@@ -286,7 +286,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditMode ? 'تعديل صنف' : 'إضافة صنف جديد'),
-        backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.1),
+        backgroundColor: const Color(0xFFFFD700).withOpacity(0.1),
         actions: [
           if (!_isEditMode)
             IconButton(
@@ -338,10 +338,10 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFD700).withValues(alpha: 0.1),
+                  color: const Color(0xFFFFD700).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: const Color(0xFFFFD700).withValues(alpha: 0.3),
+                    color: const Color(0xFFFFD700).withOpacity(0.3),
                   ),
                 ),
                 child: Row(
@@ -373,7 +373,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: 0.2),
+                        color: Colors.green.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: const Text(

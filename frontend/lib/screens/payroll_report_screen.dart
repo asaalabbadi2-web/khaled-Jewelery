@@ -288,7 +288,7 @@ class _PayrollReportScreenState extends State<PayrollReportScreen> {
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ExpansionTile(
                           leading: CircleAvatar(
-                            backgroundColor: statusColor.withValues(alpha: 0.1),
+                            backgroundColor: statusColor.withOpacity(0.1),
                             child: Icon(Icons.person, color: statusColor),
                           ),
                           title: Text(

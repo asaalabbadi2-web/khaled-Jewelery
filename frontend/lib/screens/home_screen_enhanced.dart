@@ -185,7 +185,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     setState(() => isLoading = true);
 
     try {
-      debugPrint('🔄 بدء تحميل البيانات...');
+      print('🔄 بدء تحميل البيانات...');
       await Future.wait([
         _loadGoldPrice(),
         _loadCustomers(),
@@ -194,15 +194,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         _loadSuppliers(),
       ]);
 
-      debugPrint(
+      print(
         '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
       );
       await _calculateSummaries();
-      debugPrint(
+      print(
         '✅ تم حساب الملخصات - مبيعات: ${salesSummary['count']}, مشتريات: ${purchaseSummary['count']}, مخزون: ${inventorySummary['count']}',
       );
     } catch (e) {
-      debugPrint('❌ خطأ في تحميل البيانات: $e');
+      print('❌ خطأ في تحميل البيانات: $e');
     } finally {
       setState(() => isLoading = false);
     }
@@ -223,7 +223,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         });
       }
     } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل سعر الذهب: $e');
+      print('⚠️ خطأ في تحميل سعر الذهب: $e');
     }
   }
 
@@ -232,7 +232,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final data = await api.getCustomers();
       setState(() => customers = data);
     } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل العملاء: $e');
+      print('⚠️ خطأ في تحميل العملاء: $e');
     }
   }
 
@@ -241,7 +241,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final data = await api.getItems();
       setState(() => items = data);
     } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الأصناف: $e');
+      print('⚠️ خطأ في تحميل الأصناف: $e');
     }
   }
 
@@ -252,7 +252,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         invoices = data is List ? data : (data['invoices'] ?? []);
       });
     } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الفواتير: $e');
+      print('⚠️ خطأ في تحميل الفواتير: $e');
     }
   }
 
@@ -261,7 +261,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final data = await api.getSuppliers();
       setState(() => suppliers = data);
     } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الموردين: $e');
+      print('⚠️ خطأ في تحميل الموردين: $e');
     }
   }
 
@@ -277,7 +277,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       return invType == 'sell' || invType == 'بيع' || invType.contains('بيع');
     }).toList();
 
-    debugPrint(
+    print(
       '📊 عدد فواتير المبيعات: ${salesInvoices.length} من أصل ${filteredInvoices.length}',
     );
 
@@ -334,7 +334,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           invType.contains('شراء');
     }).toList();
 
-    debugPrint(
+    print(
       '📊 عدد فواتير المشتريات: ${purchaseInvoices.length} من أصل ${filteredInvoices.length}',
     );
 
@@ -458,7 +458,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         padding: const EdgeInsets.fromLTRB(24, 48, 24, 32),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [gold.withValues(alpha: 0.85), gold.withValues(alpha: 0.45)],
+            colors: [gold.withOpacity(0.85), gold.withOpacity(0.45)],
             begin: AlignmentDirectional.topStart,
             end: AlignmentDirectional.bottomEnd,
           ),
@@ -487,7 +487,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               style: TextStyle(
                 fontFamily: 'Cairo',
                 fontSize: 14,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
+                color: theme.colorScheme.onSurface.withOpacity(0.8),
               ),
             ),
           ],
@@ -1047,7 +1047,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     return NavigationDrawer(
       backgroundColor:
           theme.drawerTheme.backgroundColor ?? const Color(0xFF161616),
-      indicatorColor: gold.withValues(alpha: 0.18),
+      indicatorColor: gold.withOpacity(0.18),
       surfaceTintColor: Colors.transparent,
       selectedIndex: null,
       onDestinationSelected: (index) async {
@@ -1117,7 +1117,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         children: [
                           CircleAvatar(
                             radius: 16,
-                            backgroundColor: AppColors.primaryGold.withValues(alpha: 
+                            backgroundColor: AppColors.primaryGold.withOpacity(
                               0.2,
                             ),
                             child: Icon(
@@ -1374,8 +1374,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         gradient: LinearGradient(
           colors: isDark
               ? [
-                  colorScheme.primary.withValues(alpha: 0.6),
-                  colorScheme.primary.withValues(alpha: 0.4),
+                  colorScheme.primary.withOpacity(0.6),
+                  colorScheme.primary.withOpacity(0.4),
                 ]
               : [colorScheme.primary, colorScheme.secondary],
           begin: Alignment.topLeft,
@@ -1384,7 +1384,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: colorScheme.primary.withValues(alpha: isDark ? 0.25 : 0.35),
+            color: colorScheme.primary.withOpacity(isDark ? 0.25 : 0.35),
             blurRadius: 15,
             offset: Offset(0, 8),
           ),
@@ -1422,7 +1422,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     Container(
                       padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: colorScheme.onPrimary.withValues(alpha: 0.25),
+                        color: colorScheme.onPrimary.withOpacity(0.25),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
@@ -1441,7 +1441,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               Text(
                                 'سعر الأونصة',
                                 style: TextStyle(
-                                  color: colorScheme.onPrimary.withValues(alpha: 
+                                  color: colorScheme.onPrimary.withOpacity(
                                     0.95,
                                   ),
                                   fontSize: 11,
@@ -1453,7 +1453,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                                 Text(
                                   '(${DateFormat('dd/MM').format(goldPriceDate!)})',
                                   style: TextStyle(
-                                    color: colorScheme.onPrimary.withValues(alpha: 
+                                    color: colorScheme.onPrimary.withOpacity(
                                       0.75,
                                     ),
                                     fontSize: 9,
@@ -1484,7 +1484,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           Text(
                             'عيار $mainKarat',
                             style: TextStyle(
-                              color: colorScheme.onPrimary.withValues(alpha: 0.85),
+                              color: colorScheme.onPrimary.withOpacity(0.85),
                               fontSize: 10,
                               fontFamily: 'Cairo',
                             ),
@@ -1539,7 +1539,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     children: [
                       SizedBox(height: 12),
                       Divider(
-                        color: colorScheme.onPrimary.withValues(alpha: 0.3),
+                        color: colorScheme.onPrimary.withOpacity(0.3),
                         thickness: 0.5,
                         height: 1,
                       ),
@@ -1582,7 +1582,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
       border: TableBorder(
         horizontalInside: BorderSide(
-          color: colorScheme.onPrimary.withValues(alpha: 0.15),
+          color: colorScheme.onPrimary.withOpacity(0.15),
           width: 0.5,
         ),
       ),
@@ -1590,7 +1590,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         // Header row
         TableRow(
           decoration: BoxDecoration(
-            color: colorScheme.onPrimary.withValues(alpha: 0.12),
+            color: colorScheme.onPrimary.withOpacity(0.12),
             borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
           ),
           children: [
@@ -1619,7 +1619,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             children: [
               _buildTableCell(
                 '$karat',
-                colorScheme.onPrimary.withValues(alpha: 0.95),
+                colorScheme.onPrimary.withOpacity(0.95),
                 false,
               ),
               _buildTableCell(
@@ -1769,7 +1769,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: Colors.black.withOpacity(0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1787,7 +1787,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: action.getColor().withValues(alpha: 0.1),
+                    color: action.getColor().withOpacity(0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(action.icon, color: action.getColor(), size: 24),
@@ -2133,7 +2133,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         color: isDark ? Colors.grey[850] : Colors.grey[100],
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: AppColors.primaryGold.withValues(alpha: 0.2),
+          color: AppColors.primaryGold.withOpacity(0.2),
           width: 1,
         ),
       ),
@@ -2166,7 +2166,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
-              ? AppColors.primaryGold.withValues(alpha: isDark ? 0.3 : 0.2)
+              ? AppColors.primaryGold.withOpacity(isDark ? 0.3 : 0.2)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
           border: isSelected
@@ -2252,7 +2252,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.08),
             blurRadius: 15,
             offset: Offset(0, 5),
           ),
@@ -2274,7 +2274,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     Container(
                       padding: EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: color.withValues(alpha: isDark ? 0.2 : 0.1),
+                        color: color.withOpacity(isDark ? 0.2 : 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(icon, color: color, size: 28),
@@ -2301,7 +2301,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: isDark ? 0.1 : 0.05),
+                    color: color.withOpacity(isDark ? 0.1 : 0.05),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -2398,12 +2398,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     margin: EdgeInsets.only(bottom: 8),
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withValues(alpha: 
+                      color: theme.colorScheme.surface.withOpacity(
                         isDark ? 0.5 : 1,
                       ),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: theme.dividerColor.withValues(alpha: 0.5),
+                        color: theme.dividerColor.withOpacity(0.5),
                       ),
                     ),
                     child: Row(
@@ -2577,7 +2577,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
             blurRadius: 10,
             offset: Offset(0, 4),
           ),
@@ -2595,7 +2595,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: isDark ? 0.2 : 0.1),
+                    color: color.withOpacity(isDark ? 0.2 : 0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(icon, color: color, size: 28),

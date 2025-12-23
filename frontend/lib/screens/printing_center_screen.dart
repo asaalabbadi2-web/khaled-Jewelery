@@ -3639,7 +3639,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: (option['color'] as Color).withValues(alpha: 0.1),
+                  color: (option['color'] as Color).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
@@ -4081,7 +4081,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                     margin: const EdgeInsets.symmetric(vertical: 4),
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+                        backgroundColor: const Color(0xFFD4AF37).withOpacity(0.2),
                         child: Text(
                           '#${invoice['invoice_type_id']}',
                           style: const TextStyle(

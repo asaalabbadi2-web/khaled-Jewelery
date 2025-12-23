@@ -623,7 +623,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     return Card(
       elevation: isDark ? 2 : 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      shadowColor: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
+      shadowColor: Colors.black.withOpacity(isDark ? 0.25 : 0.08),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -635,7 +635,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withValues(alpha: 
+                    color: colorScheme.primary.withOpacity(
                       isDark ? 0.18 : 0.12,
                     ),
                     borderRadius: BorderRadius.circular(12),
@@ -749,7 +749,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           : Icons.settings_outlined,
                       color: _showAdvancedPaymentOptions
                           ? colorScheme.primary
-                          : colorScheme.primary.withValues(alpha: 0.6),
+                          : colorScheme.primary.withOpacity(0.6),
                     ),
                     label: Text(
                       _showAdvancedPaymentOptions
@@ -792,7 +792,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                   start: 8,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.green.withValues(alpha: 0.15),
+                                  color: Colors.green.withOpacity(0.15),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: const Text(
@@ -880,7 +880,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final display = price > 0 ? price.toStringAsFixed(2) : '-';
     return Chip(
       label: Text('$label: $display ر.س'),
-      backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.18),
+      backgroundColor: const Color(0xFFFFD700).withOpacity(0.18),
     );
   }
 
@@ -1117,7 +1117,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   final karatLabel = entry.key;
                   final weightValue = entry.value;
                   return Chip(
-                    backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.12),
+                    backgroundColor: const Color(0xFFFFD700).withOpacity(0.12),
                     label: Text(
                       'عيار $karatLabel: ${_formatWeight(weightValue)}',
                     ),
@@ -1150,7 +1150,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundColor: resolvedIconColor.withValues(alpha: 0.12),
+            backgroundColor: resolvedIconColor.withOpacity(0.12),
             child: Icon(icon, color: resolvedIconColor, size: 18),
           ),
           const SizedBox(width: 12),
@@ -1264,7 +1264,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       children: entries
           .map(
             (entry) => Chip(
-              backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.15),
+              backgroundColor: const Color(0xFFFFD700).withOpacity(0.15),
               label: Text('عيار ${entry.key}: ${_formatWeight(entry.value)}'),
             ),
           )

@@ -519,7 +519,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
     final bool isDark = theme.brightness == Brightness.dark;
-    final statsBackground = colorScheme.surfaceVariant.withValues(alpha: 
+    final statsBackground = colorScheme.surfaceVariant.withOpacity(
       isDark ? 0.35 : 0.2,
     );
 
@@ -623,7 +623,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: highlightColor.withValues(alpha: 0.15),
+                    color: highlightColor.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(icon, color: highlightColor, size: 20),
@@ -633,7 +633,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   child: Text(
                     title,
                     style: textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
+                      color: colorScheme.onSurface.withOpacity(0.7),
                       fontWeight: FontWeight.w600,
                     ),
                     overflow: TextOverflow.ellipsis,
@@ -661,7 +661,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
     final bool isDark = theme.brightness == Brightness.dark;
-    final filterBackground = colorScheme.surfaceVariant.withValues(alpha: 
+    final filterBackground = colorScheme.surfaceVariant.withOpacity(
       isDark ? 0.4 : 0.7,
     );
 
@@ -670,7 +670,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       decoration: BoxDecoration(
         color: filterBackground,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.1)),
+        border: Border.all(color: colorScheme.outline.withOpacity(0.1)),
       ),
       child: Column(
         children: [
@@ -687,22 +687,22 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         ? '🔍 بحث برقم الفاتورة أو اسم العميل...'
                         : '🔍 Search by number or customer...',
                     hintStyle: textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.5),
+                      color: colorScheme.onSurface.withOpacity(0.5),
                     ),
                     filled: true,
-                    fillColor: colorScheme.surface.withValues(alpha: 
+                    fillColor: colorScheme.surface.withOpacity(
                       isDark ? 0.35 : 0.9,
                     ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide(
-                        color: colorScheme.outline.withValues(alpha: 0.2),
+                        color: colorScheme.outline.withOpacity(0.2),
                       ),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide(
-                        color: colorScheme.outline.withValues(alpha: 0.1),
+                        color: colorScheme.outline.withOpacity(0.1),
                       ),
                     ),
                     contentPadding: const EdgeInsets.symmetric(
@@ -725,7 +725,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   Icons.date_range,
                   color: _dateRange != null
                       ? colorScheme.primary
-                      : colorScheme.onSurface.withValues(alpha: 0.6),
+                      : colorScheme.onSurface.withOpacity(0.6),
                 ),
                 onPressed: () async {
                   final picked = await showDateRangePicker(
@@ -928,9 +928,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        color: colorScheme.surface.withValues(alpha: isDark ? 0.35 : 0.95),
+        color: colorScheme.surface.withOpacity(isDark ? 0.35 : 0.95),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.1)),
+        border: Border.all(color: colorScheme.outline.withOpacity(0.1)),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
@@ -938,7 +938,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           hint: Text(
             hint,
             style: textTheme.bodyMedium?.copyWith(
-              color: colorScheme.onSurface.withValues(alpha: 0.6),
+              color: colorScheme.onSurface.withOpacity(0.6),
             ),
           ),
           dropdownColor: theme.cardTheme.color ?? colorScheme.surface,
@@ -1022,7 +1022,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: colorScheme.primary.withValues(alpha: 0.18),
+                        color: colorScheme.primary.withOpacity(0.18),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
@@ -1040,7 +1040,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: typeColor.withValues(alpha: 0.18),
+                        color: typeColor.withOpacity(0.18),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
@@ -1058,7 +1058,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.2),
+                        color: statusColor.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Row(
@@ -1088,7 +1088,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   children: [
                     Icon(
                       Icons.person,
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
+                      color: colorScheme.onSurface.withOpacity(0.7),
                       size: 18,
                     ),
                     const SizedBox(width: 8),
@@ -1103,14 +1103,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     ),
                     Icon(
                       Icons.calendar_today,
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
+                      color: colorScheme.onSurface.withOpacity(0.7),
                       size: 16,
                     ),
                     const SizedBox(width: 4),
                     Text(
                       _formatDate(invoice['date'], isAr),
                       style: textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurface.withValues(alpha: 0.7),
+                        color: colorScheme.onSurface.withOpacity(0.7),
                       ),
                     ),
                   ],
@@ -1122,7 +1122,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: colorScheme.surfaceVariant.withValues(alpha: 
+                    color: colorScheme.surfaceVariant.withOpacity(
                       theme.brightness == Brightness.dark ? 0.35 : 0.8,
                     ),
                     borderRadius: BorderRadius.circular(8),
@@ -1133,7 +1133,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                       Text(
                         isAr ? 'الإجمالي:' : 'Total:',
                         style: textTheme.bodyMedium?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.7),
+                          color: colorScheme.onSurface.withOpacity(0.7),
                         ),
                       ),
                       Text(
@@ -1193,7 +1193,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       // Return simple error card
       return Card(
         margin: const EdgeInsets.only(bottom: 12),
-        color: Colors.red.withValues(alpha: 0.15),
+        color: Colors.red.withOpacity(0.15),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Text(
@@ -1229,20 +1229,20 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           Icon(
             Icons.receipt_long,
             size: 80,
-            color: colorScheme.onSurface.withValues(alpha: 0.2),
+            color: colorScheme.onSurface.withOpacity(0.2),
           ),
           const SizedBox(height: 16),
           Text(
             isAr ? 'لا توجد فواتير' : 'No Invoices',
             style: textTheme.titleMedium?.copyWith(
-              color: colorScheme.onSurface.withValues(alpha: 0.7),
+              color: colorScheme.onSurface.withOpacity(0.7),
             ),
           ),
           const SizedBox(height: 8),
           Text(
             isAr ? 'ابدأ بإضافة فاتورة جديدة' : 'Start by adding a new invoice',
             style: textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurface.withValues(alpha: 0.5),
+              color: colorScheme.onSurface.withOpacity(0.5),
             ),
           ),
         ],
@@ -1299,7 +1299,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
             child: Text(
               isAr ? 'إلغاء' : 'Cancel',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.7),
+                color: colorScheme.onSurface.withOpacity(0.7),
               ),
             ),
           ),

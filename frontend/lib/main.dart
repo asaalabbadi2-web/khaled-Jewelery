@@ -92,7 +92,7 @@ class _MyAppState extends State<MyApp> {
                 padding: const EdgeInsets.all(24),
                 margin: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.1),
+                  color: Colors.red.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.red, width: 2),
                 ),

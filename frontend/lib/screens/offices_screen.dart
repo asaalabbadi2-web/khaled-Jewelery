@@ -334,7 +334,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: (isActive ? AppColors.success : AppColors.error).withValues(alpha: 0.4),
+          color: (isActive ? AppColors.success : AppColors.error).withOpacity(0.4),
           width: 2,
         ),
       ),
@@ -351,7 +351,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
                 children: [
                   CircleAvatar(
                     backgroundColor: (isActive ? AppColors.success : AppColors.error)
-                        .withValues(alpha: 0.12),
+                        .withOpacity(0.12),
                     child: Icon(
                       Icons.store,
                       color: isActive ? AppColors.success : AppColors.error,
@@ -384,7 +384,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
                     ),
                     decoration: BoxDecoration(
                       color: (isActive ? AppColors.success : AppColors.error)
-                          .withValues(alpha: 0.1),
+                          .withOpacity(0.1),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
@@ -516,7 +516,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(

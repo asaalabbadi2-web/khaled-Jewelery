@@ -45,7 +45,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('طباعة الباركود'),
-        backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.1),
+        backgroundColor: const Color(0xFFFFD700).withOpacity(0.1),
         actions: [
           IconButton(
             icon: const Icon(Icons.print),
@@ -134,7 +134,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
               color: Colors.grey.shade100,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: Colors.black.withOpacity(0.05),
                   blurRadius: 10,
                   offset: const Offset(0, -2),
                 ),

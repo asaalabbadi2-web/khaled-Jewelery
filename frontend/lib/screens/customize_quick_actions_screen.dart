@@ -94,10 +94,10 @@ class _CustomizeQuickActionsScreenState
                   margin: const EdgeInsets.all(16),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: AppColors.info.withValues(alpha: 0.1),
+                    color: AppColors.info.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: AppColors.info.withValues(alpha: 0.3),
+                      color: AppColors.info.withOpacity(0.3),
                       width: 1,
                     ),
                   ),
@@ -223,7 +223,7 @@ class _CustomizeQuickActionsScreenState
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: action.getColor().withValues(alpha: 0.1),
+            color: action.getColor().withOpacity(0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(action.icon, color: action.getColor(), size: 24),
@@ -240,7 +240,7 @@ class _CustomizeQuickActionsScreenState
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: theme.disabledColor.withValues(alpha: 0.2),
+                  color: theme.disabledColor.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -287,7 +287,7 @@ class _CustomizeQuickActionsScreenState
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: action.getColor().withValues(alpha: action.isActive ? 0.15 : 0.05),
+            color: action.getColor().withOpacity(action.isActive ? 0.15 : 0.05),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
@@ -512,7 +512,7 @@ class _CustomizeQuickActionsScreenState
                                       leading: Container(
                                         padding: const EdgeInsets.all(8),
                                         decoration: BoxDecoration(
-                                          color: actionColor.withValues(alpha: 0.12),
+                                          color: actionColor.withOpacity(0.12),
                                           borderRadius: BorderRadius.circular(
                                             8,
                                           ),

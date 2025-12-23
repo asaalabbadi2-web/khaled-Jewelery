@@ -207,7 +207,7 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                   Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.1),
+                      color: color.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(icon, color: color, size: 32),
@@ -243,7 +243,7 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                 padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: itemCount > 0
-                      ? color.withValues(alpha: 0.1)
+                      ? color.withOpacity(0.1)
                       : Colors.grey.shade200,
                   borderRadius: BorderRadius.circular(6),
                 ),

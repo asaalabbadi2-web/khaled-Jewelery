@@ -260,7 +260,7 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
               color: Colors.blue.shade700,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
+                  color: Colors.black.withOpacity(0.1),
                   blurRadius: 4,
                   offset: const Offset(0, 2),
                 ),
@@ -360,7 +360,7 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Colors.white, color.withValues(alpha: 0.05)],
+            colors: [Colors.white, color.withOpacity(0.05)],
           ),
         ),
         child: Padding(

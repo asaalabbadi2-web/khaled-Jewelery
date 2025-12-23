@@ -422,7 +422,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
         padding: EdgeInsets.all(16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [color.withValues(alpha: 0.1), Colors.white],
+            colors: [color.withOpacity(0.1), Colors.white],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -511,7 +511,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
 
   Widget _buildNormalTable() {
     return DataTable(
-      headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
+      headingRowColor: MaterialStateProperty.all(Colors.grey.shade200),
       headingTextStyle: TextStyle(
         fontWeight: FontWeight.bold,
         color: Color(0xFF1976D2),
@@ -612,7 +612,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
         }).toList(),
         // Totals row
         DataRow(
-          color: WidgetStateProperty.all(Colors.blue.shade50),
+          color: MaterialStateProperty.all(Colors.blue.shade50),
           cells: [
             DataCell(Text('', style: TextStyle(fontWeight: FontWeight.bold))),
             DataCell(
@@ -711,7 +711,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
 
   Widget _buildKaratDetailTable() {
     return DataTable(
-      headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
+      headingRowColor: MaterialStateProperty.all(Colors.grey.shade200),
       headingTextStyle: TextStyle(
         fontWeight: FontWeight.bold,
         color: Color(0xFF1976D2),
@@ -783,7 +783,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
         }).toList(),
         // Totals row
         DataRow(
-          color: WidgetStateProperty.all(Colors.blue.shade50),
+          color: MaterialStateProperty.all(Colors.blue.shade50),
           cells: [
             DataCell(Text('')),
             DataCell(

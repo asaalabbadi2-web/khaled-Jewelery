@@ -291,7 +291,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                   children: [
                     // بطاقة معلومات السعر الحالي
                     Card(
-                      color: AppColors.lightGold.withValues(alpha: 0.4),
+                      color: AppColors.lightGold.withOpacity(0.4),
                       child: Padding(
                         padding: const EdgeInsets.all(16),
                         child: Row(
@@ -526,9 +526,9 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                             Container(
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
-                                color: AppColors.lightGold.withValues(alpha: 0.35),
+                                color: AppColors.lightGold.withOpacity(0.35),
                                 borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: AppColors.mediumGold.withValues(alpha: 0.5)),
+                                border: Border.all(color: AppColors.mediumGold.withOpacity(0.5)),
                               ),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -565,9 +565,9 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                               Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: AppColors.error.withValues(alpha: 0.08),
+                                  color: AppColors.error.withOpacity(0.08),
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
+                                  border: Border.all(color: AppColors.error.withOpacity(0.35)),
                                 ),
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

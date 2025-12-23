@@ -73,7 +73,7 @@ class _AddSupplierScreenState extends State<AddSupplierScreen> {
         _remainingCapacity = data['remaining_capacity'];
       });
     } catch (e) {
-      debugPrint('Error loading next supplier code: $e');
+      print('Error loading next supplier code: $e');
     }
   }
 
@@ -143,7 +143,7 @@ class _AddSupplierScreenState extends State<AddSupplierScreen> {
                   margin: EdgeInsets.only(bottom: 16),
                   padding: EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.3),
+                    color: Colors.black.withOpacity(0.3),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: gold, width: 1),
                   ),

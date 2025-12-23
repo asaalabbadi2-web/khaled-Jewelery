@@ -681,7 +681,7 @@ class _PrintTemplateDesignerScreenState
               color: Colors.white,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
+                  color: Colors.black.withOpacity(0.2),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -809,7 +809,7 @@ class _PrintTemplateDesignerScreenState
       children: [
         // رأس الجدول
         TableRow(
-          decoration: BoxDecoration(color: _primaryColor.withValues(alpha: 0.1)),
+          decoration: BoxDecoration(color: _primaryColor.withOpacity(0.1)),
           children: [
             _buildTableCell('#', isHeader: true),
             _buildTableCell(widget.isArabic ? 'الصنف' : 'Item', isHeader: true),

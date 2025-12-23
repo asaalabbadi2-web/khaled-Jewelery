@@ -66,7 +66,7 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
         _accounts = List<Map<String, dynamic>>.from(accounts);
       });
     } catch (e) {
-      debugPrint('خطأ في تحميل الحسابات: $e');
+      print('خطأ في تحميل الحسابات: $e');
     }
   }
 
@@ -366,7 +366,7 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
         color: Colors.blue.shade700,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
+            color: Colors.black.withOpacity(0.1),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -730,7 +730,7 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
 
     return Chip(
       label: Text('$label: ${formattedAmount.replaceAll('\u00A0', ' ')}'),
-      backgroundColor: color.withValues(alpha: 0.1),
+      backgroundColor: color.withOpacity(0.1),
       labelStyle: TextStyle(color: color, fontWeight: FontWeight.bold),
     );
   }

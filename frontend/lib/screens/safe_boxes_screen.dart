@@ -524,7 +524,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                         margin: const EdgeInsets.only(bottom: 8),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: safeBox.typeColor.withValues(alpha: 0.2),
+                            backgroundColor: safeBox.typeColor.withOpacity(0.2),
                             child: Icon(safeBox.icon, color: safeBox.typeColor),
                           ),
                           title: Row(

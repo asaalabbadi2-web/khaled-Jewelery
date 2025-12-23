@@ -280,7 +280,7 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.all(16),
-                    color: const Color(0xFFD4AF37).withValues(alpha: 0.1),
+                    color: const Color(0xFFD4AF37).withOpacity(0.1),
                     child: Row(
                       children: [
                         const Icon(Icons.layers, color: Color(0xFFD4AF37)),
@@ -334,7 +334,7 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
     
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      color: isSelected ? const Color(0xFFD4AF37).withValues(alpha: 0.2) : null,
+      color: isSelected ? const Color(0xFFD4AF37).withOpacity(0.2) : null,
       child: ListTile(
         dense: true,
         leading: Icon(
@@ -475,7 +475,7 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
+            color: Colors.black.withOpacity(0.3),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -529,12 +529,12 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
           height: element.height,
           decoration: BoxDecoration(
             border: Border.all(
-              color: isSelected ? const Color(0xFFD4AF37) : Colors.blue.withValues(alpha: 0.5),
+              color: isSelected ? const Color(0xFFD4AF37) : Colors.blue.withOpacity(0.5),
               width: isSelected ? 2 : 1,
             ),
             color: isSelected
-                ? const Color(0xFFD4AF37).withValues(alpha: 0.1)
-                : Colors.blue.withValues(alpha: 0.05),
+                ? const Color(0xFFD4AF37).withOpacity(0.1)
+                : Colors.blue.withOpacity(0.05),
           ),
           child: Stack(
             children: [

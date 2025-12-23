@@ -750,7 +750,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
 
   Widget _buildSearchAndFilterBar() {
     final surface = Theme.of(context).colorScheme.surface;
-    final fieldFill = surface.withValues(alpha: 0.92);
+    final fieldFill = surface.withOpacity(0.92);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
@@ -760,7 +760,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: theme.AppColors.deepGold.withValues(alpha: 0.08),
+            color: theme.AppColors.deepGold.withOpacity(0.08),
             blurRadius: 16,
             offset: const Offset(0, 6),
           ),
@@ -831,7 +831,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       side: BorderSide(
         color: isSelected
             ? theme.AppColors.primaryGold
-            : theme.AppColors.primaryGold.withValues(alpha: 0.2),
+            : theme.AppColors.primaryGold.withOpacity(0.2),
       ),
       labelStyle: TextStyle(
         color: isSelected
@@ -844,7 +844,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
 
   Widget _buildSearchAndFilterBarForEntries() {
     final surface = Theme.of(context).colorScheme.surface;
-    final fieldFill = surface.withValues(alpha: 0.92);
+    final fieldFill = surface.withOpacity(0.92);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
@@ -854,7 +854,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: theme.AppColors.deepGold.withValues(alpha: 0.08),
+            color: theme.AppColors.deepGold.withOpacity(0.08),
             blurRadius: 16,
             offset: const Offset(0, 6),
           ),
@@ -1073,7 +1073,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              theme.AppColors.primaryGold.withValues(alpha: 0.12),
+              theme.AppColors.primaryGold.withOpacity(0.12),
               surfaceColor,
             ],
             begin: AlignmentDirectional.topEnd,
@@ -1097,7 +1097,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               SizedBox(
                 height: 72,
                 child: VerticalDivider(
-                  color: theme.AppColors.primaryGold.withValues(alpha: 0.4),
+                  color: theme.AppColors.primaryGold.withOpacity(0.4),
                   thickness: 1.2,
                 ),
               ),
@@ -1216,7 +1216,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: theme.AppColors.lightGold.withValues(alpha: 0.35),
+              color: theme.AppColors.lightGold.withOpacity(0.35),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -1293,7 +1293,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       elevation: isSelected ? 6 : 2,
       color: isSelected
-          ? theme.AppColors.lightGold.withValues(alpha: 0.25)
+          ? theme.AppColors.lightGold.withOpacity(0.25)
           : Theme.of(context).cardColor,
       child: ListTile(
         leading: isPosted
@@ -1382,7 +1382,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: theme.AppColors.lightGold.withValues(alpha: 0.35),
+              color: theme.AppColors.lightGold.withOpacity(0.35),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -1460,7 +1460,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       elevation: isSelected ? 6 : 2,
       color: isSelected
-          ? theme.AppColors.lightGold.withValues(alpha: 0.25)
+          ? theme.AppColors.lightGold.withOpacity(0.25)
           : Theme.of(context).cardColor,
       child: ListTile(
         leading: isPosted
@@ -1530,7 +1530,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    theme.AppColors.primaryGold.withValues(alpha: 0.72),
+                    theme.AppColors.primaryGold.withOpacity(0.72),
                     theme.AppColors.darkGold,
                   ],
                   begin: AlignmentDirectional.centerEnd,
@@ -1544,7 +1544,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.18),
+                        color: Colors.white.withOpacity(0.18),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
@@ -1816,7 +1816,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   ),
                   value: _enableScheduledPosting,
                   activeColor: theme.AppColors.primaryGold,
-                  activeTrackColor: theme.AppColors.lightGold.withValues(alpha: 0.6),
+                  activeTrackColor: theme.AppColors.lightGold.withOpacity(0.6),
                   inactiveThumbColor: Colors.grey[400],
                   inactiveTrackColor: Colors.grey[300],
                   onChanged: !_canSchedulePosting
@@ -1837,8 +1837,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                       color: !_canSchedulePosting
                           ? Colors.grey.shade200
                           : _enableScheduledPosting
-                              ? theme.AppColors.lightGold.withValues(alpha: 0.45)
-                              : theme.AppColors.lightGold.withValues(alpha: 0.2),
+                              ? theme.AppColors.lightGold.withOpacity(0.45)
+                              : theme.AppColors.lightGold.withOpacity(0.2),
                       border: Border.all(
                         color: !_canSchedulePosting
                             ? Colors.grey.shade400

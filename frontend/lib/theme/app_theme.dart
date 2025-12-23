@@ -466,7 +466,7 @@ class ThemeProvider extends ChangeNotifier {
       _themeMode = isDark ? ThemeMode.dark : ThemeMode.light;
       notifyListeners();
     } catch (e) {
-      debugPrint('خطأ في تحميل إعدادات الثيم: $e');
+      print('خطأ في تحميل إعدادات الثيم: $e');
     }
   }
 
@@ -476,7 +476,7 @@ class ThemeProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isDarkMode', isDarkMode);
     } catch (e) {
-      debugPrint('خطأ في حفظ إعدادات الثيم: $e');
+      print('خطأ في حفظ إعدادات الثيم: $e');
     }
   }
 

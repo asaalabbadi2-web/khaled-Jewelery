@@ -310,7 +310,7 @@ class _RecurringTemplatesListScreenState
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: isActive ? Color(0xFFD4AF37).withValues(alpha: 0.3) : Colors.grey.withValues(alpha: 0.2),
+          color: isActive ? Color(0xFFD4AF37).withOpacity(0.3) : Colors.grey.withOpacity(0.2),
           width: 1,
         ),
       ),
@@ -481,7 +481,7 @@ class _RecurringTemplatesListScreenState
                 Container(
                   padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                   decoration: BoxDecoration(
-                    color: Color(0xFFD4AF37).withValues(alpha: 0.1),
+                    color: Color(0xFFD4AF37).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -514,9 +514,9 @@ class _RecurringTemplatesListScreenState
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -527,7 +527,7 @@ class _RecurringTemplatesListScreenState
             label,
             style: TextStyle(
               fontSize: 12,
-              color: color.withValues(alpha: 0.9),
+              color: color.withOpacity(0.9),
               fontWeight: FontWeight.w500,
             ),
           ),

@@ -161,7 +161,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
               child: Text(
                 'إلغاء',
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withValues(alpha: 0.7),
+                  color: colorScheme.onSurface.withOpacity(0.7),
                 ),
               ),
             ),
@@ -274,7 +274,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
 
     return Container(
       padding: const EdgeInsets.all(12),
-      color: colorScheme.surface.withValues(alpha: isDark ? 0.35 : 0.2),
+      color: colorScheme.surface.withOpacity(isDark ? 0.35 : 0.2),
       child: Row(
         children: [
           Expanded(
@@ -338,7 +338,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
             Text(
               title,
               style: textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.7),
+                color: colorScheme.onSurface.withOpacity(0.7),
               ),
             ),
           ],
@@ -466,7 +466,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: colorScheme.primary.withValues(alpha: 0.18),
+                      color: colorScheme.primary.withOpacity(0.18),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Column(
@@ -510,7 +510,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: karatBadgeColor.withValues(alpha: 0.18),
+                                  color: karatBadgeColor.withOpacity(0.18),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Text(
@@ -530,13 +530,13 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                               Icon(
                                 Icons.qr_code,
                                 size: 14,
-                                color: colorScheme.onSurface.withValues(alpha: 0.6),
+                                color: colorScheme.onSurface.withOpacity(0.6),
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 barcode,
                                 style: textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface.withValues(alpha: 0.6),
+                                  color: colorScheme.onSurface.withOpacity(0.6),
                                 ),
                               ),
                             ],
@@ -547,26 +547,26 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                             Icon(
                               Icons.scale,
                               size: 14,
-                              color: colorScheme.onSurface.withValues(alpha: 0.6),
+                              color: colorScheme.onSurface.withOpacity(0.6),
                             ),
                             const SizedBox(width: 4),
                             Text(
                               '${weight.toStringAsFixed(2)} جم',
                               style: textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurface.withValues(alpha: 0.8),
+                                color: colorScheme.onSurface.withOpacity(0.8),
                               ),
                             ),
                             const SizedBox(width: 16),
                             Icon(
                               Icons.inventory,
                               size: 14,
-                              color: colorScheme.onSurface.withValues(alpha: 0.6),
+                              color: colorScheme.onSurface.withOpacity(0.6),
                             ),
                             const SizedBox(width: 4),
                             Text(
                               '$count قطعة',
                               style: textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurface.withValues(alpha: 0.8),
+                                color: colorScheme.onSurface.withOpacity(0.8),
                               ),
                             ),
                           ],
@@ -680,7 +680,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
           Icon(
             Icons.inventory_2_outlined,
             size: 80,
-            color: colorScheme.onSurface.withValues(alpha: 0.25),
+            color: colorScheme.onSurface.withOpacity(0.25),
           ),
           const SizedBox(height: 16),
           Text(
@@ -688,7 +688,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                 ? 'لا توجد نتائج للبحث'
                 : 'لا توجد أصناف بعد',
             style: textTheme.titleMedium?.copyWith(
-              color: colorScheme.onSurface.withValues(alpha: 0.7),
+              color: colorScheme.onSurface.withOpacity(0.7),
             ),
           ),
           const SizedBox(height: 8),

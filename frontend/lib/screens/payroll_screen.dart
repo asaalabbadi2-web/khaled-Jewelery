@@ -395,7 +395,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
                         child: ListTile(
                           onTap: () => _openForm(entry: entry),
                           leading: CircleAvatar(
-                            backgroundColor: statusColor.withValues(alpha: 0.15),
+                            backgroundColor: statusColor.withOpacity(0.15),
                             child: Icon(Icons.payments, color: statusColor),
                           ),
                           title: Text(

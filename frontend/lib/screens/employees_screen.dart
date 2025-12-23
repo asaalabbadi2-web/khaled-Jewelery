@@ -214,8 +214,8 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                       ),
                       decoration: BoxDecoration(
                         color: employee.isActive
-                            ? Colors.green.withValues(alpha: 0.1)
-                            : Colors.red.withValues(alpha: 0.1),
+                            ? Colors.green.withOpacity(0.1)
+                            : Colors.red.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
@@ -764,7 +764,7 @@ class _StatChip extends StatelessWidget {
     return Chip(
       avatar: Icon(icon, color: colorScheme.primary),
       label: Text('$label: $value'),
-      backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
+      backgroundColor: colorScheme.primary.withOpacity(0.1),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
   }

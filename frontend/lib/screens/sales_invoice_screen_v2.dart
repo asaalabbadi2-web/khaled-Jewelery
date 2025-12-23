@@ -791,7 +791,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.12),
+                  color: AppColors.success.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(Icons.person_add, color: AppColors.success),
@@ -861,7 +861,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: const Text('⚠️ يرجى إدخال اسم العميل'),
-                      backgroundColor: AppColors.warning.withValues(alpha: 0.9),
+                      backgroundColor: AppColors.warning.withOpacity(0.9),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -1132,7 +1132,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     return Card(
       elevation: isDark ? 2 : 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      shadowColor: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
+      shadowColor: Colors.black.withOpacity(isDark ? 0.25 : 0.08),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -1144,7 +1144,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withValues(alpha: 
+                    color: colorScheme.primary.withOpacity(
                       isDark ? 0.18 : 0.12,
                     ),
                     borderRadius: BorderRadius.circular(12),
@@ -1194,7 +1194,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceVariant.withValues(alpha: 
+                  color: colorScheme.surfaceVariant.withOpacity(
                     isDark ? 0.25 : 0.5,
                   ),
                   borderRadius: BorderRadius.circular(12),
@@ -1246,7 +1246,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                   phone,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.textTheme.bodySmall?.color
-                                        ?.withValues(alpha: 0.7),
+                                        ?.withOpacity(0.7),
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -1290,7 +1290,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       decoration: BoxDecoration(
         color: colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.3)),
+        border: Border.all(color: colorScheme.primary.withOpacity(0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1351,9 +1351,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: colorScheme.primary.withValues(alpha: isDark ? 0.18 : 0.12),
+        color: colorScheme.primary.withOpacity(isDark ? 0.18 : 0.12),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.4)),
+        border: Border.all(color: colorScheme.primary.withOpacity(0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1388,7 +1388,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            colorScheme.primary.withValues(alpha: 0.15),
+            colorScheme.primary.withOpacity(0.15),
             theme.colorScheme.surface,
           ],
           begin: Alignment.topLeft,
@@ -1396,7 +1396,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: colorScheme.primary.withValues(alpha: 0.5),
+          color: colorScheme.primary.withOpacity(0.5),
           width: 2,
         ),
       ),
@@ -1410,7 +1410,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withValues(alpha: 0.3),
+                  color: colorScheme.primary.withOpacity(0.3),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1548,9 +1548,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: color.withValues(alpha: backgroundOpacity),
+            color: color.withOpacity(backgroundOpacity),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withValues(alpha: borderOpacity)),
+            border: Border.all(color: color.withOpacity(borderOpacity)),
           ),
           child: Icon(icon, color: color, size: 20),
         ),
@@ -1568,10 +1568,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: dividerColor.withValues(alpha: 0.6)),
+        border: Border.all(color: dividerColor.withOpacity(0.6)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 
+            color: Colors.black.withOpacity(
               theme.brightness == Brightness.dark ? 0.3 : 0.06,
             ),
             blurRadius: 8,
@@ -1589,7 +1589,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withValues(alpha: 0.1),
+                  color: colorScheme.primary.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1642,7 +1642,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: theme.dividerColor.withValues(alpha: 0.6),
+          color: theme.dividerColor.withOpacity(0.6),
           width: 2,
         ),
       ),
@@ -1652,7 +1652,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             Icon(
               Icons.shopping_cart_outlined,
               size: 64,
-              color: colorScheme.primary.withValues(alpha: 0.6),
+              color: colorScheme.primary.withOpacity(0.6),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1690,12 +1690,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
-        headingRowColor: WidgetStateProperty.all(
-          colorScheme.primary.withValues(alpha: 0.15),
+        headingRowColor: MaterialStateProperty.all(
+          colorScheme.primary.withOpacity(0.15),
         ),
-        dataRowColor: WidgetStateProperty.resolveWith((states) {
+        dataRowColor: MaterialStateProperty.resolveWith((states) {
           if (states.contains(MaterialState.selected)) {
-            return colorScheme.primary.withValues(alpha: 0.1);
+            return colorScheme.primary.withOpacity(0.1);
           }
           return theme.cardColor;
         }),
@@ -1729,10 +1729,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.info.withValues(alpha: 0.15),
+                      color: AppColors.info.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.info.withValues(alpha: 0.3),
+                        color: AppColors.info.withOpacity(0.3),
                       ),
                     ),
                     child: Text(
@@ -1751,10 +1751,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.success.withValues(alpha: 0.15),
+                      color: AppColors.success.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.success.withValues(alpha: 0.3),
+                        color: AppColors.success.withOpacity(0.3),
                       ),
                     ),
                     child: Text(
@@ -1773,10 +1773,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.15),
+                      color: AppColors.warning.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withValues(alpha: 0.3),
+                        color: AppColors.warning.withOpacity(0.3),
                       ),
                     ),
                     child: Text(
@@ -1811,10 +1811,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.karat24.withValues(alpha: 0.15),
+                      color: AppColors.karat24.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.karat24.withValues(alpha: 0.3),
+                        color: AppColors.karat24.withOpacity(0.3),
                       ),
                     ),
                     child: Text(
@@ -1925,7 +1925,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               : [colorScheme.surface, theme.scaffoldBackgroundColor],
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.6)),
+        border: Border.all(color: theme.dividerColor.withOpacity(0.6)),
       ),
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -1946,7 +1946,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 minimumSize: const Size(0, 56),
                 backgroundColor: AppColors.karat24,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: theme.disabledColor.withValues(alpha: 0.2),
+                disabledBackgroundColor: theme.disabledColor.withOpacity(0.2),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1966,7 +1966,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
-                  color: colorScheme.primary.withValues(alpha: isDark ? 0.35 : 0.4),
+                  color: colorScheme.primary.withOpacity(isDark ? 0.35 : 0.4),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -1985,7 +1985,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         color: isDark ? Colors.white : Colors.black87,
                         shadows: !isDark ? [
                           Shadow(
-                            color: Colors.white.withValues(alpha: 0.8),
+                            color: Colors.white.withOpacity(0.8),
                             blurRadius: 2,
                           ),
                         ] : null,
@@ -1994,11 +1994,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     Text(
                       '${_items.length} صنف',
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: isDark ? Colors.white.withValues(alpha: 0.9) : Colors.black87,
+                        color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87,
                         fontWeight: FontWeight.w500,
                         shadows: !isDark ? [
                           Shadow(
-                            color: Colors.white.withValues(alpha: 0.8),
+                            color: Colors.white.withOpacity(0.8),
                             blurRadius: 2,
                           ),
                         ] : null,
@@ -2013,7 +2013,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     color: isDark ? Colors.white : Colors.black87,
                     shadows: !isDark ? [
                       Shadow(
-                        color: Colors.white.withValues(alpha: 0.9),
+                        color: Colors.white.withOpacity(0.9),
                         blurRadius: 3,
                       ),
                     ] : null,
@@ -2032,7 +2032,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final totalAmount = _calculateGrandTotal();
-    final dividerColor = theme.dividerColor.withValues(alpha: 0.6);
+    final dividerColor = theme.dividerColor.withOpacity(0.6);
     final isDark = theme.brightness == Brightness.dark;
 
     return Card(
@@ -2065,10 +2065,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.success.withValues(alpha: isDark ? 0.2 : 0.12),
+                    color: AppColors.success.withOpacity(isDark ? 0.2 : 0.12),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: AppColors.success.withValues(alpha: 0.4),
+                      color: AppColors.success.withOpacity(0.4),
                     ),
                   ),
                   child: Text(
@@ -2089,7 +2089,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: colorScheme.primary.withValues(alpha: 0.4),
+                    color: colorScheme.primary.withOpacity(0.4),
                     width: 2,
                   ),
                   borderRadius: BorderRadius.circular(8),
@@ -2102,10 +2102,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            colorScheme.primary.withValues(alpha: 
+                            colorScheme.primary.withOpacity(
                               isDark ? 0.25 : 0.3,
                             ),
-                            AppColors.lightGold.withValues(alpha: 
+                            AppColors.lightGold.withOpacity(
                               isDark ? 0.2 : 0.35,
                             ),
                           ],
@@ -2126,7 +2126,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withValues(alpha: 0.8),
+                                    color: Colors.white.withOpacity(0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2142,7 +2142,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withValues(alpha: 0.8),
+                                    color: Colors.white.withOpacity(0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2159,7 +2159,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withValues(alpha: 0.8),
+                                    color: Colors.white.withOpacity(0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2176,7 +2176,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withValues(alpha: 0.8),
+                                    color: Colors.white.withOpacity(0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2193,7 +2193,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withValues(alpha: 0.8),
+                                    color: Colors.white.withOpacity(0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2212,7 +2212,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         decoration: BoxDecoration(
                           color: index % 2 == 0
                               ? theme.colorScheme.surface
-                              : theme.colorScheme.surfaceVariant.withValues(alpha: 
+                              : theme.colorScheme.surfaceVariant.withOpacity(
                                   isDark ? 0.3 : 0.5,
                                 ),
                           border: Border(
@@ -2240,7 +2240,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                         vertical: 3,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: AppColors.warning.withValues(alpha: 
+                                        color: AppColors.warning.withOpacity(
                                           isDark ? 0.2 : 0.25,
                                         ),
                                         borderRadius: BorderRadius.circular(6),
@@ -2323,10 +2323,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: colorScheme.primary.withValues(alpha: isDark ? 0.15 : 0.12),
+                color: colorScheme.primary.withOpacity(isDark ? 0.15 : 0.12),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: colorScheme.primary.withValues(alpha: 0.4),
+                  color: colorScheme.primary.withOpacity(0.4),
                   width: 2,
                 ),
               ),
@@ -2355,12 +2355,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             color: theme.colorScheme.surface,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: colorScheme.primary.withValues(alpha: 0.5),
+                              color: colorScheme.primary.withOpacity(0.5),
                               width: 2,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: colorScheme.primary.withValues(alpha: 0.16),
+                                color: colorScheme.primary.withOpacity(0.16),
                                 blurRadius: 4,
                                 offset: const Offset(0, 2),
                               ),
@@ -2548,7 +2548,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.amber.withValues(alpha: 0.1),
+                                    color: Colors.amber.withOpacity(0.1),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   ),
@@ -2608,7 +2608,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                                     vertical: 2,
                                                   ),
                                               decoration: BoxDecoration(
-                                                color: Colors.green.withValues(alpha: 
+                                                color: Colors.green.withOpacity(
                                                   0.2,
                                                 ),
                                                 borderRadius:
@@ -2667,7 +2667,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             boxShadow: _remainingAmount > 0
                                 ? [
                                     BoxShadow(
-                                      color: colorScheme.primary.withValues(alpha: 
+                                      color: colorScheme.primary.withOpacity(
                                         0.25,
                                       ),
                                       blurRadius: 4,
@@ -2716,7 +2716,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                   decoration: BoxDecoration(
                                     border: Border(
                                       right: BorderSide(
-                                        color: colorScheme.primary.withValues(alpha: 
+                                        color: colorScheme.primary.withOpacity(
                                           0.4,
                                         ),
                                       ),
@@ -2777,7 +2777,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           backgroundColor: colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
                           elevation: 3,
-                          shadowColor: colorScheme.primary.withValues(alpha: 0.4),
+                          shadowColor: colorScheme.primary.withOpacity(0.4),
                         ),
                       ),
                     ],
@@ -2786,12 +2786,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 
+                      color: AppColors.warning.withOpacity(
                         isDark ? 0.18 : 0.12,
                       ),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withValues(alpha: 0.4),
+                        color: AppColors.warning.withOpacity(0.4),
                       ),
                     ),
                     child: Row(
@@ -2825,12 +2825,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 gradient: LinearGradient(
                   colors: _remainingAmount > 0
                       ? [
-                          colorScheme.error.withValues(alpha: isDark ? 0.16 : 0.12),
-                          colorScheme.error.withValues(alpha: isDark ? 0.28 : 0.2),
+                          colorScheme.error.withOpacity(isDark ? 0.16 : 0.12),
+                          colorScheme.error.withOpacity(isDark ? 0.28 : 0.2),
                         ]
                       : [
-                          AppColors.success.withValues(alpha: isDark ? 0.16 : 0.12),
-                          AppColors.success.withValues(alpha: isDark ? 0.28 : 0.2),
+                          AppColors.success.withOpacity(isDark ? 0.16 : 0.12),
+                          AppColors.success.withOpacity(isDark ? 0.28 : 0.2),
                         ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -2838,8 +2838,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: _remainingAmount > 0
-                      ? colorScheme.error.withValues(alpha: 0.5)
-                      : AppColors.success.withValues(alpha: 0.5),
+                      ? colorScheme.error.withOpacity(0.5)
+                      : AppColors.success.withOpacity(0.5),
                   width: 2,
                 ),
                 boxShadow: [
@@ -2848,7 +2848,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         (_remainingAmount > 0
                                 ? colorScheme.error
                                 : AppColors.success)
-                            .withValues(alpha: 0.12),
+                            .withOpacity(0.12),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
