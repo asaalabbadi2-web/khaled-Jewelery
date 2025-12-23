@@ -13,9 +13,9 @@ if not os.path.exists('app.py'):
     print("❌ يجب تشغيل هذا السكريبت من مجلد backend")
     sys.exit(1)
 
-# استيراد التطبيق والنماذج باستخدام المسار الكامل لضمان استخدام نفس مثيل SQLAlchemy
+# استيراد التطبيق والنماذج باستخدام نفس مثيل SQLAlchemy كما في الخادم الرئيسي
 from app import app, db
-from backend.models import Account, AccountingMapping
+from models import Account, AccountingMapping
 
 def setup_mappings():
     """إعداد الربط المحاسبي الأساسي لفواتير شراء من مورد"""

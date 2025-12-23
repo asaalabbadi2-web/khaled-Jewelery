@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
@@ -8,6 +7,12 @@ import '../theme/app_theme.dart';
 import '../models/safe_box_model.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import 'add_customer_screen.dart';
+import '../widgets/invoice_type_banner.dart';
+import '../utils.dart';
+
+// نسبة افتراضية لخفض سعر السوق للحصول على سعر شراء آمن عند عدم توفر بيانات مخاطبة من المتوسط
+const double kScrapPurchasePriceDiscount = 0.98;
 
 /// شاشة فاتورة شراء الكسر - نسخة مبسطة
 /// ميزات: تصوير الذهب + ملاحظات + دفع نقدي/تحويل فقط + بدون ضريبة
@@ -16,10 +21,10 @@ class ScrapPurchaseInvoiceScreen extends StatefulWidget {
   final List<Map<String, dynamic>> customers;
 
   const ScrapPurchaseInvoiceScreen({
-    Key? key,
+    super.key,
     required this.items,
     required this.customers,
-  }) : super(key: key);
+  });
 
   @override
   State<ScrapPurchaseInvoiceScreen> createState() =>
@@ -41,17 +46,20 @@ class _ScrapPurchaseInvoiceScreenState
 
   // Gold Price & Settings
   double _goldPrice24k = 0.0;
+  double _purchasePrice24k = 0.0;
   late SettingsProvider _settingsProvider;
 
   // Payment - 🆕 وسائل دفع متعددة
   List<Map<String, dynamic>> _paymentMethods = [];
-  List<PaymentEntry> _payments = []; // 🆕 قائمة الدفعات المضافة
+  final List<PaymentEntry> _payments = []; // 🆕 قائمة الدفعات المضافة
   int? _selectedPaymentMethodId; // للـ Dropdown
 
   // 🆕 الخزائن
+  // ignore: unused_field
   List<SafeBoxModel> _safeBoxes = [];
   int? _selectedSafeBoxId;
-  bool _showAdvancedPaymentOptions = false; // 🎯 للتحكم في إظهار الخزائن
+  // ignore: unused_field
+  final bool _showAdvancedPaymentOptions = false; // 🎯 للتحكم في إظهار الخزائن
 
   // 🆕 صور الذهب المشترى
   final List<File> _goldImages = [];
@@ -74,6 +82,7 @@ class _ScrapPurchaseInvoiceScreenState
     _loadSettings();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
     _loadDefaultSafeBox(); // 🆕 تحميل الخزينة النقدية
+    _loadPurchaseBaseline();
     _smartInputFocus.requestFocus();
   }
 
@@ -99,11 +108,45 @@ class _ScrapPurchaseInvoiceScreenState
       final priceData = await apiService.getGoldPrice();
       if (!mounted) return;
       setState(() {
-        _goldPrice24k = _parseDouble(priceData['price_24k']);
+        final fetched = _parseDouble(priceData['price_24k']);
+        _goldPrice24k = fetched;
+        if (_purchasePrice24k <= 0) {
+          _purchasePrice24k = _fallbackPurchasePriceFromMarket(fetched);
+        }
       });
     } catch (e) {
       _showError('فشل تحميل سعر الذهب: $e');
     }
+  }
+
+  Future<void> _loadPurchaseBaseline() async {
+    try {
+      final apiService = ApiService();
+      final response = await apiService.getGoldCostingSnapshot();
+      final config = Map<String, dynamic>.from(response['config'] ?? {});
+      final lastPurchase = _parseDouble(config['last_purchase_price']);
+      final avgGold = _parseDouble(config['avg_gold_price_per_gram']);
+      final resolved = lastPurchase > 0 ? lastPurchase : avgGold;
+      if (!mounted || resolved <= 0) return;
+      setState(() {
+        _purchasePrice24k = resolved;
+      });
+    } catch (e) {
+      debugPrint('⚠️ فشل تحميل سعر شراء الذهب: $e');
+    }
+  }
+
+  double _fallbackPurchasePriceFromMarket(double marketPrice) {
+    if (marketPrice <= 0) return 0.0;
+    return double.parse((marketPrice * kScrapPurchasePriceDiscount).toStringAsFixed(2));
+  }
+
+  double get _effectivePurchasePrice24k {
+    if (_purchasePrice24k > 0) return _purchasePrice24k;
+    if (_goldPrice24k > 0) {
+      return _fallbackPurchasePriceFromMarket(_goldPrice24k);
+    }
+    return 0.0;
   }
 
   int? _parseInt(dynamic value) {
@@ -326,8 +369,8 @@ class _ScrapPurchaseInvoiceScreenState
   Future<void> _processSmartInput(String input) async {
     if (input.trim().isEmpty) return;
 
-    print('🔍 البحث عن: "$input"');
-    print('📦 عدد الأصناف المتاحة: ${widget.items.length}');
+    debugPrint('🔍 البحث عن: "$input"');
+    debugPrint('📦 عدد الأصناف المتاحة: ${widget.items.length}');
 
     try {
       // البحث بالترتيب: Barcode → Item Code → Name
@@ -337,7 +380,7 @@ class _ScrapPurchaseInvoiceScreenState
       foundItem = widget.items.firstWhere((item) {
         final barcode = item['barcode']?.toString().toLowerCase();
         final match = barcode == input.toLowerCase();
-        if (match) print('✅ تطابق بالباركود: ${item['name']}');
+        if (match) debugPrint('✅ تطابق بالباركود: ${item['name']}');
         return match;
       }, orElse: () => {});
 
@@ -346,7 +389,7 @@ class _ScrapPurchaseInvoiceScreenState
         foundItem = widget.items.firstWhere((item) {
           final code = item['item_code']?.toString().toLowerCase();
           final match = code == input.toLowerCase();
-          if (match) print('✅ تطابق برقم الصنف: ${item['name']}');
+          if (match) debugPrint('✅ تطابق برقم الصنف: ${item['name']}');
           return match;
         }, orElse: () => {});
       }
@@ -356,13 +399,13 @@ class _ScrapPurchaseInvoiceScreenState
         foundItem = widget.items.firstWhere((item) {
           final name = item['name']?.toString().toLowerCase();
           final match = name?.contains(input.toLowerCase()) ?? false;
-          if (match) print('✅ تطابق بالاسم: ${item['name']}');
+          if (match) debugPrint('✅ تطابق بالاسم: ${item['name']}');
           return match;
         }, orElse: () => {});
       }
 
       if (foundItem.isNotEmpty) {
-        print('✨ تمت إضافة: ${foundItem['name']}');
+        debugPrint('✨ تمت إضافة: ${foundItem['name']}');
         _addItemFromData(foundItem);
         _smartInputController.clear();
         _smartInputFocus.requestFocus();
@@ -377,18 +420,18 @@ class _ScrapPurchaseInvoiceScreenState
           );
         }
       } else {
-        print('❌ لم يتم العثور على الصنف');
+        debugPrint('❌ لم يتم العثور على الصنف');
         _showError('⚠️ لم يتم العثور على الصنف');
       }
     } catch (e) {
-      print('🔴 خطأ في البحث: $e');
+      debugPrint('🔴 خطأ في البحث: $e');
       _showError('خطأ في البحث: $e');
     }
   }
 
   Future<void> _addItemFromData(Map<String, dynamic> itemData) async {
-    print('➕ إضافة صنف: ${itemData['name']} (ID: ${itemData['id']})');
-    print(
+    debugPrint('➕ إضافة صنف: ${itemData['name']} (ID: ${itemData['id']})');
+    debugPrint(
       '   البيانات الخام: karat=${itemData['karat']}, wage=${itemData['wage']}',
     );
 
@@ -401,41 +444,46 @@ class _ScrapPurchaseInvoiceScreenState
         if (mounted) {
           setState(() {
             _goldPrice24k = newPrice;
+            if (_purchasePrice24k <= 0) {
+              _purchasePrice24k = _fallbackPurchasePriceFromMarket(newPrice);
+            }
           });
         }
-        print('💰 سعر الذهب المحدث: $_goldPrice24k ر.س/جم');
+        debugPrint('💰 سعر الذهب المحدث: $_goldPrice24k ر.س/جم');
       } else {
-        print('⚠️ سعر الذهب غير صالح في الاستجابة: ${priceData['price_24k']}');
+        debugPrint('⚠️ سعر الذهب غير صالح في الاستجابة: ${priceData['price_24k']}');
       }
     } catch (e) {
-      print('⚠️ فشل تحديث سعر الذهب: $e');
+      debugPrint('⚠️ فشل تحديث سعر الذهب: $e');
       // الاستمرار باستخدام السعر الحالي
     }
 
     // تحويل آمن للقيم
     double karat = _parseDouble(itemData['karat']);
-    if (karat <= 0) karat = 21.0;
+    if (karat <= 0) {
+      karat = _settingsProvider.mainKarat.toDouble();
+    }
 
-    double wage = _parseDouble(itemData['wage']);
+    // الوزن والمصنعية تبدأ من الصفر ليقوم المستخدم بتعبئتها بنفسه
+    double wage = 0.0;
+    double weight = 0.0;
 
-    // تحويل آمن للوزن
-    double weight = _parseDouble(itemData['weight']);
-    if (weight <= 0) weight = 10.0; // افتراضي إذا لم يكن موجود
+    final parsedId = _parseInt(itemData['id']);
 
     setState(() {
       _items.add(
         InvoiceItem(
-          id: itemData['id'],
+          itemId: parsedId,
           name: itemData['name'] ?? '',
           barcode: itemData['barcode'] ?? '',
           karat: karat,
-          weight: weight, // استخدام الوزن الفعلي من قاعدة البيانات
+          weight: weight,
           wage: wage,
-          goldPrice24k: _goldPrice24k,
+          goldPrice24k: _effectivePurchasePrice24k,
           mainKarat: _settingsProvider.mainKarat,
         ),
       );
-      print('📋 عدد الأصناف الآن: ${_items.length}');
+      debugPrint('📋 عدد الأصناف الآن: ${_items.length}');
     });
   }
 
@@ -491,10 +539,10 @@ class _ScrapPurchaseInvoiceScreenState
     // تحديث الربح
     item.profit = requiredProfit;
 
-    print('🔄 إعادة حساب للوصول للإجمالي ${targetTotal.toStringAsFixed(2)}:');
-    print('   التكلفة: ${currentCost.toStringAsFixed(2)}');
-    print('   الربح: ${requiredProfit.toStringAsFixed(2)}');
-    print('   الصافي: ${targetNet.toStringAsFixed(2)}');
+    debugPrint('🔄 إعادة حساب للوصول للإجمالي ${targetTotal.toStringAsFixed(2)}:');
+    debugPrint('   التكلفة: ${currentCost.toStringAsFixed(2)}');
+    debugPrint('   الربح: ${requiredProfit.toStringAsFixed(2)}');
+    debugPrint('   الصافي: ${targetNet.toStringAsFixed(2)}');
   }
 
   void _removeItem(int index) {
@@ -524,6 +572,7 @@ class _ScrapPurchaseInvoiceScreenState
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
+              inputFormatters: [NormalizeNumberFormatter()],
               decoration: InputDecoration(
                 labelText: 'المبلغ المستهدف',
                 suffixText: _settingsProvider.currencySymbol,
@@ -668,16 +717,58 @@ class _ScrapPurchaseInvoiceScreenState
       // إذا لم يتم اختيار عميل، استخدم عميل "نقدي" (ID = 1)
       int customerId = _selectedCustomerId ?? 1;
 
-      // تحقق من وجود عميل "نقدي" في القائمة، إذا لم يكن موجوداً استخدم أول عميل
-      final cashCustomer = widget.customers.firstWhere(
-        (c) => c['name']?.toString().toLowerCase() == 'نقدي' || c['id'] == 1,
-        orElse: () =>
-            widget.customers.isNotEmpty ? widget.customers.first : {'id': 1},
-      );
+      Map<String, dynamic>? cashCustomer = _findCashCustomer();
 
       if (_selectedCustomerId == null) {
-        customerId = cashCustomer['id'] ?? 1;
-        print('💵 لم يتم اختيار عميل - تقييد للعميل النقدي (ID: $customerId)');
+        final proceedWithCash = await _confirmUseCashCustomer();
+        if (!proceedWithCash) {
+          _showError('يرجى اختيار عميل لإكمال الفاتورة أو الاستمرار مع العميل النقدي.');
+          return;
+        }
+
+  cashCustomer ??= await _getOrCreateCashCustomer(promptIfMissing: false);
+        if (cashCustomer == null || cashCustomer['id'] == null) {
+          _showError('لا يوجد عميل نقدي متاح. يرجى إنشاء عميل نقدي أو اختيار عميل محدد للمتابعة.');
+          return;
+        }
+
+        customerId = cashCustomer['id'];
+        if (mounted) {
+          setState(() {
+            _selectedCustomerId = customerId;
+          });
+        }
+
+        debugPrint('💵 لم يتم اختيار عميل - تم تأكيد التقييد للعميل النقدي (ID: $customerId)');
+      }
+
+      // ================= Identity fields enforcement for scrap purchase =================
+      // If the selected customer is not the cash customer, ensure identity fields exist
+      Map<String, dynamic>? selectedCustomer;
+      if (_selectedCustomerId != null) {
+        selectedCustomer = widget.customers.firstWhere((c) {
+          final rawId = c['id'];
+          if (rawId == null) return false;
+          final parsed = rawId is int ? rawId : int.tryParse(rawId.toString());
+          return parsed == _selectedCustomerId;
+        }, orElse: () => {});
+        if (selectedCustomer.isEmpty) selectedCustomer = null;
+      }
+
+      // Only enforce identity for real customers (not the special 'نقدي' cash customer)
+    final isCashCustomer = (selectedCustomer == null)
+      ? (cashCustomer != null && _isCashCustomerEntry(cashCustomer))
+      : _isCashCustomerEntry(selectedCustomer);
+
+      if (!isCashCustomer) {
+        final idNumber = selectedCustomer?['id_number']?.toString().trim() ?? '';
+        final idVersion = selectedCustomer?['id_version_number']?.toString().trim() ?? '';
+        final birthDate = selectedCustomer?['birth_date']?.toString().trim() ?? '';
+
+        if (idNumber.isEmpty || idVersion.isEmpty || birthDate.isEmpty) {
+          _showError('يجب أن يحتوي العميل المختار على رقم الهوية، رقم نسخة الهوية وتاريخ الميلاد قبل حفظ فاتورة شراء الكسر.\nيرجى تعديل بيانات العميل أو إضافة عميل جديد مع معلومات الهوية.');
+          return;
+        }
       }
 
       // حساب الإجماليات
@@ -716,15 +807,15 @@ class _ScrapPurchaseInvoiceScreenState
 
       final response = await apiService.addInvoice(invoiceData);
 
-      if (context.mounted) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ تم حفظ الفاتورة #${response['id']}'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-      }
+      if (!mounted) return;
+
+      Navigator.pop(context, true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ تم حفظ الفاتورة #${response['id']}'),
+          backgroundColor: AppColors.success,
+        ),
+      );
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }
@@ -746,6 +837,169 @@ class _ScrapPurchaseInvoiceScreenState
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: AppColors.error),
     );
+  }
+
+  Map<String, dynamic>? _findCashCustomer() {
+    for (final customer in widget.customers) {
+      final rawId = customer['id'];
+      final id = rawId is int ? rawId : int.tryParse(rawId.toString());
+      if (id == null) continue;
+
+      if (_isCashCustomerEntry(customer)) {
+        return {
+          ...customer,
+          'id': id,
+        };
+      }
+    }
+    return null;
+  }
+
+  bool _isCashCustomerEntry(Map<String, dynamic>? customer) {
+    if (customer == null) return false;
+    final name = customer['name']?.toString().toLowerCase() ?? '';
+    final code = customer['customer_code']?.toString().toLowerCase() ?? '';
+    return _containsCashKeyword(name) || _containsCashKeyword(code);
+  }
+
+  bool _containsCashKeyword(String value) {
+    if (value.isEmpty) return false;
+    return value.contains('نقد') || value.contains('كاش') || value.contains('cash');
+  }
+
+  Future<Map<String, dynamic>?> _getOrCreateCashCustomer({bool promptIfMissing = true}) async {
+    final existing = _findCashCustomer();
+    if (existing != null) return existing;
+
+    if (!promptIfMissing) {
+      return _createCashCustomerRecord();
+    }
+
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final shouldCreate = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              backgroundColor: colorScheme.surface,
+              title: Text(
+                'لا يوجد عميل نقدي',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              content: Text(
+                'لا يوجد عميل نقدي في قائمة العملاء الحالية. هل ترغب في إنشاء عميل نقدي افتراضي الآن؟',
+                style: theme.textTheme.bodyMedium,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: Text('إلغاء', style: theme.textTheme.bodyMedium),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('إنشاء عميل نقدي'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!shouldCreate) {
+      return null;
+    }
+
+    return _createCashCustomerRecord();
+  }
+
+  Future<Map<String, dynamic>?> _createCashCustomerRecord() async {
+    try {
+      final api = ApiService();
+      final payload = {
+        'name': 'عميل نقدي',
+        'phone': '',
+        'address_line_1': 'إنشاء تلقائي',
+        'notes': 'تم إنشاؤه تلقائياً للاستخدام كعميل نقدي',
+        'active': true,
+      };
+
+      final response = await api.addCustomer(payload);
+      if (!mounted) return response;
+      setState(() {
+        widget.customers.add(response);
+      });
+      return response;
+    } catch (e) {
+      _showError('فشل إنشاء عميل نقدي: $e');
+      return null;
+    }
+  }
+
+  Future<bool> _confirmUseCashCustomer() async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              backgroundColor: colorScheme.surface,
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.warning_amber, color: AppColors.warning),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'لم يتم اختيار عميل',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Text(
+                'لم يتم اختيار عميل لهذه الفاتورة. يمكنك إما العودة لاختيار العميل الصحيح أو الاستمرار وتقييد الفاتورة باسم العميل النقدي.',
+                style: theme.textTheme.bodyMedium,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: Text(
+                    'تراجع',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.secondary,
+                    ),
+                  ),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('استمرار مع عميل نقدي'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
   }
 
   // 🆕 Helper methods لأيقونات وألوان طرق الدفع
@@ -787,157 +1041,29 @@ class _ScrapPurchaseInvoiceScreenState
     }
   }
 
-  // إضافة عميل جديد
+  // Open the reusable AddCustomerScreen so we can enforce identity fields when needed
   Future<void> _addNewCustomer() async {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final nameController = TextEditingController();
-    final phoneController = TextEditingController();
-    final addressController = TextEditingController();
-
-    await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: colorScheme.surface,
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.success.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.person_add, color: AppColors.success),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'إضافة عميل جديد',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم العميل *',
-                    prefixIcon: Icon(Icons.person),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: phoneController,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'رقم الجوال',
-                    prefixIcon: Icon(Icons.phone),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: addressController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'العنوان',
-                    prefixIcon: Icon(Icons.location_on),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actionsPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 12,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: Text(
-                'إلغاء',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.secondary,
-                ),
-              ),
-            ),
-            FilledButton.icon(
-              onPressed: () async {
-                if (nameController.text.trim().isEmpty) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('⚠️ يرجى إدخال اسم العميل'),
-                      backgroundColor: AppColors.warning.withOpacity(0.9),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                try {
-                  final apiService = ApiService();
-                  final customerData = {
-                    'name': nameController.text.trim(),
-                    'phone': phoneController.text.trim(),
-                    'address_line_1': addressController.text.trim(),
-                    'active': true,
-                  };
-
-                  final response = await apiService.addCustomer(customerData);
-
-                  if (!mounted) return;
-
-                  setState(() {
-                    widget.customers.add(response);
-                    _selectedCustomerId = response['id'];
-                  });
-
-                  Navigator.pop(dialogContext, true);
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('✅ تم إضافة العميل: ${response['name']}'),
-                      backgroundColor: AppColors.success,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                } catch (e) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('❌ فشل إضافة العميل: $e'),
-                      backgroundColor: AppColors.error,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.save),
-              label: const Text('حفظ'),
-              style: FilledButton.styleFrom(
-                backgroundColor: colorScheme.primary,
-                foregroundColor: colorScheme.onPrimary,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+    final result = await Navigator.push<bool?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddCustomerScreen(
+          api: ApiService(),
+          enforceIdentityFields: true, // scrap purchases require identity data
+          onCustomerSaved: (saved) {
+            if (!mounted) return;
+            setState(() {
+              widget.customers.add(saved);
+              final rawId = saved['id'];
+              _selectedCustomerId = rawId is int ? rawId : int.tryParse(rawId.toString());
+            });
+          },
+        ),
+      ),
     );
+
+    if (result == true) {
+      debugPrint('Customer added via AddCustomerScreen');
+    }
   }
 
   Future<void> _openCameraScanner() async {
@@ -947,7 +1073,7 @@ class _ScrapPurchaseInvoiceScreenState
     );
 
     if (barcode != null && barcode.isNotEmpty && mounted) {
-      print('📷 تم مسح الباركود: $barcode'); // للتتبع
+      debugPrint('📷 تم مسح الباركود: $barcode'); // للتتبع
       _smartInputController.text = barcode;
       await _processSmartInput(barcode);
       _smartInputFocus.requestFocus(); // إعادة التركيز للإدخال
@@ -1012,6 +1138,16 @@ class _ScrapPurchaseInvoiceScreenState
         final bodyContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            InvoiceTypeBanner(
+              title: 'فاتورة شراء ذهب كسر',
+              subtitle: 'خاصة بشراء الذهب المستعمل أو الكسر مع توصيف القطعة والصور',
+              color: AppColors.invoicePurchaseScrap,
+              icon: Icons.shopping_bag_outlined,
+              trailing: Text(
+                'نوع الفاتورة',
+                style: theme.textTheme.labelLarge,
+              ),
+            ),
             _buildCustomerSection(theme),
             const SizedBox(height: 24),
             if (isWideLayout)
@@ -1097,6 +1233,9 @@ class _ScrapPurchaseInvoiceScreenState
 
         return Scaffold(
           appBar: AppBar(
+            backgroundColor: AppColors.invoicePurchaseScrap,
+            foregroundColor: Colors.white,
+            iconTheme: const IconThemeData(color: Colors.white),
             title: const Text('فاتورة شراء الكسر'),
             actions: [
               IconButton(
@@ -1137,7 +1276,7 @@ class _ScrapPurchaseInvoiceScreenState
     return Card(
       elevation: isDark ? 2 : 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      shadowColor: Colors.black.withOpacity(isDark ? 0.25 : 0.08),
+      shadowColor: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -1149,7 +1288,7 @@ class _ScrapPurchaseInvoiceScreenState
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withOpacity(
+                    color: colorScheme.primary.withValues(alpha: 
                       isDark ? 0.18 : 0.12,
                     ),
                     borderRadius: BorderRadius.circular(12),
@@ -1199,8 +1338,8 @@ class _ScrapPurchaseInvoiceScreenState
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceVariant.withOpacity(
-                    isDark ? 0.25 : 0.5,
+                  color: colorScheme.surfaceContainerHighest.withValues(
+                    alpha: isDark ? 0.25 : 0.5,
                   ),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1211,7 +1350,7 @@ class _ScrapPurchaseInvoiceScreenState
               )
             else
               DropdownButtonFormField<int>(
-                value: _selectedCustomerId,
+                initialValue: _selectedCustomerId,
                 items: widget.customers
                     .map((customer) {
                       final rawId = customer['id'];
@@ -1251,7 +1390,7 @@ class _ScrapPurchaseInvoiceScreenState
                                   phone,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.textTheme.bodySmall?.color
-                                        ?.withOpacity(0.7),
+                                        ?.withValues(alpha: 0.7),
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -1295,7 +1434,7 @@ class _ScrapPurchaseInvoiceScreenState
       decoration: BoxDecoration(
         color: colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.primary.withOpacity(0.3)),
+        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1356,9 +1495,9 @@ class _ScrapPurchaseInvoiceScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: colorScheme.primary.withOpacity(isDark ? 0.18 : 0.12),
+        color: colorScheme.primary.withValues(alpha: isDark ? 0.18 : 0.12),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.primary.withOpacity(0.4)),
+        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1393,7 +1532,7 @@ class _ScrapPurchaseInvoiceScreenState
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            colorScheme.primary.withOpacity(0.15),
+            colorScheme.primary.withValues(alpha: 0.15),
             theme.colorScheme.surface,
           ],
           begin: Alignment.topLeft,
@@ -1401,7 +1540,7 @@ class _ScrapPurchaseInvoiceScreenState
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: colorScheme.primary.withOpacity(0.5),
+          color: colorScheme.primary.withValues(alpha: 0.5),
           width: 2,
         ),
       ),
@@ -1415,7 +1554,7 @@ class _ScrapPurchaseInvoiceScreenState
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withOpacity(0.3),
+                  color: colorScheme.primary.withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1519,9 +1658,9 @@ class _ScrapPurchaseInvoiceScreenState
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: color.withOpacity(backgroundOpacity),
+            color: color.withValues(alpha: backgroundOpacity),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(borderOpacity)),
+            border: Border.all(color: color.withValues(alpha: borderOpacity)),
           ),
           child: Icon(icon, color: color, size: 20),
         ),
@@ -1539,10 +1678,10 @@ class _ScrapPurchaseInvoiceScreenState
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: dividerColor.withOpacity(0.6)),
+        border: Border.all(color: dividerColor.withValues(alpha: 0.6)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(
+            color: Colors.black.withValues(alpha: 
               theme.brightness == Brightness.dark ? 0.3 : 0.06,
             ),
             blurRadius: 8,
@@ -1560,7 +1699,7 @@ class _ScrapPurchaseInvoiceScreenState
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withOpacity(0.1),
+                  color: colorScheme.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1608,12 +1747,15 @@ class _ScrapPurchaseInvoiceScreenState
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: theme.brightness == Brightness.dark
-              ? [colorScheme.surfaceVariant, theme.scaffoldBackgroundColor]
+              ? [
+                  colorScheme.surfaceContainerHighest,
+                  theme.scaffoldBackgroundColor,
+                ]
               : [colorScheme.surface, theme.scaffoldBackgroundColor],
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: theme.dividerColor.withOpacity(0.6),
+          color: theme.dividerColor.withValues(alpha: 0.6),
           width: 2,
         ),
       ),
@@ -1623,7 +1765,7 @@ class _ScrapPurchaseInvoiceScreenState
             Icon(
               Icons.shopping_cart_outlined,
               size: 64,
-              color: colorScheme.primary.withOpacity(0.6),
+              color: colorScheme.primary.withValues(alpha: 0.6),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1661,12 +1803,12 @@ class _ScrapPurchaseInvoiceScreenState
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
-        headingRowColor: MaterialStateProperty.all(
-          colorScheme.primary.withOpacity(0.15),
+        headingRowColor: WidgetStateProperty.all(
+          colorScheme.primary.withValues(alpha: 0.15),
         ),
-        dataRowColor: MaterialStateProperty.resolveWith((states) {
-          if (states.contains(MaterialState.selected)) {
-            return colorScheme.primary.withOpacity(0.1);
+        dataRowColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return colorScheme.primary.withValues(alpha: 0.1);
           }
           return theme.cardColor;
         }),
@@ -1676,7 +1818,7 @@ class _ScrapPurchaseInvoiceScreenState
           DataColumn(label: Text('العيار', style: headerStyle)),
           DataColumn(label: Text('الوزن (جم)', style: headerStyle)),
           DataColumn(label: Text('المصنعية', style: headerStyle)),
-          DataColumn(label: Text('السعر/جم', style: headerStyle)),
+          DataColumn(label: Text('تكلفة الشراء/جم', style: headerStyle)),
           DataColumn(label: Text('التكلفة', style: headerStyle)),
           DataColumn(label: Text('الصافي', style: headerStyle)),
           DataColumn(label: Text('الإجمالي', style: headerStyle)),
@@ -1688,7 +1830,7 @@ class _ScrapPurchaseInvoiceScreenState
 
           return DataRow(
             cells: [
-              DataCell(Text('${index + 1}', style: cellStyle)),
+              DataCell(Text((index + 1).toString(), style: cellStyle)),
               DataCell(Text(item.name, style: cellStyle)),
               DataCell(
                 InkWell(
@@ -1699,14 +1841,14 @@ class _ScrapPurchaseInvoiceScreenState
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.info.withOpacity(0.15),
+                      color: AppColors.info.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.info.withOpacity(0.3),
+                        color: AppColors.info.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
-                      '${item.karat.toStringAsFixed(0)}',
+                      item.karat.toStringAsFixed(0),
                       style: cellStyle,
                     ),
                   ),
@@ -1721,14 +1863,14 @@ class _ScrapPurchaseInvoiceScreenState
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.success.withOpacity(0.15),
+                      color: AppColors.success.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.success.withOpacity(0.3),
+                        color: AppColors.success.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
-                      '${item.weight.toStringAsFixed(2)}',
+                      item.weight.toStringAsFixed(2),
                       style: cellStyle,
                     ),
                   ),
@@ -1743,14 +1885,14 @@ class _ScrapPurchaseInvoiceScreenState
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withOpacity(0.15),
+                      color: AppColors.warning.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withOpacity(0.3),
+                        color: AppColors.warning.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
-                      '${item.wage.toStringAsFixed(2)}',
+                      item.wage.toStringAsFixed(2),
                       style: cellStyle,
                     ),
                   ),
@@ -1758,15 +1900,15 @@ class _ScrapPurchaseInvoiceScreenState
               ),
               DataCell(
                 Text(
-                  '${item.calculateSellingPricePerGram().toStringAsFixed(2)}',
+                  item.calculatePurchaseCostPerGram().toStringAsFixed(2),
                   style: cellStyle,
                 ),
               ),
               DataCell(
-                Text('${item.cost.toStringAsFixed(2)}', style: cellStyle),
+                Text(item.cost.toStringAsFixed(2), style: cellStyle),
               ),
               DataCell(
-                Text('${item.net.toStringAsFixed(2)}', style: cellStyle),
+                Text(item.net.toStringAsFixed(2), style: cellStyle),
               ),
               DataCell(
                 InkWell(
@@ -1778,10 +1920,10 @@ class _ScrapPurchaseInvoiceScreenState
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.karat24.withOpacity(0.15),
+                      color: AppColors.karat24.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.karat24.withOpacity(0.3),
+                        color: AppColors.karat24.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
@@ -1848,6 +1990,7 @@ class _ScrapPurchaseInvoiceScreenState
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [NormalizeNumberFormatter()],
           decoration: InputDecoration(
             labelText: label,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -1866,11 +2009,11 @@ class _ScrapPurchaseInvoiceScreenState
                 Navigator.pop(context);
               }
             },
-            child: const Text('حفظ'),
             style: ElevatedButton.styleFrom(
               backgroundColor: colorScheme.primary,
               foregroundColor: colorScheme.onPrimary,
             ),
+            child: const Text('حفظ'),
           ),
         ],
       ),
@@ -1888,11 +2031,14 @@ class _ScrapPurchaseInvoiceScreenState
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: isDark
-              ? [colorScheme.surfaceVariant, theme.scaffoldBackgroundColor]
+              ? [
+                  colorScheme.surfaceContainerHighest,
+                  theme.scaffoldBackgroundColor,
+                ]
               : [colorScheme.surface, theme.scaffoldBackgroundColor],
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.dividerColor.withOpacity(0.6)),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.6)),
       ),
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -1911,9 +2057,10 @@ class _ScrapPurchaseInvoiceScreenState
               ),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(0, 56),
-                backgroundColor: AppColors.karat24,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: theme.disabledColor.withOpacity(0.2),
+                backgroundColor:
+                    isDark ? AppColors.karat24 : AppColors.primaryGold,
+                foregroundColor: isDark ? Colors.white : Colors.black,
+                disabledBackgroundColor: theme.disabledColor.withValues(alpha: 0.2),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1933,7 +2080,7 @@ class _ScrapPurchaseInvoiceScreenState
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
-                  color: colorScheme.primary.withOpacity(isDark ? 0.35 : 0.4),
+                  color: colorScheme.primary.withValues(alpha: isDark ? 0.35 : 0.4),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -1952,7 +2099,7 @@ class _ScrapPurchaseInvoiceScreenState
                         color: isDark ? Colors.white : Colors.black87,
                         shadows: !isDark ? [
                           Shadow(
-                            color: Colors.white.withOpacity(0.8),
+                            color: Colors.white.withValues(alpha: 0.8),
                             blurRadius: 2,
                           ),
                         ] : null,
@@ -1961,11 +2108,11 @@ class _ScrapPurchaseInvoiceScreenState
                     Text(
                       '${_items.length} صنف',
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87,
+                        color: isDark ? Colors.white.withValues(alpha: 0.9) : Colors.black87,
                         fontWeight: FontWeight.w500,
                         shadows: !isDark ? [
                           Shadow(
-                            color: Colors.white.withOpacity(0.8),
+                            color: Colors.white.withValues(alpha: 0.8),
                             blurRadius: 2,
                           ),
                         ] : null,
@@ -1980,7 +2127,7 @@ class _ScrapPurchaseInvoiceScreenState
                     color: isDark ? Colors.white : Colors.black87,
                     shadows: !isDark ? [
                       Shadow(
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white.withValues(alpha: 0.9),
                         blurRadius: 3,
                       ),
                     ] : null,
@@ -2129,14 +2276,14 @@ class _ScrapPurchaseInvoiceScreenState
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
-              value: selectedCondition,
+              initialValue: selectedCondition,
               decoration: InputDecoration(
                 labelText: 'حالة الذهب',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
                 filled: true,
-                fillColor: colorScheme.surfaceContainerHighest.withOpacity(0.3),
+                fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
               ),
               items: _goldConditionOptions
                   .map(
@@ -2165,7 +2312,7 @@ class _ScrapPurchaseInvoiceScreenState
                   borderRadius: BorderRadius.circular(12),
                 ),
                 filled: true,
-                fillColor: colorScheme.surfaceContainerHighest.withOpacity(0.3),
+                fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
               ),
             ),
           ],
@@ -2179,7 +2326,7 @@ class _ScrapPurchaseInvoiceScreenState
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final totalAmount = _calculateGrandTotal();
-    final dividerColor = theme.dividerColor.withOpacity(0.6);
+    final dividerColor = theme.dividerColor.withValues(alpha: 0.6);
     final isDark = theme.brightness == Brightness.dark;
 
     return Card(
@@ -2212,10 +2359,10 @@ class _ScrapPurchaseInvoiceScreenState
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.success.withOpacity(isDark ? 0.2 : 0.12),
+                    color: AppColors.success.withValues(alpha: isDark ? 0.2 : 0.12),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: AppColors.success.withOpacity(0.4),
+                      color: AppColors.success.withValues(alpha: 0.4),
                     ),
                   ),
                   child: Text(
@@ -2236,7 +2383,7 @@ class _ScrapPurchaseInvoiceScreenState
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: colorScheme.primary.withOpacity(0.4),
+                    color: colorScheme.primary.withValues(alpha: 0.4),
                     width: 2,
                   ),
                   borderRadius: BorderRadius.circular(8),
@@ -2249,10 +2396,10 @@ class _ScrapPurchaseInvoiceScreenState
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            colorScheme.primary.withOpacity(
+                            colorScheme.primary.withValues(alpha: 
                               isDark ? 0.25 : 0.3,
                             ),
-                            AppColors.lightGold.withOpacity(
+                            AppColors.lightGold.withValues(alpha: 
                               isDark ? 0.2 : 0.35,
                             ),
                           ],
@@ -2273,7 +2420,7 @@ class _ScrapPurchaseInvoiceScreenState
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2289,7 +2436,7 @@ class _ScrapPurchaseInvoiceScreenState
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2306,7 +2453,7 @@ class _ScrapPurchaseInvoiceScreenState
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2323,7 +2470,7 @@ class _ScrapPurchaseInvoiceScreenState
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2340,7 +2487,7 @@ class _ScrapPurchaseInvoiceScreenState
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2359,9 +2506,8 @@ class _ScrapPurchaseInvoiceScreenState
                         decoration: BoxDecoration(
                           color: index % 2 == 0
                               ? theme.colorScheme.surface
-                              : theme.colorScheme.surfaceVariant.withOpacity(
-                                  isDark ? 0.3 : 0.5,
-                                ),
+                              : theme.colorScheme.surfaceContainerHighest
+                                  .withValues(alpha: isDark ? 0.3 : 0.5),
                           border: Border(
                             bottom: BorderSide(color: dividerColor, width: 1),
                           ),
@@ -2387,7 +2533,7 @@ class _ScrapPurchaseInvoiceScreenState
                                         vertical: 3,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: AppColors.warning.withOpacity(
+                                        color: AppColors.warning.withValues(alpha: 
                                           isDark ? 0.2 : 0.25,
                                         ),
                                         borderRadius: BorderRadius.circular(6),
@@ -2470,10 +2616,10 @@ class _ScrapPurchaseInvoiceScreenState
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: colorScheme.primary.withOpacity(isDark ? 0.15 : 0.12),
+                color: colorScheme.primary.withValues(alpha: isDark ? 0.15 : 0.12),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: colorScheme.primary.withOpacity(0.4),
+                  color: colorScheme.primary.withValues(alpha: 0.4),
                   width: 2,
                 ),
               ),
@@ -2488,11 +2634,11 @@ class _ScrapPurchaseInvoiceScreenState
                     ),
                   ),
                   const SizedBox(height: 12),
+                  // Row 1: وسيلة الدفع
                   Row(
                     children: [
                       // Dropdown وسيلة الدفع - محسّن 🆕
                       Expanded(
-                        flex: 3,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -2502,12 +2648,12 @@ class _ScrapPurchaseInvoiceScreenState
                             color: theme.colorScheme.surface,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: colorScheme.primary.withOpacity(0.5),
+                              color: colorScheme.primary.withValues(alpha: 0.5),
                               width: 2,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: colorScheme.primary.withOpacity(0.16),
+                                color: colorScheme.primary.withValues(alpha: 0.16),
                                 blurRadius: 4,
                                 offset: const Offset(0, 2),
                               ),
@@ -2637,11 +2783,15 @@ class _ScrapPurchaseInvoiceScreenState
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
 
+                  // Row 2: المبلغ وزر الإضافة (في صف واحد)
+                  Row(
+                    children: [
                       // حقل المبلغ مع أيقونة ملء باقي المبلغ
                       Expanded(
-                        flex: 2,
                         child: Container(
                           decoration: BoxDecoration(
                             color: theme.colorScheme.surface,
@@ -2655,7 +2805,7 @@ class _ScrapPurchaseInvoiceScreenState
                             boxShadow: _remainingAmount > 0
                                 ? [
                                     BoxShadow(
-                                      color: colorScheme.primary.withOpacity(
+                                      color: colorScheme.primary.withValues(alpha: 
                                         0.25,
                                       ),
                                       blurRadius: 4,
@@ -2704,7 +2854,7 @@ class _ScrapPurchaseInvoiceScreenState
                                   decoration: BoxDecoration(
                                     border: Border(
                                       right: BorderSide(
-                                        color: colorScheme.primary.withOpacity(
+                                        color: colorScheme.primary.withValues(alpha: 
                                           0.4,
                                         ),
                                       ),
@@ -2734,7 +2884,6 @@ class _ScrapPurchaseInvoiceScreenState
                         ),
                       ),
                       const SizedBox(width: 8),
-
                       // زر الإضافة
                       ElevatedButton.icon(
                         onPressed: () {
@@ -2758,7 +2907,7 @@ class _ScrapPurchaseInvoiceScreenState
                           backgroundColor: colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
                           elevation: 3,
-                          shadowColor: colorScheme.primary.withOpacity(0.4),
+                          shadowColor: colorScheme.primary.withValues(alpha: 0.4),
                         ),
                       ),
                     ],
@@ -2767,12 +2916,12 @@ class _ScrapPurchaseInvoiceScreenState
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withOpacity(
+                      color: AppColors.warning.withValues(alpha: 
                         isDark ? 0.18 : 0.12,
                       ),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withOpacity(0.4),
+                        color: AppColors.warning.withValues(alpha: 0.4),
                       ),
                     ),
                     child: Row(
@@ -2806,12 +2955,12 @@ class _ScrapPurchaseInvoiceScreenState
                 gradient: LinearGradient(
                   colors: _remainingAmount > 0
                       ? [
-                          colorScheme.error.withOpacity(isDark ? 0.16 : 0.12),
-                          colorScheme.error.withOpacity(isDark ? 0.28 : 0.2),
+                          colorScheme.error.withValues(alpha: isDark ? 0.16 : 0.12),
+                          colorScheme.error.withValues(alpha: isDark ? 0.28 : 0.2),
                         ]
                       : [
-                          AppColors.success.withOpacity(isDark ? 0.16 : 0.12),
-                          AppColors.success.withOpacity(isDark ? 0.28 : 0.2),
+                          AppColors.success.withValues(alpha: isDark ? 0.16 : 0.12),
+                          AppColors.success.withValues(alpha: isDark ? 0.28 : 0.2),
                         ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -2819,8 +2968,8 @@ class _ScrapPurchaseInvoiceScreenState
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: _remainingAmount > 0
-                      ? colorScheme.error.withOpacity(0.5)
-                      : AppColors.success.withOpacity(0.5),
+                      ? colorScheme.error.withValues(alpha: 0.5)
+                      : AppColors.success.withValues(alpha: 0.5),
                   width: 2,
                 ),
                 boxShadow: [
@@ -2829,7 +2978,7 @@ class _ScrapPurchaseInvoiceScreenState
                         (_remainingAmount > 0
                                 ? colorScheme.error
                                 : AppColors.success)
-                            .withOpacity(0.12),
+                            .withValues(alpha: 0.12),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -3066,13 +3215,13 @@ class _ScrapPurchaseInvoiceScreenState
 
 // ==================== Invoice Item Model ====================
 class InvoiceItem {
-  final int id;
+  final int? itemId;
   final String name;
   final String barcode;
   double karat;
   double weight;
   double wage; // أجور المصنعية للجرام الواحد
-  final double goldPrice24k;
+  final double goldPrice24k; // سعر الشراء لعيار 24 بعد أي خصم مطبق
   final int mainKarat;
 
   // الربح الموزع (يتم حسابه في _distributeAmount)
@@ -3083,7 +3232,7 @@ class InvoiceItem {
   double? _targetTotal;
 
   InvoiceItem({
-    required this.id,
+    required this.itemId,
     required this.name,
     required this.barcode,
     required this.karat,
@@ -3098,9 +3247,13 @@ class InvoiceItem {
     return goldPrice24k * (karat / 24.0);
   }
 
+  double calculatePurchaseCostPerGram() {
+    return calculatePricePerGram() + wage;
+  }
+
   // التكلفة = الوزن × (سعر الذهب للجرام + المصنعية للجرام)
   double get cost {
-    return weight * (calculatePricePerGram() + wage);
+    return weight * calculatePurchaseCostPerGram();
   }
 
   // الصافي = التكلفة + الربح الموزع
@@ -3139,7 +3292,7 @@ class InvoiceItem {
 
   Map<String, dynamic> toJson() {
     return {
-      'item_id': id,
+      'item_id': itemId,
       'name': name,
       'karat': karat,
       'weight': weight,
@@ -3217,10 +3370,10 @@ class _BarcodeScannerPlaceholderState
               final List<Barcode> barcodes = capture.barcodes;
               if (barcodes.isNotEmpty) {
                 final code = barcodes.first.rawValue;
-                print('📸 تم قراءة الباركود: $code');
+                debugPrint('📸 تم قراءة الباركود: $code');
                 if (code != null && code.isNotEmpty) {
                   _isProcessing = true; // تعليم كـ "قيد المعالجة"
-                  print('✅ إغلاق الكاميرا وإرجاع: $code');
+                  debugPrint('✅ إغلاق الكاميرا وإرجاع: $code');
                   Navigator.pop(context, code);
                 }
               }

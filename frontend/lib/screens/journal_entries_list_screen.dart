@@ -324,7 +324,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
       builder: (dialogContext) {
         final dialogTheme = Theme.of(dialogContext);
         final colorScheme = dialogTheme.colorScheme;
-        final hintColor = colorScheme.onSurface.withOpacity(0.45);
+        final hintColor = colorScheme.onSurface.withValues(alpha: 0.45);
 
         return AlertDialog(
           backgroundColor: colorScheme.surface,
@@ -344,7 +344,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                     ? 'الرجاء كتابة سبب حذف هذا القيد:'
                     : 'Please enter the reason for deleting this entry:',
                 style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withOpacity(0.75),
+                  color: colorScheme.onSurface.withValues(alpha: 0.75),
                 ),
               ),
               SizedBox(height: 12),
@@ -360,14 +360,14 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                     color: hintColor,
                   ),
                   filled: true,
-                  fillColor: colorScheme.surfaceVariant.withOpacity(0.35),
+                  fillColor: colorScheme.surfaceVariant.withValues(alpha: 0.35),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: colorScheme.primary.withOpacity(0.4)),
+                    borderSide: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4)),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: colorScheme.primary.withOpacity(0.4)),
+                    borderSide: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4)),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -383,7 +383,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
               child: Text(
                 isAr ? 'إلغاء' : 'Cancel',
                 style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withOpacity(0.7),
+                  color: colorScheme.onSurface.withValues(alpha: 0.7),
                 ),
               ),
             ),
@@ -445,7 +445,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                   Text(
                     isAr ? 'القيد:' : 'Entry:',
                     style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.75),
+                      color: colorScheme.onSurface.withValues(alpha: 0.75),
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -457,7 +457,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                   Text(
                     isAr ? 'السبب:' : 'Reason:',
                     style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.75),
+                      color: colorScheme.onSurface.withValues(alpha: 0.75),
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -469,9 +469,9 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                   Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.info.withOpacity(0.1),
+                      color: AppColors.info.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.info.withOpacity(0.2)),
+                      border: Border.all(color: AppColors.info.withValues(alpha: 0.2)),
                     ),
                     child: Row(
                       children: [
@@ -498,7 +498,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                   child: Text(
                     isAr ? 'إلغاء' : 'Cancel',
                     style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.7),
+                      color: colorScheme.onSurface.withValues(alpha: 0.7),
                     ),
                   ),
                 ),
@@ -651,7 +651,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                 decoration: InputDecoration(
                   hintText: 'بحث بالوصف، التاريخ، أو الرقم...',
                   border: InputBorder.none,
-                  hintStyle: TextStyle(color: appBarForeground.withOpacity(0.6)),
+                  hintStyle: TextStyle(color: appBarForeground.withValues(alpha: 0.6)),
                 ),
                 style: TextStyle(color: appBarForeground),
               )
@@ -738,12 +738,12 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
           begin: Alignment.topRight,
           end: Alignment.bottomLeft,
           colors: [
-            colorScheme.primary.withOpacity(0.18),
-            colorScheme.primary.withOpacity(0.05),
+            colorScheme.primary.withValues(alpha: 0.18),
+            colorScheme.primary.withValues(alpha: 0.05),
           ],
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: colorScheme.primary.withOpacity(0.25), width: 1),
+        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.25), width: 1),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -801,7 +801,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
         Text(
           label,
           style: theme.textTheme.bodySmall?.copyWith(
-            color: textColor.withOpacity(0.65),
+            color: textColor.withValues(alpha: 0.65),
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -881,13 +881,13 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
       ),
       deleteIcon: Icon(Icons.close, size: 18, color: gold),
       onDeleted: onDelete,
-      backgroundColor: gold.withOpacity(0.1),
-      side: BorderSide(color: gold.withOpacity(0.6), width: 1),
+      backgroundColor: gold.withValues(alpha: 0.1),
+      side: BorderSide(color: gold.withValues(alpha: 0.6), width: 1),
     );
   }
 
   Widget _buildEmptyState(bool isAr, ThemeData theme) {
-    final muted = theme.colorScheme.onSurface.withOpacity(0.6);
+    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.6);
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -895,7 +895,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
           Icon(
             Icons.receipt_long_outlined,
             size: 64,
-            color: theme.colorScheme.primary.withOpacity(0.35),
+            color: theme.colorScheme.primary.withValues(alpha: 0.35),
           ),
           SizedBox(height: 16),
           Text(
@@ -911,7 +911,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
           Text(
             isAr ? 'قم بإضافة قيد جديد' : 'Add a new entry',
             style: theme.textTheme.bodySmall?.copyWith(
-              color: muted.withOpacity(0.7),
+              color: muted.withValues(alpha: 0.7),
               fontSize: 14,
             ),
           ),
@@ -935,7 +935,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
     final colorScheme = theme.colorScheme;
     final gold = colorScheme.primary;
     final cardBg = theme.cardColor;
-    final mutedText = colorScheme.onSurface.withOpacity(0.6);
+    final mutedText = colorScheme.onSurface.withValues(alpha: 0.6);
     final totals = _calculateEntryTotals(entry);
     final totalCash = totals['cash']!;
     final totalGold = totals['gold']!;
@@ -970,7 +970,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                   child: Text(
                     'إلغاء',
                     style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: dialogScheme.onSurface.withOpacity(0.65),
+                      color: dialogScheme.onSurface.withValues(alpha: 0.65),
                     ),
                   ),
                 ),
@@ -1020,7 +1020,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
         color: cardBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: gold.withOpacity(0.2), width: 1),
+          side: BorderSide(color: gold.withValues(alpha: 0.2), width: 1),
         ),
         child: InkWell(
           onTap: () => _navigateToAddEditScreen(entry),
@@ -1043,7 +1043,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                             vertical: 6,
                           ),
                           decoration: BoxDecoration(
-                            color: gold.withOpacity(0.1),
+                            color: gold.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(color: gold, width: 1),
                           ),
@@ -1063,7 +1063,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: _getEntryTypeColor(entry['entry_type']).withOpacity(0.15),
+                              color: _getEntryTypeColor(entry['entry_type']).withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
                                 color: _getEntryTypeColor(entry['entry_type']),
@@ -1250,7 +1250,7 @@ class _FilterDialogState extends State<_FilterDialog> {
     final colorScheme = theme.colorScheme;
     final gold = colorScheme.primary;
     final onSurface = colorScheme.onSurface;
-    final hintColor = onSurface.withOpacity(0.5);
+    final hintColor = onSurface.withValues(alpha: 0.5);
     final sortedAccounts = List<dynamic>.from(widget.accounts)
       ..sort((a, b) {
         final aNum = int.tryParse(a['account_number']?.toString() ?? '0') ?? 0;
@@ -1276,7 +1276,7 @@ class _FilterDialogState extends State<_FilterDialog> {
             Text(
               isAr ? 'نطاق التاريخ' : 'Date Range',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: onSurface.withOpacity(0.75),
+                color: onSurface.withValues(alpha: 0.75),
               ),
             ),
             SizedBox(height: 8),
@@ -1303,7 +1303,7 @@ class _FilterDialogState extends State<_FilterDialog> {
             Text(
               isAr ? 'الحساب' : 'Account',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: onSurface.withOpacity(0.75),
+                color: onSurface.withValues(alpha: 0.75),
               ),
             ),
             SizedBox(height: 8),
@@ -1377,7 +1377,7 @@ class _FilterDialogState extends State<_FilterDialog> {
             Text(
               isAr ? 'نطاق المبلغ النقدي' : 'Cash Amount Range',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: onSurface.withOpacity(0.75),
+                color: onSurface.withValues(alpha: 0.75),
               ),
             ),
             SizedBox(height: 8),
@@ -1451,7 +1451,7 @@ class _FilterDialogState extends State<_FilterDialog> {
           child: Text(
             isAr ? 'إلغاء' : 'Cancel',
             style: theme.textTheme.bodyMedium?.copyWith(
-              color: onSurface.withOpacity(0.7),
+              color: onSurface.withValues(alpha: 0.7),
             ),
           ),
         ),

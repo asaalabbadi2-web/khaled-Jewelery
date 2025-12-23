@@ -129,7 +129,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
           Icon(
             Icons.repeat,
             size: 80,
-            color: theme.colorScheme.primary.withOpacity(0.25),
+            color: theme.colorScheme.primary.withValues(alpha: 0.25),
           ),
           SizedBox(height: 16),
           Text(
@@ -137,7 +137,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: theme.colorScheme.onSurface.withOpacity(0.7),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
           ),
           SizedBox(height: 8),
@@ -146,7 +146,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
                 ? 'اضغط على الزر أدناه لإضافة قالب جديد'
                 : 'Tap the button below to add a new template',
             style: TextStyle(
-              color: theme.colorScheme.onSurface.withOpacity(0.6),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
             ),
             textAlign: TextAlign.center,
           ),
@@ -226,7 +226,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
                               ),
                               decoration: BoxDecoration(
                                 color: isActive
-                                    ? AppColors.success.withOpacity(0.12)
+                                    ? AppColors.success.withValues(alpha: 0.12)
                                     : theme.colorScheme.surfaceVariant,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
@@ -244,7 +244,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
                                   color: isActive
                                       ? AppColors.success
                                       : theme.colorScheme.onSurface
-                                          .withOpacity(0.6),
+                                          .withValues(alpha: 0.6),
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -255,7 +255,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
                               style: TextStyle(
                                 fontSize: 12,
                                 color:
-                                    theme.colorScheme.onSurface.withOpacity(0.6),
+                                    theme.colorScheme.onSurface.withValues(alpha: 0.6),
                               ),
                             ),
                           ],
@@ -332,7 +332,7 @@ class _RecurringTemplatesScreenState extends State<RecurringTemplatesScreen> {
                   '${isAr ? 'آخر إنشاء:' : 'Last created:'} ${_formatDate(lastCreatedDate)}',
                   style: TextStyle(
                     fontSize: 11,
-                    color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                 ),
               ],

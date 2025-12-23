@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../api_service.dart';
+import '../utils.dart';
 
 /// شاشة تحديث سعر الذهب المحسّنة بتصميم احترافي
 class GoldPriceManualScreenEnhanced extends StatefulWidget {
@@ -16,10 +17,12 @@ class GoldPriceManualScreenEnhanced extends StatefulWidget {
 class _GoldPriceManualScreenEnhancedState
     extends State<GoldPriceManualScreenEnhanced> {
   final TextEditingController _priceController = TextEditingController();
+  final TextEditingController _priceUsdController = TextEditingController();
   final ApiService _apiService = ApiService();
 
   bool _isLoading = true;
   bool _isUpdating = false;
+  bool _useUsdInput = false;
   double? _currentPrice;
   DateTime? _lastUpdateDate;
   List<Map<String, dynamic>> _priceHistory = [];
@@ -40,6 +43,7 @@ class _GoldPriceManualScreenEnhancedState
   @override
   void dispose() {
     _priceController.dispose();
+    _priceUsdController.dispose();
     super.dispose();
   }
 
@@ -49,7 +53,8 @@ class _GoldPriceManualScreenEnhancedState
       final priceData = await _apiService.getGoldPrice();
 
       setState(() {
-        _currentPrice = priceData['price_per_gram']?.toDouble();
+        final raw = priceData['price_sar_per_gram'] ?? priceData['price_24k'];
+        _currentPrice = raw is num ? raw.toDouble() : double.tryParse('$raw');
         _lastUpdateDate = priceData['date'] != null
             ? DateTime.parse(priceData['date'])
             : null;
@@ -62,45 +67,73 @@ class _GoldPriceManualScreenEnhancedState
   }
 
   Future<void> _updatePrice() async {
-    if (_priceController.text.isEmpty) {
-      _showMessage('يرجى إدخال السعر', isError: true);
+    if (!_useUsdInput && _priceController.text.isEmpty) {
+      _showMessage('يرجى إدخال سعر الغرام بالريال أو التبديل إلى الدولار/أونصة', isError: true);
+      return;
+    }
+    if (_useUsdInput && _priceUsdController.text.isEmpty) {
+      _showMessage('يرجى إدخال سعر الأونصة بالدولار أو إلغاء التبديل', isError: true);
       return;
     }
 
-    final price = double.tryParse(_priceController.text);
-    if (price == null || price <= 0) {
-      _showMessage('يرجى إدخال سعر صحيح', isError: true);
+    final sarValue = double.tryParse(_priceController.text);
+    final usdValue = double.tryParse(_priceUsdController.text);
+
+    if (!_useUsdInput && (sarValue == null || sarValue <= 0)) {
+      _showMessage('يرجى إدخال سعر غرام صحيح', isError: true);
+      return;
+    }
+    if (_useUsdInput && (usdValue == null || usdValue <= 0)) {
+      _showMessage('يرجى إدخال سعر أونصة صحيح', isError: true);
       return;
     }
 
     // تأكيد التحديث
-    final confirm = await _showConfirmDialog(price);
+    final confirm = await _showConfirmDialog(_useUsdInput ? _usdToSar(usdValue!) : sarValue!);
     if (!confirm) return;
 
     setState(() => _isUpdating = true);
 
     try {
       // استخدام HTTP مباشرة لتحديث السعر
+      final payload = _useUsdInput
+          ? {
+              'price_usd_per_oz': usdValue,
+            }
+          : {
+              'price': sarValue,
+              'unit': 'sar_per_gram',
+            };
+
       final response = await http.post(
         Uri.parse('http://localhost:8001/gold_price/update'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'price': price}),
+        body: json.encode(payload),
       );
 
       if (response.statusCode != 200) {
         throw Exception('فشل التحديث: ${response.body}');
       }
 
+    final decoded = json.decode(response.body);
+    final fallbackValue = _useUsdInput ? _usdToSar(usdValue!) : sarValue!;
+    final updatedSar = decoded['price_sar_per_gram'] ?? decoded['price_24k'] ?? fallbackValue;
+    final updatedPrice = updatedSar is num ? updatedSar.toDouble() : double.tryParse('$updatedSar') ?? fallbackValue;
+
       // إضافة للتاريخ
       setState(() {
         _priceHistory.insert(0, {
-          'price': price,
+          'price': updatedPrice,
           'old_price': _currentPrice,
           'date': DateTime.now(),
         });
-        _currentPrice = price;
+        _currentPrice = updatedPrice;
         _lastUpdateDate = DateTime.now();
-        _priceController.clear();
+        if (_useUsdInput) {
+          _priceUsdController.clear();
+        } else {
+          _priceController.clear();
+        }
         _isUpdating = false;
       });
 
@@ -111,7 +144,11 @@ class _GoldPriceManualScreenEnhancedState
     }
   }
 
-  Future<bool> _showConfirmDialog(double newPrice) async {
+  double _usdToSar(double priceUsdPerOz) {
+    return (priceUsdPerOz / 31.1035) * 3.75;
+  }
+
+  Future<bool> _showConfirmDialog(double newPriceSarPerGram) async {
     return await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -170,7 +207,7 @@ class _GoldPriceManualScreenEnhancedState
                         children: [
                           Text('السعر الجديد:', style: TextStyle(fontSize: 14)),
                           Text(
-                            '${newPrice.toStringAsFixed(2)} ر.س/غ',
+                            '${newPriceSarPerGram.toStringAsFixed(2)} ر.س/غ',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: _goldColor,
@@ -187,10 +224,10 @@ class _GoldPriceManualScreenEnhancedState
                           children: [
                             Text('الفرق:', style: TextStyle(fontSize: 14)),
                             Text(
-                              '${(newPrice - _currentPrice!).toStringAsFixed(2)} ر.س/غ',
+                              '${(newPriceSarPerGram - _currentPrice!).toStringAsFixed(2)} ر.س/غ',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: newPrice > _currentPrice!
+                                color: newPriceSarPerGram > _currentPrice!
                                     ? _successColor
                                     : _errorColor,
                               ),
@@ -332,16 +369,16 @@ class _GoldPriceManualScreenEnhancedState
   Widget _buildCurrentPriceCard() {
     return Card(
       elevation: 4,
-      shadowColor: _goldColor.withOpacity(0.3),
+      shadowColor: _goldColor.withValues(alpha: 0.3),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: _goldColor.withOpacity(0.3), width: 2),
+        side: BorderSide(color: _goldColor.withValues(alpha: 0.3), width: 2),
       ),
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           gradient: LinearGradient(
-            colors: [_goldColor.withOpacity(0.1), Colors.white],
+            colors: [_goldColor.withValues(alpha: 0.1), Colors.white],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -354,7 +391,7 @@ class _GoldPriceManualScreenEnhancedState
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: _goldColor.withOpacity(0.2),
+                    color: _goldColor.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(Icons.diamond, color: _goldColor, size: 32),
@@ -445,7 +482,7 @@ class _GoldPriceManualScreenEnhancedState
                 Container(
                   padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: _accentColor.withOpacity(0.1),
+                    color: _accentColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(Icons.edit, color: _accentColor, size: 28),
@@ -473,16 +510,29 @@ class _GoldPriceManualScreenEnhancedState
               ),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline, color: _accentColor, size: 20),
+                  Icon(Icons.swap_horiz, color: _accentColor, size: 20),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'أدخل سعر الغرام الواحد بالريال السعودي',
+                      _useUsdInput
+                          ? 'أدخل سعر الأونصة بالدولار الأمريكي'
+                          : 'أدخل سعر الغرام الواحد بالريال السعودي',
                       style: TextStyle(
                         fontSize: 13,
                         color: Colors.grey.shade700,
                       ),
                     ),
+                  ),
+                  Switch(
+                    value: _useUsdInput,
+                    activeColor: _accentColor,
+                    onChanged: (value) {
+                      setState(() {
+                        _useUsdInput = value;
+                        _priceController.clear();
+                        _priceUsdController.clear();
+                      });
+                    },
                   ),
                 ],
               ),
@@ -490,40 +540,78 @@ class _GoldPriceManualScreenEnhancedState
 
             SizedBox(height: 20),
 
-            TextFormField(
-              controller: _priceController,
-              keyboardType: TextInputType.numberWithOptions(decimal: true),
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              decoration: InputDecoration(
-                labelText: 'سعر الغرام الجديد',
-                labelStyle: TextStyle(
-                  color: _goldColor,
-                  fontWeight: FontWeight.bold,
+            if (!_useUsdInput)
+              TextFormField(
+                controller: _priceController,
+                keyboardType: TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [NormalizeNumberFormatter()],
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  labelText: 'سعر الغرام الجديد',
+                  labelStyle: TextStyle(
+                    color: _goldColor,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  hintText: 'مثال: 250.50',
+                  prefixIcon: Icon(Icons.monetization_on, color: _goldColor),
+                  suffixText: 'ر.س',
+                  suffixStyle: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade600,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _goldColor, width: 2),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey.shade300, width: 2),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _goldColor, width: 2),
+                  ),
+                  filled: true,
+                  fillColor: Colors.white,
                 ),
-                hintText: 'مثال: 250.50',
-                prefixIcon: Icon(Icons.monetization_on, color: _goldColor),
-                suffixText: 'ر.س',
-                suffixStyle: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade600,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: _goldColor, width: 2),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Colors.grey.shade300, width: 2),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: _goldColor, width: 2),
-                ),
-                filled: true,
-                fillColor: Colors.white,
               ),
-            ),
+            if (_useUsdInput)
+              TextFormField(
+                controller: _priceUsdController,
+                keyboardType: TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [NormalizeNumberFormatter()],
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  labelText: 'سعر الأونصة بالدولار',
+                  labelStyle: TextStyle(
+                    color: Colors.blueGrey,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  hintText: 'مثال: 2350.00',
+                  prefixIcon: Icon(Icons.attach_money, color: Colors.blueGrey),
+                  suffixText: 'USD',
+                  suffixStyle: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade600,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.blueGrey, width: 2),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey.shade300, width: 2),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.blueGrey, width: 2),
+                  ),
+                  filled: true,
+                  fillColor: Colors.white,
+                ),
+              ),
 
             SizedBox(height: 24),
 
@@ -536,7 +624,7 @@ class _GoldPriceManualScreenEnhancedState
                   backgroundColor: _goldColor,
                   foregroundColor: Colors.black87,
                   elevation: 4,
-                  shadowColor: _goldColor.withOpacity(0.5),
+                  shadowColor: _goldColor.withValues(alpha: 0.5),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -597,7 +685,7 @@ class _GoldPriceManualScreenEnhancedState
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _warningColor.withOpacity(0.3), width: 2),
+        border: Border.all(color: _warningColor.withValues(alpha: 0.3), width: 2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -691,9 +779,9 @@ class _GoldPriceManualScreenEnhancedState
                       padding: EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         color: diff > 0
-                            ? _successColor.withOpacity(0.1)
+                            ? _successColor.withValues(alpha: 0.1)
                             : diff < 0
-                            ? _errorColor.withOpacity(0.1)
+                            ? _errorColor.withValues(alpha: 0.1)
                             : Colors.grey.shade100,
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -745,8 +833,8 @@ class _GoldPriceManualScreenEnhancedState
                         ),
                         decoration: BoxDecoration(
                           color: diff > 0
-                              ? _successColor.withOpacity(0.1)
-                              : _errorColor.withOpacity(0.1),
+                              ? _successColor.withValues(alpha: 0.1)
+                              : _errorColor.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(

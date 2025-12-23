@@ -1,10 +1,12 @@
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:barcode_widget/barcode_widget.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:barcode/barcode.dart' as barcode_lib;
+import '../utils.dart';
 
 /// شاشة معاينة وطباعة الباركود
 ///
@@ -45,7 +47,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('طباعة الباركود'),
-        backgroundColor: const Color(0xFFFFD700).withOpacity(0.1),
+        backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.1),
         actions: [
           IconButton(
             icon: const Icon(Icons.print),
@@ -134,7 +136,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
               color: Colors.grey.shade100,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
+                  color: Colors.black.withValues(alpha: 0.05),
                   blurRadius: 10,
                   offset: const Offset(0, -2),
                 ),
@@ -244,6 +246,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
                 suffixText: 'ملصق',
               ),
               keyboardType: TextInputType.number,
+              inputFormatters: [NormalizeNumberFormatter()],
               onChanged: (value) {
                 final count = int.tryParse(value);
                 if (count != null && count > 0 && count <= 100) {
@@ -303,9 +306,36 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
 
   Future<void> _printBarcode() async {
     try {
-      await Printing.layoutPdf(
-        onLayout: (format) => _generatePDF(),
-        name: 'barcode_${widget.itemCode}',
+      // إنشاء PDF مرة واحدة فقط
+      Uint8List? cachedPdf;
+      
+      if (kIsWeb) {
+        // للويب: استخدام sharePdf لفتح PDF في نافذة جديدة
+        final pdf = await _generatePDF();
+        await Printing.sharePdf(
+          bytes: pdf,
+          filename: 'barcode_${widget.itemCode}.pdf',
+        );
+      } else {
+        // للتطبيقات الأصلية: استخدام حوار الطباعة
+        await Printing.layoutPdf(
+          onLayout: (PdfPageFormat format) async {
+            // إنشاء PDF مرة واحدة فقط وإعادة استخدامه
+            cachedPdf ??= await _generatePDF();
+            return cachedPdf!;
+          },
+          name: 'barcode_${widget.itemCode}',
+        );
+      }
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(kIsWeb 
+            ? 'تم فتح ملف الباركود. يمكنك طباعته من المتصفح.'
+            : 'تم إرسال الباركود إلى الطابعة.'),
+          backgroundColor: Colors.green,
+        ),
       );
     } catch (e) {
       if (!mounted) return;

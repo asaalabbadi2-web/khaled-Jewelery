@@ -4,13 +4,15 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../providers/settings_provider.dart';
 import 'accounting_mapping_screen_enhanced.dart';
-import 'customize_quick_actions_screen.dart';
 import 'payment_methods_screen_enhanced.dart';
 import 'safe_boxes_screen.dart';
 import 'gold_price_manual_screen_enhanced.dart';
 import 'system_reset_screen.dart';
+import 'template_designer_screen.dart';
+import 'weight_closing_settings_screen.dart';
+import '../utils.dart';
 
-enum SettingsEntry { goldPrice, systemReset, printerSettings, about }
+enum SettingsEntry { goldPrice, weightClosing, systemReset, printerSettings, about }
 
 class SettingsScreenEnhanced extends StatefulWidget {
   static const int systemTabIndex = 5;
@@ -37,6 +39,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   final ScrollController _systemScrollController = ScrollController();
   late final Map<SettingsEntry, GlobalKey> _systemSectionKeys = {
     SettingsEntry.goldPrice: GlobalKey(),
+    SettingsEntry.weightClosing: GlobalKey(),
     SettingsEntry.systemReset: GlobalKey(),
     SettingsEntry.printerSettings: GlobalKey(),
     SettingsEntry.about: GlobalKey(),
@@ -78,8 +81,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   bool _showCompanyLogo = true;
   bool _allowDiscount = true;
   double _defaultDiscountPercent = 0.0;
+  bool _allowManualInvoiceItems = false;
 
-  // whether vouchers are auto-posted when saved
   bool _voucherAutoPost = false;
 
   bool _printerAutoConnect = true;
@@ -87,8 +90,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   bool _printerAutoCut = true;
   String _printerPaperSize = '80 مم';
   final List<String> _printerPaperOptions = const ['58 مم', '80 مم', 'A4'];
-
-  List<Map<String, dynamic>> _paymentMethods = const [];
 
   @override
   void initState() {
@@ -157,14 +158,9 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     });
 
     try {
-      final results = await Future.wait([
-        _apiService.getSettings(),
-        _apiService.getPaymentMethods(),
-      ]);
+      final settings = await _apiService.getSettings();
 
       if (!mounted) return;
-      final settings = Map<String, dynamic>.from(results[0] as Map);
-      final paymentMethodsRaw = results[1] as List<dynamic>;
 
       _currencyController.text =
           settings['currency_symbol']?.toString() ?? 'ر.س';
@@ -199,26 +195,19 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           fallback: true,
         );
         _allowDiscount = _safeBool(settings['allow_discount'], fallback: true);
+        _allowManualInvoiceItems = _safeBool(
+          settings['allow_manual_invoice_items'],
+          fallback: false,
+        );
         _defaultDiscountPercent = _normalizePercent(
           settings['default_discount_rate'],
           fallbackPercent: 0,
         );
 
-        // workflow setting: whether vouchers are auto-posted on save
         _voucherAutoPost = _safeBool(
           settings['voucher_auto_post'],
           fallback: false,
         );
-
-        _paymentMethods =
-            paymentMethodsRaw
-                .map((method) => Map<String, dynamic>.from(method as Map))
-                .toList()
-              ..sort(
-                (a, b) => _safeInt(
-                  a['display_order'],
-                ).compareTo(_safeInt(b['display_order'])),
-              );
       });
     } catch (error) {
       if (!mounted) return;
@@ -238,27 +227,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     }
   }
 
-  Future<void> _refreshPaymentMethods() async {
-    try {
-      final methods = await _apiService.getPaymentMethods();
-      if (!mounted) return;
-      setState(() {
-        _paymentMethods =
-            methods
-                .map((method) => Map<String, dynamic>.from(method as Map))
-                .toList()
-              ..sort(
-                (a, b) => _safeInt(
-                  a['display_order'],
-                ).compareTo(_safeInt(b['display_order'])),
-              );
-      });
-    } catch (error) {
-      if (!mounted) return;
-      _showSnack('تعذر تحديث وسائل الدفع: $error', isError: true);
-    }
-  }
-
   Future<void> _saveSettings() async {
     if (_isSaving) return;
     FocusScope.of(context).unfocus();
@@ -275,6 +243,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'tax_enabled': _taxEnabled,
       'tax_rate': _taxRatePercent / 100,
       'allow_discount': _allowDiscount,
+  'allow_manual_invoice_items': _allowManualInvoiceItems,
       'default_discount_rate': _defaultDiscountPercent / 100,
       'invoice_prefix': _invoicePrefixController.text.trim(),
       'show_company_logo': _showCompanyLogo,
@@ -282,12 +251,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'company_address': _companyAddressController.text.trim(),
       'company_phone': _companyPhoneController.text.trim(),
       'company_tax_number': _companyTaxNumberController.text.trim(),
-      // include voucher workflow setting
       'voucher_auto_post': _voucherAutoPost,
     };
 
     try {
-      // Update via Provider to apply changes globally
       final settingsProvider = Provider.of<SettingsProvider>(
         context,
         listen: false,
@@ -305,41 +272,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           _isSaving = false;
         });
       }
-    }
-  }
-
-  Future<void> _togglePaymentMethodStatus(
-    Map<String, dynamic> method,
-    bool isActive,
-  ) async {
-    final int methodId = _safeInt(method['id']);
-    if (methodId == 0) {
-      _showSnack('لا يمكن تحديث هذه الوسيلة الآن', isError: true);
-      return;
-    }
-
-    setState(() {
-      method['is_active'] = isActive;
-    });
-
-    try {
-      await _apiService.updatePaymentMethod(
-        methodId,
-        paymentType: method['payment_type']?.toString() ?? 'cash',
-        name: method['name']?.toString() ?? 'وسيلة دفع',
-        commissionRate: _safeDouble(method['commission_rate']),
-        isActive: isActive,
-      );
-      if (!mounted) return;
-      _showSnack(
-        isActive ? 'تم تفعيل وسيلة الدفع' : 'تم إلغاء تفعيل وسيلة الدفع',
-      );
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        method['is_active'] = !isActive;
-      });
-      _showSnack('تعذر تحديث الحالة: $error', isError: true);
     }
   }
 
@@ -366,10 +298,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           isScrollable: true,
           tabs: const [
             Tab(icon: Icon(Icons.tune), text: 'عام'),
+            Tab(icon: Icon(Icons.business), text: 'الشركة والفواتير'),
             Tab(icon: Icon(Icons.payments), text: 'المدفوعات'),
-            Tab(icon: Icon(Icons.receipt_long), text: 'الضريبة'),
-            Tab(icon: Icon(Icons.business), text: 'الشركة'),
             Tab(icon: Icon(Icons.account_tree), text: 'محاسبة'),
+            Tab(icon: Icon(Icons.print), text: 'الطباعة'),
             Tab(icon: Icon(Icons.settings_applications), text: 'النظام'),
           ],
         ),
@@ -405,10 +337,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               controller: _tabController,
               children: [
                 _buildGeneralTab(),
+                _buildCompanyAndInvoicesTab(),
                 _buildPaymentTab(),
-                _buildTaxTab(),
-                _buildCompanyTab(),
                 _buildAccountingTab(),
+                _buildPrintingTab(),
                 _buildSystemTab(),
               ],
             ),
@@ -464,15 +396,13 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                     .toList(),
               ),
             ),
-            const SizedBox(height: 16),
-            _buildKaratHint(),
           ],
         ),
         const SizedBox(height: 20),
         _buildSectionCard(
-          icon: Icons.currency_exchange,
+          icon: Icons.style,
           iconColor: _accentColor,
-          title: 'العملة والدقة',
+          title: 'التنسيق والعملة',
           children: [
             Text('رمز العملة', style: _fieldLabelStyle()),
             const SizedBox(height: 12),
@@ -535,20 +465,13 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                     .toList(),
               ),
             ),
-            const SizedBox(height: 12),
-            _buildInfoBanner(
-              icon: Icons.info_outline,
-              color: _accentColor,
-              text:
-                  'يؤثر هذا الخيار على طريقة عرض التاريخ في التقارير والفواتير.',
-            ),
           ],
         ),
         const SizedBox(height: 20),
         _buildSectionCard(
           icon: Icons.percent,
           iconColor: _successColor,
-          title: 'الخصومات الافتراضية',
+          title: 'الخصومات',
           children: [
             SwitchListTile.adaptive(
               value: _allowDiscount,
@@ -580,10 +503,11 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                       max: 50,
                       divisions: 100,
                       label: '${_defaultDiscountPercent.toStringAsFixed(1)}%',
-                      onChanged: _allowDiscount
-                          ? (value) =>
-                                setState(() => _defaultDiscountPercent = value)
-                          : null,
+                      onChanged:
+                          _allowDiscount
+                              ? (value) =>
+                                    setState(() => _defaultDiscountPercent = value)
+                              : null,
                     ),
                   ),
                   Align(
@@ -601,248 +525,12 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             ),
           ],
         ),
-        const SizedBox(height: 20),
-        _buildSectionCard(
-          icon: Icons.dashboard_customize,
-          iconColor: _primaryColor,
-          title: 'الشاشة الرئيسية',
-          children: [
-            Text('الوصول السريع', style: _fieldLabelStyle()),
-            const SizedBox(height: 12),
-            _buildNavigationTile(
-              title: 'تخصيص أزرار الوصول السريع',
-              subtitle:
-                  'إضافة، حذف أو إعادة ترتيب الاختصارات في الشاشة الرئيسية',
-              icon: Icons.flash_on,
-              accentColor: _primaryColor,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const CustomizeQuickActionsScreen(),
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: 32),
-        _buildTipsCard(
-          title: 'نصائح سريعة',
-          tips: const [
-            'يمكنك تغيير الإعدادات في أي وقت دون التأثير على الفواتير السابقة.',
-            'العيار الأساسي هو المرجع لجميع حسابات الوزن.',
-            'استخدم رمز عملة قصيراً ليسهل قراءته داخل الفاتورة.',
-            'جرّب إعدادات مختلفة للمنازل العشرية لمعرفة الأنسب لعملك.',
-          ],
-        ),
       ],
     );
   }
 
-  Widget _buildPaymentTab() {
-    final activeCount = _paymentMethods
-        .where((m) => m['is_active'] == true)
-        .length;
-    final inactiveCount = _paymentMethods.length - activeCount;
-
-    return RefreshIndicator(
-      color: _primaryColor,
-      onRefresh: _refreshPaymentMethods,
-      child: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          _buildSectionCard(
-            icon: Icons.payments_outlined,
-            iconColor: _accentColor,
-            title: 'ملخص طرق الدفع',
-            children: [
-              Row(
-                children: [
-                  _buildPaymentBadge(
-                    label: 'نشط',
-                    count: activeCount,
-                    color: _successColor,
-                  ),
-                  const SizedBox(width: 12),
-                  _buildPaymentBadge(
-                    label: 'معطّل',
-                    count: inactiveCount,
-                    color: _colors.secondaryContainer,
-                    textColor: _colors.onSecondaryContainer,
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: _refreshPaymentMethods,
-                    icon: Icon(Icons.refresh, color: _accentColor),
-                    tooltip: 'تحديث',
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              FilledButton.tonalIcon(
-                icon: const Icon(Icons.manage_accounts),
-                label: const Text('إدارة وسائل الدفع'),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const PaymentMethodsScreenEnhanced(),
-                    ),
-                  ).then((_) => _refreshPaymentMethods());
-                },
-              ),
-              const SizedBox(height: 12),
-              FilledButton.tonalIcon(
-                icon: const Icon(Icons.account_balance_wallet),
-                label: const Text('إدارة الخزائن'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.amber.shade700,
-                ),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => SafeBoxesScreen(api: _apiService),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          if (_paymentMethods.isEmpty)
-            _buildEmptyState(
-              icon: Icons.credit_card_off,
-              title: 'لا توجد طرق دفع مسجلة',
-              message:
-                  'استخدم زر إدارة وسائل الدفع لإضافة أو تحديث الطرق المتاحة.',
-            )
-          else
-            ..._paymentMethods.map(_buildPaymentMethodCard),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTaxTab() {
+  Widget _buildCompanyAndInvoicesTab() {
     final examples = [1000, 5000, 10000];
-
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        _buildSectionCard(
-          icon: Icons.receipt_long_outlined,
-          iconColor: _colors.tertiary,
-          title: 'إعدادات الضريبة',
-          children: [
-            SwitchListTile.adaptive(
-              value: _taxEnabled,
-              onChanged: (value) => setState(() => _taxEnabled = value),
-              thumbColor: _thumbColorFor(_colors.tertiary),
-              trackColor: _trackColorFor(_colors.tertiary),
-              title: Text(
-                'تفعيل احتساب الضريبة',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-            ),
-            const SizedBox(height: 16),
-            AnimatedOpacity(
-              opacity: _taxEnabled ? 1.0 : 0.4,
-              duration: const Duration(milliseconds: 200),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('نسبة الضريبة (%)', style: _fieldLabelStyle()),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: _blendOnSurface(_colors.tertiary, 0.1),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: _withOpacity(_colors.tertiary, 0.3),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              _taxRatePercent.toStringAsFixed(1),
-                              style: Theme.of(context).textTheme.displaySmall
-                                  ?.copyWith(
-                                    color: _colors.tertiary,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '%',
-                              style: Theme.of(context).textTheme.headlineSmall
-                                  ?.copyWith(
-                                    color: _withOpacity(_colors.tertiary, 0.8),
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                            ),
-                          ],
-                        ),
-                        SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            activeTrackColor: _colors.tertiary,
-                            inactiveTrackColor: _withOpacity(
-                              _colors.tertiary,
-                              0.3,
-                            ),
-                            thumbColor: _colors.tertiary,
-                            overlayColor: _withOpacity(_colors.tertiary, 0.15),
-                          ),
-                          child: Slider(
-                            value: _taxRatePercent,
-                            min: 0,
-                            max: 30,
-                            divisions: 300,
-                            label: '${_taxRatePercent.toStringAsFixed(1)}%',
-                            onChanged: _taxEnabled
-                                ? (value) =>
-                                      setState(() => _taxRatePercent = value)
-                                : null,
-                          ),
-                        ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              '0%',
-                              style: TextStyle(color: _mutedTextColor),
-                            ),
-                            Text(
-                              '30%',
-                              style: TextStyle(color: _mutedTextColor),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _buildSectionCard(
-          icon: Icons.calculate_outlined,
-          iconColor: _accentColor,
-          title: 'أمثلة حسابية',
-          children: [...examples.map(_buildTaxExampleRow)],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCompanyTab() {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
@@ -879,49 +567,165 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                 accentColor: _accentColor,
               ),
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _companyTaxNumberController,
-              keyboardType: TextInputType.number,
-              decoration: _inputDecoration(
-                icon: Icons.badge_outlined,
-                label: 'الرقم الضريبي',
-                accentColor: _colors.error,
-              ),
-            ),
           ],
         ),
         const SizedBox(height: 20),
         _buildSectionCard(
-          icon: Icons.receipt_outlined,
-          iconColor: _primaryColor,
-          title: 'إعدادات الفاتورة',
+          icon: Icons.receipt_long_outlined,
+          iconColor: _colors.tertiary,
+          title: 'إعدادات الضريبة والفواتير',
           children: [
+            TextFormField(
+              controller: _companyTaxNumberController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [NormalizeNumberFormatter()],
+              decoration: _inputDecoration(
+                icon: Icons.badge_outlined,
+                label: 'الرقم الضريبي',
+                accentColor: _colors.tertiary,
+              ),
+            ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _invoicePrefixController,
               decoration: _inputDecoration(
                 icon: Icons.confirmation_number,
                 label: 'بادئة رقم الفاتورة',
-                accentColor: _primaryColor,
+                accentColor: _colors.tertiary,
               ),
             ),
             const SizedBox(height: 12),
             SwitchListTile.adaptive(
               value: _showCompanyLogo,
               onChanged: (value) => setState(() => _showCompanyLogo = value),
-              thumbColor: _thumbColorFor(_primaryColor),
-              trackColor: _trackColorFor(_primaryColor),
+              thumbColor: _thumbColorFor(_colors.tertiary),
+              trackColor: _trackColorFor(_colors.tertiary),
               title: Text(
                 'عرض شعار الشركة على الفواتير',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
             ),
+            const SizedBox(height: 8),
+            SwitchListTile.adaptive(
+              value: _allowManualInvoiceItems,
+              onChanged: (value) => setState(() => _allowManualInvoiceItems = value),
+              thumbColor: _thumbColorFor(_colors.tertiary),
+              trackColor: _trackColorFor(_colors.tertiary),
+              title: Text(
+                'السماح بإضافة صنف يدوي من شاشة الفاتورة',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              subtitle: const Text(
+                'عند التفعيل يظهر زر لإدخال صنف ببيانات مخصصة (اسم، وزن، عيار) أثناء إنشاء فاتورة بيع.',
+              ),
+            ),
+            const Divider(height: 32),
+            SwitchListTile.adaptive(
+              value: _taxEnabled,
+              onChanged: (value) => setState(() => _taxEnabled = value),
+              thumbColor: _thumbColorFor(_colors.tertiary),
+              trackColor: _trackColorFor(_colors.tertiary),
+              title: Text(
+                'تفعيل احتساب الضريبة',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            const SizedBox(height: 16),
+            AnimatedOpacity(
+              opacity: _taxEnabled ? 1.0 : 0.4,
+              duration: const Duration(milliseconds: 200),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('نسبة الضريبة (%)', style: _fieldLabelStyle()),
+                  const SizedBox(height: 12),
+                   SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: _colors.tertiary,
+                            inactiveTrackColor: _withOpacity(
+                              _colors.tertiary,
+                              0.3,
+                            ),
+                            thumbColor: _colors.tertiary,
+                            overlayColor: _withOpacity(_colors.tertiary, 0.15),
+                          ),
+                          child: Slider(
+                            value: _taxRatePercent,
+                            min: 0,
+                            max: 30,
+                            divisions: 300,
+                            label: '${_taxRatePercent.toStringAsFixed(1)}%',
+                            onChanged:
+                                _taxEnabled
+                                    ? (value) =>
+                                          setState(() => _taxRatePercent = value)
+                                    : null,
+                          ),
+                        ),
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: Text(
+                      '${_taxRatePercent.toStringAsFixed(1)}%',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: _colors.tertiary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+         const SizedBox(height: 20),
+        _buildSectionCard(
+          icon: Icons.calculate_outlined,
+          iconColor: _accentColor,
+          title: 'أمثلة حسابية للضريبة',
+          children: [...examples.map(_buildTaxExampleRow)],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPaymentTab() {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        _buildSectionCard(
+          icon: Icons.payments_outlined,
+          iconColor: _accentColor,
+          title: 'إدارة المدفوعات',
+          children: [
+             Text(
+            'أدر طرق الدفع والخزائن المرتبطة بها لتبسيط عمليات الدفع والتحصيل.',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 20),
+            FilledButton.icon(
+              icon: const Icon(Icons.credit_card),
+              label: const Text('إدارة وسائل الدفع'),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const PaymentMethodsScreenEnhanced(),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 12),
-            _buildInfoBanner(
-              icon: Icons.lightbulb_outline,
-              color: _primaryColor,
-              text:
-                  'تأكد من تحديث رقم الهاتف والعنوان ليظهر بشكل صحيح في رأس الفاتورة.',
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.account_balance_wallet),
+              label: const Text('إدارة الخزائن'),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SafeBoxesScreen(api: _apiService),
+                  ),
+                );
+              },
             ),
           ],
         ),
@@ -933,6 +737,24 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
+         _buildSectionCard(
+          icon: Icons.rule_folder_outlined,
+          iconColor: _primaryColor,
+          title: 'سير العمل المحاسبي',
+          children: [
+             SwitchListTile.adaptive(
+              value: _voucherAutoPost,
+              onChanged: (value) => setState(() => _voucherAutoPost = value),
+              title: const Text('ترحيل السندات تلقائياً عند الحفظ'),
+              subtitle: const Text(
+                'عند التفعيل سيتم إنشاء قيد محاسبي فور حفظ السند. عند الإيقاف ستُحفظ السندات كمسودة وتحتاج للموافقة يدوياً.',
+              ),
+              thumbColor: _thumbColorFor(_primaryColor),
+              trackColor: _trackColorFor(_primaryColor),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
         _buildSectionCard(
           icon: Icons.account_tree_outlined,
           iconColor: _accentColor,
@@ -955,89 +777,17 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               icon: const Icon(Icons.open_in_new),
               label: const Text('فتح شاشة الربط المحاسبي'),
             ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () {
-                _tabController.animateTo(1);
-              },
-              icon: const Icon(Icons.payments_rounded),
-              label: const Text('مراجعة طرق الدفع'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
-        _buildTipsCard(
-          title: 'تلميحات محاسبية',
-          tips: const [
-            'قم بمراجعة الخرائط المحاسبية بعد أي تعديل على الحسابات الأساسية.',
-            'تأكد من ربط طرق الدفع بحساباتها الصحيحة لضمان تطابق التقارير.',
-            'استخدم شاشة الربط المحاسبي لمراجعة الأرصدة قبل إقفال الفترة.',
           ],
         ),
       ],
     );
   }
-
-  Widget _buildSystemTab() {
-    return ListView(
-      controller: _systemScrollController,
+  
+  Widget _buildPrintingTab() {
+     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _buildSectionCard(
-          sectionKey: _systemSectionKeys[SettingsEntry.goldPrice],
-          icon: Icons.monetization_on_outlined,
-          iconColor: _accentColor,
-          title: 'أسعار الذهب',
-          children: [
-            Text(
-              'تابع آخر تحديثات أسعار الذهب وقم بالمزامنة اليدوية عند الحاجة.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _openGoldPriceManager,
-              icon: const Icon(Icons.sync_alt),
-              label: const Text('تحديث سعر الذهب'),
-            ),
-            const SizedBox(height: 12),
-            _buildInfoBanner(
-              icon: Icons.info_outline,
-              color: _accentColor,
-              text:
-                  'يمكنك تفعيل التحديث الآلي من شاشة ربط الحسابات لضمان دقة القيود.',
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _buildSectionCard(
-          sectionKey: _systemSectionKeys[SettingsEntry.systemReset],
-          icon: Icons.restore_outlined,
-          iconColor: _errorColor,
-          title: 'إعادة تهيئة النظام',
-          children: [
-            Text(
-              'استخدم هذه الأداة لمسح البيانات وإعادة ضبط النظام مع أخذ نسخة احتياطية.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 16),
-            FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(foregroundColor: _errorColor),
-              onPressed: _openSystemReset,
-              icon: const Icon(Icons.security_update_warning),
-              label: const Text('فتح شاشة إعادة التهيئة'),
-            ),
-            const SizedBox(height: 12),
-            _buildInfoBanner(
-              icon: Icons.warning_amber_outlined,
-              color: _errorColor,
-              text:
-                  'ننصح بإنشاء نسخة احتياطية قبل المتابعة لتجنب فقدان البيانات المهمة.',
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _buildSectionCard(
-          sectionKey: _systemSectionKeys[SettingsEntry.printerSettings],
+         _buildSectionCard(
           icon: Icons.print_outlined,
           iconColor: _primaryColor,
           title: 'إعدادات الطابعة',
@@ -1068,18 +818,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               title: const Text('تشغيل القطع التلقائي بعد الطباعة'),
               subtitle: const Text(
                 'يعمل مع الطابعات الحرارية الداعمة لخاصية القطع.',
-              ),
-              thumbColor: _thumbColorFor(_primaryColor),
-              trackColor: _trackColorFor(_primaryColor),
-            ),
-            const SizedBox(height: 12),
-            // Voucher workflow toggle
-            SwitchListTile.adaptive(
-              value: _voucherAutoPost,
-              onChanged: (value) => setState(() => _voucherAutoPost = value),
-              title: const Text('ترحيل السندات تلقائياً عند الحفظ'),
-              subtitle: const Text(
-                'عند التفعيل سيتم إنشاء قيد محاسبي فور حفظ السند. عند الإيقاف ستُحفظ السندات كقيد مبدئي (معلق) وتحتاج للموافقة يدوياً.',
               ),
               thumbColor: _thumbColorFor(_primaryColor),
               trackColor: _trackColorFor(_primaryColor),
@@ -1122,6 +860,124 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
         ),
         const SizedBox(height: 20),
         _buildSectionCard(
+          icon: Icons.design_services_outlined,
+          iconColor: const Color(0xFFD4AF37),
+          title: 'مصمم القوالب',
+          children: [
+            Text(
+              'صمم قوالب احترافية مخصصة للفواتير والسندات والقيود وكشوفات الحساب.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _openTemplateDesigner,
+              icon: const Icon(Icons.palette),
+              label: const Text('فتح مصمم القوالب'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFD4AF37),
+              ),
+            ),
+          ],
+        ),
+      ]
+    );
+  }
+
+  Widget _buildSystemTab() {
+    final settingsProvider = Provider.of<SettingsProvider>(context);
+    final weightConfig = settingsProvider.weightClosingSettings;
+    final bool weightEnabled = weightConfig['enabled'] == true;
+    final String weightPriceSource =
+        (weightConfig['price_source']?.toString() ?? 'live');
+    final bool weightAllowOverride =
+        weightConfig['allow_override'] != false;
+
+    return ListView(
+      controller: _systemScrollController,
+      padding: const EdgeInsets.all(20),
+      children: [
+        _buildSectionCard(
+          sectionKey: _systemSectionKeys[SettingsEntry.goldPrice],
+          icon: Icons.monetization_on_outlined,
+          iconColor: _accentColor,
+          title: 'أسعار الذهب',
+          children: [
+            Text(
+              'تابع آخر تحديثات أسعار الذهب وقم بالمزامنة اليدوية عند الحاجة.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _openGoldPriceManager,
+              icon: const Icon(Icons.sync_alt),
+              label: const Text('تحديث سعر الذهب'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _buildSectionCard(
+          sectionKey: _systemSectionKeys[SettingsEntry.weightClosing],
+          icon: Icons.scale_outlined,
+          iconColor: _successColor,
+          title: 'التسكير الوزني الآلي',
+          children: [
+             Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildConfigChip(
+                  icon: weightEnabled
+                      ? Icons.check_circle
+                      : Icons.pause_circle_filled,
+                  label: weightEnabled ? 'مفعل' : 'متوقف مؤقتاً',
+                  color: weightEnabled ? _successColor : _outlineColor,
+                ),
+                _buildConfigChip(
+                  icon: Icons.price_change,
+                  label:
+                      'المصدر: ${_weightClosingPriceSourceLabel(weightPriceSource)}',
+                  color: _accentColor,
+                ),
+                _buildConfigChip(
+                  icon: weightAllowOverride
+                      ? Icons.edit_attributes
+                      : Icons.lock_outline,
+                  label:
+                      weightAllowOverride ? 'يسمح بالتعديل' : 'سعر ثابت',
+                  color: weightAllowOverride ? _primaryColor : _errorColor,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _openWeightClosingSettings,
+              icon: const Icon(Icons.settings_suggest_outlined),
+              label: const Text('فتح إعدادات التسكير'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _buildSectionCard(
+          sectionKey: _systemSectionKeys[SettingsEntry.systemReset],
+          icon: Icons.restore_outlined,
+          iconColor: _errorColor,
+          title: 'إعادة تهيئة النظام',
+          children: [
+            Text(
+              'استخدم هذه الأداة لمسح البيانات وإعادة ضبط النظام.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(foregroundColor: _errorColor),
+              onPressed: _openSystemReset,
+              icon: const Icon(Icons.security_update_warning),
+              label: const Text('فتح شاشة إعادة التهيئة'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _buildSectionCard(
           sectionKey: _systemSectionKeys[SettingsEntry.about],
           icon: Icons.info_outline,
           iconColor: _successColor,
@@ -1142,18 +998,11 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                 ),
               ),
               subtitle: Text(
-                'إصدار 2.0 — منصة متكاملة لإدارة محلات الذهب.',
+                'إصدار 2.1 — منصة متكاملة لإدارة محلات الذهب.',
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: _mutedTextColor),
               ),
-            ),
-            const SizedBox(height: 12),
-            _buildInfoBanner(
-              icon: Icons.lightbulb_outline,
-              color: _successColor,
-              text:
-                  'تم تصميم الواجهة لتكون ثنائية اللغة وتدعم الأعمال القائمة على وزن الذهب.',
             ),
             const SizedBox(height: 16),
             FilledButton.tonalIcon(
@@ -1169,24 +1018,13 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
 
   void _scrollToSystemEntry(SettingsEntry entry) {
     final key = _systemSectionKeys[entry];
-    if (key == null) {
-      return;
-    }
-    final context = key.currentContext;
-    if (context == null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _scrollToSystemEntry(entry),
-      );
-      return;
-    }
-
+    if (key?.currentContext == null) return;
     Scrollable.ensureVisible(
-      context,
+      key!.currentContext!,
       duration: const Duration(milliseconds: 450),
       curve: Curves.easeOutCubic,
       alignment: 0.08,
     );
-    _pendingFocusEntry = null;
   }
 
   Future<void> _openGoldPriceManager() async {
@@ -1203,87 +1041,86 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     );
   }
 
+  Future<void> _openTemplateDesigner() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const TemplateDesignerScreen(),
+      ),
+    );
+  }
+
+  Future<void> _openWeightClosingSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const WeightClosingSettingsScreen(),
+      ),
+    );
+  }
+
   Future<void> _showPrinterSetupSheet() async {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+             Text('إدارة الطابعات', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            _buildInfoBanner(
+              icon: Icons.info_outline,
+              color: _primaryColor,
+              text: 'سيتم توفير دعم الطابعات الحرارية والبلوتوث في التحديثات القادمة.',
+            ),
+          ],
+        ),
       ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.print, color: _primaryColor),
-                  const SizedBox(width: 12),
-                  Text(
-                    'إدارة الطابعات',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              _buildInfoBanner(
-                icon: Icons.info_outline,
-                color: _primaryColor,
-                text:
-                    'سيتم توفير دعم الطابعات الحرارية والبلوتوث في التحديثات القادمة.',
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _showSnack('ميزة إدارة الطابعات ستتوفر قريباً');
-                },
-                icon: const Icon(Icons.bluetooth_searching),
-                label: const Text('البحث عن طابعة عبر البلوتوث'),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 
   Future<void> _showAboutDialog() async {
     await showDialog<void>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.diamond, color: _accentColor),
-              const SizedBox(width: 12),
-              const Text('حول التطبيق'),
-            ],
+      builder: (context) => AlertDialog(
+        title: const Text('حول التطبيق'),
+        content: const Text('الإصدار: 2.1\nنظام متكامل لإدارة محلات الذهب والمجوهرات.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('حسناً'),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
-              Text('الإصدار: 2.0'),
-              SizedBox(height: 8),
-              Text('نظام متكامل لإدارة محلات الذهب والمجوهرات.'),
-              SizedBox(height: 8),
-              Text('© 2025 جميع الحقوق محفوظة لدى الياسر للذهب.'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('حسناً'),
-            ),
-          ],
-        );
-      },
+        ],
+      ),
     );
+  }
+
+  Widget _buildConfigChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Chip(
+      avatar: CircleAvatar(
+        radius: 14,
+        backgroundColor: color,
+        child: Icon(icon, size: 16, color: _colors.onPrimary),
+      ),
+      label: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+      backgroundColor: _blendOnSurface(color, 0.1),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    );
+  }
+
+  String _weightClosingPriceSourceLabel(String source) {
+    switch (source.toLowerCase()) {
+      case 'average': return 'متوسط التكلفة';
+      case 'invoice': return 'سعر الفاتورة';
+      default: return 'السعر المباشر';
+    }
   }
 
   Widget _buildSectionCard({
@@ -1295,110 +1132,23 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   }) {
     return Card(
       key: sectionKey,
-      elevation: 1,
+      elevation: 0,
       color: _cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _blendOnSurface(iconColor, 0.16),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(icon, color: iconColor, size: 26),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: _strongTextColor,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            Row(children: [
+              Icon(icon, color: iconColor, size: 24),
+              const SizedBox(width: 12),
+              Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+            ]),
             const SizedBox(height: 20),
             ...children,
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildKaratHint() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _blendOnSurface(_primaryColor, 0.12),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _withOpacity(_primaryColor, 0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: _karatOptions.map((karat) {
-          final selected = karat == _mainKarat;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: selected
-                        ? _primaryColor
-                        : _withOpacity(_primaryColor, 0.6),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'عيار $karat',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                    color: selected ? _primaryColor : _mutedTextColor,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '(${(karat / 24 * 100).toStringAsFixed(1)}% نقاء)',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: _mutedTextColor),
-                ),
-                if (selected) ...[
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _successColor,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      'محدد',
-                      style: TextStyle(
-                        color: _colors.onPrimary,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          );
-        }).toList(),
       ),
     );
   }
@@ -1411,283 +1161,20 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: _blendOnSurface(color, 0.12),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _withOpacity(color, 0.2)),
+        color: _blendOnSurface(color, 0.1),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, color: color, size: 18),
           const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: _mutedTextColor,
-                height: 1.5,
-              ),
-            ),
-          ),
+          Expanded(child: Text(text, style: Theme.of(context).textTheme.bodySmall)),
         ],
       ),
     );
   }
 
-  Widget _buildNavigationTile({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color accentColor,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _blendOnSurface(accentColor, 0.08),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _withOpacity(accentColor, 0.25)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: _withOpacity(accentColor, 0.18),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Icon(icon, color: accentColor),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: accentColor,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: _mutedTextColor),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.arrow_back_ios_new, color: accentColor, size: 18),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTipsCard({required String title, required List<String> tips}) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _blendOnSurface(_accentColor, 0.08),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _withOpacity(_accentColor, 0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.tips_and_updates, color: _accentColor),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: _accentColor,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ...tips.map(
-            (tip) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('• ', style: TextStyle(color: _accentColor)),
-                  Expanded(
-                    child: Text(
-                      tip,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodyMedium?.copyWith(color: _mutedTextColor),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPaymentBadge({
-    required String label,
-    required int count,
-    required Color color,
-    Color? textColor,
-  }) {
-    final effectiveTextColor = textColor ?? _colors.onPrimary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: _blendOnSurface(color, 0.2),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _withOpacity(color, 0.2)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: effectiveTextColor,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '$count',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: effectiveTextColor),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPaymentMethodCard(Map<String, dynamic> method) {
-    final bool isActive = method['is_active'] == true;
-    final Color baseColor = isActive ? _successColor : _outlineColor;
-    final Color background = _blendOnSurface(baseColor, isActive ? 0.18 : 0.08);
-    final double commission = _safeDouble(method['commission_rate']);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: _withOpacity(baseColor, isActive ? 0.35 : 0.2),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: _withOpacity(baseColor, 0.2),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(Icons.credit_card, color: baseColor),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  method['name']?.toString() ?? 'وسيلة دفع',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: _strongTextColor,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  method['payment_type']?.toString() ?? '-',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: _mutedTextColor),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Icon(Icons.percent, size: 16, color: baseColor),
-                    const SizedBox(width: 6),
-                    Text(
-                      'عمولة ${commission.toStringAsFixed(2)}%',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: baseColor),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Switch.adaptive(
-            value: isActive,
-            onChanged: (value) => _togglePaymentMethodStatus(method, value),
-            thumbColor: _thumbColorFor(_successColor),
-            trackColor: _trackColorFor(_successColor),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState({
-    required IconData icon,
-    required String title,
-    required String message,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(40),
-      decoration: BoxDecoration(
-        color: _blendOnSurface(_outlineColor, 0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _withOpacity(_outlineColor, 0.2)),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, size: 64, color: _outlineColor),
-          const SizedBox(height: 16),
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: _strongTextColor,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: _mutedTextColor),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildTaxExampleRow(int amount) {
     final double taxValue = _taxRatePercent / 100 * amount;
@@ -1742,7 +1229,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           fontWeight: FontWeight.w700,
           color: _strongTextColor,
         ) ??
-        TextStyle(fontWeight: FontWeight.w700, color: _strongTextColor);
+        const TextStyle(fontWeight: FontWeight.w700);
   }
 
   InputDecoration _inputDecoration({
@@ -1812,15 +1299,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     return fallback;
   }
 
-  double _safeDouble(dynamic value, {double fallback = 0}) {
-    if (value is double) return value;
-    if (value is num) return value.toDouble();
-    if (value is String) {
-      final parsed = double.tryParse(value);
-      if (parsed != null) return parsed;
-    }
-    return fallback;
-  }
 
   bool _safeBool(dynamic value, {required bool fallback}) {
     if (value is bool) return value;
@@ -1828,37 +1306,24 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     if (value is String) return value.toLowerCase() == 'true';
     return fallback;
   }
-
+  
   WidgetStateProperty<Color?> _thumbColorFor(Color color) {
     return WidgetStateProperty.resolveWith((states) {
-      if (states.contains(WidgetState.disabled)) {
-        return _withOpacity(color, 0.4);
-      }
-      if (states.contains(WidgetState.selected)) {
-        return color;
-      }
+      if (states.contains(WidgetState.selected)) return color;
       return null;
     });
   }
 
   WidgetStateProperty<Color?> _trackColorFor(Color color) {
     return WidgetStateProperty.resolveWith((states) {
-      if (states.contains(WidgetState.disabled)) {
-        return _withOpacity(color, 0.12);
-      }
-      if (states.contains(WidgetState.selected)) {
-        return _withOpacity(color, 0.45);
-      }
+      if (states.contains(WidgetState.selected)) return color.withOpacity(0.5);
       return null;
     });
   }
 
-  Color _withOpacity(Color color, double opacity) {
-    final double clamped = opacity.clamp(0.0, 1.0);
-    return color.withAlpha((clamped * 255).round());
-  }
+  Color _withOpacity(Color color, double opacity) => color.withOpacity(opacity.clamp(0.0, 1.0));
 
   Color _blendOnSurface(Color color, double opacity) {
-    return Color.alphaBlend(_withOpacity(color, opacity), _surfaceColor);
+    return Color.alphaBlend(color.withOpacity(opacity), _surfaceColor);
   }
 }

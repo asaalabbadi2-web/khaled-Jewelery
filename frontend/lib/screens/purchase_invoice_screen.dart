@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api_service.dart';
+import '../models/category_model.dart';
 import '../models/safe_box_model.dart';
-import '../widgets/add_supplier_dialog.dart';
+import 'add_supplier_screen.dart';
+import '../utils.dart';
 
 class PurchaseInvoiceScreen extends StatefulWidget {
   final int? supplierId;
@@ -30,11 +32,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   int? _selectedSupplierId;
   String? _supplierError;
 
+  // Payment Methods
+  List<Map<String, dynamic>> _paymentMethods = [];
+  int? _selectedPaymentMethodId;
+
   List<SafeBoxModel> _safeBoxes = [];
   int? _selectedSafeBoxId;
 
+  List<Category> _categories = [];
+  bool _isLoadingCategories = false;
+  String? _categoriesError;
+
   Map<String, dynamic>? _goldPrice;
   List<PurchaseKaratLine> _karatLines = [];
+  List<PurchaseInlineItem> _inlineItems = [];
 
   double _totalWeight = 0;
   double _goldSubtotal = 0;
@@ -52,8 +63,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     super.initState();
     _selectedSupplierId = widget.supplierId;
     _loadSuppliers();
+    _loadCategories();
     _loadGoldPrice();
-    _loadDefaultSafeBox();
+    _loadPaymentMethods();
     _loadSettings();
     _applyTotals(_KaratTotals.zero);
   }
@@ -139,6 +151,154 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     }
   }
 
+  Future<void> _loadCategories() async {
+    setState(() {
+      _isLoadingCategories = true;
+      _categoriesError = null;
+    });
+
+    try {
+      final response = await _api.getCategories();
+      if (!mounted) return;
+
+      final categories = response
+          .whereType<Map<String, dynamic>>()
+          .map(Category.fromJson)
+          .toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+
+      setState(() {
+        _categories = categories;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      final message = 'فشل تحميل التصنيفات: $e';
+      setState(() {
+        _categoriesError = message;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingCategories = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadPaymentMethods() async {
+    try {
+      final methods = await _api.getActivePaymentMethods();
+      if (!mounted) return;
+
+      final normalizedMethods = methods
+          .whereType<Map<String, dynamic>>()
+          .map<Map<String, dynamic>>((method) {
+            final map = Map<String, dynamic>.from(method);
+            final id = _parseInt(map['id']);
+            final commission = _toDouble(map['commission_rate']);
+            final settlement = _parseInt(map['settlement_days']) ?? 0;
+            final displayOrder = _parseInt(map['display_order']) ?? 999;
+
+            return {
+              ...map,
+              'id': id,
+              'commission_rate': commission,
+              'settlement_days': settlement,
+              'display_order': displayOrder,
+            };
+          })
+          .where((method) => method['id'] != null)
+          .toList();
+
+      normalizedMethods.sort((a, b) {
+        final aOrder = a['display_order'] as int;
+        final bOrder = b['display_order'] as int;
+        return aOrder.compareTo(bOrder);
+      });
+
+      setState(() {
+        _paymentMethods = normalizedMethods;
+
+        if (_paymentMethods.isNotEmpty) {
+          final defaultMethod = _paymentMethods.firstWhere(
+            (m) => (m['name'] ?? '').toString().trim() == 'نقداً',
+            orElse: () => _paymentMethods.first,
+          );
+          _selectedPaymentMethodId = defaultMethod['id'] as int?;
+        } else {
+          _selectedPaymentMethodId = null;
+        }
+
+        // قم بإعادة تعيين الخزائن قبل تحميلها من جديد
+        _safeBoxes = [];
+        _selectedSafeBoxId = null;
+      });
+
+      if (_selectedPaymentMethodId != null) {
+        await _loadSafeBoxesForPaymentMethod(_selectedPaymentMethodId!);
+      } else {
+        await _loadDefaultSafeBox();
+      }
+    } catch (e) {
+      debugPrint('فشل تحميل وسائل الدفع: $e');
+    }
+  }
+
+  Future<void> _loadSafeBoxesForPaymentMethod(int paymentMethodId) async {
+    try {
+      final method = _paymentMethods.firstWhere(
+        (m) => m['id'] == paymentMethodId,
+        orElse: () => {},
+      );
+
+      if (method.isEmpty) return;
+
+      final paymentType = method['payment_type'] as String?;
+      if (paymentType == null) return;
+
+      final allBoxes = await _api.getSafeBoxes();
+      List<SafeBoxModel> boxes;
+
+      switch (paymentType) {
+        case 'cash':
+          boxes = allBoxes.where((box) => box.safeType == 'cash').toList();
+          break;
+        case 'bank_transfer':
+        case 'check':
+          boxes = allBoxes.where((box) => box.safeType == 'bank').toList();
+          break;
+        default:
+          boxes = allBoxes
+              .where((box) => box.safeType == 'cash' || box.safeType == 'bank')
+              .toList();
+      }
+
+      if (!mounted) return;
+
+      if (boxes.isEmpty) {
+        await _loadDefaultSafeBox();
+        return;
+      }
+
+      setState(() {
+        _safeBoxes = boxes;
+        final defaultBox = _safeBoxes.firstWhere(
+          (box) => box.isDefault == true,
+          orElse: () => _safeBoxes.first,
+        );
+        _selectedSafeBoxId = defaultBox.id;
+      });
+    } catch (e) {
+      debugPrint('فشل تحميل الخزائن: $e');
+    }
+  }
+
   Future<void> _loadDefaultSafeBox() async {
     try {
       final boxes = await _api.getSafeBoxes();
@@ -175,7 +335,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
       setState(() {
         _goldPrice = enriched;
-        _applyTotals(_calculateTotals(_karatLines));
+        _applyCombinedTotals();
       });
     } catch (e) {
       if (!mounted) return;
@@ -189,33 +349,49 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   }
 
   Future<void> _openAddSupplierDialog() async {
-    final created = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => AddSupplierDialog(api: _api),
+    final result = await Navigator.push<bool?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddSupplierScreen(
+          api: _api,
+          onSupplierSaved: (saved) {
+            if (!mounted) return;
+            final normalized = Map<String, dynamic>.from(saved);
+            normalized['id'] = _parseId(saved['id']);
+            final supplierId = normalized['id'] as int?;
+            if (supplierId == null) return;
+
+            setState(() {
+              _suppliers.removeWhere(
+                (supplier) => _parseId(supplier['id']) == supplierId,
+              );
+              _suppliers.add(normalized);
+              _suppliers.sort(
+                (a, b) => ((a['name'] ?? '') as String).compareTo(
+                  (b['name'] ?? '') as String,
+                ),
+              );
+              _selectedSupplierId = supplierId;
+              _supplierError = null;
+            });
+          },
+        ),
+      ),
     );
 
-    if (created == null) return;
-
-    final normalized = Map<String, dynamic>.from(created);
-    normalized['id'] = _parseId(created['id']);
-    final supplierId = normalized['id'] as int?;
-    if (supplierId == null) {
-      return;
+    if (result == true) {
+      debugPrint('Supplier added via AddSupplierScreen (purchase)');
     }
-
-    setState(() {
-      _suppliers.add(normalized);
-      _suppliers.sort(
-        (a, b) => ((a['name'] ?? '') as String).compareTo(
-          (b['name'] ?? '') as String,
-        ),
-      );
-      _selectedSupplierId = supplierId;
-      _supplierError = null;
-    });
   }
 
   int? _parseId(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
+  }
+
+  int? _parseInt(dynamic value) {
     if (value == null) return null;
     if (value is int) return value;
     if (value is num) return value.toInt();
@@ -292,6 +468,34 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     );
   }
 
+  List<PurchaseKaratLine> _derivedInlineKaratLines(
+    List<PurchaseInlineItem>? items,
+  ) {
+    final source = items ?? _inlineItems;
+    return source
+        .map(
+          (item) => PurchaseKaratLine(
+            karat: item.karat,
+            weightGrams: item.weightGrams,
+            wagePerGram: item.wagePerGram,
+          ),
+        )
+        .toList();
+  }
+
+  void _applyCombinedTotals({
+    List<PurchaseKaratLine>? manualLines,
+    List<PurchaseInlineItem>? inlineItems,
+  }) {
+    final resolvedManual = manualLines ?? _karatLines;
+    final resolvedInline = inlineItems ?? _inlineItems;
+    final combinedLines = [
+      ...resolvedManual,
+      ..._derivedInlineKaratLines(resolvedInline),
+    ];
+    _applyTotals(_calculateTotals(combinedLines));
+  }
+
   void _applyTotals(_KaratTotals totals) {
     _totalWeight = _round(totals.totalWeight, 3);
     _goldSubtotal = _round(totals.goldSubtotal, 2);
@@ -304,18 +508,94 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   }
 
   void _updateLines(List<PurchaseKaratLine> lines) {
-    final totals = _calculateTotals(lines);
     setState(() {
       _karatLines = lines;
-      _applyTotals(totals);
+      _applyCombinedTotals(manualLines: lines);
     });
   }
 
-  Future<void> _addKaratLine() async {
-    final line = await _showKaratLineDialog();
-    if (line == null) return;
+  void _updateInlineItems(List<PurchaseInlineItem> items) {
+    setState(() {
+      _inlineItems = items;
+      _applyCombinedTotals(inlineItems: items);
+    });
+  }
 
-    _updateLines([..._karatLines, line]);
+  Future<void> _addInlineItem() async {
+    final item = await _showInlineItemDialog();
+    if (item == null) return;
+    _updateInlineItems([..._inlineItems, item]);
+  }
+
+  Future<void> _addInlineItemsBulk() async {
+    final result = await _showInlineBulkDialog();
+    if (result == null || result.weights.isEmpty) return;
+
+    final newItems = result.weights
+        .map(
+          (weight) => PurchaseInlineItem(
+            name: result.name,
+            karat: result.karat,
+            weightGrams: weight,
+            wagePerGram: result.wagePerGram,
+            description: result.description,
+            itemCode: result.itemCode,
+            barcode: result.barcode,
+            category: result.category,
+            categoryId: result.categoryId,
+          ),
+        )
+        .toList();
+
+    _updateInlineItems([..._inlineItems, ...newItems]);
+
+    if (!mounted) return;
+    final totalWeight = newItems.fold<double>(
+      0,
+      (sum, item) => sum + item.weightGrams,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'تمت إضافة ${newItems.length} وزناً (${_formatWeight(totalWeight)}) للصنف ${result.name}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editInlineItem(int index) async {
+    final existing = _inlineItems[index];
+    final item = await _showInlineItemDialog(existing: existing);
+    if (item == null) return;
+
+    final updated = [..._inlineItems];
+    updated[index] = item;
+    _updateInlineItems(updated);
+  }
+
+  Future<void> _removeInlineItem(int index) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('حذف الصنف'),
+        content: Text('هل تريد حذف الصنف "${_inlineItems[index].name}"؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final updated = [..._inlineItems]..removeAt(index);
+    _updateInlineItems(updated);
   }
 
   Future<void> _editKaratLine(int index) async {
@@ -355,13 +635,92 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     _updateLines(updated);
   }
 
-  Map<String, double> _aggregateWeightByKarat() {
+  Future<void> _addManualKaratLine() async {
+    final line = await _showKaratLineDialog();
+    if (line == null) return;
+
+    _updateLines([..._karatLines, line]);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'تمت إضافة وزن ${_formatWeight(line.weightGrams)} لعيار ${line.karat.toStringAsFixed(0)}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addBulkWeights() async {
+    final result = await _showBulkWeightsDialog();
+    if (result == null) return;
+
+    final updated = [..._karatLines];
+    for (final weight in result.weights) {
+      updated.add(
+        PurchaseKaratLine(
+          karat: result.karat,
+          weightGrams: weight,
+          wagePerGram: result.wagePerGram,
+          description: result.notes,
+        ),
+      );
+    }
+
+    _updateLines(updated);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'تمت إضافة ${result.weights.length} من الأوزان لعيار ${result.karat.toStringAsFixed(0)}',
+        ),
+      ),
+    );
+  }
+
+  Map<String, double> _aggregateManualWeightByKarat() {
     final Map<String, double> summary = {};
     for (final line in _karatLines) {
       final key = _normalizeKaratKey(line.karat);
       summary[key] = (summary[key] ?? 0) + line.weightGrams;
     }
     return summary;
+  }
+
+  Map<String, double> _aggregateInlineWeightByKarat() {
+    final Map<String, double> summary = {};
+    for (final item in _inlineItems) {
+      final key = _normalizeKaratKey(item.karat);
+      summary[key] = (summary[key] ?? 0) + item.weightGrams;
+    }
+    return summary;
+  }
+
+  Map<String, double> _aggregateWeightByKarat() {
+    final summary = Map<String, double>.from(_aggregateManualWeightByKarat());
+    for (final entry in _aggregateInlineWeightByKarat().entries) {
+      summary[entry.key] = (summary[entry.key] ?? 0) + entry.value;
+    }
+    return summary;
+  }
+
+  double get _inlineTotalWeight =>
+      _inlineItems.fold(0.0, (sum, item) => sum + item.weightGrams);
+
+  double get _inlineTotalWage => _inlineItems.fold(
+      0.0, (sum, item) => sum + (item.weightGrams * item.wagePerGram));
+
+  Map<double, _InlineKaratAggregate> _inlineKaratAggregates() {
+    final Map<double, _InlineKaratAggregate> aggregates = {};
+    for (final item in _inlineItems) {
+      final line = PurchaseKaratLine(
+        karat: item.karat,
+        weightGrams: item.weightGrams,
+        wagePerGram: item.wagePerGram,
+      );
+      final snapshot = _snapshotFor(line);
+      aggregates.putIfAbsent(line.karat, () => _InlineKaratAggregate()).add(snapshot);
+    }
+    return aggregates;
   }
 
   String _normalizeKaratKey(double karat) {
@@ -393,9 +752,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       return false;
     }
 
-    if (_karatLines.isEmpty) {
+    if (_karatLines.isEmpty && _inlineItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أضف سطر عيار واحد على الأقل قبل الحفظ')),
+        const SnackBar(
+          content: Text('أضف أصنافاً أو قم بتعبئة بيانات العيارات قبل الحفظ'),
+        ),
       );
       return false;
     }
@@ -403,6 +764,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     if (_totalWeight <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('إجمالي الوزن يجب أن يكون أكبر من صفر')),
+      );
+      return false;
+    }
+
+    if (_paymentMethods.isNotEmpty && _selectedPaymentMethodId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('اختر وسيلة الدفع قبل الحفظ')),
       );
       return false;
     }
@@ -425,6 +793,22 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       };
     }).toList();
 
+    final inlineAggregates = _inlineKaratAggregates();
+    inlineAggregates.forEach((karat, aggregate) {
+      linePayloads.add({
+        'karat': karat,
+        'weight_grams': _round(aggregate.weight, 3),
+        'gold_value_cash': _round(aggregate.goldValue, 2),
+        'manufacturing_wage_cash': _round(aggregate.wageCash, 2),
+        'gold_tax': _round(aggregate.goldTax, 2),
+        'wage_tax': _round(aggregate.wageTax, 2),
+        'description': 'تفاصيل الأصناف المضافة داخل الفاتورة',
+      });
+    });
+
+    final inlineItemsPayload =
+        _inlineItems.map((item) => item.toPayload()).toList();
+    final inlineWeights = _aggregateInlineWeightByKarat();
     final weightByKarat = _aggregateWeightByKarat();
     final supplierGoldLines = weightByKarat.entries
         .map(
@@ -450,7 +834,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       'wage_tax_total': _round(_wageTaxTotal, 2),
       'apply_gold_tax': _applyVatOnGold,
       'karat_lines': linePayloads,
-      'items': [],
+      'items': inlineItemsPayload,
       'supplier_gold_lines': supplierGoldLines,
       'supplier_gold_weights': weightByKarat.map(
         (key, value) => MapEntry(key, _round(value, 3)),
@@ -467,6 +851,16 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           (key, value) => MapEntry(key, _round(value, 3)),
         ),
         'wage_total': _round(_wageSubtotal, 2),
+      },
+      if (_inlineItems.isNotEmpty) ...{
+        'inline_items_summary': {
+          'count': _inlineItems.length,
+          'total_weight': _round(_inlineTotalWeight, 3),
+          'total_wage_cash': _round(_inlineTotalWage, 2),
+        },
+        'inline_items_weight_by_karat': inlineWeights.map(
+          (key, value) => MapEntry(key, _round(value, 3)),
+        ),
       },
       if (_selectedSafeBoxId != null) 'safe_box_id': _selectedSafeBoxId,
     };
@@ -511,14 +905,17 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final size = MediaQuery.of(context).size;
     final isWideLayout = size.width >= 1100;
 
     final leftColumn = <Widget>[
       _buildSupplierSection(),
       const SizedBox(height: 24),
-      _buildKaratLinesSection(),
+      _buildInlineItemsSection(),
+      if (_karatLines.isNotEmpty) ...[
+        const SizedBox(height: 24),
+        _buildKaratLinesSection(),
+      ],
     ];
 
     final rightColumn = <Widget>[
@@ -576,38 +973,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 const SizedBox(height: 24),
                 ...rightColumn,
               ],
-              const SizedBox(height: 32),
-              Align(
-                alignment: Alignment.center,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: FilledButton.icon(
-                    onPressed: _isSavingInvoice ? null : _saveInvoice,
-                    icon: _isSavingInvoice
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: theme.colorScheme.onPrimary,
-                            ),
-                          )
-                        : const Icon(Icons.save_alt),
-                    label: Text(
-                      _isSavingInvoice ? 'جارٍ الحفظ...' : 'حفظ الفاتورة',
-                    ),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 16,
-                      ),
-                      textStyle: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
@@ -623,7 +988,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     return Card(
       elevation: isDark ? 2 : 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      shadowColor: Colors.black.withOpacity(isDark ? 0.25 : 0.08),
+      shadowColor: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -635,7 +1000,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withOpacity(
+                    color: colorScheme.primary.withValues(alpha: 
                       isDark ? 0.18 : 0.12,
                     ),
                     borderRadius: BorderRadius.circular(12),
@@ -693,7 +1058,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             ),
             const SizedBox(height: 20),
             DropdownButtonFormField<int>(
-              value: _selectedSupplierId,
+                  initialValue: _selectedSupplierId,
               items: _suppliers
                   .map(
                     (supplier) => DropdownMenuItem<int>(
@@ -721,6 +1086,39 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               },
             ),
             const SizedBox(height: 16),
+            // Payment Method Dropdown
+            if (_paymentMethods.isNotEmpty) ...[
+              DropdownButtonFormField<int>(
+                initialValue: _selectedPaymentMethodId,
+                decoration: InputDecoration(
+                  labelText: 'وسيلة الدفع',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: Icon(
+                    Icons.payment,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                dropdownColor: theme.cardColor,
+                icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
+                items: _paymentMethods
+                    .map(
+                      (method) => DropdownMenuItem<int>(
+                        value: method['id'] as int,
+                        child: Text(method['name']?.toString() ?? 'بدون اسم'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedPaymentMethodId = value;
+                  });
+                  if (value != null) {
+                    _loadSafeBoxesForPaymentMethod(value);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
             Row(
               children: [
                 OutlinedButton.icon(
@@ -749,7 +1147,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           : Icons.settings_outlined,
                       color: _showAdvancedPaymentOptions
                           ? colorScheme.primary
-                          : colorScheme.primary.withOpacity(0.6),
+                          : colorScheme.primary.withValues(alpha: 0.6),
                     ),
                     label: Text(
                       _showAdvancedPaymentOptions
@@ -768,7 +1166,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             if (_safeBoxes.isNotEmpty && _showAdvancedPaymentOptions) ...[
               const SizedBox(height: 20),
               DropdownButtonFormField<int>(
-                value: _selectedSafeBoxId,
+                initialValue: _selectedSafeBoxId,
                 decoration: const InputDecoration(
                   labelText: 'الخزينة المستخدمة للدفع',
                   border: OutlineInputBorder(),
@@ -792,7 +1190,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                   start: 8,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.green.withOpacity(0.15),
+                                  color: Colors.green.withValues(alpha: 0.15),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: const Text(
@@ -880,7 +1278,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final display = price > 0 ? price.toStringAsFixed(2) : '-';
     return Chip(
       label: Text('$label: $display ر.س'),
-      backgroundColor: const Color(0xFFFFD700).withOpacity(0.18),
+      backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.18),
     );
   }
 
@@ -908,7 +1306,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 if (manual == _manualPricing) return;
                 setState(() {
                   _manualPricing = manual;
-                  _applyTotals(_calculateTotals(_karatLines));
+                  _applyCombinedTotals();
                 });
               },
               children: const [
@@ -964,7 +1362,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               onChanged: (value) {
                 setState(() {
                   _applyVatOnGold = value;
-                  _applyTotals(_calculateTotals(_karatLines));
+                  _applyCombinedTotals();
                 });
               },
             ),
@@ -1117,7 +1515,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   final karatLabel = entry.key;
                   final weightValue = entry.value;
                   return Chip(
-                    backgroundColor: const Color(0xFFFFD700).withOpacity(0.12),
+                    backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.12),
                     label: Text(
                       'عيار $karatLabel: ${_formatWeight(weightValue)}',
                     ),
@@ -1150,7 +1548,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundColor: resolvedIconColor.withOpacity(0.12),
+            backgroundColor: resolvedIconColor.withValues(alpha: 0.12),
             child: Icon(icon, color: resolvedIconColor, size: 18),
           ),
           const SizedBox(width: 12),
@@ -1209,6 +1607,923 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     );
   }
 
+  Widget _buildInlineItemsSection() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Card(
+      elevation: isDark ? 1 : 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text(
+                        'الأصناف داخل الفاتورة',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'أدخل وزناً واحداً للصنف أو ألصق عدة أوزان لنفس الصنف دفعة واحدة.',
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: _addInlineItem,
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text('إضافة وزن واحد'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _addInlineItemsBulk,
+                      icon: const Icon(Icons.playlist_add),
+                      label: const Text('إضافة عدة أوزان'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_inlineItems.isEmpty)
+                  _buildInlineItemsEmptyState()
+            else ...[
+              _buildInlineItemsMetrics(),
+              const SizedBox(height: 12),
+              _buildInlineWeightChips(),
+              const SizedBox(height: 12),
+              _buildInlineItemsTable(),
+            ],
+            const SizedBox(height: 16),
+            _buildSaveInvoiceButton(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSaveInvoiceButton() {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: AlignmentDirectional.centerEnd,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: FilledButton.icon(
+          onPressed: _isSavingInvoice ? null : _saveInvoice,
+          icon: _isSavingInvoice
+              ? SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: theme.colorScheme.onPrimary,
+                  ),
+                )
+              : const Icon(Icons.save_alt),
+          label: Text(
+            _isSavingInvoice ? 'جارٍ الحفظ...' : 'حفظ الفاتورة',
+          ),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 16,
+            ),
+            textStyle: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInlineItemsMetrics() {
+    final entries = <Widget>[
+      _buildInlineMetricChip('عدد الأصناف', _inlineItems.length.toString()),
+      _buildInlineMetricChip('إجمالي الوزن', _formatWeight(_inlineTotalWeight)),
+      _buildInlineMetricChip('أجور المصنعية', _formatCurrency(_inlineTotalWage)),
+    ];
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: entries,
+    );
+  }
+
+  Widget _buildInlineMetricChip(String label, String value) {
+    return Chip(
+      backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.14),
+      label: Text('$label: $value'),
+    );
+  }
+
+  Widget _buildInlineWeightChips() {
+    final summary = _aggregateInlineWeightByKarat();
+    if (summary.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final entries = summary.entries.toList()
+      ..sort(
+        (a, b) => (double.tryParse(a.key) ?? 0).compareTo(
+          double.tryParse(b.key) ?? 0,
+        ),
+      );
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: entries
+          .map(
+            (entry) => Chip(
+              backgroundColor: const Color(0xFFFAF5E4),
+              label: Text('عيار ${entry.key}: ${_formatWeight(entry.value)}'),
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  Widget _buildInlineItemsEmptyState() {
+    return Column(
+      children: const [
+        SizedBox(height: 16),
+        Icon(Icons.inventory_outlined, size: 64, color: Colors.grey),
+        SizedBox(height: 12),
+        Text('لا توجد أصناف بعد. استخدم زر "إضافة وزن واحد" أو "إضافة عدة أوزان".'),
+      ],
+    );
+  }
+
+  Widget _buildInlineItemsTable() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        columns: const [
+          DataColumn(label: Text('الصنف')),
+          DataColumn(label: Text('العيار')),
+          DataColumn(label: Text('الوزن (جم)')),
+          DataColumn(label: Text('أجرة/جرام')),
+          DataColumn(label: Text('أجور كلية')),
+          DataColumn(label: Text('أحجار')),
+          DataColumn(label: Text('ملاحظات')),
+          DataColumn(label: Text('إجراءات')),
+        ],
+        rows: [
+          for (int index = 0; index < _inlineItems.length; index++)
+            _buildInlineItemRow(_inlineItems[index], index),
+        ],
+      ),
+    );
+  }
+
+  int? _categoryIdForName(String? name) {
+    if (name == null || name.isEmpty) return null;
+    try {
+      return _categories.firstWhere((category) => category.name == name).id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<DropdownMenuItem<String?>> _buildCategoryDropdownItems() {
+    final items = <DropdownMenuItem<String?>>[
+      const DropdownMenuItem<String?>(
+        value: null,
+        child: Text('بدون تصنيف'),
+      ),
+    ];
+
+    for (final category in _categories) {
+      items.add(
+        DropdownMenuItem<String?>(
+          value: category.name,
+          child: Text(category.name),
+        ),
+      );
+    }
+
+    return items;
+  }
+
+  InputDecoration _categoryDropdownDecoration({
+    String labelText = 'التصنيف (اختياري)',
+  }) {
+    return InputDecoration(
+      labelText: labelText,
+      border: const OutlineInputBorder(),
+      prefixIcon: const Icon(Icons.category_outlined),
+      helperText: _categoriesError ??
+          (_categories.isEmpty ? 'لا توجد تصنيفات متاحة حالياً.' : null),
+    );
+  }
+
+  DataRow _buildInlineItemRow(PurchaseInlineItem item, int index) {
+    return DataRow(
+      cells: [
+        DataCell(Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (item.category?.isNotEmpty ?? false)
+              Text('تصنيف: ${item.category}', style: const TextStyle(fontSize: 12)),
+            if (item.itemCode?.isNotEmpty ?? false)
+              Text('كود: ${item.itemCode}', style: const TextStyle(fontSize: 12)),
+            if (item.barcode?.isNotEmpty ?? false)
+              Text('باركود: ${item.barcode}', style: const TextStyle(fontSize: 12)),
+          ],
+        )),
+        DataCell(Text(item.karat.toStringAsFixed(0))),
+        DataCell(Text(item.weightGrams.toStringAsFixed(3))),
+        DataCell(Text(item.wagePerGram.toStringAsFixed(2))),
+        DataCell(Text((item.weightGrams * item.wagePerGram).toStringAsFixed(2))),
+        DataCell(Text(item.hasStones ? 'نعم' : '-')),
+        DataCell(
+          item.description == null || item.description!.isEmpty
+              ? const Text('-')
+              : Tooltip(
+                  message: item.description!,
+                  child: Text(
+                    item.description!,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+        ),
+        DataCell(Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.edit),
+              tooltip: 'تعديل',
+              onPressed: () => _editInlineItem(index),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete, color: Colors.red),
+              tooltip: 'حذف',
+              onPressed: () => _removeInlineItem(index),
+            ),
+          ],
+        )),
+      ],
+    );
+  }
+
+  Future<PurchaseInlineItem?> _showInlineItemDialog({
+    PurchaseInlineItem? existing,
+  }) async {
+    final nameController = TextEditingController(text: existing?.name ?? '');
+    final weightController = TextEditingController(
+      text: existing != null ? existing.weightGrams.toStringAsFixed(3) : '',
+    );
+    final wageController = TextEditingController(
+      text: existing != null ? existing.wagePerGram.toStringAsFixed(2) : '0',
+    );
+    final descriptionController =
+        TextEditingController(text: existing?.description ?? '');
+    final itemCodeController =
+        TextEditingController(text: existing?.itemCode ?? '');
+    final barcodeController =
+        TextEditingController(text: existing?.barcode ?? '');
+    final stonesWeightController = TextEditingController(
+      text: existing != null && existing.stonesWeight > 0
+          ? existing.stonesWeight.toStringAsFixed(3)
+          : '',
+    );
+    final stonesValueController = TextEditingController(
+      text: existing != null && existing.stonesValue > 0
+          ? existing.stonesValue.toStringAsFixed(2)
+          : '',
+    );
+
+    double karat = existing?.karat ?? 21;
+    bool hasStones = existing?.hasStones ?? false;
+  String? selectedCategoryName =
+    (existing?.category?.isNotEmpty ?? false) ? existing!.category : null;
+  int? selectedCategoryId =
+    existing?.categoryId ?? _categoryIdForName(selectedCategoryName);
+
+    final result = await showDialog<PurchaseInlineItem>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final weight = double.tryParse(weightController.text) ?? 0;
+            final wagePerGram = double.tryParse(wageController.text) ?? 0;
+            final stonesWeight =
+                double.tryParse(stonesWeightController.text) ?? 0;
+            final stonesValue =
+                double.tryParse(stonesValueController.text) ?? 0;
+            final categoryItems = _buildCategoryDropdownItems();
+            final hasCategoryValue = categoryItems
+                .any((item) => item.value == selectedCategoryName);
+            final dropdownCategoryValue =
+                hasCategoryValue ? selectedCategoryName : null;
+            if (!hasCategoryValue && selectedCategoryName != null) {
+              selectedCategoryName = null;
+              selectedCategoryId = null;
+            }
+
+            return AlertDialog(
+              title: Text(
+                existing == null ? 'إضافة صنف' : 'تعديل الصنف',
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'اسم الصنف',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.title),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<double>(
+                      initialValue: karat,
+                      decoration: const InputDecoration(
+                        labelText: 'العيار',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [18.0, 21.0, 22.0, 24.0]
+                          .map(
+                            (value) => DropdownMenuItem<double>(
+                              value: value,
+                              child: Text(value.toStringAsFixed(0)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          karat = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: weightController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        NormalizeNumberFormatter(),
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'^[0-9]*\.?[0-9]*$'),
+                        ),
+                      ],
+                      decoration: const InputDecoration(
+                        labelText: 'الوزن (جرام)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.scale),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: wageController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        NormalizeNumberFormatter(),
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'^[0-9]*\.?[0-9]*$'),
+                        ),
+                      ],
+                      decoration: const InputDecoration(
+                        labelText: 'أجور المصنعية (ريال/جرام)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.design_services),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descriptionController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'ملاحظات (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.sticky_note_2_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: itemCodeController,
+                      decoration: const InputDecoration(
+                        labelText: 'كود الصنف (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.tag),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String?>(
+                      initialValue: dropdownCategoryValue,
+                      items: categoryItems,
+                      isExpanded: true,
+            onChanged: _isLoadingCategories
+              ? null
+              : (value) => setDialogState(() {
+                selectedCategoryName = value;
+                selectedCategoryId =
+                  _categoryIdForName(value);
+                }),
+                      decoration: _categoryDropdownDecoration(),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: barcodeController,
+                      decoration: const InputDecoration(
+                        labelText: 'الباركود (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.qr_code_2),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SwitchListTile(
+                      title: const Text('يتضمن أحجاراً أو إضافات'),
+                      contentPadding: EdgeInsets.zero,
+                      value: hasStones,
+                      onChanged: (value) => setDialogState(() {
+                        hasStones = value;
+                      }),
+                    ),
+                    if (hasStones) ...[
+                      TextField(
+                        controller: stonesWeightController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [
+                          NormalizeNumberFormatter(),
+                          FilteringTextInputFormatter.allow(
+                            RegExp(r'^[0-9]*\.?[0-9]*$'),
+                          ),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'وزن الأحجار (جم)',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.diamond),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: stonesValueController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [
+                          NormalizeNumberFormatter(),
+                          FilteringTextInputFormatter.allow(
+                            RegExp(r'^[0-9]*\.?[0-9]*$'),
+                          ),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'قيمة الأحجار (ريال)',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.attach_money),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Card(
+                      color: const Color(0xFFFAF5E4),
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'معاينة سريعة',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 8),
+                            _previewRow(
+                              'الوزن',
+                              _formatWeight(weight),
+                            ),
+                            _previewRow(
+                              'أجور المصنعية',
+                              _formatCurrency(weight * wagePerGram),
+                            ),
+                            if (hasStones)
+                              _previewRow(
+                                'وزن الأحجار',
+                                _formatWeight(stonesWeight),
+                              ),
+                            if (hasStones)
+                              _previewRow(
+                                'قيمة الأحجار',
+                                _formatCurrency(stonesValue),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    final name = nameController.text.trim();
+                    final parsedWeight =
+                        double.tryParse(weightController.text) ?? 0;
+                    final parsedWage =
+                        double.tryParse(wageController.text) ?? 0;
+
+                    if (name.isEmpty || parsedWeight <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content:
+                              Text('الاسم والوزن مطلوبان لإضافة الصنف'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    Navigator.of(dialogContext).pop(
+                      PurchaseInlineItem(
+                        name: name,
+                        karat: karat,
+                        weightGrams: parsedWeight,
+                        wagePerGram: parsedWage,
+                        description:
+                            descriptionController.text.trim().isEmpty
+                                ? null
+                                : descriptionController.text.trim(),
+                        itemCode: itemCodeController.text.trim().isEmpty
+                            ? null
+                            : itemCodeController.text.trim(),
+                        barcode: barcodeController.text.trim().isEmpty
+                            ? null
+                            : barcodeController.text.trim(),
+                        category: selectedCategoryName,
+                        categoryId: selectedCategoryId,
+                        hasStones: hasStones,
+                        stonesWeight: hasStones ? stonesWeight : 0,
+                        stonesValue: hasStones ? stonesValue : 0,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.save),
+                  label: Text(existing == null ? 'إضافة' : 'تحديث'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    nameController.dispose();
+    weightController.dispose();
+    wageController.dispose();
+    descriptionController.dispose();
+    itemCodeController.dispose();
+    barcodeController.dispose();
+    stonesWeightController.dispose();
+    stonesValueController.dispose();
+
+    return result;
+  }
+
+  Future<_InlineBulkResult?> _showInlineBulkDialog() async {
+    final nameController = TextEditingController();
+    final weightsController = TextEditingController();
+    final wageController = TextEditingController(text: '0');
+    final descriptionController = TextEditingController();
+  final itemCodeController = TextEditingController();
+  final barcodeController = TextEditingController();
+  double karat = 21;
+    String? selectedCategoryName;
+  int? selectedCategoryId;
+  final weightsFocusNode = FocusNode();
+
+    List<double> parseWeights(String input) {
+      final tokens = input
+          .split(RegExp(r'[\s,;،]+'))
+          .map((token) => token.trim())
+          .where((token) => token.isNotEmpty)
+          .toList();
+
+      final values = <double>[];
+      for (final token in tokens) {
+        final normalized = token.replaceAll(',', '.');
+        final parsed = double.tryParse(normalized);
+        if (parsed != null && parsed > 0) {
+          values.add(parsed);
+        }
+      }
+      return values;
+    }
+
+    final parentContext = context;
+
+    final result = await showDialog<_InlineBulkResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final parsedWeights = parseWeights(weightsController.text);
+            final totalWeight = parsedWeights.fold<double>(
+              0,
+              (sum, value) => sum + value,
+            );
+            final categoryItems = _buildCategoryDropdownItems();
+            final hasCategoryValue = categoryItems
+                .any((item) => item.value == selectedCategoryName);
+            final dropdownCategoryValue =
+                hasCategoryValue ? selectedCategoryName : null;
+            if (!hasCategoryValue && selectedCategoryName != null) {
+              selectedCategoryName = null;
+              selectedCategoryId = null;
+            }
+
+            void handleInsertNewline() {
+              final selection = weightsController.selection;
+              final text = weightsController.text;
+              final start = selection.isValid
+                  ? selection.start
+                  : text.length;
+              final end = selection.isValid
+                  ? selection.end
+                  : text.length;
+
+              final updatedText = text.replaceRange(start, end, '\n');
+              final caretOffset = start + 1;
+
+              weightsController.value = TextEditingValue(
+                text: updatedText,
+                selection: TextSelection.collapsed(offset: caretOffset),
+              );
+
+              setDialogState(() {});
+              weightsFocusNode.requestFocus();
+            }
+
+            return AlertDialog(
+              title: const Text('إضافة عدة أوزان لنفس الصنف'),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'اسم الصنف',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.inventory_2_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<double>(
+                      initialValue: karat,
+                      decoration: const InputDecoration(
+                        labelText: 'العيار',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [18.0, 21.0, 22.0, 24.0]
+                          .map(
+                            (value) => DropdownMenuItem<double>(
+                              value: value,
+                              child: Text(value.toStringAsFixed(0)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          karat = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: wageController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        NormalizeNumberFormatter(),
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'^[0-9]*\.?[0-9]*$'),
+                        ),
+                      ],
+                      decoration: const InputDecoration(
+                        labelText: 'أجرة المصنعية (ريال/جرام)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.design_services),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Shortcuts(
+                      shortcuts: const <ShortcutActivator, Intent>{
+                        SingleActivator(LogicalKeyboardKey.enter):
+                            _InsertNewlineIntent(),
+                        SingleActivator(LogicalKeyboardKey.numpadEnter):
+                            _InsertNewlineIntent(),
+                      },
+                      child: Actions(
+                        actions: <Type, Action<Intent>>{
+                          _InsertNewlineIntent:
+                              CallbackAction<_InsertNewlineIntent>(
+                            onInvoke: (intent) {
+                              handleInsertNewline();
+                              return null;
+                            },
+                          ),
+                        },
+                        child: TextField(
+                          focusNode: weightsFocusNode,
+                          controller: weightsController,
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            NormalizeNumberFormatter(),
+                            FilteringTextInputFormatter.allow(
+                              RegExp('[0-9\u0660-\u0669\u06F0-\u06F9.,،؛;\\s]'),
+                            ),
+                          ],
+                          textInputAction: TextInputAction.newline,
+                          minLines: 3,
+                          maxLines: 6,
+                          decoration: const InputDecoration(
+                            labelText: 'الأوزان المراد إضافتها',
+                            hintText: 'مثال:\n10.500\n9.350\n8.125',
+                            helperText:
+                                'افصل بين الأوزان بسطر جديد أو فاصلة أو مسافة.',
+                            alignLabelWithHint: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          onChanged: (_) => setDialogState(() {}),
+                          onEditingComplete: handleInsertNewline,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      parsedWeights.isEmpty
+                          ? 'لم يتم التعرف على أي وزن بعد.'
+                          : 'سيتم إضافة ${parsedWeights.length} وزنًا بإجمالي ${_formatWeight(totalWeight)}',
+                      style: TextStyle(
+                        color: parsedWeights.isEmpty
+                            ? Colors.redAccent
+                            : Colors.green.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descriptionController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'ملاحظات (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.note_alt_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: itemCodeController,
+                      decoration: const InputDecoration(
+                        labelText: 'كود الصنف (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.tag),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String?>(
+                      initialValue: dropdownCategoryValue,
+                      items: categoryItems,
+                      isExpanded: true,
+                      onChanged: _isLoadingCategories
+                          ? null
+                          : (value) => setDialogState(() {
+                                selectedCategoryName = value;
+                                selectedCategoryId =
+                                    _categoryIdForName(value);
+                              }),
+                      decoration: _categoryDropdownDecoration(),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: barcodeController,
+                      decoration: const InputDecoration(
+                        labelText: 'الباركود (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.qr_code_2),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    final name = nameController.text.trim();
+                    final weights = parseWeights(weightsController.text);
+                    final wage = double.tryParse(wageController.text) ?? 0;
+
+                    if (name.isEmpty) {
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('اسم الصنف مطلوب'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (weights.isEmpty) {
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('أدخل وزناً واحداً على الأقل'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (wage < 0) {
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        const SnackBar(
+                          content:
+                              Text('لا يمكن أن تكون أجرة المصنعية سالبة'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    Navigator.of(dialogContext).pop(
+                      _InlineBulkResult(
+                        name: name,
+                        karat: karat,
+                        wagePerGram: wage,
+                        weights: weights,
+                        description: descriptionController.text.trim().isEmpty
+                            ? null
+                            : descriptionController.text.trim(),
+                        itemCode: itemCodeController.text.trim().isEmpty
+                            ? null
+                            : itemCodeController.text.trim(),
+                        barcode: barcodeController.text.trim().isEmpty
+                            ? null
+                            : barcodeController.text.trim(),
+                        category: selectedCategoryName,
+                        categoryId: selectedCategoryId,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.save_alt),
+                  label: const Text('إضافة الأوزان'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    nameController.dispose();
+    weightsController.dispose();
+    wageController.dispose();
+    descriptionController.dispose();
+    itemCodeController.dispose();
+    barcodeController.dispose();
+    weightsFocusNode.dispose();
+
+    return result;
+  }
+
   Widget _buildKaratLinesSection() {
     final snapshots = _karatLines.map(_snapshotFor).toList();
 
@@ -1222,17 +2537,29 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            const Text(
+              'الأوزان اليدوية (اختياري)',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'استخدم هذا القسم لإدخال أوزان مستلمة مباشرة بدون إنشاء صنف داخل الفاتورة.',
+              style: TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                const Text(
-                  'أسطر العيار',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                FilledButton.icon(
+                  onPressed: _addManualKaratLine,
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('إضافة وزن'),
                 ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  onPressed: _addKaratLine,
-                  icon: const Icon(Icons.add),
-                  label: const Text('إضافة سطر'),
+                OutlinedButton.icon(
+                  onPressed: _addBulkWeights,
+                  icon: const Icon(Icons.playlist_add),
+                  label: const Text('إضافة عدة أوزان'),
                 ),
               ],
             ),
@@ -1250,7 +2577,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   }
 
   Widget _buildKaratSummaryChips() {
-    final summary = _aggregateWeightByKarat();
+    final summary = _aggregateManualWeightByKarat();
     final entries = summary.entries.toList()
       ..sort(
         (a, b) => (double.tryParse(a.key) ?? 0).compareTo(
@@ -1264,7 +2591,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       children: entries
           .map(
             (entry) => Chip(
-              backgroundColor: const Color(0xFFFFD700).withOpacity(0.15),
+              backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.15),
               label: Text('عيار ${entry.key}: ${_formatWeight(entry.value)}'),
             ),
           )
@@ -1278,9 +2605,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         SizedBox(height: 16),
         Icon(Icons.balance, size: 64, color: Colors.grey),
         SizedBox(height: 12),
-        Text(
-          'لم يتم إضافة أسطر عيار بعد. استخدم زر "إضافة سطر" لبدء إدخال الأوزان.',
-        ),
+        Text('لم يتم إضافة أسطر عيار بعد.'),
       ],
     );
   }
@@ -1435,16 +2760,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 effectiveWageTax;
 
             return AlertDialog(
-              title: Text(
-                existing == null ? 'إضافة سطر عيار' : 'تعديل سطر العيار',
-              ),
+              title: Text(existing == null ? 'إضافة وزن' : 'تعديل سطر العيار'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     DropdownButtonFormField<double>(
-                      value: karat,
+                      initialValue: karat,
                       decoration: const InputDecoration(
                         labelText: 'العيار',
                         border: OutlineInputBorder(),
@@ -1471,6 +2794,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         decimal: true,
                       ),
                       inputFormatters: [
+                        NormalizeNumberFormatter(),
                         FilteringTextInputFormatter.allow(
                           RegExp(r'^[0-9]*\.?[0-9]*$'),
                         ),
@@ -1489,6 +2813,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         decimal: true,
                       ),
                       inputFormatters: [
+                        NormalizeNumberFormatter(),
                         FilteringTextInputFormatter.allow(
                           RegExp(r'^[0-9]*\.?[0-9]*$'),
                         ),
@@ -1508,6 +2833,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           decimal: true,
                         ),
                         inputFormatters: [
+                          NormalizeNumberFormatter(),
                           FilteringTextInputFormatter.allow(
                             RegExp(r'^[0-9]*\.?[0-9]*$'),
                           ),
@@ -1526,6 +2852,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           decimal: true,
                         ),
                         inputFormatters: [
+                          NormalizeNumberFormatter(),
                           FilteringTextInputFormatter.allow(
                             RegExp(r'^[0-9]*\.?[0-9]*$'),
                           ),
@@ -1548,6 +2875,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     decimal: true,
                                   ),
                               inputFormatters: [
+                                NormalizeNumberFormatter(),
                                 FilteringTextInputFormatter.allow(
                                   RegExp(r'^[0-9]*\.?[0-9]*$'),
                                 ),
@@ -1568,6 +2896,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     decimal: true,
                                   ),
                               inputFormatters: [
+                                NormalizeNumberFormatter(),
                                 FilteringTextInputFormatter.allow(
                                   RegExp(r'^[0-9]*\.?[0-9]*$'),
                                 ),
@@ -1680,7 +3009,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                       ),
                     );
                   },
-                  child: const Text('حفظ'),
+                  child: Text(existing == null ? 'إضافة' : 'تحديث'),
                 ),
               ],
             );
@@ -1695,6 +3024,194 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     wageCashController.dispose();
     goldTaxController.dispose();
     wageTaxController.dispose();
+    notesController.dispose();
+
+    return result;
+  }
+
+  Future<_BulkWeightEntry?> _showBulkWeightsDialog() async {
+    final weightsController = TextEditingController();
+    final wageController = TextEditingController(text: '0');
+    final notesController = TextEditingController();
+    double karat = 21;
+
+    List<double> parseWeights(String input) {
+      final tokens = input
+          .split(RegExp(r'[\s,;،]+'))
+          .map((token) => token.trim())
+          .where((token) => token.isNotEmpty)
+          .toList();
+      final values = <double>[];
+      for (final token in tokens) {
+        final normalized = token.replaceAll(',', '.');
+        final parsed = double.tryParse(normalized);
+        if (parsed != null && parsed > 0) {
+          values.add(parsed);
+        }
+      }
+      return values;
+    }
+
+    final parentContext = context;
+
+    final result = await showDialog<_BulkWeightEntry>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final parsedWeights = parseWeights(weightsController.text);
+            final totalWeight = parsedWeights.fold<double>(
+              0,
+              (sum, value) => sum + value,
+            );
+            final statusText = parsedWeights.isEmpty
+                ? 'أدخل الأوزان المطلوب إضافتها (سطر لكل وزن).'
+                : 'سيتم إضافة ${parsedWeights.length} وزنًا بإجمالي ${_formatWeight(totalWeight)}';
+
+            return AlertDialog(
+              title: const Text('إضافة عدة أوزان دفعة واحدة'),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<double>(
+                      initialValue: karat,
+                      decoration: const InputDecoration(
+                        labelText: 'العيار',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [18.0, 21.0, 22.0, 24.0]
+                          .map(
+                            (value) => DropdownMenuItem<double>(
+                              value: value,
+                              child: Text(value.toStringAsFixed(0)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          karat = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: wageController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        NormalizeNumberFormatter(),
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'^[0-9]*\.?[0-9]*$'),
+                        ),
+                      ],
+                      decoration: const InputDecoration(
+                        labelText: 'أجرة المصنعية (ريال/جرام)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.design_services),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: weightsController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        NormalizeNumberFormatter(),
+                        FilteringTextInputFormatter.allow(
+                          RegExp('[0-9\u0660-\u0669\u06F0-\u06F9.,،؛;\\s]'),
+                        ),
+                      ],
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: const InputDecoration(
+                        labelText: 'الأوزان المراد إضافتها',
+                        hintText: 'مثال:\n2.350\n1.780\n0.955',
+                        helperText: 'افصل بين الأوزان بسطر جديد أو مسافة أو فاصلة.',
+                        alignLabelWithHint: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      statusText,
+                      style: TextStyle(
+                        color: parsedWeights.isEmpty
+                            ? Colors.redAccent
+                            : Colors.green.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: notesController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'ملاحظات (اختياري)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.note_alt_outlined),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    final weights = parseWeights(weightsController.text);
+                    if (weights.isEmpty) {
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('يجب إضافة وزن واحد على الأقل'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    final wagePerGram =
+                        double.tryParse(wageController.text) ?? 0;
+                    if (wagePerGram < 0) {
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('لا يمكن أن تكون أجرة المصنعية سالبة'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    Navigator.of(dialogContext).pop(
+                      _BulkWeightEntry(
+                        karat: karat,
+                        wagePerGram: wagePerGram,
+                        weights: weights,
+                        notes: notesController.text.trim().isEmpty
+                            ? null
+                            : notesController.text.trim(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.save_alt),
+                  label: const Text('إضافة الأوزان'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    weightsController.dispose();
+    wageController.dispose();
     notesController.dispose();
 
     return result;
@@ -1764,6 +3281,20 @@ class PurchaseKaratLine {
   }
 }
 
+class _BulkWeightEntry {
+  final double karat;
+  final double wagePerGram;
+  final List<double> weights;
+  final String? notes;
+
+  const _BulkWeightEntry({
+    required this.karat,
+    required this.wagePerGram,
+    required this.weights,
+    this.notes,
+  });
+}
+
 class _KaratLineSnapshot {
   final PurchaseKaratLine line;
   final double pricePerGram;
@@ -1812,4 +3343,126 @@ class _KaratTotals {
   double get subtotal => goldSubtotal + wageSubtotal;
   double get taxTotal => goldTaxTotal + wageTaxTotal;
   double get grandTotal => subtotal + taxTotal;
+}
+
+class _InlineKaratAggregate {
+  double weight = 0;
+  double goldValue = 0;
+  double wageCash = 0;
+  double goldTax = 0;
+  double wageTax = 0;
+
+  void add(_KaratLineSnapshot snapshot) {
+    weight += snapshot.weight;
+    goldValue += snapshot.goldValue;
+    wageCash += snapshot.wageCash;
+    goldTax += snapshot.goldTax;
+    wageTax += snapshot.wageTax;
+  }
+}
+
+class PurchaseInlineItem {
+  final String name;
+  final double karat;
+  final double weightGrams;
+  final double wagePerGram;
+  final String? description;
+  final bool hasStones;
+  final double stonesWeight;
+  final double stonesValue;
+  final String? itemCode;
+  final String? barcode;
+  final String? category;
+  final int? categoryId;
+
+  const PurchaseInlineItem({
+    required this.name,
+    required this.karat,
+    required this.weightGrams,
+    required this.wagePerGram,
+    this.description,
+    this.hasStones = false,
+    this.stonesWeight = 0,
+    this.stonesValue = 0,
+    this.itemCode,
+    this.barcode,
+    this.category,
+    this.categoryId,
+  });
+
+  PurchaseInlineItem copyWith({
+    String? name,
+    double? karat,
+    double? weightGrams,
+    double? wagePerGram,
+    String? description,
+    bool? hasStones,
+    double? stonesWeight,
+    double? stonesValue,
+    String? itemCode,
+    String? barcode,
+    String? category,
+    int? categoryId,
+  }) {
+    return PurchaseInlineItem(
+      name: name ?? this.name,
+      karat: karat ?? this.karat,
+      weightGrams: weightGrams ?? this.weightGrams,
+      wagePerGram: wagePerGram ?? this.wagePerGram,
+      description: description ?? this.description,
+      hasStones: hasStones ?? this.hasStones,
+      stonesWeight: stonesWeight ?? this.stonesWeight,
+      stonesValue: stonesValue ?? this.stonesValue,
+      itemCode: itemCode ?? this.itemCode,
+      barcode: barcode ?? this.barcode,
+      category: category ?? this.category,
+      categoryId: categoryId ?? this.categoryId,
+    );
+  }
+
+  Map<String, dynamic> toPayload() {
+    return {
+      'name': name,
+      'karat': karat,
+      'weight': weightGrams,
+      'wage': wagePerGram,
+      'description': description,
+      'item_code': itemCode,
+      'barcode': barcode,
+      'has_stones': hasStones,
+      'stones_weight': stonesWeight,
+      'stones_value': stonesValue,
+      'category': category,
+      'category_id': categoryId,
+      'create_inline': true,
+    }..removeWhere((key, value) => value == null);
+  }
+}
+
+class _InlineBulkResult {
+  final String name;
+  final double karat;
+  final double wagePerGram;
+  final List<double> weights;
+  final String? description;
+  final String? itemCode;
+  final String? barcode;
+  final String? category;
+  final int? categoryId;
+
+  const _InlineBulkResult({
+    required this.name,
+    required this.karat,
+    required this.wagePerGram,
+    required this.weights,
+    this.description,
+    this.itemCode,
+    this.barcode,
+    this.category,
+    this.categoryId,
+  });
+}
+
+class _InsertNewlineIntent extends Intent {
+  const _InsertNewlineIntent();
 }

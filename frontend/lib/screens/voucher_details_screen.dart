@@ -295,7 +295,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: typeColor.withOpacity(0.2),
+                              color: typeColor.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Icon(typeIcon, color: typeColor, size: 32),
@@ -322,7 +322,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
                                     vertical: 4,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: typeColor.withOpacity(0.2),
+                                    color: typeColor.withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Text(
@@ -349,7 +349,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: Colors.red.withOpacity(0.1),
+                            color: Colors.red.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: Colors.red, width: 1),
                           ),

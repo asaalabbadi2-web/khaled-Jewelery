@@ -29,10 +29,10 @@ class ReportCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: surfaceColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: borderColor.withOpacity(0.4)),
+          border: Border.all(color: borderColor.withValues(alpha: 0.4)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: Colors.black.withValues(alpha: 0.04),
               blurRadius: 8,
               offset: const Offset(0, 4),
             ),
@@ -51,7 +51,7 @@ class ReportCard extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withOpacity(0.08),
+                    color: theme.colorScheme.primary.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(report.icon,
@@ -74,7 +74,7 @@ class ReportCard extends StatelessWidget {
                       Text(
                         description,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurface.withOpacity(0.7),
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
                       ),
                     ],
@@ -108,8 +108,8 @@ class ReportCard extends StatelessWidget {
   Widget _buildTag(BuildContext context, String label, {bool isWarning = false}) {
     final theme = Theme.of(context);
     final bg = isWarning
-        ? theme.colorScheme.secondary.withOpacity(0.12)
-        : theme.colorScheme.primary.withOpacity(0.12);
+        ? theme.colorScheme.secondary.withValues(alpha: 0.12)
+        : theme.colorScheme.primary.withValues(alpha: 0.12);
     final fg = isWarning
         ? theme.colorScheme.secondary
         : theme.colorScheme.primary;

@@ -3,6 +3,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
+import '../services/data_sync_bus.dart';
 import '../providers/quick_actions_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
@@ -37,11 +38,41 @@ import 'payroll_report_screen.dart';
 import 'safe_boxes_screen.dart';
 import 'melting_renewal_screen.dart';
 import 'gold_reservation_screen.dart';
+import 'gold_reservations_list_screen.dart';
 import 'offices_screen.dart';
 import 'posting_management_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
 import 'printing_center_screen.dart';
+import 'weight_closing_settings_screen.dart';
+
+class _DrawerItemData {
+  final IconData icon;
+  final String title;
+  final Color? color;
+  final Future<void> Function() onSelected;
+
+  const _DrawerItemData({
+    required this.icon,
+    required this.title,
+    required this.onSelected,
+    this.color,
+  });
+}
+
+class _DrawerSectionData {
+  final String id;
+  final String title;
+  final Color color;
+  final List<_DrawerItemData> items;
+
+  _DrawerSectionData({
+    required this.id,
+    required this.title,
+    required this.color,
+    List<_DrawerItemData>? items,
+  }) : items = items ?? [];
+}
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -62,6 +93,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Data
   double? goldPrice;
+  double? goldPriceSar;
   DateTime? goldPriceDate;
   List customers = [];
   List items = [];
@@ -76,6 +108,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Gold price card expansion state
   bool _isGoldPriceExpanded = false;
+  String? _expandedDrawerSectionId;
 
   // Summary data
   Map<String, dynamic> salesSummary = {};
@@ -87,7 +120,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Bottom Navigation
   int _selectedNavIndex = 0;
-  List<String> _bottomNavItems = [
+  final List<String> _bottomNavItems = [
     'home',
     'invoices',
     'customers',
@@ -96,6 +129,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   ];
 
   bool isLoading = true;
+  VoidCallback? _itemsRevisionListener;
 
   @override
   void didChangeDependencies() {
@@ -178,6 +212,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   @override
   void initState() {
     super.initState();
+    _itemsRevisionListener = () {
+      if (!mounted) return;
+      _loadItems();
+    };
+    DataSyncBus.itemsRevision.addListener(_itemsRevisionListener!);
     _loadAllData();
   }
 
@@ -185,7 +224,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     setState(() => isLoading = true);
 
     try {
-      print('🔄 بدء تحميل البيانات...');
+      debugPrint('🔄 بدء تحميل البيانات...');
       await Future.wait([
         _loadGoldPrice(),
         _loadCustomers(),
@@ -194,15 +233,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         _loadSuppliers(),
       ]);
 
-      print(
+      debugPrint(
         '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
       );
       await _calculateSummaries();
-      print(
+      debugPrint(
         '✅ تم حساب الملخصات - مبيعات: ${salesSummary['count']}, مشتريات: ${purchaseSummary['count']}, مخزون: ${inventorySummary['count']}',
       );
     } catch (e) {
-      print('❌ خطأ في تحميل البيانات: $e');
+      debugPrint('❌ خطأ في تحميل البيانات: $e');
     } finally {
       setState(() => isLoading = false);
     }
@@ -211,11 +250,22 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   Future<void> _loadGoldPrice() async {
     try {
       final response = await api.getGoldPrice();
-      if (response['price_usd_per_oz'] != null) {
+      final rawUsdPrice = response['price_usd_per_oz'];
+      final rawSarPrice = response['price_sar_per_oz'];
+
+      final parsedUsdPrice = (rawUsdPrice is String)
+          ? double.tryParse(rawUsdPrice)
+          : (rawUsdPrice as num?)?.toDouble();
+
+      final parsedSarPrice = (rawSarPrice is String)
+          ? double.tryParse(rawSarPrice)
+          : (rawSarPrice as num?)?.toDouble();
+
+      if (parsedUsdPrice != null || parsedSarPrice != null) {
         setState(() {
-          goldPrice = (response['price_usd_per_oz'] is String)
-              ? double.tryParse(response['price_usd_per_oz'])
-              : (response['price_usd_per_oz'] as num?)?.toDouble();
+          goldPrice = parsedUsdPrice;
+          goldPriceSar = parsedSarPrice ??
+              (parsedUsdPrice != null ? parsedUsdPrice * exchangeRate : null);
 
           if (response['date'] != null) {
             goldPriceDate = DateTime.parse(response['date']);
@@ -223,7 +273,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         });
       }
     } catch (e) {
-      print('⚠️ خطأ في تحميل سعر الذهب: $e');
+      debugPrint('⚠️ خطأ في تحميل سعر الذهب: $e');
     }
   }
 
@@ -232,7 +282,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final data = await api.getCustomers();
       setState(() => customers = data);
     } catch (e) {
-      print('⚠️ خطأ في تحميل العملاء: $e');
+      debugPrint('⚠️ خطأ في تحميل العملاء: $e');
     }
   }
 
@@ -241,8 +291,52 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final data = await api.getItems();
       setState(() => items = data);
     } catch (e) {
-      print('⚠️ خطأ في تحميل الأصناف: $e');
+      debugPrint('⚠️ خطأ في تحميل الأصناف: $e');
     }
+  }
+
+  @override
+  void dispose() {
+    _itemsRevisionListener != null
+        ? DataSyncBus.itemsRevision.removeListener(_itemsRevisionListener!)
+        : null;
+    super.dispose();
+  }
+
+  double _parseStockValue(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      return double.tryParse(value) ?? 0.0;
+    }
+    return 0.0;
+  }
+
+  List<Map<String, dynamic>> _getSaleReadyItems() {
+    // 🔥 في تجارة الذهب: كل قطعة فريدة
+    // stock = 1 → القطعة متاحة للبيع
+    // stock = 0 → القطعة مباعة
+    final allItems = items
+        .whereType<Map<String, dynamic>>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    
+    debugPrint('🔍 Total items in inventory: ${allItems.length}');
+    
+    // فلترة القطع المتاحة فقط (stock >= 1)
+    final availableItems = allItems
+        .where((item) => _parseStockValue(item['stock']) >= 1)
+        .toList();
+    
+    debugPrint('✅ Available pieces for sale: ${availableItems.length}');
+    
+    // عرض تفاصيل القطع المتاحة
+    for (var item in availableItems) {
+      final weight = item['weight'] ?? 0;
+      final karat = item['karat'] ?? '?';
+      debugPrint('  💎 ${item['name']}: ${weight}g عيار $karat');
+    }
+    
+    return availableItems;
   }
 
   Future<void> _loadInvoices() async {
@@ -252,7 +346,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         invoices = data is List ? data : (data['invoices'] ?? []);
       });
     } catch (e) {
-      print('⚠️ خطأ في تحميل الفواتير: $e');
+      debugPrint('⚠️ خطأ في تحميل الفواتير: $e');
     }
   }
 
@@ -261,7 +355,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final data = await api.getSuppliers();
       setState(() => suppliers = data);
     } catch (e) {
-      print('⚠️ خطأ في تحميل الموردين: $e');
+      debugPrint('⚠️ خطأ في تحميل الموردين: $e');
     }
   }
 
@@ -277,7 +371,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       return invType == 'sell' || invType == 'بيع' || invType.contains('بيع');
     }).toList();
 
-    print(
+    debugPrint(
       '📊 عدد فواتير المبيعات: ${salesInvoices.length} من أصل ${filteredInvoices.length}',
     );
 
@@ -334,7 +428,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           invType.contains('شراء');
     }).toList();
 
-    print(
+    debugPrint(
       '📊 عدد فواتير المشتريات: ${purchaseInvoices.length} من أصل ${filteredInvoices.length}',
     );
 
@@ -450,69 +544,63 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       fontWeight: FontWeight.bold,
     );
 
-    final List<Widget> drawerChildren = [];
-    final List<Future<void> Function()> actions = [];
-
-    drawerChildren.add(
-      Container(
-        padding: const EdgeInsets.fromLTRB(24, 48, 24, 32),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [gold.withOpacity(0.85), gold.withOpacity(0.45)],
-            begin: AlignmentDirectional.topStart,
-            end: AlignmentDirectional.bottomEnd,
+    final header = Container(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 32),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [gold.withValues(alpha: 0.85), gold.withValues(alpha: 0.45)],
+          begin: AlignmentDirectional.topStart,
+          end: AlignmentDirectional.bottomEnd,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 30,
+            backgroundColor: theme.colorScheme.surface,
+            child: Icon(Icons.workspace_premium, color: gold, size: 36),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CircleAvatar(
-              radius: 30,
-              backgroundColor: theme.colorScheme.surface,
-              child: Icon(Icons.workspace_premium, color: gold, size: 36),
+          const SizedBox(height: 16),
+          Text(
+            isAr ? 'ياسار للذهب' : 'Yasar Gold',
+            style: TextStyle(
+              fontFamily: 'Cairo',
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: theme.colorScheme.onSurface,
             ),
-            const SizedBox(height: 16),
-            Text(
-              isAr ? 'ياسار للذهب' : 'Yasar Gold',
-              style: TextStyle(
-                fontFamily: 'Cairo',
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.onSurface,
-              ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isAr ? 'نظام إدارة متكامل' : 'Integrated POS Platform',
+            style: TextStyle(
+              fontFamily: 'Cairo',
+              fontSize: 14,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
             ),
-            const SizedBox(height: 4),
-            Text(
-              isAr ? 'نظام إدارة متكامل' : 'Integrated POS Platform',
-              style: TextStyle(
-                fontFamily: 'Cairo',
-                fontSize: 14,
-                color: theme.colorScheme.onSurface.withOpacity(0.8),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
 
-    void addDivider() {
-      drawerChildren.add(
-        Divider(
-          indent: 24,
-          endIndent: 24,
-          height: 24,
-          color: theme.dividerColor,
-        ),
-      );
+    Future<void> handleTap(Future<void> Function() action) async {
+      Navigator.of(context).pop();
+      await action();
     }
 
-    void addSection(String title, Color color) {
-      drawerChildren.add(
-        Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(24, 16, 24, 8),
-          child: Text(title, style: sectionStyle.copyWith(color: color)),
-        ),
-      );
+    final List<_DrawerItemData> topLevelItems = [];
+    final List<_DrawerSectionData> sections = [];
+    _DrawerSectionData? currentSection;
+
+    void addSection({
+      required String id,
+      required String title,
+      required Color color,
+    }) {
+      final section = _DrawerSectionData(id: id, title: title, color: color);
+      sections.add(section);
+      currentSection = section;
     }
 
     void addDestination({
@@ -521,21 +609,19 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       required Future<void> Function() onSelected,
       Color? color,
     }) {
-      final iconColor = color ?? theme.iconTheme.color ?? Colors.white70;
-      drawerChildren.add(
-        NavigationDrawerDestination(
-          icon: Icon(icon, color: iconColor),
-          selectedIcon: Icon(
-            icon,
-            color: theme.colorScheme.onSecondaryContainer,
-          ),
-          label: Text(title, style: baseLabelStyle),
-        ),
+      final destination = _DrawerItemData(
+        icon: icon,
+        title: title,
+        color: color,
+        onSelected: onSelected,
       );
-      actions.add(onSelected);
+      if (currentSection == null) {
+        topLevelItems.add(destination);
+      } else {
+        currentSection!.items.add(destination);
+      }
     }
 
-    drawerChildren.add(const SizedBox(height: 12));
     addDestination(
       icon: Icons.home_outlined,
       title: isAr ? 'الرئيسية' : 'Home',
@@ -545,8 +631,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'الفواتير' : 'Invoices', gold);
+    addSection(
+      id: 'invoices',
+      title: isAr ? 'الفواتير' : 'Invoices',
+      color: gold,
+    );
     addDestination(
       icon: Icons.point_of_sale,
       title: isAr ? 'فاتورة بيع' : 'Sales Invoice',
@@ -556,7 +645,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           context,
           MaterialPageRoute(
             builder: (_) => SalesInvoiceScreenV2(
-              items: items.cast<Map<String, dynamic>>(),
+              items: _getSaleReadyItems(),
               customers: customers.cast<Map<String, dynamic>>(),
             ),
           ),
@@ -621,8 +710,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'المرتجعات' : 'Returns', Colors.red.shade300);
+    addSection(
+      id: 'returns',
+      title: isAr ? 'المرتجعات' : 'Returns',
+      color: Colors.red.shade300,
+    );
     addDestination(
       icon: Icons.keyboard_return,
       title: isAr ? 'مرتجع بيع' : 'Sales Return',
@@ -671,8 +763,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'العملاء' : 'Customers', Colors.blue.shade300);
+    addSection(
+      id: 'customers',
+      title: isAr ? 'العملاء' : 'Customers',
+      color: Colors.blue.shade300,
+    );
     addDestination(
       icon: Icons.people,
       title: isAr ? 'قائمة العملاء' : 'Customers List',
@@ -697,8 +792,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'الأصناف' : 'Items', Colors.orange.shade300);
+    addSection(
+      id: 'items',
+      title: isAr ? 'الأصناف' : 'Items',
+      color: Colors.orange.shade300,
+    );
     addDestination(
       icon: Icons.inventory_2,
       title: isAr ? 'قائمة الأصناف' : 'Items List',
@@ -735,8 +833,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'الموردين' : 'Suppliers', Colors.purple.shade300);
+    addSection(
+      id: 'suppliers',
+      title: isAr ? 'الموردين' : 'Suppliers',
+      color: Colors.purple.shade300,
+    );
     addDestination(
       icon: Icons.store,
       title: isAr ? 'قائمة الموردين' : 'Suppliers List',
@@ -751,8 +852,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'التسكير' : 'Gold Reservation', AppColors.deepGold);
+    addSection(
+      id: 'reservation',
+      title: isAr ? 'التسكير' : 'Gold Reservation',
+      color: AppColors.deepGold,
+    );
     addDestination(
       icon: Icons.business,
       title: isAr ? 'قائمة المكاتب' : 'Offices List',
@@ -780,11 +884,37 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         if (result == true) await _loadAllData();
       },
     );
+    addDestination(
+      icon: Icons.history_toggle_off,
+      title: isAr ? 'سجل حجوزات الذهب' : 'Reservation History',
+      color: AppColors.lightGold,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GoldReservationsListScreen(api: api, isArabic: isAr),
+          ),
+        );
+      },
+    );
+    addDestination(
+      icon: Icons.settings_suggest_outlined,
+      title: isAr ? 'إعدادات التسكير الآلي' : 'Weight Closing Settings',
+      color: AppColors.mediumGold,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const WeightClosingSettingsScreen(),
+          ),
+        );
+      },
+    );
 
-    addDivider();
     addSection(
-      isAr ? '� الموارد البشرية' : '👔 Human Resources',
-      Colors.blueGrey.shade400,
+      id: 'hr',
+      title: isAr ? '� الموارد البشرية' : '👔 Human Resources',
+      color: Colors.blueGrey.shade400,
     );
     addDestination(
       icon: Icons.badge,
@@ -842,8 +972,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'المحاسبة' : 'Accounting', gold);
+    addSection(
+      id: 'accounting',
+      title: isAr ? 'المحاسبة' : 'Accounting',
+      color: gold,
+    );
     addDestination(
       icon: Icons.receipt_long,
       title: isAr ? 'السندات' : 'Vouchers',
@@ -887,7 +1020,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       onSelected: () async {
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => AccountsScreen()),
+          MaterialPageRoute(
+            builder: (_) => AccountsScreen(initialOnlyDetailAccounts: true),
+          ),
         );
       },
     );
@@ -958,10 +1093,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
     addSection(
-      isAr ? '⚙️ الإعدادات والأدوات' : '⚙️ Settings & Tools',
-      theme.hintColor,
+      id: 'settings_tools',
+      title: isAr ? '⚙️ الإعدادات والأدوات' : '⚙️ Settings & Tools',
+      color: theme.hintColor,
     );
     addDestination(
       icon: Icons.account_balance_wallet,
@@ -1042,22 +1177,105 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    drawerChildren.add(const SizedBox(height: 24));
+  ListTile buildItemTile(_DrawerItemData item,
+        {EdgeInsetsGeometry? padding, bool highlight = false}) {
+      final iconColor = item.color ?? theme.iconTheme.color ?? Colors.white70;
+      return ListTile(
+        leading: Icon(item.icon, color: iconColor),
+        title: Text(
+          item.title,
+          style: baseLabelStyle.copyWith(
+            color: highlight ? iconColor : baseLabelStyle.color,
+            fontWeight: highlight ? FontWeight.bold : baseLabelStyle.fontWeight,
+          ),
+        ),
+        contentPadding:
+            padding ?? const EdgeInsetsDirectional.fromSTEB(24, 0, 24, 0),
+        onTap: () async => await handleTap(item.onSelected),
+      );
+    }
 
-    return NavigationDrawer(
+    Widget buildSectionTile(_DrawerSectionData section) {
+      return Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 0),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: section.color.withValues(alpha: 0.25)),
+            color: theme.cardColor.withValues(alpha: 0.08),
+          ),
+          child: Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: ValueKey(
+                'drawer-section-${section.id}-'
+                '${_expandedDrawerSectionId == section.id}',
+              ),
+              tilePadding:
+                  const EdgeInsetsDirectional.fromSTEB(16, 4, 16, 4),
+              iconColor: section.color,
+              collapsedIconColor: section.color,
+              textColor: section.color,
+              collapsedTextColor: section.color,
+              maintainState: false,
+              initiallyExpanded: _expandedDrawerSectionId == section.id,
+              onExpansionChanged: (expanded) {
+                setState(() {
+                  _expandedDrawerSectionId = expanded ? section.id : null;
+                });
+              },
+              title: Text(
+                section.title,
+                style: sectionStyle.copyWith(color: section.color),
+              ),
+              childrenPadding:
+                  const EdgeInsetsDirectional.fromSTEB(8, 0, 8, 12),
+              children: section.items
+                  .map(
+                    (item) => buildItemTile(
+                      item,
+                      padding: const EdgeInsetsDirectional.fromSTEB(
+                        32,
+                        0,
+                        16,
+                        0,
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Drawer(
       backgroundColor:
           theme.drawerTheme.backgroundColor ?? const Color(0xFF161616),
-      indicatorColor: gold.withOpacity(0.18),
-      surfaceTintColor: Colors.transparent,
-      selectedIndex: null,
-      onDestinationSelected: (index) async {
-        if (index < 0 || index >= actions.length) {
-          return;
-        }
-        Navigator.of(context).pop();
-        await actions[index]();
-      },
-      children: drawerChildren,
+      child: SafeArea(
+        child: Column(
+          children: [
+            header,
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  const SizedBox(height: 12),
+                  ...topLevelItems.map(
+                    (item) => buildItemTile(
+                      item,
+                      highlight: true,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ...sections.map(buildSectionTile),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1117,7 +1335,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         children: [
                           CircleAvatar(
                             radius: 16,
-                            backgroundColor: AppColors.primaryGold.withOpacity(
+                            backgroundColor: AppColors.primaryGold.withValues(alpha: 
                               0.2,
                             ),
                             child: Icon(
@@ -1374,8 +1592,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         gradient: LinearGradient(
           colors: isDark
               ? [
-                  colorScheme.primary.withOpacity(0.6),
-                  colorScheme.primary.withOpacity(0.4),
+                  colorScheme.primary.withValues(alpha: 0.6),
+                  colorScheme.primary.withValues(alpha: 0.4),
                 ]
               : [colorScheme.primary, colorScheme.secondary],
           begin: Alignment.topLeft,
@@ -1384,7 +1602,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: colorScheme.primary.withOpacity(isDark ? 0.25 : 0.35),
+            color: colorScheme.primary.withValues(alpha: isDark ? 0.25 : 0.35),
             blurRadius: 15,
             offset: Offset(0, 8),
           ),
@@ -1422,7 +1640,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     Container(
                       padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: colorScheme.onPrimary.withOpacity(0.25),
+                        color: colorScheme.onPrimary.withValues(alpha: 0.25),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
@@ -1441,7 +1659,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               Text(
                                 'سعر الأونصة',
                                 style: TextStyle(
-                                  color: colorScheme.onPrimary.withOpacity(
+                                  color: colorScheme.onPrimary.withValues(alpha: 
                                     0.95,
                                   ),
                                   fontSize: 11,
@@ -1453,7 +1671,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                                 Text(
                                   '(${DateFormat('dd/MM').format(goldPriceDate!)})',
                                   style: TextStyle(
-                                    color: colorScheme.onPrimary.withOpacity(
+                                    color: colorScheme.onPrimary.withValues(alpha: 
                                       0.75,
                                     ),
                                     fontSize: 9,
@@ -1465,7 +1683,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           SizedBox(height: 2),
                           Text(
                             goldPrice != null
-                                ? '\$${goldPrice!.toStringAsFixed(2)}'
+                                ? '\$${goldPrice!.toStringAsFixed(2)} / oz'
                                 : 'غير متوفر',
                             style: TextStyle(
                               color: colorScheme.onPrimary,
@@ -1474,6 +1692,19 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               fontFamily: 'Cairo',
                             ),
                           ),
+                          if (goldPriceSar != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                '${_formatCash(goldPriceSar!, includeSymbol: true)} / أونصة',
+                                style: TextStyle(
+                                  color:
+                                      colorScheme.onPrimary.withValues(alpha: 0.8),
+                                  fontSize: 12,
+                                  fontFamily: 'Cairo',
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -1484,7 +1715,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           Text(
                             'عيار $mainKarat',
                             style: TextStyle(
-                              color: colorScheme.onPrimary.withOpacity(0.85),
+                              color: colorScheme.onPrimary.withValues(alpha: 0.85),
                               fontSize: 10,
                               fontFamily: 'Cairo',
                             ),
@@ -1539,7 +1770,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     children: [
                       SizedBox(height: 12),
                       Divider(
-                        color: colorScheme.onPrimary.withOpacity(0.3),
+                        color: colorScheme.onPrimary.withValues(alpha: 0.3),
                         thickness: 0.5,
                         height: 1,
                       ),
@@ -1582,7 +1813,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
       border: TableBorder(
         horizontalInside: BorderSide(
-          color: colorScheme.onPrimary.withOpacity(0.15),
+          color: colorScheme.onPrimary.withValues(alpha: 0.15),
           width: 0.5,
         ),
       ),
@@ -1590,7 +1821,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         // Header row
         TableRow(
           decoration: BoxDecoration(
-            color: colorScheme.onPrimary.withOpacity(0.12),
+            color: colorScheme.onPrimary.withValues(alpha: 0.12),
             borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
           ),
           children: [
@@ -1619,7 +1850,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             children: [
               _buildTableCell(
                 '$karat',
-                colorScheme.onPrimary.withOpacity(0.95),
+                colorScheme.onPrimary.withValues(alpha: 0.95),
                 false,
               ),
               _buildTableCell(
@@ -1634,7 +1865,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               ),
             ],
           );
-        }).toList(),
+  }),
       ],
     );
   }
@@ -1769,7 +2000,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1787,7 +2018,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: action.getColor().withOpacity(0.1),
+                    color: action.getColor().withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(action.icon, color: action.getColor(), size: 24),
@@ -1819,7 +2050,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           context,
           MaterialPageRoute(
             builder: (_) => SalesInvoiceScreenV2(
-              items: items.cast<Map<String, dynamic>>(),
+              items: _getSaleReadyItems(),
               customers: customers.cast<Map<String, dynamic>>(),
             ),
           ),
@@ -1909,10 +2140,19 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         );
         break;
       case 'receipt_voucher':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AddVoucherScreen(voucherType: 'receipt'),
+          ),
+        );
+        break;
       case 'payment_voucher':
         result = await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => VouchersListScreen()),
+          MaterialPageRoute(
+            builder: (_) => AddVoucherScreen(voucherType: 'payment'),
+          ),
         );
         break;
       case 'vouchers_list':
@@ -2070,7 +2310,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         },
         {
           'label': 'إجمالي الوزن',
-          'value': _formatWeight(weight, decimals: 3),
+          'value': _formatWeight(weight),
           'icon': Icons.scale,
         },
       ],
@@ -2108,7 +2348,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         },
         {
           'label': 'إجمالي الوزن',
-          'value': _formatWeight(weight, decimals: 3),
+          'value': _formatWeight(weight),
           'icon': Icons.scale,
         },
       ],
@@ -2133,7 +2373,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         color: isDark ? Colors.grey[850] : Colors.grey[100],
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: AppColors.primaryGold.withOpacity(0.2),
+          color: AppColors.primaryGold.withValues(alpha: 0.2),
           width: 1,
         ),
       ),
@@ -2166,7 +2406,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
-              ? AppColors.primaryGold.withOpacity(isDark ? 0.3 : 0.2)
+              ? AppColors.primaryGold.withValues(alpha: isDark ? 0.3 : 0.2)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
           border: isSelected
@@ -2219,7 +2459,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         },
         {
           'label': 'إجمالي الوزن',
-          'value': _formatWeight(weight, decimals: 3),
+          'value': _formatWeight(weight),
           'icon': Icons.scale,
         },
       ],
@@ -2252,7 +2492,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.3 : 0.08),
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
             blurRadius: 15,
             offset: Offset(0, 5),
           ),
@@ -2274,7 +2514,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     Container(
                       padding: EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: color.withOpacity(isDark ? 0.2 : 0.1),
+                        color: color.withValues(alpha: isDark ? 0.2 : 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(icon, color: color, size: 28),
@@ -2301,7 +2541,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(isDark ? 0.1 : 0.05),
+                    color: color.withValues(alpha: isDark ? 0.1 : 0.05),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -2357,8 +2597,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                                 ],
                               ),
                             ),
-                          )
-                          .toList(),
+                          ),
                     ],
                   ),
                 ),
@@ -2398,12 +2637,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     margin: EdgeInsets.only(bottom: 8),
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withOpacity(
+                      color: theme.colorScheme.surface.withValues(alpha: 
                         isDark ? 0.5 : 1,
                       ),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: theme.dividerColor.withOpacity(0.5),
+                        color: theme.dividerColor.withValues(alpha: 0.5),
                       ),
                     ),
                     child: Row(
@@ -2499,7 +2738,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                       ],
                     ),
                   );
-                }).toList(),
+                }),
               ],
             ),
           ),
@@ -2577,7 +2816,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
             blurRadius: 10,
             offset: Offset(0, 4),
           ),
@@ -2595,7 +2834,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(isDark ? 0.2 : 0.1),
+                    color: color.withValues(alpha: isDark ? 0.2 : 0.1),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(icon, color: color, size: 28),
@@ -2640,7 +2879,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     int? decimals,
     bool includeUnit = true,
   }) {
-    final effectiveDecimals = decimals ?? (amount.abs() < 1 ? 3 : 2);
+    final effectiveDecimals = decimals ?? 3;
     final formatted = amount.toStringAsFixed(effectiveDecimals);
     return includeUnit ? '$formatted جم' : formatted;
   }

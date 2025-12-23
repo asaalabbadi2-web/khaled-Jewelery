@@ -4,6 +4,12 @@ import 'dart:convert';
 import '../api_service.dart';
 
 class SettingsProvider with ChangeNotifier {
+  static const Map<String, dynamic> _defaultWeightClosingSettings = {
+    'enabled': true,
+    'price_source': 'live',
+    'allow_override': true,
+  };
+
   Map<String, dynamic> _settings = {};
   bool _isLoading = false;
   String? _error;
@@ -22,6 +28,8 @@ class SettingsProvider with ChangeNotifier {
   double get taxRatePercent => taxRate * 100;
   bool get allowDiscount =>
       _safeBool(_settings['allow_discount'], fallback: true);
+  bool get allowManualInvoiceItems =>
+    _safeBool(_settings['allow_manual_invoice_items'], fallback: true);
   double get defaultDiscountRate =>
       _safeDouble(_settings['default_discount_rate'], fallback: 0.0);
   double get defaultDiscountPercent => defaultDiscountRate * 100;
@@ -37,6 +45,20 @@ class SettingsProvider with ChangeNotifier {
   // Workflow: whether vouchers should be auto-posted on save
   bool get voucherAutoPost =>
       _safeBool(_settings['voucher_auto_post'], fallback: false);
+
+  Map<String, dynamic> get weightClosingSettings =>
+    _normalizeWeightClosingSettings(_settings['weight_closing_settings']);
+
+  bool get weightClosingEnabled =>
+    _safeBool(weightClosingSettings['enabled'], fallback: true);
+
+  String get weightClosingPriceSource =>
+    (weightClosingSettings['price_source']?.toString() ?? 'live');
+
+  bool get weightClosingAllowOverride => _safeBool(
+    weightClosingSettings['allow_override'],
+    fallback: true,
+    );
 
   // Helper methods
   int _safeInt(dynamic value, {int fallback = 0}) {
@@ -65,6 +87,50 @@ class SettingsProvider with ChangeNotifier {
     if (value is int) return value.toDouble();
     if (value is String) return double.tryParse(value) ?? fallback;
     return fallback;
+  }
+
+  Map<String, dynamic> _normalizeWeightClosingSettings(dynamic raw) {
+    final normalized = Map<String, dynamic>.from(_defaultWeightClosingSettings);
+    Map<String, dynamic>? parsed;
+
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = json.decode(raw);
+        if (decoded is Map<String, dynamic>) {
+          parsed = decoded;
+        } else if (decoded is Map) {
+          parsed = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {
+        parsed = null;
+      }
+    } else if (raw is Map<String, dynamic>) {
+      parsed = raw;
+    } else if (raw is Map) {
+      parsed = Map<String, dynamic>.from(raw);
+    }
+
+    if (parsed != null) {
+      final priceSource =
+          (parsed['price_source']?.toString().toLowerCase()) ?? 'live';
+      if (priceSource == 'average') {
+        normalized['price_source'] = 'average';
+      } else if (priceSource == 'invoice') {
+        normalized['price_source'] = 'invoice';
+      } else {
+        normalized['price_source'] = 'live';
+      }
+      normalized['enabled'] = _safeBool(
+        parsed['enabled'],
+        fallback: normalized['enabled'] as bool,
+      );
+      normalized['allow_override'] = _safeBool(
+        parsed['allow_override'],
+        fallback: normalized['allow_override'] as bool,
+      );
+    }
+
+    return normalized;
   }
 
   // تحميل الإعدادات من SharedPreferences أو API
@@ -135,6 +201,48 @@ class SettingsProvider with ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<Map<String, dynamic>> fetchWeightClosingSettings() async {
+    try {
+      final data = await ApiService().getWeightClosingSettings();
+      await _applyWeightClosingSettings(data);
+      return data;
+    } catch (e) {
+      _error = e.toString();
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> updateWeightClosingSettingsPayload(
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final updated = await ApiService().updateWeightClosingSettings(payload);
+      await _applyWeightClosingSettings(updated);
+      return updated;
+    } catch (e) {
+      _error = e.toString();
+      rethrow;
+    }
+  }
+
+  Future<void> applyWeightClosingSettingsLocally(
+    Map<String, dynamic> settings,
+  ) async {
+    await _applyWeightClosingSettings(settings);
+  }
+
+  Future<void> _applyWeightClosingSettings(
+    Map<String, dynamic> settings,
+  ) async {
+    _settings = {
+      ..._settings,
+      'weight_closing_settings': settings,
+    };
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('app_settings', json.encode(_settings));
+    notifyListeners();
   }
 
   // دالة مساعدة لتنسيق الأرقام حسب عدد الأصفار

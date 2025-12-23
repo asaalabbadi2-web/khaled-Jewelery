@@ -35,7 +35,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
       return customers;
     } catch (e) {
       // Handle error appropriately
-      print('Error loading customers: $e');
+      debugPrint('Error loading customers: $e');
       return [];
     }
   }
@@ -74,7 +74,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
     final gold = colorScheme.primary;
     final scaffoldBackgroundColor = theme.scaffoldBackgroundColor;
     final cardColor = theme.cardTheme.color ?? colorScheme.surface;
-    final subtitleColor = colorScheme.onSurface.withOpacity(isDark ? 0.7 : 0.6);
+    final subtitleColor = colorScheme.onSurface.withValues(alpha: isDark ? 0.7 : 0.6);
 
     return Scaffold(
       appBar: AppBar(
@@ -173,10 +173,10 @@ class _CustomersScreenState extends State<CustomersScreen> {
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: gold.withOpacity(0.2),
+                                  color: gold.withValues(alpha: 0.2),
                                   borderRadius: BorderRadius.circular(4),
                                   border: Border.all(
-                                    color: gold.withOpacity(0.5),
+                                    color: gold.withValues(alpha: 0.5),
                                   ),
                                 ),
                                 child: Text(
@@ -235,6 +235,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                                           AccountStatementScreen(
                                             accountId: customerId,
                                             accountName: c['name'],
+                                            entityType: 'customer',
                                           ),
                                     ),
                                   );

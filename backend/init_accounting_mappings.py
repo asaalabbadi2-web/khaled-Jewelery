@@ -22,46 +22,46 @@ from models import AccountingMapping, Account
 # إعدادات الربط الافتراضية
 DEFAULT_MAPPINGS = {
     'بيع': {
-        'inventory_21k': 120,      # مخزون ذهب عيار 21
-        'cash': 101,               # الصندوق
-        'revenue': 4,              # الإيرادات
-        'cost': 120,               # تكلفة البضاعة المباعة (من المخزون)
-        'commission': 5200,        # مصروف العمولات
-        'commission_vat': 1303,    # ضريبة القيمة المضافة المدفوعة
-        'vat_payable': 2101,       # ضريبة القيمة المضافة المستحقة
-        'customers': 1100,         # العملاء
+        'inventory_21k': '1310',      # مخزون ذهب عيار 21
+        'cash': '1100',               # الصندوق
+        'revenue': '40',              # الإيرادات
+        'cost_of_sales': '50',        # تكلفة المبيعات
+    'commission': '5150',         # مصروف العمولات
+        'commission_vat': '1501',     # ضريبة عمولات نقاط البيع
+        'vat_payable': '2210',        # ضريبة القيمة المضافة المستحقة
+        'customers': '1200',          # العملاء
     },
     'شراء من عميل': {
-        'inventory_21k': 120,
-        'cash': 101,
-        'customers': 1100,
-        'vat_receivable': 1303,
+        'inventory_21k': '1310',
+        'cash': '1100',
+        'customers': '1200',
+        'vat_receivable': '1500',
     },
     'مرتجع بيع': {
-        'inventory_21k': 120,
-        'cash': 101,
-        'revenue': 4,
-        'sales_returns': 401,      # مردودات المبيعات
-        'customers': 1100,
-        'vat_payable': 2101,
+        'inventory_21k': '1310',
+        'cash': '1100',
+        'revenue': '40',
+        'sales_returns': '40',        # استخدام نفس حساب المبيعات لعدم توفر حساب مستقل حالياً
+        'customers': '1200',
+        'vat_payable': '2210',
     },
     'مرتجع شراء': {
-        'inventory_21k': 120,
-        'cash': 101,
-        'purchase_returns': 501,   # مردودات المشتريات
-        'suppliers': 211,          # الموردين
+        'inventory_21k': '1310',
+        'cash': '1100',
+        'purchase_returns': '50',
+        'suppliers': '210',
     },
     'شراء من مورد': {
-        'inventory_21k': 120,
-        'cash': 101,
-        'suppliers': 211,
-        'vat_receivable': 1303,
+        'inventory_21k': '1310',
+        'cash': '1100',
+        'suppliers': '210',
+        'vat_receivable': '1500',
     },
     'مرتجع شراء من مورد': {
-        'inventory_21k': 120,
-        'cash': 101,
-        'suppliers': 211,
-        'purchase_returns': 501,
+        'inventory_21k': '1310',
+        'cash': '1100',
+        'suppliers': '210',
+        'purchase_returns': '50',
     },
 }
 
@@ -78,12 +78,12 @@ def create_default_mappings():
         for operation_type, mappings in DEFAULT_MAPPINGS.items():
             print(f"📌 معالجة عملية: {operation_type}")
             
-            for account_type, account_id in mappings.items():
-                # التحقق من وجود الحساب
-                account = Account.query.get(account_id)
+            for account_type, account_number in mappings.items():
+                # التحقق من وجود الحساب عبر account_number
+                account = Account.query.filter_by(account_number=str(account_number)).first()
                 
                 if not account:
-                    print(f"   ⚠️  الحساب {account_id} غير موجود - تخطي {account_type}")
+                    print(f"   ⚠️  الحساب {account_number} غير موجود - تخطي {account_type}")
                     error_count += 1
                     continue
                 
@@ -102,7 +102,7 @@ def create_default_mappings():
                 mapping = AccountingMapping(
                     operation_type=operation_type,
                     account_type=account_type,
-                    account_id=account_id,
+                    account_id=account.id,
                     description=f'ربط افتراضي: {operation_type} → {account_type}',
                     is_active=True,
                     created_by='system'

@@ -56,15 +56,15 @@ class QuickActionsProvider extends ChangeNotifier {
         _actions = decoded
             .map((item) => QuickActionItem.fromMap(item))
             .toList();
-        print('✅ تم تحميل ${_actions.length} زر من الإعدادات');
+        debugPrint('✅ تم تحميل ${_actions.length} زر من الإعدادات');
       } else {
         // إذا لم تكن هناك إعدادات محفوظة، استخدم الافتراضيات
         _actions = DefaultQuickActions.getDefaultActive();
         await _saveActions(); // احفظ الافتراضيات
-        print('✅ تم تحميل الأزرار الافتراضية (${_actions.length} زر)');
+        debugPrint('✅ تم تحميل الأزرار الافتراضية (${_actions.length} زر)');
       }
     } catch (e) {
-      print('❌ خطأ في تحميل الأزرار: $e');
+      debugPrint('❌ خطأ في تحميل الأزرار: $e');
       _actions = DefaultQuickActions.getDefaultActive();
     }
 
@@ -83,10 +83,10 @@ class QuickActionsProvider extends ChangeNotifier {
       final String actionsJson = json.encode(encoded);
 
       await prefs.setString(_storageKey, actionsJson);
-      print('✅ تم حفظ ${_actions.length} زر');
+      debugPrint('✅ تم حفظ ${_actions.length} زر');
       return true;
     } catch (e) {
-      print('❌ خطأ في حفظ الأزرار: $e');
+      debugPrint('❌ خطأ في حفظ الأزرار: $e');
       return false;
     }
   }

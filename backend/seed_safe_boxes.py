@@ -2,17 +2,22 @@
 """
 إنشاء الخزائن الافتراضية
 """
+import os
+import sys
+
 from sqlalchemy import or_
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from app import app
+from models import db, SafeBox, Account
+
 
 def seed_safe_boxes():
     """إنشاء الخزائن الافتراضية"""
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(__file__))
-    
-    from app import app
-    from backend.models import db, SafeBox, Account
-    
     with app.app_context():
         print("🔄 بدء إنشاء الخزائن الافتراضية...")
         
@@ -20,27 +25,26 @@ def seed_safe_boxes():
         accounts = {
             'cash_main': Account.query.filter(
                 or_(
-                    Account.account_number == '1000',
-                    Account.account_number == '1000.1',
+                    Account.account_number == '1100',
                     Account.name.like('%صندوق النقدية%'),
                     Account.name.like('%الصندوق الرئيسي%')
                 )
             ).first(),
             'bank_riyadh': Account.query.filter(
                 or_(
-                    Account.account_number == '1010',
+                    Account.account_number == '1136',
                     Account.name.like('%بنك الرياض%')
                 )
             ).first(),
             'bank_rajhi': Account.query.filter(
                 or_(
-                    Account.account_number == '1020',
+                    Account.account_number == '1120',
                     Account.name.like('%بنك الراجحي%')
                 )
             ).first(),
             'bank_ahli': Account.query.filter(
                 or_(
-                    Account.account_number == '1030',
+                    Account.account_number == '1110',
                     Account.name.like('%البنك الأهلي%')
                 )
             ).first(),

@@ -377,11 +377,11 @@ class _PaymentMethodsScreenEnhancedState
         return Card(
           margin: const EdgeInsets.only(bottom: 16),
           elevation: 2,
-          shadowColor: color.withOpacity(0.2),
+          shadowColor: color.withValues(alpha: 0.2),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(
-              color: isActive ? color.withOpacity(0.3) : Colors.grey.shade300,
+              color: isActive ? color.withValues(alpha: 0.3) : Colors.grey.shade300,
               width: 2,
             ),
           ),
@@ -390,7 +390,7 @@ class _PaymentMethodsScreenEnhancedState
               borderRadius: BorderRadius.circular(16),
               gradient: LinearGradient(
                 colors: [
-                  isActive ? color.withOpacity(0.05) : Colors.grey.shade100,
+                  isActive ? color.withValues(alpha: 0.05) : Colors.grey.shade100,
                   Colors.white,
                 ],
                 begin: Alignment.topLeft,
@@ -409,7 +409,7 @@ class _PaymentMethodsScreenEnhancedState
                         padding: EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: isActive
-                              ? color.withOpacity(0.15)
+                              ? color.withValues(alpha: 0.15)
                               : Colors.grey.shade200,
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -766,7 +766,7 @@ class _PaymentMethodsScreenEnhancedState
               Container(
                 padding: EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: _accentColor.withOpacity(0.1),
+                  color: _accentColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(Icons.payment, color: _accentColor),
@@ -966,7 +966,7 @@ class _PaymentMethodsScreenEnhancedState
                                           : Colors.grey.shade300,
                                     ),
                                   ),
-                                  selectedColor: _accentColor.withOpacity(0.15),
+                                  selectedColor: _accentColor.withValues(alpha: 0.15),
                                 );
                               })
                               .where((chip) => chip is! SizedBox)
@@ -1005,7 +1005,7 @@ class _PaymentMethodsScreenEnhancedState
                   Container(
                     decoration: BoxDecoration(
                       color: isActive
-                          ? _successColor.withOpacity(0.1)
+                          ? _successColor.withValues(alpha: 0.1)
                           : Colors.grey.shade100,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(

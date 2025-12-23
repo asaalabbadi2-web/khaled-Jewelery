@@ -4,8 +4,9 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
-import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
+import '../widgets/invoice_type_banner.dart';
+import '../utils.dart';
 
 /// شاشة فاتورة بيع الكسر - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
@@ -46,7 +47,6 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   int? _selectedPaymentMethodId; // للـ Dropdown
 
   // 🆕 الخزائن
-  List<SafeBoxModel> _safeBoxes = [];
   int? _selectedSafeBoxId;
 
   @override
@@ -162,7 +162,6 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       if (!mounted) return;
 
       setState(() {
-        _safeBoxes = cashBoxes;
         if (cashBoxes.isNotEmpty) {
           final defaultBox = cashBoxes.firstWhere(
             (box) => box.isDefault == true,
@@ -283,8 +282,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   Future<void> _processSmartInput(String input) async {
     if (input.trim().isEmpty) return;
 
-    print('🔍 البحث عن: "$input"');
-    print('📦 عدد الأصناف المتاحة: ${widget.items.length}');
+    debugPrint('🔍 البحث عن: "$input"');
+    debugPrint('📦 عدد الأصناف المتاحة: ${widget.items.length}');
 
     try {
       // البحث بالترتيب: Barcode → Item Code → Name
@@ -294,7 +293,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       foundItem = widget.items.firstWhere((item) {
         final barcode = item['barcode']?.toString().toLowerCase();
         final match = barcode == input.toLowerCase();
-        if (match) print('✅ تطابق بالباركود: ${item['name']}');
+        if (match) debugPrint('✅ تطابق بالباركود: ${item['name']}');
         return match;
       }, orElse: () => {});
 
@@ -303,7 +302,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         foundItem = widget.items.firstWhere((item) {
           final code = item['item_code']?.toString().toLowerCase();
           final match = code == input.toLowerCase();
-          if (match) print('✅ تطابق برقم الصنف: ${item['name']}');
+          if (match) debugPrint('✅ تطابق برقم الصنف: ${item['name']}');
           return match;
         }, orElse: () => {});
       }
@@ -313,13 +312,13 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         foundItem = widget.items.firstWhere((item) {
           final name = item['name']?.toString().toLowerCase();
           final match = name?.contains(input.toLowerCase()) ?? false;
-          if (match) print('✅ تطابق بالاسم: ${item['name']}');
+          if (match) debugPrint('✅ تطابق بالاسم: ${item['name']}');
           return match;
         }, orElse: () => {});
       }
 
       if (foundItem.isNotEmpty) {
-        print('✨ تمت إضافة: ${foundItem['name']}');
+        debugPrint('✨ تمت إضافة: ${foundItem['name']}');
         _addItemFromData(foundItem);
         _smartInputController.clear();
         _smartInputFocus.requestFocus();
@@ -334,18 +333,18 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           );
         }
       } else {
-        print('❌ لم يتم العثور على الصنف');
+        debugPrint('❌ لم يتم العثور على الصنف');
         _showError('⚠️ لم يتم العثور على الصنف');
       }
     } catch (e) {
-      print('🔴 خطأ في البحث: $e');
+      debugPrint('🔴 خطأ في البحث: $e');
       _showError('خطأ في البحث: $e');
     }
   }
 
   Future<void> _addItemFromData(Map<String, dynamic> itemData) async {
-    print('➕ إضافة صنف: ${itemData['name']} (ID: ${itemData['id']})');
-    print(
+    debugPrint('➕ إضافة صنف: ${itemData['name']} (ID: ${itemData['id']})');
+    debugPrint(
       '   البيانات الخام: karat=${itemData['karat']}, wage=${itemData['wage']}',
     );
 
@@ -360,12 +359,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
             _goldPrice24k = newPrice;
           });
         }
-        print('💰 سعر الذهب المحدث: $_goldPrice24k ر.س/جم');
+        debugPrint('💰 سعر الذهب المحدث: $_goldPrice24k ر.س/جم');
       } else {
-        print('⚠️ سعر الذهب غير صالح في الاستجابة: ${priceData['price_24k']}');
+        debugPrint('⚠️ سعر الذهب غير صالح في الاستجابة: ${priceData['price_24k']}');
       }
     } catch (e) {
-      print('⚠️ فشل تحديث سعر الذهب: $e');
+      debugPrint('⚠️ فشل تحديث سعر الذهب: $e');
       // الاستمرار باستخدام السعر الحالي
     }
 
@@ -393,7 +392,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           taxRate: _settingsProvider.taxRate,
         ),
       );
-      print('📋 عدد الأصناف الآن: ${_items.length}');
+      debugPrint('📋 عدد الأصناف الآن: ${_items.length}');
     });
   }
 
@@ -449,10 +448,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     // تحديث الربح
     item.profit = requiredProfit;
 
-    print('🔄 إعادة حساب للوصول للإجمالي ${targetTotal.toStringAsFixed(2)}:');
-    print('   التكلفة: ${currentCost.toStringAsFixed(2)}');
-    print('   الربح: ${requiredProfit.toStringAsFixed(2)}');
-    print('   الصافي: ${targetNet.toStringAsFixed(2)}');
+    debugPrint('🔄 إعادة حساب للوصول للإجمالي ${targetTotal.toStringAsFixed(2)}:');
+    debugPrint('   التكلفة: ${currentCost.toStringAsFixed(2)}');
+    debugPrint('   الربح: ${requiredProfit.toStringAsFixed(2)}');
+    debugPrint('   الصافي: ${targetNet.toStringAsFixed(2)}');
   }
 
   void _removeItem(int index) {
@@ -482,6 +481,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
+              inputFormatters: [NormalizeNumberFormatter()],
               decoration: InputDecoration(
                 labelText: 'المبلغ المستهدف',
                 suffixText: _settingsProvider.currencySymbol,
@@ -593,7 +593,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
       if (_selectedCustomerId == null) {
         customerId = cashCustomer['id'] ?? 1;
-        print('💵 لم يتم اختيار عميل - تقييد للعميل النقدي (ID: $customerId)');
+        debugPrint('💵 لم يتم اختيار عميل - تقييد للعميل النقدي (ID: $customerId)');
       }
 
       // حساب الإجماليات
@@ -716,7 +716,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: AppColors.success.withOpacity(0.12),
+                  color: AppColors.success.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(Icons.person_add, color: AppColors.success),
@@ -786,7 +786,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: const Text('⚠️ يرجى إدخال اسم العميل'),
-                      backgroundColor: AppColors.warning.withOpacity(0.9),
+                      backgroundColor: AppColors.warning.withValues(alpha: 0.9),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -858,7 +858,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     );
 
     if (barcode != null && barcode.isNotEmpty && mounted) {
-      print('📷 تم مسح الباركود: $barcode'); // للتتبع
+      debugPrint('📷 تم مسح الباركود: $barcode'); // للتتبع
       _smartInputController.text = barcode;
       await _processSmartInput(barcode);
       _smartInputFocus.requestFocus(); // إعادة التركيز للإدخال
@@ -923,6 +923,16 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         final bodyContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            InvoiceTypeBanner(
+              title: 'فاتورة بيع ذهب كسر',
+              subtitle: 'مخصصة لبيع الذهب المستعمل بعد إعادة تقييم الوزن والسعر',
+              color: AppColors.invoiceSaleScrap,
+              icon: Icons.handshake_outlined,
+              trailing: Text(
+                'نوع الفاتورة',
+                style: theme.textTheme.labelLarge,
+              ),
+            ),
             _buildCustomerSection(theme),
             const SizedBox(height: 24),
             if (isWideLayout)
@@ -1000,6 +1010,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
         return Scaffold(
           appBar: AppBar(
+            backgroundColor: AppColors.invoiceSaleScrap,
+            foregroundColor: Colors.white,
+            iconTheme: const IconThemeData(color: Colors.white),
             title: const Text('فاتورة بيع الكسر'),
             actions: [
               IconButton(
@@ -1040,7 +1053,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     return Card(
       elevation: isDark ? 2 : 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      shadowColor: Colors.black.withOpacity(isDark ? 0.25 : 0.08),
+      shadowColor: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -1052,7 +1065,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: colorScheme.primary.withOpacity(
+                    color: colorScheme.primary.withValues(alpha: 
                       isDark ? 0.18 : 0.12,
                     ),
                     borderRadius: BorderRadius.circular(12),
@@ -1102,7 +1115,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceVariant.withOpacity(
+                  color: colorScheme.surfaceVariant.withValues(alpha: 
                     isDark ? 0.25 : 0.5,
                   ),
                   borderRadius: BorderRadius.circular(12),
@@ -1154,7 +1167,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                   phone,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.textTheme.bodySmall?.color
-                                        ?.withOpacity(0.7),
+                                        ?.withValues(alpha: 0.7),
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -1198,7 +1211,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       decoration: BoxDecoration(
         color: colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.primary.withOpacity(0.3)),
+        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1259,9 +1272,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: colorScheme.primary.withOpacity(isDark ? 0.18 : 0.12),
+        color: colorScheme.primary.withValues(alpha: isDark ? 0.18 : 0.12),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.primary.withOpacity(0.4)),
+        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1296,7 +1309,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            colorScheme.primary.withOpacity(0.15),
+            colorScheme.primary.withValues(alpha: 0.15),
             theme.colorScheme.surface,
           ],
           begin: Alignment.topLeft,
@@ -1304,7 +1317,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: colorScheme.primary.withOpacity(0.5),
+          color: colorScheme.primary.withValues(alpha: 0.5),
           width: 2,
         ),
       ),
@@ -1318,7 +1331,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withOpacity(0.3),
+                  color: colorScheme.primary.withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1422,9 +1435,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: color.withOpacity(backgroundOpacity),
+            color: color.withValues(alpha: backgroundOpacity),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(borderOpacity)),
+            border: Border.all(color: color.withValues(alpha: borderOpacity)),
           ),
           child: Icon(icon, color: color, size: 20),
         ),
@@ -1442,10 +1455,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: dividerColor.withOpacity(0.6)),
+        border: Border.all(color: dividerColor.withValues(alpha: 0.6)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(
+            color: Colors.black.withValues(alpha: 
               theme.brightness == Brightness.dark ? 0.3 : 0.06,
             ),
             blurRadius: 8,
@@ -1463,7 +1476,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: colorScheme.primary.withOpacity(0.1),
+                  color: colorScheme.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1516,7 +1529,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: theme.dividerColor.withOpacity(0.6),
+          color: theme.dividerColor.withValues(alpha: 0.6),
           width: 2,
         ),
       ),
@@ -1526,7 +1539,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
             Icon(
               Icons.shopping_cart_outlined,
               size: 64,
-              color: colorScheme.primary.withOpacity(0.6),
+              color: colorScheme.primary.withValues(alpha: 0.6),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1564,12 +1577,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
-        headingRowColor: MaterialStateProperty.all(
-          colorScheme.primary.withOpacity(0.15),
+        headingRowColor: WidgetStateProperty.all(
+          colorScheme.primary.withValues(alpha: 0.15),
         ),
-        dataRowColor: MaterialStateProperty.resolveWith((states) {
+        dataRowColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(MaterialState.selected)) {
-            return colorScheme.primary.withOpacity(0.1);
+            return colorScheme.primary.withValues(alpha: 0.1);
           }
           return theme.cardColor;
         }),
@@ -1603,10 +1616,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.info.withOpacity(0.15),
+                      color: AppColors.info.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.info.withOpacity(0.3),
+                        color: AppColors.info.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
@@ -1625,10 +1638,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.success.withOpacity(0.15),
+                      color: AppColors.success.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.success.withOpacity(0.3),
+                        color: AppColors.success.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
@@ -1647,10 +1660,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withOpacity(0.15),
+                      color: AppColors.warning.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withOpacity(0.3),
+                        color: AppColors.warning.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
@@ -1685,10 +1698,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.karat24.withOpacity(0.15),
+                      color: AppColors.karat24.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.karat24.withOpacity(0.3),
+                        color: AppColors.karat24.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
@@ -1755,6 +1768,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [NormalizeNumberFormatter()],
           decoration: InputDecoration(
             labelText: label,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -1799,7 +1813,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               : [colorScheme.surface, theme.scaffoldBackgroundColor],
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.dividerColor.withOpacity(0.6)),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.6)),
       ),
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -1820,7 +1834,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 minimumSize: const Size(0, 56),
                 backgroundColor: AppColors.karat24,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: theme.disabledColor.withOpacity(0.2),
+                disabledBackgroundColor: theme.disabledColor.withValues(alpha: 0.2),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1840,7 +1854,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
-                  color: colorScheme.primary.withOpacity(isDark ? 0.35 : 0.4),
+                  color: colorScheme.primary.withValues(alpha: isDark ? 0.35 : 0.4),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -1859,7 +1873,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                         color: isDark ? Colors.white : Colors.black87,
                         shadows: !isDark ? [
                           Shadow(
-                            color: Colors.white.withOpacity(0.8),
+                            color: Colors.white.withValues(alpha: 0.8),
                             blurRadius: 2,
                           ),
                         ] : null,
@@ -1868,11 +1882,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                     Text(
                       '${_items.length} صنف',
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87,
+                        color: isDark ? Colors.white.withValues(alpha: 0.9) : Colors.black87,
                         fontWeight: FontWeight.w500,
                         shadows: !isDark ? [
                           Shadow(
-                            color: Colors.white.withOpacity(0.8),
+                            color: Colors.white.withValues(alpha: 0.8),
                             blurRadius: 2,
                           ),
                         ] : null,
@@ -1887,7 +1901,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                     color: isDark ? Colors.white : Colors.black87,
                     shadows: !isDark ? [
                       Shadow(
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white.withValues(alpha: 0.9),
                         blurRadius: 3,
                       ),
                     ] : null,
@@ -1906,7 +1920,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final totalAmount = _calculateGrandTotal();
-    final dividerColor = theme.dividerColor.withOpacity(0.6);
+    final dividerColor = theme.dividerColor.withValues(alpha: 0.6);
     final isDark = theme.brightness == Brightness.dark;
 
     return Card(
@@ -1939,10 +1953,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.success.withOpacity(isDark ? 0.2 : 0.12),
+                    color: AppColors.success.withValues(alpha: isDark ? 0.2 : 0.12),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: AppColors.success.withOpacity(0.4),
+                      color: AppColors.success.withValues(alpha: 0.4),
                     ),
                   ),
                   child: Text(
@@ -1963,7 +1977,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: colorScheme.primary.withOpacity(0.4),
+                    color: colorScheme.primary.withValues(alpha: 0.4),
                     width: 2,
                   ),
                   borderRadius: BorderRadius.circular(8),
@@ -1976,10 +1990,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            colorScheme.primary.withOpacity(
+                            colorScheme.primary.withValues(alpha: 
                               isDark ? 0.25 : 0.3,
                             ),
-                            AppColors.lightGold.withOpacity(
+                            AppColors.lightGold.withValues(alpha: 
                               isDark ? 0.2 : 0.35,
                             ),
                           ],
@@ -2000,7 +2014,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2016,7 +2030,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2033,7 +2047,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2050,7 +2064,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2067,7 +2081,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                 color: isDark ? Colors.white : Colors.black87,
                                 shadows: !isDark ? [
                                   Shadow(
-                                    color: Colors.white.withOpacity(0.8),
+                                    color: Colors.white.withValues(alpha: 0.8),
                                     blurRadius: 2,
                                   ),
                                 ] : null,
@@ -2086,7 +2100,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                         decoration: BoxDecoration(
                           color: index % 2 == 0
                               ? theme.colorScheme.surface
-                              : theme.colorScheme.surfaceVariant.withOpacity(
+                              : theme.colorScheme.surfaceVariant.withValues(alpha: 
                                   isDark ? 0.3 : 0.5,
                                 ),
                           border: Border(
@@ -2114,7 +2128,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                         vertical: 3,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: AppColors.warning.withOpacity(
+                                        color: AppColors.warning.withValues(alpha: 
                                           isDark ? 0.2 : 0.25,
                                         ),
                                         borderRadius: BorderRadius.circular(6),
@@ -2197,10 +2211,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: colorScheme.primary.withOpacity(isDark ? 0.15 : 0.12),
+                color: colorScheme.primary.withValues(alpha: isDark ? 0.15 : 0.12),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: colorScheme.primary.withOpacity(0.4),
+                  color: colorScheme.primary.withValues(alpha: 0.4),
                   width: 2,
                 ),
               ),
@@ -2229,12 +2243,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             color: theme.colorScheme.surface,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: colorScheme.primary.withOpacity(0.5),
+                              color: colorScheme.primary.withValues(alpha: 0.5),
                               width: 2,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: colorScheme.primary.withOpacity(0.16),
+                                color: colorScheme.primary.withValues(alpha: 0.16),
                                 blurRadius: 4,
                                 offset: const Offset(0, 2),
                               ),
@@ -2382,7 +2396,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             boxShadow: _remainingAmount > 0
                                 ? [
                                     BoxShadow(
-                                      color: colorScheme.primary.withOpacity(
+                                      color: colorScheme.primary.withValues(alpha: 
                                         0.25,
                                       ),
                                       blurRadius: 4,
@@ -2431,7 +2445,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                   decoration: BoxDecoration(
                                     border: Border(
                                       right: BorderSide(
-                                        color: colorScheme.primary.withOpacity(
+                                        color: colorScheme.primary.withValues(alpha: 
                                           0.4,
                                         ),
                                       ),
@@ -2485,7 +2499,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           backgroundColor: colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
                           elevation: 3,
-                          shadowColor: colorScheme.primary.withOpacity(0.4),
+                          shadowColor: colorScheme.primary.withValues(alpha: 0.4),
                         ),
                       ),
                     ],
@@ -2494,12 +2508,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withOpacity(
+                      color: AppColors.warning.withValues(alpha: 
                         isDark ? 0.18 : 0.12,
                       ),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withOpacity(0.4),
+                        color: AppColors.warning.withValues(alpha: 0.4),
                       ),
                     ),
                     child: Row(
@@ -2533,12 +2547,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 gradient: LinearGradient(
                   colors: _remainingAmount > 0
                       ? [
-                          colorScheme.error.withOpacity(isDark ? 0.16 : 0.12),
-                          colorScheme.error.withOpacity(isDark ? 0.28 : 0.2),
+                          colorScheme.error.withValues(alpha: isDark ? 0.16 : 0.12),
+                          colorScheme.error.withValues(alpha: isDark ? 0.28 : 0.2),
                         ]
                       : [
-                          AppColors.success.withOpacity(isDark ? 0.16 : 0.12),
-                          AppColors.success.withOpacity(isDark ? 0.28 : 0.2),
+                          AppColors.success.withValues(alpha: isDark ? 0.16 : 0.12),
+                          AppColors.success.withValues(alpha: isDark ? 0.28 : 0.2),
                         ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -2546,8 +2560,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: _remainingAmount > 0
-                      ? colorScheme.error.withOpacity(0.5)
-                      : AppColors.success.withOpacity(0.5),
+                      ? colorScheme.error.withValues(alpha: 0.5)
+                      : AppColors.success.withValues(alpha: 0.5),
                   width: 2,
                 ),
                 boxShadow: [
@@ -2556,7 +2570,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                         (_remainingAmount > 0
                                 ? colorScheme.error
                                 : AppColors.success)
-                            .withOpacity(0.12),
+                            .withValues(alpha: 0.12),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -2955,10 +2969,10 @@ class _BarcodeScannerPlaceholderState
               final List<Barcode> barcodes = capture.barcodes;
               if (barcodes.isNotEmpty) {
                 final code = barcodes.first.rawValue;
-                print('📸 تم قراءة الباركود: $code');
+                debugPrint('📸 تم قراءة الباركود: $code');
                 if (code != null && code.isNotEmpty) {
                   _isProcessing = true; // تعليم كـ "قيد المعالجة"
-                  print('✅ إغلاق الكاميرا وإرجاع: $code');
+                  debugPrint('✅ إغلاق الكاميرا وإرجاع: $code');
                   Navigator.pop(context, code);
                 }
               }

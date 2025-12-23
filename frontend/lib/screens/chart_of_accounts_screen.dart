@@ -132,7 +132,14 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
       if (pId != null) {
         final parentAcc = _accounts.firstWhere((acc) => acc['id'] == pId);
         final parentNumber = normalizeNumber(parentAcc['account_number']);
-        originalAccNumController.text = parentNumber;
+
+        // Use spaced numbering logic: if parent ends in 0, strip it to allow children like 120 -> 1210
+        final effectivePrefix =
+            (parentNumber.endsWith('0') && parentNumber.length > 1)
+                ? parentNumber.substring(0, parentNumber.length - 1)
+                : parentNumber;
+
+        originalAccNumController.text = effectivePrefix;
 
         // Suggest new number only when adding a new account or re-parenting an existing one
         final children = _accounts
@@ -144,8 +151,8 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
           int maxChildSuffix = 0;
           for (var child in children) {
             final childNumber = normalizeNumber(child['account_number']);
-            if (childNumber.startsWith(parentNumber)) {
-              final suffix = childNumber.substring(parentNumber.length);
+            if (childNumber.startsWith(effectivePrefix)) {
+              final suffix = childNumber.substring(effectivePrefix.length);
               final suffixInt = int.tryParse(suffix) ?? 0;
               if (suffixInt > maxChildSuffix) {
                 maxChildSuffix = suffixInt;
@@ -180,9 +187,17 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
         try {
           final parent = _accounts.firstWhere((acc) => acc['id'] == parentId);
           final parentNumber = normalizeNumber(parent['account_number']);
-          originalAccNumController.text = parentNumber;
-          if (fullNumber.startsWith(parentNumber)) {
-            accNumController.text = fullNumber.substring(parentNumber.length);
+
+          final effectivePrefix =
+              (parentNumber.endsWith('0') && parentNumber.length > 1)
+                  ? parentNumber.substring(0, parentNumber.length - 1)
+                  : parentNumber;
+
+          originalAccNumController.text = effectivePrefix;
+          if (fullNumber.startsWith(effectivePrefix)) {
+            accNumController.text = fullNumber.substring(
+              effectivePrefix.length,
+            );
           } else {
             accNumController.text =
                 fullNumber; // Fallback if numbers are inconsistent

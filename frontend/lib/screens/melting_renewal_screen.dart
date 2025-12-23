@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart';
+import '../utils.dart';
 
 /// شاشة التجديد والتكسير
 /// 1. تجديد القطع المستعملة: عند شراء ذهب مستعمل نظيف يُجدد ويُعرض
@@ -222,6 +223,8 @@ class _RenewalTabState extends State<_RenewalTab> {
             ? null
             : _notesController.text.trim(),
       };
+
+  debugPrint('Renewal payload: $payload');
 
       // TODO: استدعاء API
       // await widget.api.createMeltingRenewal(payload);
@@ -625,6 +628,8 @@ class _MeltingTabState extends State<_MeltingTab> {
             : _notesController.text.trim(),
       };
 
+  debugPrint('Melting payload: $payload');
+
       // TODO: استدعاء API
       // await widget.api.createMeltingRenewal(payload);
 
@@ -988,6 +993,7 @@ class _RenewalItemDialogState extends State<_RenewalItemDialog> {
                   ),
                 ),
                 keyboardType: TextInputType.number,
+                inputFormatters: [NormalizeNumberFormatter()],
                 validator: (value) {
                   if (value == null || value.isEmpty) {
                     return isAr ? 'أدخل الوزن' : 'Enter weight';
@@ -1021,6 +1027,7 @@ class _RenewalItemDialogState extends State<_RenewalItemDialog> {
                   labelText: isAr ? 'سعر الشراء (ريال)' : 'Purchase Price (SAR)',
                 ),
                 keyboardType: TextInputType.number,
+                inputFormatters: [NormalizeNumberFormatter()],
                 validator: (value) {
                   if (value == null || value.isEmpty) {
                     return isAr ? 'أدخل السعر' : 'Enter price';

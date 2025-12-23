@@ -50,9 +50,9 @@ class AppColors {
   // ===== الخلفيات =====
 
   /// خلفية ذهبية خفيفة للبطاقات
-  static Color goldBackground10 = gold.withOpacity(0.1);
-  static Color goldBackground20 = gold.withOpacity(0.2);
-  static Color goldBackground30 = gold.withOpacity(0.3);
+  static Color goldBackground10 = gold.withValues(alpha: 0.1);
+  static Color goldBackground20 = gold.withValues(alpha: 0.2);
+  static Color goldBackground30 = gold.withValues(alpha: 0.3);
 
   // ===== Theme للـ AppBar الذهبي =====
 

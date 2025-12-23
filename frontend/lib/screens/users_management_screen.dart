@@ -39,7 +39,14 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
 
   Future<void> _loadToken() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('auth_token');
+    _token = prefs.getString('jwt_token');
+    if ((_token == null || _token!.isEmpty)) {
+      final legacy = prefs.getString('auth_token');
+      if (legacy != null && legacy.isNotEmpty) {
+        _token = legacy;
+        await prefs.setString('jwt_token', legacy);
+      }
+    }
     if (_token != null) {
       _loadUsers();
       _loadRoles();
@@ -127,7 +134,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: color.withOpacity(0.15),
+                  backgroundColor: color.withValues(alpha: 0.15),
                   child: Icon(icon, color: color, size: 22),
                 ),
                 const SizedBox(width: 12),
@@ -204,7 +211,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: CircleAvatar(
           backgroundColor: isActive
-              ? const Color(0xFFFFD700).withOpacity(0.2)
+              ? const Color(0xFFFFD700).withValues(alpha: 0.2)
               : Colors.grey.shade300,
           child: Icon(
             isAdmin ? Icons.admin_panel_settings : Icons.person,
@@ -241,7 +248,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                       roleName,
                       style: const TextStyle(fontSize: 11),
                     ),
-                    backgroundColor: const Color(0xFFFFD700).withOpacity(0.2),
+                    backgroundColor: const Color(0xFFFFD700).withValues(alpha: 0.2),
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   );

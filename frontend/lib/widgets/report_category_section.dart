@@ -69,7 +69,7 @@ class ReportCategorySection extends StatelessWidget {
           width: 48,
           height: 48,
           decoration: BoxDecoration(
-            color: category.accentColor.withOpacity(0.12),
+            color: category.accentColor.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(14),
           ),
           child: Icon(category.icon, color: category.accentColor, size: 26),

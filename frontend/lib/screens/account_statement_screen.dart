@@ -18,8 +18,14 @@ import '../models/account_statement_model.dart';
 class AccountStatementScreen extends StatefulWidget {
   final int accountId;
   final String accountName;
+  final String entityType; // 'customer', 'supplier', 'account'
 
-  const AccountStatementScreen({super.key, required this.accountId, required this.accountName});
+  const AccountStatementScreen({
+    super.key, 
+    required this.accountId, 
+    required this.accountName,
+    this.entityType = 'account', // default to account for backward compatibility
+  });
 
   @override
   State<AccountStatementScreen> createState() => _AccountStatementScreenState();
@@ -68,7 +74,17 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   Future<void> _fetchAccountStatement() async {
     setState(() => _isLoading = true);
     try {
-      final data = await ApiService().getAccountStatement(widget.accountId);
+      Map<String, dynamic> data;
+      
+      // Call appropriate API based on entity type
+      if (widget.entityType == 'customer') {
+        data = await ApiService().getCustomerStatement(widget.accountId);
+      } else if (widget.entityType == 'supplier') {
+        data = await ApiService().getSupplierStatement(widget.accountId);
+      } else {
+        data = await ApiService().getAccountStatement(widget.accountId);
+      }
+      
       if (!mounted) return;
       setState(() {
         _statement = AccountStatement.fromJson(data);
@@ -343,8 +359,14 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       ..writeln('إجمالي ذهب دائن: ${statement.totalCreditGold.toStringAsFixed(3)}')
       ..writeln('إجمالي نقد مدين: ${statement.totalDebitCash.toStringAsFixed(2)}')
       ..writeln('إجمالي نقد دائن: ${statement.totalCreditCash.toStringAsFixed(2)}')
-      ..writeln('رصيد ختامي ذهب: ${statement.closingBalanceGoldNormalized.toStringAsFixed(3)}')
-      ..writeln('رصيد ختامي نقد: ${statement.closingBalanceCash.toStringAsFixed(2)}');
+      ..writeln('رصيد ختامي ذهب (حسب الكشف): ${statement.closingBalanceGoldNormalized.toStringAsFixed(3)}')
+      ..writeln('رصيد ختامي نقد (حسب الكشف): ${statement.closingBalanceCash.toStringAsFixed(2)}');
+
+    if (statement.hasEntityBalances) {
+      summary
+        ..writeln('الرصيد الحالي ذهب (من الملف): ${statement.effectiveClosingGold.toStringAsFixed(3)}')
+        ..writeln('الرصيد الحالي نقد (من الملف): ${statement.effectiveClosingCash.toStringAsFixed(2)}');
+    }
 
     await Clipboard.setData(ClipboardData(text: summary.toString()));
   }
@@ -413,6 +435,10 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     final theme = Theme.of(context);
     final statement = _statement!;
 
+    final closingTitle = statement.hasEntityBalances
+        ? 'الرصيد الحالي (من الملف)'
+        : 'رصيد ختامي (موزون)';
+
     final cards = <Widget>[
       _SummaryCard(
         title: 'رصيد افتتاحي (عيار ${statement.mainKarat})',
@@ -429,9 +455,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         icon: Icons.sync_alt,
       ),
       _SummaryCard(
-        title: 'رصيد ختامي (موزون)',
-        goldValue: statement.closingBalanceGoldNormalized,
-        cashValue: statement.closingBalanceCash,
+        title: closingTitle,
+        goldValue: statement.effectiveClosingGold,
+        cashValue: statement.effectiveClosingCash,
         color: theme.colorScheme.tertiary,
         icon: Icons.summarize,
       ),
@@ -673,7 +699,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Widget _buildClosingBreakdown(double mainKarat) {
-    final closingDetails = _statement!.closingBalanceGoldDetails;
+  final closingDetails = _statement!.effectiveClosingGoldDetails;
     if (closingDetails.isEmpty) {
       return const SizedBox.shrink();
     }

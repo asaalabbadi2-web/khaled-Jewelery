@@ -1,7 +1,67 @@
 """
+🟡 القاعدة الذهبية للنظام المزدوج (ريال ↔ وزن)
+=====================================================
+
+⚠️ تحديث مهم:
+--------------
+منطق القاعدة الذهبية الآن في:
+backend/services/weight_ledger_service.py
+
+يُفضل استخدام WeightLedgerService مباشرة بدلاً من هذه الدوال
+لتجنب تكرار الكود وضمان تطبيق موحد للقاعدة.
+
+المبدأ الأساسي:
+--------------
+أي ريال يدخل أو يخرج → يتحول فورًا إلى جرام في دفتر الوزن
+
+الاستثناء الوحيد:
+-----------------
+المخزون الذهبي:
+- في الدفتر المالي: يُسجّل بالقيمة (التكلفة بالريال)
+- في الدفتر الوزني: يُسجّل بالوزن الفعلي (بدون تحويل)
+
+آلية التحويل:
+-------------
+الوزن المعادل = المبلغ بالريال ÷ السعر المباشر للذهب عيار 24
+
+الفوائد:
+--------
+1. قوائم مالية مزدوجة (نقد + وزن)
+2. تتبع الأداء الحقيقي بالوزن
+3. حماية من تقلبات الأسعار
+4. ربحية وزنية واضحة
+
 Dual accounting system helpers (cash + weight)
 Note: These functions must be called from within a Flask app context
 """
+
+from config import MAIN_KARAT as CONFIG_MAIN_KARAT, WEIGHT_SUPPORT_ACCOUNTS
+
+_MAIN_KARAT_CACHE = None
+
+
+def _get_main_karat_value(db_session):
+    """Return the main karat configured for weight normalization."""
+    global _MAIN_KARAT_CACHE
+    if _MAIN_KARAT_CACHE:
+        return _MAIN_KARAT_CACHE
+    value = CONFIG_MAIN_KARAT or 21
+    try:
+        from models import Settings
+        settings = db_session.query(Settings).first()
+        if settings and settings.main_karat:
+            value = settings.main_karat
+    except Exception:
+        # Fallback silently to the configured value
+        pass
+    _MAIN_KARAT_CACHE = value
+    return value
+
+
+def _normalize_weight_to_main(weight, karat, main_karat):
+    if not weight or weight <= 0 or not main_karat:
+        return 0.0
+    return (weight * karat) / main_karat
 
 
 def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_credit=0, 
@@ -9,27 +69,162 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
                                weight_21k_debit=0, weight_21k_credit=0,
                                weight_22k_debit=0, weight_22k_credit=0,
                                weight_24k_debit=0, weight_24k_credit=0,
-                               description=None, customer_id=None, supplier_id=None):
+                               description=None, customer_id=None, supplier_id=None,
+                               debit_18k=0, credit_18k=0,
+                               debit_21k=0, credit_21k=0,
+                               debit_22k=0, credit_22k=0,
+                               debit_24k=0, credit_24k=0,
+                               apply_golden_rule=True,  # 🆕 تطبيق القاعدة الذهبية تلقائياً
+                               **kwargs):
     """
     Create dual journal entry with cash and weight.
     Must be called from routes.py where db is already in context.
     
+    🆕 القاعدة الذهبية:
+    - إذا كان الحساب له حساب موازي (memo_account_id)
+    - وتم تمرير قيم نقدية فقط (بدون أوزان)
+    - يتم حساب الأوزان تلقائياً حسب سعر الذهب
+    
     Args:
+        apply_golden_rule: تطبيق القاعدة الذهبية (افتراضي True)
         customer_id: معرف العميل (اختياري)
         supplier_id: معرف المورد (اختياري)
+        **kwargs: معاملات ديناميكية إضافية (يتم تجاهلها)
     """
+    
+    # دمج المعاملات القديمة والجديدة
+    weight_18k_debit = weight_18k_debit or debit_18k
+    weight_18k_credit = weight_18k_credit or credit_18k
+    weight_21k_debit = weight_21k_debit or debit_21k
+    weight_21k_credit = weight_21k_credit or credit_21k
+    weight_22k_debit = weight_22k_debit or debit_22k
+    weight_22k_credit = weight_22k_credit or credit_22k
+    weight_24k_debit = weight_24k_debit or debit_24k
+    weight_24k_credit = weight_24k_credit or credit_24k
     # Get db from current Flask app extensions
     from flask import current_app
-    from models import JournalEntryLine, Account
+    from models import JournalEntryLine, Account, JournalEntry, Invoice, Voucher
     
     db = current_app.extensions['sqlalchemy']
+
+    account = db.session.query(Account).filter_by(id=account_id).first()
+    if not account:
+        raise ValueError(f"Account {account_id} not found while creating dual journal entry")
+
+    account_code = (account.account_number or '').strip()
+    # حسابات المذكرة تبدأ بـ '7' (النظام القديم)
+    is_memo_account = account_code.startswith('7') if account_code else False
+    memo_main_karat = _get_main_karat_value(db.session) if is_memo_account else None
+
+    # Resolve customer/supplier context automatically when not provided explicitly
+    resolved_customer_id = customer_id
+    resolved_supplier_id = supplier_id
+
+    try:
+        journal_entry = db.session.query(JournalEntry).get(journal_entry_id)
+    except Exception:
+        journal_entry = None
+
+    related_invoice = None
+    related_voucher = None
+
+    if journal_entry:
+        if journal_entry.reference_type == 'invoice':
+            related_invoice = db.session.query(Invoice).get(journal_entry.reference_id)
+            if related_invoice:
+                if not resolved_customer_id and related_invoice.customer_id:
+                    resolved_customer_id = related_invoice.customer_id
+                if not resolved_supplier_id and related_invoice.supplier_id:
+                    resolved_supplier_id = related_invoice.supplier_id
+        elif journal_entry.reference_type == 'voucher':
+            related_voucher = db.session.query(Voucher).get(journal_entry.reference_id)
+            if related_voucher:
+                if not resolved_customer_id and related_voucher.customer_id:
+                    resolved_customer_id = related_voucher.customer_id
+                if not resolved_supplier_id and related_voucher.supplier_id:
+                    resolved_supplier_id = related_voucher.supplier_id
+    
+    # 🆕 تطبيق القاعدة الذهبية تلقائياً
+    # إذا كان الحساب له memo_account_id وتم تمرير قيم نقدية فقط
+    has_weights = any([weight_18k_debit, weight_18k_credit, weight_21k_debit, weight_21k_credit,
+                       weight_22k_debit, weight_22k_credit, weight_24k_debit, weight_24k_credit])
+    has_cash = (cash_debit > 0 or cash_credit > 0)
+    
+    if apply_golden_rule and has_cash and not has_weights and account.memo_account_id:
+        # الحصول على سعر الذهب للعيار الرئيسي مباشرة من قاعدة البيانات
+        try:
+            from models import GoldPrice, Settings
+            
+            # الحصول على آخر سعر ذهب (هو سعر الأونصة بالدولار)
+            latest_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+            if not latest_price:
+                raise Exception("لا يوجد سعر ذهب محفوظ")
+            
+            # 🔧 FIXED: تحويل سعر الأونصة إلى سعر الجرام بالريال
+            # 1 أونصة = 31.1035 جرام
+            # 1 دولار = 3.75 ريال سعودي
+            price_per_gram_24k_sar = (latest_price.price / 31.1035) * 3.75
+            
+            # الحصول على العيار الرئيسي من الإعدادات
+            settings = Settings.query.first()
+            main_karat = settings.main_karat if settings else 21
+            
+            # 🔧 FIXED: حساب السعر للعيار الرئيسي (SAR/gram)
+            gold_price_main_karat = (price_per_gram_24k_sar * main_karat) / 24.0
+            
+            if gold_price_main_karat > 0:
+                # تطبيق القاعدة الذهبية
+                if cash_debit > 0:
+                    weight_main_debit = cash_debit / gold_price_main_karat
+                    # تعيين الوزن في حقل العيار الرئيسي
+                    if main_karat == 18:
+                        weight_18k_debit = weight_main_debit
+                    elif main_karat == 21:
+                        weight_21k_debit = weight_main_debit
+                    elif main_karat == 22:
+                        weight_22k_debit = weight_main_debit
+                    elif main_karat == 24:
+                        weight_24k_debit = weight_main_debit
+                
+                if cash_credit > 0:
+                    weight_main_credit = cash_credit / gold_price_main_karat
+                    # تعيين الوزن في حقل العيار الرئيسي
+                    if main_karat == 18:
+                        weight_18k_credit = weight_main_credit
+                    elif main_karat == 21:
+                        weight_21k_credit = weight_main_credit
+                    elif main_karat == 22:
+                        weight_22k_credit = weight_main_credit
+                    elif main_karat == 24:
+                        weight_24k_credit = weight_main_credit
+                
+                print(f"✅ تطبيق القاعدة الذهبية على حساب {account.account_number}: {cash_debit or cash_credit} ريال = {weight_main_debit if cash_debit else weight_main_credit:.3f} جرام ({main_karat}k @ {gold_price_main_karat:.2f} SAR/g)")
+                
+                # سجل إلى ملف أيضاً
+                with open('/tmp/golden_rule.log', 'a', encoding='utf-8') as f:
+                    f.write(f"✅ [{account.account_number}] {cash_debit or cash_credit} ريال = {weight_main_debit if cash_debit else weight_main_credit:.3f}جم ({main_karat}k)\\n")
+        except Exception as e:
+            print(f"⚠️ تعذر تطبيق القاعدة الذهبية على حساب {account.account_number}: {e}")
+            with open('/tmp/golden_rule.log', 'a', encoding='utf-8') as f:
+                f.write(f"❌ [{account.account_number}] خطأ: {e}\\n")
+    else:
+        # سجل تصحيح: لماذا لم يتم تطبيق القاعدة؟
+        if has_cash and not has_weights:
+            if not account.memo_account_id:
+                print(f"⏭️ تخطي القاعدة الذهبية للحساب {account.account_number} ({account.name}): لا يوجد حساب موازي")
+                with open('/tmp/golden_rule.log', 'a', encoding='utf-8') as f:
+                    f.write(f"⏭️ [{account.account_number}] تخطي: لا يوجد حساب موازي\\n")
+            elif not apply_golden_rule:
+                print(f"⏭️ تخطي القاعدة الذهبية للحساب {account.account_number}: apply_golden_rule=False")
+                with open('/tmp/golden_rule.log', 'a', encoding='utf-8') as f:
+                    f.write(f"⏭️ [{account.account_number}] تخطي: apply_golden_rule=False\\n")
     
     # Create the journal entry line (description is ignored - not in model)
     line = JournalEntryLine(
         journal_entry_id=journal_entry_id,
         account_id=account_id,
-        customer_id=customer_id,  # 🆕 ربط بالعميل
-        supplier_id=supplier_id   # 🆕 ربط بالمورد
+        customer_id=resolved_customer_id,  # 🆕 ربط بالعميل
+        supplier_id=resolved_supplier_id   # 🆕 ربط بالمورد
     )
     
     # Set cash amounts
@@ -58,12 +253,30 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
         line.debit_24k = round(weight_24k_debit, 3)
     if weight_24k_credit > 0:
         line.credit_24k = round(weight_24k_credit, 3)
+
+    if is_memo_account and memo_main_karat:
+        total_debit_weight = (
+            _normalize_weight_to_main(weight_18k_debit, 18, memo_main_karat) +
+            _normalize_weight_to_main(weight_21k_debit, 21, memo_main_karat) +
+            _normalize_weight_to_main(weight_22k_debit, 22, memo_main_karat) +
+            _normalize_weight_to_main(weight_24k_debit, 24, memo_main_karat)
+        )
+        total_credit_weight = (
+            _normalize_weight_to_main(weight_18k_credit, 18, memo_main_karat) +
+            _normalize_weight_to_main(weight_21k_credit, 21, memo_main_karat) +
+            _normalize_weight_to_main(weight_22k_credit, 22, memo_main_karat) +
+            _normalize_weight_to_main(weight_24k_credit, 24, memo_main_karat)
+        )
+
+        if total_debit_weight > 0:
+            line.debit_weight = round(total_debit_weight, 6)
+        if total_credit_weight > 0:
+            line.credit_weight = round(total_credit_weight, 6)
     
     db.session.add(line)
     
     # Update account balance
     try:
-        account = db.session.query(Account).filter_by(id=account_id).first()
         if account and hasattr(account, 'update_balance'):
             account.update_balance(
                 cash_amount=(cash_debit - cash_credit),
@@ -78,11 +291,11 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
     
     # 🆕 Update supplier/customer balance in their own table
     try:
-        if supplier_id:
+        if resolved_supplier_id:
             from models import Supplier
-            supplier = db.session.query(Supplier).filter_by(id=supplier_id).first()
+            supplier = db.session.query(Supplier).filter_by(id=resolved_supplier_id).first()
             if supplier:
-                print(f"🔍 Updating supplier {supplier_id} balance:")
+                print(f"🔍 Updating supplier {resolved_supplier_id} balance:")
                 print(f"   Before: cash={supplier.balance_cash}, 18k={supplier.balance_gold_18k}, 21k={supplier.balance_gold_21k}")
                 supplier.balance_cash += (cash_debit - cash_credit)
                 supplier.balance_gold_18k += (weight_18k_debit - weight_18k_credit)
@@ -91,13 +304,13 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
                 supplier.balance_gold_24k += (weight_24k_debit - weight_24k_credit)
                 print(f"   After: cash={supplier.balance_cash}, 18k={supplier.balance_gold_18k}, 21k={supplier.balance_gold_21k}")
             else:
-                print(f"⚠️ Supplier {supplier_id} not found!")
+                print(f"⚠️ Supplier {resolved_supplier_id} not found!")
         
-        if customer_id:
+        if resolved_customer_id:
             from models import Customer
-            customer = db.session.query(Customer).filter_by(id=customer_id).first()
+            customer = db.session.query(Customer).filter_by(id=resolved_customer_id).first()
             if customer:
-                print(f"🔍 Updating customer {customer_id} balance:")
+                print(f"🔍 Updating customer {resolved_customer_id} balance:")
                 print(f"   Before: cash={customer.balance_cash}, 18k={customer.balance_gold_18k}, 21k={customer.balance_gold_21k}")
                 customer.balance_cash += (cash_debit - cash_credit)
                 customer.balance_gold_18k += (weight_18k_debit - weight_18k_credit)
@@ -106,7 +319,7 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
                 customer.balance_gold_24k += (weight_24k_debit - weight_24k_credit)
                 print(f"   After: cash={customer.balance_cash}, 18k={customer.balance_gold_18k}, 21k={customer.balance_gold_21k}")
             else:
-                print(f"⚠️ Customer {customer_id} not found!")
+                print(f"⚠️ Customer {resolved_customer_id} not found!")
     except Exception as e:
         print(f"❌ Warning: Could not update customer/supplier balance: {e}")
     
@@ -120,7 +333,7 @@ def verify_dual_balance(journal_entry_id):
     """
     from sqlalchemy import func
     from flask import current_app
-    from models import JournalEntryLine
+    from models import JournalEntryLine, Account
     
     db = current_app.extensions['sqlalchemy']
     
@@ -150,6 +363,40 @@ def verify_dual_balance(journal_entry_id):
         '22k': round((weight_totals.debit_22k or 0) - (weight_totals.credit_22k or 0), 3),
         '24k': round((weight_totals.debit_24k or 0) - (weight_totals.credit_24k or 0), 3)
     }
+
+    # Debug logging to trace imbalances (helps diagnose weight gaps)
+    try:
+        log_lines = [
+            f"🔍 Dual balance check for JE #{journal_entry_id}",
+            f"   Cash -> debit: {cash_debit:.2f}, credit: {cash_credit:.2f}, diff: {cash_balance:.2f}",
+            f"   18k -> debit: {(weight_totals.debit_18k or 0):.3f}, credit: {(weight_totals.credit_18k or 0):.3f}, diff: {((weight_totals.debit_18k or 0) - (weight_totals.credit_18k or 0)):.3f}",
+            f"   21k -> debit: {(weight_totals.debit_21k or 0):.3f}, credit: {(weight_totals.credit_21k or 0):.3f}, diff: {((weight_totals.debit_21k or 0) - (weight_totals.credit_21k or 0)):.3f}",
+            f"   22k -> debit: {(weight_totals.debit_22k or 0):.3f}, credit: {(weight_totals.credit_22k or 0):.3f}, diff: {((weight_totals.debit_22k or 0) - (weight_totals.credit_22k or 0)):.3f}",
+            f"   24k -> debit: {(weight_totals.debit_24k or 0):.3f}, credit: {(weight_totals.credit_24k or 0):.3f}, diff: {((weight_totals.debit_24k or 0) - (weight_totals.credit_24k or 0)):.3f}"
+        ]
+        for line in log_lines:
+            print(line)
+        with open('/tmp/dual_balance.log', 'a', encoding='utf-8') as dbg:
+            dbg.write('\n'.join(log_lines) + '\n')
+
+            # Log detailed lines to help trace imbalance sources
+            from models import JournalEntryLine, Account
+            lines = db.session.query(JournalEntryLine).filter_by(journal_entry_id=journal_entry_id).all()
+            for line in lines:
+                acc = line.account or db.session.query(Account).get(line.account_id)
+                acc_label = f"{acc.account_number} - {acc.name}" if acc else f"Account {line.account_id}"
+                detail = (
+                    f"      -> {acc_label}: cash({line.cash_debit:.2f}/{line.cash_credit:.2f}) "
+                    f"weights 18k({line.debit_18k:.3f}/{line.credit_18k:.3f}) "
+                    f"21k({line.debit_21k:.3f}/{line.credit_21k:.3f}) "
+                    f"22k({line.debit_22k:.3f}/{line.credit_22k:.3f}) "
+                    f"24k({line.debit_24k:.3f}/{line.credit_24k:.3f})"
+                )
+                print(detail)
+                dbg.write(detail + '\n')
+    except Exception as log_exc:
+        with open('/tmp/dual_balance.log', 'a', encoding='utf-8') as dbg:
+            dbg.write(f"⚠️ Failed to log dual balance details: {log_exc}\n")
     
     errors = []
     balanced = True
@@ -199,3 +446,551 @@ def get_account_balances(account_id):
         }
     
     return result
+
+
+def get_live_gold_price_helper():
+    """
+    الحصول على السعر المباشر للذهب (للجرام الواحد بالعيار الرئيسي الديناميكي)
+    
+    ملاحظة هامة:
+    يستخدم سعر العيار الرئيسي (21 عادةً) وليس 24k
+    هذا يضمن التوافق مع نظام المحاسبة الوزني
+    """
+    try:
+        # محاولة الحصول على السعر من API الذهب
+        from routes import get_current_gold_price
+        price_data = get_current_gold_price()
+        # 🔧 تم التصليح: استخدام سعر العيار الرئيسي بدلاً من 24k
+        return price_data.get('price_per_gram_main_karat', 350.0)
+    except:
+        # قيمة افتراضية في حالة الفشل (سعر 21k تقريباً)
+        return 350.0
+
+
+def create_dual_entry_with_memo(
+    date,
+    description,
+    entries,
+    reference_type=None,
+    reference_id=None,
+    gold_price=None,
+    posted=True
+):
+    """
+    إنشاء قيد مزدوج (نقد + وزن) مع تسجيل تلقائي في حسابات المذكرة
+    
+    Args:
+        date: تاريخ القيد
+        description: وصف القيد
+        entries: قائمة من القيود، كل قيد يحتوي على:
+            {
+                'account_id': رقم الحساب,
+                'debit_cash': المبلغ المدين (اختياري),
+                'credit_cash': المبلغ الدائن (اختياري),
+                'debit_weight': الوزن المدين (اختياري - يُحسب تلقائياً إن لم يُحدد),
+                'credit_weight': الوزن الدائن (اختياري),
+                'customer_id': العميل (اختياري),
+                'supplier_id': المورد (اختياري),
+                'description': وصف السطر (اختياري)
+            }
+        reference_type: نوع المرجع
+        reference_id: رقم المرجع
+        gold_price: السعر المباشر للذهب (إذا لم يُحدد يتم جلبه تلقائياً)
+        posted: هل القيد مُرحّل؟
+    
+    Returns:
+        JournalEntry: القيد المنشأ
+    """
+    from flask import current_app
+    from models import JournalEntry, JournalEntryLine, Account
+    from datetime import datetime
+    
+    db = current_app.extensions['sqlalchemy']
+    
+    # الحصول على السعر المباشر للذهب
+    if gold_price is None:
+        gold_price = get_live_gold_price_helper()
+    
+    # إنشاء القيد الرئيسي
+    from routes import _generate_journal_entry_number
+    entry_number = _generate_journal_entry_number('JE')
+    
+    journal_entry = JournalEntry(
+        entry_number=entry_number,
+        date=date,
+        description=description,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        is_posted=posted,
+        posted_at=datetime.now() if posted else None,
+        posted_by='system' if posted else None
+    )
+    db.session.add(journal_entry)
+    db.session.flush()
+    
+    # معالجة كل قيد في القائمة
+    for entry in entries:
+        account_id = entry.get('account_id')
+        account_code = entry.get('account_code')
+        
+        # الحصول على الحساب
+        if account_id:
+            account = db.session.query(Account).get(account_id)
+        elif account_code:
+            account = db.session.query(Account).filter_by(account_number=account_code).first()
+        else:
+            continue
+        
+        if not account:
+            continue
+        
+        account_id = account.id
+        
+        # القيد المالي (النقدي) - دعم كلا الصيغتين
+        debit_cash = entry.get('debit_cash') or entry.get('debit', 0.0) or 0.0
+        credit_cash = entry.get('credit_cash') or entry.get('credit', 0.0) or 0.0
+        
+        # القيد الوزني (إذا كان مُحدداً مباشرة) - فقط لحسابات المخزون/المبيعات
+        debit_weight = entry.get('debit_weight', 0.0) or 0.0
+        credit_weight = entry.get('credit_weight', 0.0) or 0.0
+        
+        # حساب الوزن المعادل لحسابات المذكرة
+        memo_debit_weight = debit_weight if debit_weight > 0 else (debit_cash / gold_price if debit_cash > 0 else 0.0)
+        memo_credit_weight = credit_weight if credit_weight > 0 else (credit_cash / gold_price if credit_cash > 0 else 0.0)
+        
+        # إنشاء سطر القيد المالي (نقد فقط - بدون أوزان)
+        line = JournalEntryLine(
+            journal_entry_id=journal_entry.id,
+            account_id=account_id,
+            customer_id=entry.get('customer_id'),
+            supplier_id=entry.get('supplier_id'),
+            cash_debit=debit_cash,
+            cash_credit=credit_cash,
+            debit_weight=0.0,  # الحسابات المالية لا تحمل أوزان
+            credit_weight=0.0,
+            gold_price_snapshot=gold_price,
+            description=entry.get('description', description)
+        )
+        db.session.add(line)
+        
+        # إذا كان للحساب حساب مذكرة موازي، نُنشئ قيداً وزنياً (أوزان فقط)
+        if account.memo_account_id:
+            memo_line = JournalEntryLine(
+                journal_entry_id=journal_entry.id,
+                account_id=account.memo_account_id,
+                customer_id=entry.get('customer_id'),
+                supplier_id=entry.get('supplier_id'),
+                cash_debit=0.0,  # حسابات المذكرة لا تحمل نقد
+                cash_credit=0.0,
+                debit_weight=memo_debit_weight,  # الوزن الفعلي أو المعادل
+                credit_weight=memo_credit_weight,
+                gold_price_snapshot=gold_price,
+                description=f"{entry.get('description', description)} (وزن معادل)"
+            )
+            db.session.add(memo_line)
+    
+    db.session.flush()
+    return journal_entry
+
+
+def link_memo_accounts_helper():
+    """
+    ربط الحسابات المالية بحسابات المذكرة الموازية
+    يتم تشغيلها مرة واحدة بعد إنشاء شجرة الحسابات
+    """
+    from flask import current_app
+    from models import Account
+    
+    db = current_app.extensions['sqlalchemy']
+    
+    # الربط الأساسي: (حساب مالي, حساب مذكرة)
+    mappings = [
+        # النقدية والبنوك
+        ('1100', '7100'),   # الصندوق ← → الصندوق الوزني
+        ('1110', '7110'),   # البنك ← → بنك وزني
+        
+        # العملاء
+        ('1200', '7200'),   # عملاء بيع ← → عملاء بيع وزني
+        
+        # المخزون
+        ('1300', '7300'),   # مخزون عيار 18 ← → مخزون وزني 18
+        ('1310', '7310'),   # مخزون عيار 21 ← → مخزون وزني 21
+        ('1320', '7320'),   # مخزون عيار 22 ← → مخزون وزني 22
+        ('1330', '7330'),   # مخزون عيار 24 ← → مخزون وزني 24
+        
+        # الإيرادات
+        ('40', '7400'),     # إيرادات بيع ← → إيرادات بيع وزنية
+        
+        # التكاليف
+        ('50', '7500'),     # تكلفة المبيعات ← → تكلفة مبيعات وزنية
+    ]
+
+    # دمج الحسابات الداعمة المعرفة في الإعدادات دون تكرار
+    seen_pairs = set(mappings)
+    for entry in WEIGHT_SUPPORT_ACCOUNTS:
+        financial_code = (entry.get('financial') or {}).get('account_number')
+        memo_code = (entry.get('memo') or {}).get('account_number')
+        if financial_code and memo_code:
+            pair = (financial_code, memo_code)
+            if pair not in seen_pairs:
+                mappings.append(pair)
+                seen_pairs.add(pair)
+    
+    count = 0
+    for financial_acc_number, memo_acc_number in mappings:
+        financial_acc = db.session.query(Account).filter_by(account_number=financial_acc_number).first()
+        memo_acc = db.session.query(Account).filter_by(account_number=memo_acc_number).first()
+        
+        if financial_acc and memo_acc:
+            financial_acc.memo_account_id = memo_acc.id
+            count += 1
+    
+    db.session.commit()
+    print(f"✓ تم ربط {count} حساب مالي بحسابات المذكرة")
+    return count
+
+
+def create_golden_rule_entry(
+    journal_entry_id,
+    account_id,
+    debit_cash=0.0,
+    credit_cash=0.0,
+    gold_price=None,
+    is_inventory=False,
+    actual_weight_18k=0.0,
+    actual_weight_21k=0.0,
+    actual_weight_22k=0.0,
+    actual_weight_24k=0.0,
+    description=None,
+    customer_id=None,
+    supplier_id=None
+):
+    """
+    🟡 القاعدة الذهبية للنظام المزدوج
+    
+    قاعدة عامة: أي ريال يدخل أو يخرج → يتحول إلى جرام في دفتر الوزن
+    الاستثناء الوحيد: المخزون يُسجل بالوزن الفعلي (بدون تحويل)
+    
+    Args:
+        journal_entry_id: رقم القيد
+        account_id: رقم الحساب المالي
+        debit_cash: المبلغ المدين (ريال)
+        credit_cash: المبلغ الدائن (ريال)
+        gold_price: السعر المباشر للذهب عيار 24 (ريال/جرام)
+        is_inventory: هل هذا حساب مخزون؟ (استثناء من التحويل)
+        actual_weight_XXk: الوزن الفعلي لكل عيار (فقط للمخزون)
+        description: وصف القيد
+        customer_id: معرف العميل
+        supplier_id: معرف المورد
+    
+    Returns:
+        tuple: (financial_line, memo_line)
+    """
+    from flask import current_app
+    from models import Account, JournalEntryLine
+    
+    db = current_app.extensions['sqlalchemy']
+    
+    # الحصول على الحساب المالي
+    account = db.session.query(Account).get(account_id)
+    if not account:
+        raise ValueError(f"Account {account_id} not found")
+    
+    # الحصول على السعر المباشر للذهب
+    if gold_price is None:
+        gold_price = get_live_gold_price_helper()
+    
+    # ============================================
+    # 1️⃣ القيد المالي (نقد فقط - بدون أوزان)
+    # ============================================
+    financial_line = JournalEntryLine(
+        journal_entry_id=journal_entry_id,
+        account_id=account_id,
+        customer_id=customer_id,
+        supplier_id=supplier_id,
+        cash_debit=round(debit_cash, 2) if debit_cash > 0 else 0.0,
+        cash_credit=round(credit_cash, 2) if credit_cash > 0 else 0.0,
+        debit_weight=0.0,  # ✅ الحسابات المالية لا تحمل أوزان
+        credit_weight=0.0,
+        debit_18k=0.0,
+        credit_18k=0.0,
+        debit_21k=0.0,
+        credit_21k=0.0,
+        debit_22k=0.0,
+        credit_22k=0.0,
+        debit_24k=0.0,
+        credit_24k=0.0,
+        gold_price_snapshot=gold_price
+    )
+    db.session.add(financial_line)
+    
+    # ============================================
+    # 2️⃣ القيد الوزني (وزن فقط - بدون نقد)
+    # ============================================
+    memo_line = None
+    
+    # تحقق من وجود حساب مذكرة موازٍ
+    if account.memo_account_id:
+        memo_account = db.session.query(Account).get(account.memo_account_id)
+        
+        if memo_account:
+            # حساب الأوزان حسب نوع الحساب
+            if is_inventory:
+                # ✅ استثناء: المخزون يُسجل بالوزن الفعلي (بدون تحويل)
+                weight_18k_debit = actual_weight_18k if debit_cash > 0 else 0.0
+                weight_18k_credit = actual_weight_18k if credit_cash > 0 else 0.0
+                weight_21k_debit = actual_weight_21k if debit_cash > 0 else 0.0
+                weight_21k_credit = actual_weight_21k if credit_cash > 0 else 0.0
+                weight_22k_debit = actual_weight_22k if debit_cash > 0 else 0.0
+                weight_22k_credit = actual_weight_22k if credit_cash > 0 else 0.0
+                weight_24k_debit = actual_weight_24k if debit_cash > 0 else 0.0
+                weight_24k_credit = actual_weight_24k if credit_cash > 0 else 0.0
+            else:
+                # ✅ القاعدة العامة: تحويل الريال إلى جرام
+                # الوزن = المبلغ ÷ السعر المباشر
+                weight_equivalent_debit = (debit_cash / gold_price) if gold_price > 0 and debit_cash > 0 else 0.0
+                weight_equivalent_credit = (credit_cash / gold_price) if gold_price > 0 and credit_cash > 0 else 0.0
+                
+                # افتراضياً نسجل في عيار 21 (العيار الرئيسي)
+                weight_18k_debit = 0.0
+                weight_18k_credit = 0.0
+                weight_21k_debit = weight_equivalent_debit
+                weight_21k_credit = weight_equivalent_credit
+                weight_22k_debit = 0.0
+                weight_22k_credit = 0.0
+                weight_24k_debit = 0.0
+                weight_24k_credit = 0.0
+            
+            # إنشاء سطر القيد الوزني
+            memo_line = JournalEntryLine(
+                journal_entry_id=journal_entry_id,
+                account_id=memo_account.id,
+                customer_id=customer_id,
+                supplier_id=supplier_id,
+                cash_debit=0.0,  # ✅ حسابات المذكرة لا تحمل نقد
+                cash_credit=0.0,
+                debit_18k=round(weight_18k_debit, 3) if weight_18k_debit > 0 else 0.0,
+                credit_18k=round(weight_18k_credit, 3) if weight_18k_credit > 0 else 0.0,
+                debit_21k=round(weight_21k_debit, 3) if weight_21k_debit > 0 else 0.0,
+                credit_21k=round(weight_21k_credit, 3) if weight_21k_credit > 0 else 0.0,
+                debit_22k=round(weight_22k_debit, 3) if weight_22k_debit > 0 else 0.0,
+                credit_22k=round(weight_22k_credit, 3) if weight_22k_credit > 0 else 0.0,
+                debit_24k=round(weight_24k_debit, 3) if weight_24k_debit > 0 else 0.0,
+                credit_24k=round(weight_24k_credit, 3) if weight_24k_credit > 0 else 0.0,
+                debit_weight=0.0,  # سنستخدم الأوزان حسب العيار مباشرة
+                credit_weight=0.0,
+                gold_price_snapshot=gold_price
+            )
+            db.session.add(memo_line)
+    
+    return (financial_line, memo_line)
+
+
+def create_complete_golden_entry(
+    date,
+    description,
+    entries,
+    gold_price=None,
+    reference_type=None,
+    reference_id=None,
+    posted=True
+):
+    """
+    🟡 إنشاء قيد كامل وفق القاعدة الذهبية
+    
+    القاعدة: كل ريال → يتحول لجرام، المخزون فقط بالوزن الفعلي
+    
+    Args:
+        date: تاريخ القيد
+        description: وصف القيد
+        entries: قائمة القيود، كل عنصر:
+            {
+                'account_id': رقم الحساب,
+                'debit': مدين نقدي (اختياري),
+                'credit': دائن نقدي (اختياري),
+                'is_inventory': هل حساب مخزون؟ (افتراضي False),
+                'weight_18k': الوزن الفعلي عيار 18 (للمخزون فقط),
+                'weight_21k': الوزن الفعلي عيار 21 (للمخزون فقط),
+                'weight_22k': الوزن الفعلي عيار 22 (للمخزون فقط),
+                'weight_24k': الوزن الفعلي عيار 24 (للمخزون فقط),
+                'customer_id': معرف العميل (اختياري),
+                'supplier_id': معرف المورد (اختياري),
+                'description': وصف السطر (اختياري)
+            }
+        gold_price: السعر المباشر للذهب (إذا لم يُحدد يُجلب تلقائياً)
+        reference_type: نوع المرجع (invoice, voucher, etc.)
+        reference_id: رقم المرجع
+        posted: هل القيد مُرحّل؟
+    
+    Returns:
+        JournalEntry: القيد المُنشأ
+    """
+    from flask import current_app
+    from models import JournalEntry
+    from datetime import datetime
+    
+    db = current_app.extensions['sqlalchemy']
+    
+    # الحصول على السعر المباشر للذهب
+    if gold_price is None:
+        gold_price = get_live_gold_price_helper()
+    
+    # إنشاء القيد الرئيسي
+    from routes import _generate_journal_entry_number
+    entry_number = _generate_journal_entry_number('JE')
+    
+    journal_entry = JournalEntry(
+        entry_number=entry_number,
+        date=date,
+        description=description,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        is_posted=posted,
+        posted_at=datetime.now() if posted else None,
+        posted_by='system' if posted else None
+    )
+    db.session.add(journal_entry)
+    db.session.flush()
+    
+    # معالجة كل قيد في القائمة
+    for entry in entries:
+        account_id = entry.get('account_id')
+        if not account_id:
+            continue
+        
+        debit_cash = entry.get('debit', 0.0) or 0.0
+        credit_cash = entry.get('credit', 0.0) or 0.0
+        is_inventory = entry.get('is_inventory', False)
+        
+        # الأوزان الفعلية (فقط للمخزون)
+        actual_weight_18k = entry.get('weight_18k', 0.0) or 0.0
+        actual_weight_21k = entry.get('weight_21k', 0.0) or 0.0
+        actual_weight_22k = entry.get('weight_22k', 0.0) or 0.0
+        actual_weight_24k = entry.get('weight_24k', 0.0) or 0.0
+        
+        # إنشاء القيد وفق القاعدة الذهبية
+        create_golden_rule_entry(
+            journal_entry_id=journal_entry.id,
+            account_id=account_id,
+            debit_cash=debit_cash,
+            credit_cash=credit_cash,
+            gold_price=gold_price,
+            is_inventory=is_inventory,
+            actual_weight_18k=actual_weight_18k,
+            actual_weight_21k=actual_weight_21k,
+            actual_weight_22k=actual_weight_22k,
+            actual_weight_24k=actual_weight_24k,
+            description=entry.get('description', description),
+            customer_id=entry.get('customer_id'),
+            supplier_id=entry.get('supplier_id')
+        )
+    
+    # 🆕 Verify balance after creating all lines (Fail Fast)
+    db.session.flush()
+    is_balanced, balance_details = verify_dual_balance(journal_entry.id, raise_on_error=False)
+    
+    if not is_balanced:
+        error_msg = f"Journal entry {journal_entry.id} is not balanced after applying golden rule"
+        print(f"❌ {error_msg}")
+        print(f"Balance details: {balance_details}")
+        # Log to file for debugging
+        with open('/tmp/dual_balance.log', 'a', encoding='utf-8') as f:
+            f.write(f"❌ JE#{journal_entry.id} IMBALANCED after golden rule batch\\n")
+            f.write(f"Details: {balance_details}\\n")
+        
+        # 🆕 Raise error to prevent saving imbalanced entries
+        from services.weight_ledger_service import WeightImbalanceError
+        raise WeightImbalanceError(error_msg)
+    
+    db.session.flush()
+    return journal_entry
+
+
+def apply_golden_rule_to_line(line_data, gold_price_main_karat, apply_rule=True):
+    """
+    🆕 تطبيق القاعدة الذهبية على سطر قيد يدوي
+    
+    Args:
+        line_data (dict): بيانات السطر من الطلب (account_id, cash_debit, cash_credit, etc.)
+        gold_price_main_karat (float): سعر الذهب للعيار الرئيسي (افتراضي 21 قيراط)
+        apply_rule (bool): تطبيق القاعدة أم لا (افتراضي True)
+    
+    Returns:
+        dict: السطر مع القيم الوزنية المحسوبة
+    
+    ملاحظة:
+        - إذا كان apply_rule=False، يعيد السطر كما هو
+        - إذا كان apply_rule=True ولا توجد قيم نقدية، يعيد السطر كما هو
+        - القاعدة: الوزن = المبلغ النقدي ÷ سعر الذهب للعيار الرئيسي
+    """
+    if not apply_rule:
+        return line_data
+    
+    # نسخ البيانات
+    result = line_data.copy()
+    
+    # التحقق من وجود قيم نقدية
+    cash_debit = float(line_data.get('cash_debit', 0))
+    cash_credit = float(line_data.get('cash_credit', 0))
+    
+    if cash_debit == 0 and cash_credit == 0:
+        # لا توجد قيم نقدية، لا حاجة لتطبيق القاعدة
+        return result
+    
+    if gold_price_main_karat <= 0:
+        # سعر غير صحيح، لا يمكن تطبيق القاعدة
+        return result
+    
+def apply_golden_rule_to_line(line_data, gold_price_main_karat, main_karat=21, apply_rule=True):
+    """
+    🆕 تطبيق القاعدة الذهبية على سطر قيد يدوي
+    
+    Args:
+        line_data (dict): بيانات السطر من الطلب (account_id, cash_debit, cash_credit, etc.)
+        gold_price_main_karat (float): سعر الذهب للعيار الرئيسي
+        main_karat (int): العيار الرئيسي (افتراضي 21، لكنه قابل للتغيير)
+        apply_rule (bool): تطبيق القاعدة أم لا (افتراضي True)
+    
+    Returns:
+        dict: السطر مع القيم الوزنية المحسوبة
+    
+    ملاحظة:
+        - إذا كان apply_rule=False، يعيد السطر كما هو
+        - إذا كان apply_rule=True ولا توجد قيم نقدية، يعيد السطر كما هو
+        - القاعدة: الوزن = المبلغ النقدي ÷ سعر الذهب للعيار الرئيسي
+        - يُسجل الوزن في حقل العيار الرئيسي (debit_XXk / credit_XXk)
+    """
+    if not apply_rule:
+        return line_data
+    
+    # نسخ البيانات
+    result = line_data.copy()
+    
+    # التحقق من وجود قيم نقدية
+    cash_debit = float(line_data.get('cash_debit', 0))
+    cash_credit = float(line_data.get('cash_credit', 0))
+    
+    if cash_debit == 0 and cash_credit == 0:
+        # لا توجد قيم نقدية، لا حاجة لتطبيق القاعدة
+        return result
+    
+    if gold_price_main_karat <= 0:
+        # سعر غير صحيح، لا يمكن تطبيق القاعدة
+        return result
+    
+    # تحديد حقل العيار المناسب
+    karat_field_debit = f'debit_{main_karat}k'
+    karat_field_credit = f'credit_{main_karat}k'
+    
+    # تطبيق القاعدة الذهبية
+    # الوزن = المبلغ ÷ سعر العيار الرئيسي
+    if cash_debit > 0:
+        weight_debit = cash_debit / gold_price_main_karat
+        result[karat_field_debit] = round(weight_debit, 3)
+    
+    if cash_credit > 0:
+        weight_credit = cash_credit / gold_price_main_karat
+        result[karat_field_credit] = round(weight_credit, 3)
+    
+    return result
+

@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Flask app setup with PostgreSQL, db init, register routes, create tables, run debug
 from flask import Flask, url_for
 from models import db
-from routes import api
+from routes import api, ensure_weight_closing_support_accounts
 print("DEBUG: Imported api blueprint from routes")  # Debug log
 from payment_methods_routes import payment_methods_api  # 🆕 استيراد payment methods routes
 print("DEBUG: Imported payment_methods_api blueprint")  # Debug log
@@ -20,6 +20,12 @@ from posting_routes import posting_bp  # 🆕 استيراد posting routes
 print("DEBUG: Imported posting_bp blueprint")  # Debug log
 from auth_routes import auth_bp  # 🆕 استيراد auth routes
 print("DEBUG: Imported auth_bp blueprint")  # Debug log
+from schema_guard import (
+	ensure_profit_weight_columns,
+	ensure_settings_columns,
+	ensure_weight_closing_columns,
+	ensure_invoice_tax_columns,
+)
 
 import os
 from flask_cors import CORS
@@ -34,6 +40,13 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 CORS(app)
 
 db.init_app(app)
+
+with app.app_context():
+	ensure_profit_weight_columns(db.engine)
+	ensure_settings_columns(db.engine)
+	ensure_weight_closing_columns(db.engine)
+	ensure_invoice_tax_columns(db.engine)
+	ensure_weight_closing_support_accounts()
 # ⚠️ ترتيب التسجيل مهم: auth_bp يجب أن يُسجل قبل api لأن auth_bp.login له أولوية
 app.register_blueprint(auth_bp, url_prefix='/api')  # 🆕 تسجيل auth & permissions routes (أولاً!)
 app.register_blueprint(posting_bp, url_prefix='/api')  # 🆕 تسجيل posting routes
@@ -54,6 +67,10 @@ def list_routes():
 def create_tables():
 	with app.app_context():
 		db.create_all()
+		ensure_profit_weight_columns(db.engine)
+		ensure_settings_columns(db.engine)
+		ensure_weight_closing_columns(db.engine)
+		ensure_invoice_tax_columns(db.engine)
 
 
 def reset_database():
@@ -72,4 +89,4 @@ if __name__ == "__main__":
 	print("[INFO] إذا كنت تستخدم جدار حماية أو VPN، أوقفه مؤقتاً.")
 	print(f"[INFO] افتح الرابط التالي من أي جهاز على الشبكة: http://<IP-الجهاز>:{port}/customers")
 	create_tables()
-	app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+	app.run(host="0.0.0.0", port=port, debug=True, threaded=True)

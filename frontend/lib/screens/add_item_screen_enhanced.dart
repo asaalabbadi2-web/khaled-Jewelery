@@ -4,7 +4,11 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api_service.dart';
 import '../utils.dart';
 import '../features/invoice/validators/invoice_form_validator.dart';
+import '../theme/app_theme.dart';
+import '../services/data_sync_bus.dart';
 import 'barcode_print_screen.dart';
+import 'quick_add_items_screen.dart';
+import '../utils/arabic_number_formatter.dart';
 
 /// شاشة إضافة صنف ذهب محسّنة
 ///
@@ -24,6 +28,8 @@ class AddItemScreenEnhanced extends StatefulWidget {
   State<AddItemScreenEnhanced> createState() => _AddItemScreenEnhancedState();
 }
 
+enum _AddItemEntryMode { single, quick }
+
 class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
   final _formKey = GlobalKey<FormState>();
 
@@ -41,6 +47,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
   bool _isLoading = false;
   bool _isEditMode = false;
   String? _itemCode; // كود الصنف (يُولّد تلقائياً)
+  _AddItemEntryMode _entryMode = _AddItemEntryMode.single;
 
   @override
   void initState() {
@@ -74,8 +81,9 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
     _priceController = TextEditingController(
       text: item['price']?.toString() ?? '0',
     );
+    final initialStockValue = _isEditMode ? _parseStockValue(item['stock']) : 1;
     _stockController = TextEditingController(
-      text: item['stock']?.toString() ?? '0',
+      text: initialStockValue.toString(),
     );
   }
 
@@ -91,6 +99,17 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
     _priceController.dispose();
     _stockController.dispose();
     super.dispose();
+  }
+
+  void _handleQuickAddSuccess() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('✅ تم حفظ الأصناف السريعة بنجاح'),
+        backgroundColor: AppColors.success,
+      ),
+    );
+    Navigator.pop(context, true);
   }
 
   Future<void> _scanBarcode() async {
@@ -109,7 +128,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('✅ تم مسح الباركود: $code'),
-            backgroundColor: Colors.green,
+              backgroundColor: AppColors.success,
           ),
         );
       }
@@ -118,7 +137,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('خطأ في الماسح: $e'),
-          backgroundColor: Colors.red,
+            backgroundColor: AppColors.error,
         ),
       );
     }
@@ -129,7 +148,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('⚠️ يرجى تصحيح الأخطاء أولاً'),
-          backgroundColor: Colors.orange,
+            backgroundColor: AppColors.warning,
         ),
       );
       return;
@@ -138,6 +157,13 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
     setState(() => _isLoading = true);
 
     try {
+      bool itemMutated = false;
+      final parsedStock = int.tryParse(_stockController.text.trim());
+      final fallbackStock = _isEditMode
+          ? _parseStockValue(widget.itemToEdit?['stock'])
+          : 1;
+      final resolvedStock = parsedStock ?? fallbackStock;
+
       final itemData = {
         'name': _nameController.text,
         'barcode': _barcodeController.text.isEmpty
@@ -149,7 +175,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
         'wage': normalizeNumber(_wageController.text),
         'description': _descriptionController.text,
         'price': normalizeNumber(_priceController.text),
-        'stock': int.tryParse(_stockController.text) ?? 0,
+        'stock': resolvedStock,
       };
 
       dynamic response;
@@ -159,6 +185,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
           widget.itemToEdit!['id'],
           itemData,
         );
+        itemMutated = true;
         // تحديث الباركود إذا تم توليده من السيرفر
         if (response != null && response['barcode'] != null) {
           setState(() {
@@ -169,6 +196,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
         response = await widget.api.addItem(itemData);
         // حفظ item_code و barcode المُولّدين من السيرفر
         if (response != null) {
+          itemMutated = true;
           if (response['item_code'] != null) {
             _itemCode = response['item_code'];
           }
@@ -179,6 +207,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
           // رسالة نجاح مع تفاصيل التوليد التلقائي
           if (!mounted) return;
 
+          DataSyncBus.notifyItemsChanged();
           Navigator.pop(context, true);
 
           ScaffoldMessenger.of(context).showSnackBar(
@@ -200,7 +229,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                     ),
                 ],
               ),
-              backgroundColor: Colors.green,
+                backgroundColor: AppColors.success,
               duration: const Duration(seconds: 4),
             ),
           );
@@ -210,6 +239,9 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
 
       if (!mounted) return;
 
+      if (itemMutated) {
+        DataSyncBus.notifyItemsChanged();
+      }
       Navigator.pop(context, true);
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -217,14 +249,14 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
           content: Text(
             _isEditMode ? '✅ تم تحديث الصنف بنجاح' : '✅ تم إضافة الصنف بنجاح',
           ),
-          backgroundColor: Colors.green,
+          backgroundColor: AppColors.success,
         ),
       );
     } catch (e) {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text('خطأ: $e'), backgroundColor: AppColors.error),
       );
     } finally {
       if (mounted) {
@@ -233,12 +265,20 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
     }
   }
 
+  int _parseStockValue(dynamic value) {
+    if (value is num) return value.toInt();
+    if (value is String && value.trim().isNotEmpty) {
+      return int.tryParse(value.trim()) ?? 0;
+    }
+    return 0;
+  }
+
   void _printBarcode() {
     if (_barcodeController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('⚠️ لا يوجد باركود لطباعته'),
-          backgroundColor: Colors.orange,
+          backgroundColor: AppColors.warning,
         ),
       );
       return;
@@ -283,26 +323,74 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
 
   @override
   Widget build(BuildContext context) {
+    final bool quickModeAvailable = !_isEditMode;
+    final bool isQuickMode =
+        quickModeAvailable && _entryMode == _AddItemEntryMode.quick;
+    final theme = Theme.of(context);
+
     return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         title: Text(_isEditMode ? 'تعديل صنف' : 'إضافة صنف جديد'),
-        backgroundColor: const Color(0xFFFFD700).withOpacity(0.1),
+        backgroundColor: AppColors.darkGold,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 2,
         actions: [
-          if (!_isEditMode)
+          if (!isQuickMode && !_isEditMode)
             IconButton(
               icon: const Icon(Icons.qr_code_scanner),
               tooltip: 'مسح باركود',
               onPressed: _scanBarcode,
+              color: Colors.white,
             ),
           if (_isEditMode && _barcodeController.text.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.print),
               tooltip: 'طباعة باركود',
               onPressed: _printBarcode,
+              color: Colors.white,
             ),
         ],
       ),
-      body: Form(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.lightGold.withValues(alpha: 0.25),
+              theme.scaffoldBackgroundColor,
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Column(
+          children: [
+            if (quickModeAvailable)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: _buildEntryModeToggle(),
+              ),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: isQuickMode
+                    ? _buildQuickAddEmbedded()
+                    : _buildSingleEntryForm(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSingleEntryForm() {
+    return KeyedSubtree(
+      key: const ValueKey('singleEntryForm'),
+      child: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -338,15 +426,15 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFD700).withOpacity(0.1),
+                  color: AppColors.primaryGold.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: const Color(0xFFFFD700).withOpacity(0.3),
+                    color: AppColors.primaryGold.withValues(alpha: 0.3),
                   ),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.tag, color: Color(0xFFFFD700)),
+                    const Icon(Icons.tag, color: AppColors.primaryGold),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -361,7 +449,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFFFFD700),
+                              color: AppColors.primaryGold,
                             ),
                           ),
                         ],
@@ -373,14 +461,14 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.2),
+                        color: AppColors.success.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: const Text(
                         'تلقائي',
                         style: TextStyle(
                           fontSize: 10,
-                          color: Colors.green,
+                          color: AppColors.success,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -397,7 +485,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                 labelText: 'الباركود (اختياري - يُولّد تلقائياً)',
                 prefixIcon: const Icon(Icons.qr_code),
                 suffixIcon: IconButton(
-                  icon: const Icon(Icons.camera_alt, color: Colors.blue),
+                  icon: const Icon(Icons.camera_alt, color: AppColors.info),
                   tooltip: 'مسح بالكاميرا',
                   onPressed: _scanBarcode,
                 ),
@@ -542,10 +630,13 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     validator: (value) {
-                      if (value == null || value.isEmpty) return 'العدد مطلوب';
+                      if (value == null || value.isEmpty) {
+                        return 'العدد مطلوب';
+                      }
                       final count = int.tryParse(value);
-                      if (count == null || count < 1)
+                      if (count == null || count < 1) {
                         return 'العدد يجب أن يكون على الأقل 1';
+                      }
                       return null;
                     },
                   ),
@@ -607,7 +698,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
               ),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: const Color(0xFFFFD700),
+                backgroundColor: AppColors.primaryGold,
                 foregroundColor: Colors.black,
               ),
             ),
@@ -617,20 +708,271 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
     );
   }
 
-  Widget _buildSectionHeader(String title, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, color: const Color(0xFFFFD700)),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: Theme.of(context).colorScheme.primary,
+  Widget _buildQuickAddEmbedded() {
+    return QuickAddItemsScreen(
+      key: const ValueKey('quickAddEmbedded'),
+      api: widget.api,
+      embedded: true,
+      onSuccess: _handleQuickAddSuccess,
+    );
+  }
+
+  Widget _buildEntryModeToggle() {
+    final theme = Theme.of(context);
+
+    Widget buildOption({
+      required _AddItemEntryMode mode,
+      required IconData icon,
+      required String title,
+      required String subtitle,
+      String? badge,
+    }) {
+      final bool selected = _entryMode == mode;
+      return GestureDetector(
+        onTap: () => setState(() => _entryMode = mode),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: selected
+                ? Colors.white
+                : Colors.white.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primaryGold
+                  : AppColors.primaryGold.withValues(alpha: 0.3),
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: AppColors.primaryGold.withValues(alpha: 0.25),
+                      offset: const Offset(0, 12),
+                      blurRadius: 28,
+                    ),
+                  ]
+                : [],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? AppColors.primaryGold.withValues(alpha: 0.2)
+                          : AppColors.primaryGold.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      icon,
+                      color: AppColors.darkGold,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    title,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.darkGold,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (badge != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? AppColors.darkGold
+                            : AppColors.darkGold.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        badge,
+                        style: TextStyle(
+                          color: selected ? Colors.white : AppColors.darkGold,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: Colors.black87,
+                ),
+              ),
+            ],
           ),
         ),
-      ],
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primaryGold.withValues(alpha: 0.16),
+            Colors.white,
+          ],
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: AppColors.primaryGold.withValues(alpha: 0.2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGold.withValues(alpha: 0.12),
+            blurRadius: 30,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.swap_horiz,
+                    color: AppColors.darkGold,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'طريقة الإدخال',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.darkGold,
+                  ),
+                ),
+                const Spacer(),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _entryMode == _AddItemEntryMode.single
+                            ? Icons.looks_one
+                            : Icons.bolt,
+                        size: 16,
+                        color: AppColors.darkGold,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _entryMode == _AddItemEntryMode.single
+                            ? 'قطعة واحدة'
+                            : 'إضافة سريعة',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.darkGold,
+                        ),
+                      )
+                    ],
+                  ),
+                )
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: buildOption(
+                    mode: _AddItemEntryMode.single,
+                    icon: Icons.looks_one,
+                    title: 'قطعة واحدة',
+                    subtitle:
+                        'ملء كل التفاصيل مع الباركود والمخزون والمصنعية.',
+                    badge: 'تفصيلي',
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: buildOption(
+                    mode: _AddItemEntryMode.quick,
+                    icon: Icons.bolt,
+                    title: 'إضافة سريعة',
+                    subtitle:
+                        'الصق أوزان متعددة أو أضف بطاقات موحدة للحفظ دفعة واحدة.',
+                    badge: 'الأسرع',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 250),
+              child: Text(
+                _entryMode == _AddItemEntryMode.single
+                    ? 'يُستخدم لإدخال كل تفاصيل قطعة محددة مع كل الخصائص المتقدمة.'
+                    : 'مصمم للتهام الأوزان من الميزان أو ملفات Excel وتسريع إضافة عدة قطع.',
+                key: ValueKey(_entryMode),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: Colors.black87,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, IconData icon) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: AppColors.primaryGold.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(
+          color: AppColors.primaryGold.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: AppColors.darkGold, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: AppColors.darkGold,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

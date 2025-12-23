@@ -1,3 +1,4 @@
+import json
 from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, joinedload
@@ -21,15 +22,30 @@ from models import (
     PaymentMethod,
     InvoicePayment,
     AccountingMapping,
+    WeightClosingOrder,
+    WeightClosingExecution,
     Employee,
     Payroll,
     Attendance,
     SafeBox,
     Office,
+    OfficeReservation,
     User,
+    Category,
 )
 from utils import normalize_number
-from dual_system_helpers import create_dual_journal_entry, verify_dual_balance, get_account_balances
+from config import WEIGHT_SUPPORT_ACCOUNTS
+from office_supplier_service import ensure_office_supplier
+from office_account_service import ensure_office_account
+from code_generator import generate_item_code, generate_barcode_from_item_code, validate_item_code
+from dual_system_helpers import (
+    create_dual_journal_entry,
+    verify_dual_balance,
+    get_account_balances,
+    link_memo_accounts_helper,
+)
+from services.journals import create_wage_weight_release_journal
+from services.weight_execution import list_weight_profiles, resolve_weight_profile
 from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import pstdev
@@ -54,6 +70,391 @@ def _parse_iso_date(value, field_name: str):
         raise ValueError(f'Invalid {field_name} format. Expected YYYY-MM-DD')
 
 
+class InlineItemCreationError(Exception):
+    """Validation/creation errors for inline purchase items."""
+
+
+def _inline_item_float(value, default=0.0):
+    if value in (None, '', False):
+        return default
+    try:
+        return float(normalize_number(str(value)))
+    except Exception:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+
+def _inline_pick_number(item_data, keys, default=0.0):
+    for key in keys:
+        if key is None:
+            continue
+        if key in item_data and item_data[key] not in (None, ''):
+            return _inline_item_float(item_data[key], default)
+    return default
+
+
+DEFAULT_WEIGHT_CLOSING_SETTINGS = {
+    'main_karat': 21,
+    'price_source': 'manual',
+    'order_number_prefix': 'WCO',
+    'reservation_code_prefix': 'RES',
+    'inventory_account_id': 1310,  # مخزون ذهب عيار 21
+    'cash_account_id': 1100,       # الصندوق
+}
+
+
+def _coerce_float(value, default=0.0):
+    if value in (None, '', False):
+        return default
+    try:
+        normalized = normalize_number(str(value))
+        return float(normalized)
+    except Exception:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+
+def validate_bridge_account_balance(bridge_account_id, tolerance=0.01):
+    """
+    🆕 التحقق من أن رصيد حساب الجسر = صفر بعد كل فاتورة شراء من مورد.
+    
+    القاعدة الذهبية:
+    - حساب الجسر يجب أن يُصفّر دائماً بعد كل معاملة
+    - إذا بقي رصيد = خلل محاسبي يجب التحقيق فيه
+    
+    Args:
+        bridge_account_id: معرف حساب الجسر
+        tolerance: هامش خطأ مسموح (للفواصل العشرية)
+    
+    Returns:
+        dict: {'is_balanced': bool, 'bridge_balance': float, 'warning': str}
+    """
+    if not bridge_account_id:
+        return {'is_balanced': True, 'bridge_balance': 0.0, 'warning': None}
+    
+    bridge_account = Account.query.get(bridge_account_id)
+    if not bridge_account:
+        return {'is_balanced': False, 'bridge_balance': 0.0, 'warning': 'حساب الجسر غير موجود'}
+    
+    # الحصول على الرصيد النقدي
+    bridge_balance = bridge_account.balance_cash or 0.0
+    
+    # التحقق من أن الرصيد قريب من الصفر
+    is_balanced = abs(bridge_balance) <= tolerance
+    
+    result = {
+        'is_balanced': is_balanced,
+        'bridge_balance': round(bridge_balance, 2),
+        'bridge_account_number': bridge_account.account_number,
+        'bridge_account_name': bridge_account.name,
+        'warning': None
+    }
+    
+    if not is_balanced:
+        result['warning'] = (
+            f"⚠️ تحذير: رصيد حساب الجسر ({bridge_account.account_number} - {bridge_account.name}) "
+            f"غير متوازن: {bridge_balance:.2f} ريال. "
+            f"يجب أن يكون الرصيد = صفر بعد كل معاملة. "
+            f"يرجى التحقيق في القيود المحاسبية."
+        )
+        print(result['warning'])
+    else:
+        print(f"✅ رصيد حساب الجسر متوازن: {bridge_balance:.2f} ريال (ضمن هامش الخطأ المسموح)")
+    
+    return result
+
+
+def get_current_gold_price():
+    """
+    Return latest gold price snapshot as SAR per gram.
+    
+    Returns:
+        dict: Contains price_per_gram_24k, price_per_gram_main_karat, main_karat, source, updated_at
+    """
+    price_per_gram_24k = 0.0
+    source = 'database'
+    updated_at = None
+
+    latest = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+    if latest and latest.price:
+        try:
+            price_per_gram_24k = (latest.price / 31.1035) * 3.75
+            updated_at = latest.date.isoformat() if latest.date else None
+        except Exception as exc:
+            print(f"⚠️ Failed to normalize gold price: {exc}")
+            price_per_gram_24k = 0.0
+
+    if price_per_gram_24k <= 0:
+        source = 'fallback'
+        price_per_gram_24k = 400.0
+    
+    # 🆕 حساب سعر العيار الرئيسي
+    main_karat = get_main_karat()
+    price_per_gram_main_karat = (price_per_gram_24k * main_karat) / 24.0
+
+    return {
+        'price_per_gram_24k': round(price_per_gram_24k, 4),
+        'price_per_gram_main_karat': round(price_per_gram_main_karat, 4),  # 🆕 سعر العيار الرئيسي
+        'main_karat': main_karat,  # 🆕 العيار الرئيسي
+        'source': source,
+        'updated_at': updated_at,
+    }
+
+
+def ensure_weight_closing_support_accounts():
+    """Ensure auxiliary financial/memo accounts required for weight closing exist."""
+    created = 0
+    linked_pairs = 0
+
+    for entry in WEIGHT_SUPPORT_ACCOUNTS:
+        financial_spec = entry.get('financial') or {}
+        memo_spec = entry.get('memo') or {}
+
+        financial_account = None
+        memo_account = None
+
+        if financial_spec.get('account_number'):
+            financial_account = Account.query.filter_by(account_number=financial_spec['account_number']).first()
+            if not financial_account:
+                parent = Account.query.filter_by(account_number=financial_spec.get('parent_number')).first()
+                financial_account = Account(
+                    account_number=financial_spec['account_number'],
+                    name=financial_spec.get('name'),
+                    type=financial_spec.get('type'),
+                    transaction_type=financial_spec.get('transaction_type', 'cash'),
+                    tracks_weight=financial_spec.get('tracks_weight', False),
+                    parent_id=parent.id if parent else None,
+                )
+                db.session.add(financial_account)
+                created += 1
+
+        if memo_spec.get('account_number'):
+            memo_account = Account.query.filter_by(account_number=memo_spec['account_number']).first()
+            if not memo_account:
+                parent = Account.query.filter_by(account_number=memo_spec.get('parent_number')).first()
+                memo_account = Account(
+                    account_number=memo_spec['account_number'],
+                    name=memo_spec.get('name'),
+                    type=memo_spec.get('type'),
+                    transaction_type=memo_spec.get('transaction_type', 'gold'),
+                    tracks_weight=memo_spec.get('tracks_weight', True),
+                    parent_id=parent.id if parent else None,
+                )
+                db.session.add(memo_account)
+                created += 1
+
+        if financial_account and memo_account and financial_account.memo_account_id != memo_account.id:
+            financial_account.memo_account_id = memo_account.id
+            linked_pairs += 1
+
+    if created or linked_pairs:
+        db.session.commit()
+        try:
+            link_memo_accounts_helper()
+        except Exception as exc:
+            print(f"⚠️ Failed to refresh memo account links: {exc}")
+
+    return created
+
+
+@api.route('/weight-closing/profiles', methods=['GET'])
+def list_weight_closing_profiles():
+    ensure_weight_closing_support_accounts()
+    return jsonify({'profiles': list_weight_profiles()})
+
+
+def _load_weight_closing_settings():
+    settings_row = Settings.query.first()
+    if settings_row and settings_row.weight_closing_settings:
+        try:
+            payload = json.loads(settings_row.weight_closing_settings)
+            if isinstance(payload, dict):
+                merged = dict(DEFAULT_WEIGHT_CLOSING_SETTINGS)
+                merged.update({k: v for k, v in payload.items() if v is not None})
+                return merged
+        except json.JSONDecodeError:
+            pass
+    return dict(DEFAULT_WEIGHT_CLOSING_SETTINGS)
+
+
+def _generate_weight_closing_order_number(prefix='WCO'):
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
+    return f"{prefix}-{timestamp}"
+
+
+def _generate_reservation_code(prefix='RES'):
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    total = OfficeReservation.query.count() + 1
+    return f"{prefix}-{timestamp}-{total:04d}"
+
+
+def _generate_journal_entry_number(prefix='JE'):
+    today = datetime.utcnow()
+    year = today.year
+    yearly_count = (
+        db.session.query(func.count(JournalEntry.id))
+        .filter(db.func.strftime('%Y', JournalEntry.date) == str(year))
+        .scalar()
+        or 0
+    ) + 1
+    return f"{prefix}-{year}-{yearly_count:05d}"
+
+
+def _record_memo_weight_transfer(journal_entry_id, *, debit_account_id=None, credit_account_id=None, weight_main_karat=0.0):
+    if weight_main_karat <= 0 or not debit_account_id or not credit_account_id:
+        return
+
+    karat_value = get_main_karat() or 21
+    if karat_value not in (18, 21, 22, 24):
+        karat_value = 21
+
+    weight_at_karat = convert_from_main_karat(weight_main_karat, karat_value)
+    if weight_at_karat <= 0:
+        return
+
+    debit_field = f'debit_{karat_value}k'
+    credit_field = f'credit_{karat_value}k'
+
+    description = f'تحويل وزني {weight_main_karat:.3f} عيار {karat_value}'
+
+    create_dual_journal_entry(
+        journal_entry_id=journal_entry_id,
+        account_id=debit_account_id,
+        description=description,
+        **{debit_field: weight_at_karat}
+    )
+
+    create_dual_journal_entry(
+        journal_entry_id=journal_entry_id,
+        account_id=credit_account_id,
+        description=description,
+        **{credit_field: weight_at_karat}
+    )
+
+
+def _get_inventory_account_by_karat(karat: int) -> int:
+    """
+    اختيار حساب المخزون المناسب حسب العيار
+    
+    Returns:
+        int: ID حساب المخزون
+    """
+    # استخدام أرقام الحسابات بالترقيم القديم
+    karat_to_account = {
+        24: '1330',  # مخزون ذهب عيار 24
+        22: '1320',  # مخزون ذهب عيار 22
+        21: '1310',  # مخزون ذهب عيار 21
+        18: '1300',  # مخزون ذهب عيار 18
+    }
+    
+    account_number = karat_to_account.get(karat, '1310')  # افتراضي: عيار 21
+    
+    account = Account.query.filter_by(account_number=account_number).first()
+    if account:
+        return account.id
+    
+    # fallback: استخدام الحساب من الإعدادات
+    settings = _load_weight_closing_settings()
+    return settings.get('inventory_account_id', 1310)
+
+
+def _invoice_weight_in_main_karat(invoice: Invoice) -> float:
+    if not invoice:
+        return 0.0
+    try:
+        if hasattr(invoice, 'calculate_total_weight'):
+            value = invoice.calculate_total_weight() or 0.0
+            if value:
+                return float(value)
+    except Exception:
+        pass
+    weight = 0.0
+    for line in invoice.karat_lines or []:
+        karat = line.karat or get_main_karat()
+        weight += convert_to_main_karat(line.weight_grams or 0.0, karat)
+    if weight:
+        return weight
+    for item in invoice.items or []:
+        karat = item.karat or get_main_karat()
+        weight += convert_to_main_karat((item.weight or 0.0) * (item.quantity or 1), karat)
+    return weight
+
+
+def create_item_from_invoice_payload(item_data):
+    if not isinstance(item_data, dict):
+        raise InlineItemCreationError('بيانات الصنف غير صالحة')
+
+    name = (item_data.get('name') or 'صنف بدون اسم').strip() or 'صنف بدون اسم'
+
+    item_code = (item_data.get('item_code') or '').strip()
+    if item_code:
+        validation = validate_item_code(item_code)
+        if not validation['is_valid']:
+            raise InlineItemCreationError(validation['message'])
+        if Item.query.filter_by(item_code=item_code).first():
+            raise InlineItemCreationError(f'كود الصنف {item_code} مستخدم بالفعل')
+    else:
+        item_code = generate_item_code()
+
+    barcode = (item_data.get('barcode') or '').strip()
+    if not barcode:
+        barcode = generate_barcode_from_item_code(item_code)
+
+    weight_value = _inline_pick_number(item_data, ['weight', 'weight_grams', 'total_weight'])
+    if weight_value <= 0:
+        raise InlineItemCreationError('وزن الصنف يجب أن يكون أكبر من صفر')
+
+    karat_value = item_data.get('karat', 21)
+    try:
+        karat_text = str(int(round(float(karat_value))))
+    except Exception:
+        karat_text = str(karat_value)
+
+    wage_per_gram = _inline_pick_number(
+        item_data,
+        ['manufacturing_wage_per_gram', 'wage_per_gram'],
+        default=0.0,
+    )
+    wage_total = _inline_pick_number(
+        item_data,
+        ['wage_total', 'wage', 'total_wage'],
+        default=weight_value * wage_per_gram,
+    )
+
+    stones_weight = _inline_pick_number(item_data, ['stones_weight'], default=0.0)
+    stones_value = _inline_pick_number(item_data, ['stones_value'], default=0.0)
+
+    new_item = Item(
+        item_code=item_code,
+        name=name,
+        barcode=barcode,
+        karat=karat_text,
+        weight=weight_value,
+        wage=wage_total,
+        manufacturing_wage_per_gram=wage_per_gram,
+        description=item_data.get('description'),
+        price=_inline_item_float(item_data.get('price'), 0.0),
+        stock=int(item_data.get('stock') or 1),
+        count=int(item_data.get('count') or 1),
+        category_id=item_data.get('category_id'),
+        has_stones=bool(item_data.get('has_stones', False)),
+        stones_weight=stones_weight,
+        stones_value=stones_value,
+    )
+
+    try:
+        db.session.add(new_item)
+        db.session.flush()
+    except IntegrityError as exc:
+        raise InlineItemCreationError('كود الصنف أو الباركود مستخدم مسبقاً') from exc
+
+    return new_item
+
+
 def _parse_iso_time(value, field_name: str):
     if value in (None, ''):
         return None
@@ -61,11 +462,20 @@ def _parse_iso_time(value, field_name: str):
         return value
     if isinstance(value, datetime):
         return value.time()
-    try:
-        return time.fromisoformat(str(value))
-    except ValueError:
-        raise ValueError(f'Invalid {field_name} format. Expected HH:MM or HH:MM:SS')
-
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value, '%H:%M').time()
+        except ValueError:
+            pass
+        try:
+            return datetime.strptime(value, '%H:%M:%S').time()
+        except ValueError:
+            pass
+        try:
+            return datetime.strptime(value, '%Y-%m-%dT%H:%M:%S').time()
+        except ValueError:
+            pass
+    raise ValueError(f"قيمة غير صالحة للحقل {field_name}: {value}")
 
 def _generate_employee_code():
     prefix = f"EMP-{datetime.now().year}"
@@ -681,13 +1091,13 @@ def add_supplier():
             if not validation['is_valid']:
                 return jsonify({'error': validation['message']}), 400
         
-        # 2. تحديد الحساب التجميعي (افتراضي: الموردين - 211)
-        account_category_number = data.get('account_category_number', '211')
+        # 2. تحديد الحساب التجميعي (افتراضي: موردي الذهب المشغول - 21100)
+        account_category_number = data.get('account_category_number', '21100')
         account_category = Account.query.filter_by(account_number=account_category_number).first()
         
         if not account_category:
-            # fallback: ابحث عن أي حساب موردين
-            account_category = Account.query.filter_by(account_number='21').first()
+            # fallback: ابحث عن حساب الموردين الرئيسي
+            account_category = Account.query.filter_by(account_number='211').first()
         
         # 3. إنشاء المورد
         new_supplier = Supplier(
@@ -775,6 +1185,268 @@ def delete_supplier(id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Failed to delete supplier: {str(e)}'}), 500
+
+
+@api.route('/suppliers/<int:supplier_id>/ledger', methods=['GET'])
+def get_supplier_ledger(supplier_id):
+    """Return cash/weight ledger summary and movements for a supplier."""
+    supplier = Supplier.query.get_or_404(supplier_id)
+
+    def _parse_positive_int(param_name, default_value):
+        raw_value = request.args.get(param_name, default_value)
+        if raw_value in (None, ''):
+            return default_value
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            raise ValueError(f'Invalid {param_name} parameter')
+        return max(1, parsed)
+
+    try:
+        page = _parse_positive_int('page', 1)
+        per_page = min(_parse_positive_int('per_page', 20), 100)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    date_from_param = request.args.get('date_from')
+    date_to_param = request.args.get('date_to')
+
+    try:
+        date_from_value = _parse_iso_date(date_from_param, 'date_from') if date_from_param else None
+        date_to_value = _parse_iso_date(date_to_param, 'date_to') if date_to_param else None
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    date_from_dt = datetime.combine(date_from_value, datetime.min.time()) if date_from_value else None
+    date_to_dt = datetime.combine(date_to_value, datetime.min.time()) + timedelta(days=1) if date_to_value else None
+
+    base_query = (
+        JournalEntryLine.query
+        .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+        .filter(JournalEntryLine.supplier_id == supplier_id)
+        .filter(JournalEntryLine.is_deleted.is_(False))
+        .filter(JournalEntry.is_deleted.is_(False))
+    )
+
+    if date_from_dt:
+        base_query = base_query.filter(JournalEntry.date >= date_from_dt)
+    if date_to_dt:
+        base_query = base_query.filter(JournalEntry.date < date_to_dt)
+
+    totals_row = (
+        base_query
+        .with_entities(
+            func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0),
+            func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0),
+        )
+        .first()
+    )
+
+    cash_debit_total, cash_credit_total, d18, c18, d21, c21, d22, c22, d24, c24 = totals_row or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    total_items = base_query.count()
+    total_pages = ((total_items + per_page - 1) // per_page) if total_items else 0
+
+    lines = (
+        base_query
+        .options(joinedload(JournalEntryLine.account), joinedload(JournalEntryLine.journal_entry))
+        .order_by(JournalEntry.date.desc(), JournalEntryLine.id.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    movements = []
+    for line in lines:
+        journal_entry = line.journal_entry
+        account = line.account
+        movements.append({
+            'journal_entry_id': line.journal_entry_id,
+            'entry_number': journal_entry.entry_number if journal_entry else None,
+            'date': journal_entry.date.isoformat() if journal_entry and journal_entry.date else None,
+            'account_id': line.account_id,
+            'account_name': account.name if account else None,
+            'description': line.description or (journal_entry.description if journal_entry else None),
+            'reference_type': journal_entry.reference_type if journal_entry else None,
+            'reference_id': journal_entry.reference_id if journal_entry else None,
+            'cash_debit': round(line.cash_debit or 0.0, 2),
+            'cash_credit': round(line.cash_credit or 0.0, 2),
+            'gold_18k_debit': round(line.debit_18k or 0.0, 3),
+            'gold_18k_credit': round(line.credit_18k or 0.0, 3),
+            'gold_21k_debit': round(line.debit_21k or 0.0, 3),
+            'gold_21k_credit': round(line.credit_21k or 0.0, 3),
+            'gold_22k_debit': round(line.debit_22k or 0.0, 3),
+            'gold_22k_credit': round(line.credit_22k or 0.0, 3),
+            'gold_24k_debit': round(line.debit_24k or 0.0, 3),
+            'gold_24k_credit': round(line.credit_24k or 0.0, 3),
+        })
+
+    latest_entry_row = (
+        base_query
+        .order_by(JournalEntry.date.desc())
+        .with_entities(JournalEntry.date)
+        .first()
+    )
+    last_transaction_date = latest_entry_row[0].isoformat() if latest_entry_row and latest_entry_row[0] else None
+
+    summary = {
+        'supplier': {
+            'id': supplier.id,
+            'name': supplier.name,
+            'code': supplier.supplier_code,
+        },
+        'total_entries': total_items,
+        'total_debits': {
+            'cash': round(cash_debit_total, 2),
+            'gold_18k': round(d18, 3),
+            'gold_21k': round(d21, 3),
+            'gold_22k': round(d22, 3),
+            'gold_24k': round(d24, 3),
+        },
+        'total_credits': {
+            'cash': round(cash_credit_total, 2),
+            'gold_18k': round(c18, 3),
+            'gold_21k': round(c21, 3),
+            'gold_22k': round(c22, 3),
+            'gold_24k': round(c24, 3),
+        },
+        'net': {
+            'cash': round((cash_debit_total or 0.0) - (cash_credit_total or 0.0), 2),
+            'gold_18k': round((d18 or 0.0) - (c18 or 0.0), 3),
+            'gold_21k': round((d21 or 0.0) - (c21 or 0.0), 3),
+            'gold_22k': round((d22 or 0.0) - (c22 or 0.0), 3),
+            'gold_24k': round((d24 or 0.0) - (c24 or 0.0), 3),
+        },
+        'last_transaction_date': last_transaction_date,
+        'filters': {
+            'date_from': date_from_value.isoformat() if date_from_value else None,
+            'date_to': date_to_value.isoformat() if date_to_value else None,
+        },
+    }
+
+    pagination = {
+        'page': page,
+        'per_page': per_page,
+        'total_pages': total_pages,
+        'total_items': total_items,
+    }
+
+    return jsonify({
+        'summary': summary,
+        'movements': movements,
+        'pagination': pagination,
+    })
+
+
+@api.route('/suppliers/<int:supplier_id>/statement', methods=['GET'])
+def get_supplier_weight_statement(supplier_id):
+    """
+    🆕 كشف حساب مورد بالوزن والقيمة التقييمية
+    
+    يعرض:
+    1. عمود الوزن (فعلي حسب العيار)
+    2. عمود القيمة (تقييمية بسعر اليوم)
+    
+    هذا يوضح للمستخدم:
+    - المورد دائن بالوزن (وليس نقداً)
+    - القيمة النقدية المعروضة هي تقييمية فقط (للمعلومية)
+    """
+    supplier = Supplier.query.get_or_404(supplier_id)
+    
+    # الحصول على سعر الذهب الحالي
+    gold_price_data = get_current_gold_price()
+    price_24k = gold_price_data.get('price_per_gram_24k', 0)
+    
+    # حساب أسعار العيارات
+    prices_by_karat = {
+        '18': round(price_24k * 18 / 24, 2),
+        '21': round(price_24k * 21 / 24, 2),
+        '22': round(price_24k * 22 / 24, 2),
+        '24': round(price_24k, 2),
+    }
+    
+    # البحث عن حساب المورد
+    supplier_account = None
+    if supplier.account_id:
+        supplier_account = Account.query.get(supplier.account_id)
+    
+    if not supplier_account or not supplier_account.tracks_weight:
+        return jsonify({
+            'error': 'حساب المورد لا يتتبع الوزن',
+            'supplier': {
+                'id': supplier.id,
+                'name': supplier.name,
+                'code': supplier.supplier_code,
+            }
+        }), 400
+    
+    # الحصول على الأرصدة الفعلية
+    balances = {
+        'weight_18k': round(supplier_account.balance_18k or 0.0, 3),
+        'weight_21k': round(supplier_account.balance_21k or 0.0, 3),
+        'weight_22k': round(supplier_account.balance_22k or 0.0, 3),
+        'weight_24k': round(supplier_account.balance_24k or 0.0, 3),
+    }
+    
+    # حساب القيمة التقييمية لكل عيار
+    valuations = {
+        '18k': round(balances['weight_18k'] * prices_by_karat['18'], 2),
+        '21k': round(balances['weight_21k'] * prices_by_karat['21'], 2),
+        '22k': round(balances['weight_22k'] * prices_by_karat['22'], 2),
+        '24k': round(balances['weight_24k'] * prices_by_karat['24'], 2),
+    }
+    
+    # إجمالي الوزن بالعيار الرئيسي
+    main_karat = gold_price_data.get('main_karat', 21)
+    total_weight_main_karat = round(
+        (balances['weight_18k'] * 18 / main_karat) +
+        (balances['weight_21k'] * 21 / main_karat) +
+        (balances['weight_22k'] * 22 / main_karat) +
+        (balances['weight_24k'] * 24 / main_karat),
+        3
+    )
+    
+    # إجمالي القيمة التقييمية
+    total_valuation = round(sum(valuations.values()), 2)
+    
+    return jsonify({
+        'supplier': {
+            'id': supplier.id,
+            'name': supplier.name,
+            'code': supplier.supplier_code,
+            'account_id': supplier_account.id,
+            'account_number': supplier_account.account_number,
+            'account_name': supplier_account.name,
+        },
+        'balances': {
+            'weights': balances,
+            'valuations': valuations,
+            'total_weight_main_karat': total_weight_main_karat,
+            'total_valuation': total_valuation,
+        },
+        'pricing': {
+            'prices_per_gram': prices_by_karat,
+            'price_24k': price_24k,
+            'main_karat': main_karat,
+            'price_source': gold_price_data.get('source'),
+            'price_updated_at': gold_price_data.get('updated_at'),
+        },
+        'notes': [
+            '⚠️ الوزن المعروض هو الرصيد الفعلي للمورد',
+            '💰 القيمة المعروضة هي تقييمية فقط (بسعر اليوم)',
+            '📌 المورد دائن بالوزن وليس بالنقد',
+            f'📊 السعر المستخدم: {price_24k:.2f} ريال/جرام عيار 24',
+        ]
+    })
+
 
 # Items CRUD
 @api.route('/items/<int:id>', methods=['PUT'])
@@ -874,8 +1546,6 @@ def add_item():
     يتم توليد item_code تلقائياً
     إذا لم يُدخل barcode، يتم توليده تلقائياً من item_code
     """
-    from code_generator import generate_item_code, generate_barcode_from_item_code, validate_item_code
-    
     data = request.json
     
     try:
@@ -924,6 +1594,96 @@ def add_item():
             return jsonify({'error': f'الباركود {barcode} مستخدم بالفعل'}), 409
         return jsonify({'error': str(e)}), 500
 
+# Category Management Endpoints
+@api.route('/categories', methods=['GET'])
+def get_categories():
+    """Get all categories"""
+    categories = Category.query.order_by(Category.name).all()
+    return jsonify([cat.to_dict() for cat in categories])
+
+@api.route('/categories/<int:category_id>', methods=['GET'])
+def get_category(category_id):
+    """Get a specific category"""
+    category = Category.query.get_or_404(category_id)
+    return jsonify(category.to_dict())
+
+@api.route('/categories', methods=['POST'])
+def create_category():
+    """Create a new category"""
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get('name'):
+            return jsonify({'error': 'اسم التصنيف مطلوب'}), 400
+        
+        # Check if category already exists
+        existing = Category.query.filter_by(name=data['name']).first()
+        if existing:
+            return jsonify({'error': 'التصنيف موجود بالفعل'}), 409
+        
+        category = Category(
+            name=data['name'],
+            description=data.get('description')
+        )
+        
+        db.session.add(category)
+        db.session.commit()
+        
+        return jsonify(category.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@api.route('/categories/<int:category_id>', methods=['PUT'])
+def update_category(category_id):
+    """Update a category"""
+    try:
+        category = Category.query.get_or_404(category_id)
+        data = request.get_json()
+        
+        if 'name' in data and data['name']:
+            # Check if new name already exists (excluding current category)
+            existing = Category.query.filter(
+                Category.name == data['name'],
+                Category.id != category_id
+            ).first()
+            if existing:
+                return jsonify({'error': 'التصنيف موجود بالفعل'}), 409
+            
+            category.name = data['name']
+        
+        if 'description' in data:
+            category.description = data['description']
+        
+        db.session.commit()
+        return jsonify(category.to_dict())
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@api.route('/categories/<int:category_id>', methods=['DELETE'])
+def delete_category(category_id):
+    """Delete a category"""
+    try:
+        category = Category.query.get_or_404(category_id)
+        
+        # Check if category has items
+        if len(category.items) > 0:
+            return jsonify({
+                'error': f'لا يمكن حذف التصنيف لأنه مرتبط بـ {len(category.items)} صنف'
+            }), 400
+        
+        db.session.delete(category)
+        db.session.commit()
+        
+        return jsonify({'message': 'تم حذف التصنيف بنجاح'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 # Endpoint لجلب سعر الذهب الحالي
 @api.route('/gold_price', methods=['GET'])
 def get_gold_price():
@@ -960,8 +1720,14 @@ def get_gold_price():
                 
                 print(f'[SUCCESS] تم جلب وحفظ سعر جديد: ${price_usd}/أونصة = {price_per_gram_sar:.2f} ر.س/جم')
                 
+                # حساب سعر العيار الرئيسي
+                main_karat = get_main_karat()
+                price_main_karat = (price_per_gram_sar * main_karat) / 24.0
+                
                 return jsonify({
                     'price_24k': round(price_per_gram_sar, 2),
+                    'price_main_karat': round(price_main_karat, 2),
+                    'main_karat': main_karat,
                     'price_usd_per_oz': price_usd,
                     'currency': 'ر.س',
                     'date': datetime.now().isoformat(),
@@ -972,8 +1738,13 @@ def get_gold_price():
             # إذا فشل الجلب واستخدم آخر سعر محفوظ
             if latest:
                 price_per_gram_sar = (latest.price / 31.1035) * 3.75
+                main_karat = get_main_karat()
+                price_main_karat = (price_per_gram_sar * main_karat) / 24.0
+                
                 return jsonify({
                     'price_24k': round(price_per_gram_sar, 2),
+                    'price_main_karat': round(price_main_karat, 2),
+                    'main_karat': main_karat,
                     'price_usd_per_oz': latest.price,
                     'currency': 'ر.س',
                     'date': latest.date.isoformat() if latest.date else None,
@@ -983,8 +1754,13 @@ def get_gold_price():
     # إرجاع السعر المحفوظ
     if latest:
         price_per_gram_sar = (latest.price / 31.1035) * 3.75
+        main_karat = get_main_karat()
+        price_main_karat = (price_per_gram_sar * main_karat) / 24.0
+        
         return jsonify({
             'price_24k': round(price_per_gram_sar, 2),
+            'price_main_karat': round(price_main_karat, 2),
+            'main_karat': main_karat,
             'price_usd_per_oz': latest.price,
             'currency': 'ر.س',
             'date': latest.date.isoformat() if latest.date else None,
@@ -1125,49 +1901,114 @@ def get_account_id_for_mapping(operation_type, account_type):
     if mapping:
         return mapping.account_id
     
-    # 2. استخدام الحسابات الافتراضية (Fallback)
-    # تم تحديث الأرقام لتطابق دليل الحسابات الفعلي
+    # تم تحديث الأرقام للترقيم القديم (1, 11, 110 للمالية و 7 للمذكرة)
     DEFAULT_ACCOUNTS = {
-        # المخزون (حسب العيار)
-        'inventory_18k': 25,  # مخزون ذهب عيار 18
-        'inventory_21k': 24,  # مخزون ذهب عيار 21  
-        'inventory_22k': 23,  # مخزون ذهب عيار 22
-        'inventory_24k': 22,  # مخزون ذهب عيار 24
+        # المخزون النقدي (حسب العيار)
+        'inventory_18k': 1300,  # مخزون ذهب عيار 18
+        'inventory_21k': 1310,  # مخزون ذهب عيار 21  
+        'inventory_22k': 1320,  # مخزون ذهب عيار 22
+        'inventory_24k': 1330,  # مخزون ذهب عيار 24
+        
+        # 🆕 مخزون أجور المصنعية
+    'manufacturing_wage_inventory': 1340,  # مخزون أجور المصنعية
+        
+        # المخزون الوزني (حسب العيار) - حسابات المذكرة
+        'inventory_weight_18k': 7300,  # مخزون وزني عيار 18
+        'inventory_weight_21k': 7310,  # مخزون وزني عيار 21
+        'inventory_weight_22k': 7320,  # مخزون وزني عيار 22
+        'inventory_weight_24k': 7330,  # مخزون وزني عيار 24
         
         # النقدية والبنوك
-        'cash': 15,           # صندوق النقدية
+        'cash': 1100,           # الصندوق
+        'bank': 1110,           # بنك الأهلي
+        'bank_rajhi': 1120,     # بنك الراجحي
         
         # العملاء والموردين
-        'customers': 5,       # العملاء (حساب تجميعي)
-        'suppliers': 38,      # الموردين
+        'customers': 1200,      # عملاء بيع ذهب
+        'customers_scrap': 1210,  # عملاء شراء كسر
+        'suppliers': 210,       # موردو ذهب خام
+        'suppliers_processed': 220,  # موردو ذهب مشغول
         
-        # الإيرادات والتكاليف (قديمة - للتوافق)
-        'revenue': 55,        # مبيعات ذهب جديد
-        'cost': 83,           # تكلفة مبيعات الذهب
+        # الإيرادات
+        'revenue': 40,          # إيرادات بيع ذهب
+        'sales_gold_new': 40,   # إيرادات بيع ذهب
+        'sales_wage': 41,       # إيرادات مصنعية
+    'sales_returns': 40,    # مردودات المبيعات (تخفيض الإيراد)
         
-        # 🆕 حسابات النظام المزدوج (نقد + وزن)
-        'sales_gold_new': 55,      # مبيعات ذهب جديد (حساب 400)
-        'purchase_scrap': 95,      # مشتريات الكسر والتسكير (حساب 431)
-        
-        # العمولات
-        'commission': 79,     # مصاريف عمولات
-        'commission_vat': 9,  # ضريبة القيمة المضافة (مدينة)
-        
-        # الضرائب
-        'vat_payable': 40,    # ضريبة القيمة المضافة - دائنة
-        'vat_receivable': 9,  # ضريبة القيمة المضافة (مدينة)
-        
-        # حسابات إضافية
-        'profit_loss': 50,    # حساب الأرباح والخسائر
-        'sales_returns': 54,  # مردودات ومسموحات المبيعات
-        'purchase_returns': 54,  # مردودات المشتريات (نفس حساب مردودات المبيعات)
+        # التكاليف
+        'cost': 50,             # تكلفة المبيعات
+        'cost_of_sales': 50,    # تكلفة المبيعات
+    'purchase_returns': 50, # مردودات المشتريات (تعديل التكلفة)
 
+    # الضرائب والعمولات
+    'vat_payable': 2210,        # ضريبة القيمة المضافة المستحقة
+    'vat_receivable': 1500,     # ضريبة القيمة المضافة (مدفوعة)
+    'commission': 5150,         # مصروف عمولات الدفع الإلكتروني
+    'commission_vat': 1501,     # ضريبة عمولات نقاط البيع (مدفوعة)
+        
+        # المصروفات
+        'operating_expenses': 51,  # مصاريف تشغيلية
+        
+        # حقوق الملكية
+        'capital': 31,          # رأس المال
+        'retained_earnings': 32,  # الأرباح المحتجزة
+        
         # حسابات للجسر والمصنعية في مشتريات الموردين
         'supplier_bridge': None,
-        'manufacturing_wage': None,
+    'manufacturing_wage': 5105,  # مصروفات أجور المصنعية
     }
     
-    return DEFAULT_ACCOUNTS.get(account_type)
+    default_account_number = DEFAULT_ACCOUNTS.get(account_type)
+    if default_account_number is None:
+        return None
+
+    # أرقام fallback تمثل account_number وليس المعرف الفعلي، لذلك نحولها هنا
+    account = Account.query.filter_by(account_number=str(default_account_number)).first()
+    if account:
+        return account.id
+
+    if account_type == 'manufacturing_wage':
+        return _ensure_manufacturing_wage_expense_account()
+
+    return None
+
+
+_ACCOUNT_NUMBER_CACHE = {}
+
+
+def get_account_id_by_number(account_number):
+    """Fast lookup for account.id using its structured account number."""
+    if not account_number:
+        return None
+    key = str(account_number)
+    if key in _ACCOUNT_NUMBER_CACHE:
+        return _ACCOUNT_NUMBER_CACHE[key]
+    account = Account.query.filter_by(account_number=key).first()
+    account_id = account.id if account else None
+    _ACCOUNT_NUMBER_CACHE[key] = account_id
+    return account_id
+
+
+def _ensure_manufacturing_wage_expense_account():
+    """Ensure a dedicated manufacturing wage expense account exists and return its ID."""
+    target_number = '5105'
+    cached = get_account_id_by_number(target_number)
+    if cached:
+        return cached
+
+    parent = Account.query.filter_by(account_number='51').first()
+    account = Account(
+        account_number=target_number,
+        name='مصروفات أجور المصنعية',
+        type='expense',
+        transaction_type='cash',
+        tracks_weight=False,
+        parent_id=parent.id if parent else None,
+    )
+    db.session.add(account)
+    db.session.commit()
+    _ACCOUNT_NUMBER_CACHE[target_number] = account.id
+    return account.id
 
 
 def get_inventory_average_cost(karat):
@@ -1186,37 +2027,65 @@ def get_inventory_average_cost(karat):
     مثال:
         المخزون: 8 جم بتكلفة 2,550 ر.س
         المتوسط: 2,550 / 8 = 318.75 ر.س/جم
+        
+    ملاحظة هامة (النظام الهجين):
+        - النقد يُحفظ في الحساب المالي (1300-1330)
+        - الوزن يُحفظ في حساب المذكرة الوزني (71300-71330)
+        - لذلك نبحث في الحسابين معاً
     """
     from sqlalchemy import func
     from backend.models import JournalEntryLine
     
-    # تحديد حساب المخزون حسب العيار
-    inventory_account_map = {
-        '18': 25,  # مخزون ذهب عيار 18
-        '21': 24,  # مخزون ذهب عيار 21
-        '22': 23,  # مخزون ذهب عيار 22
-        '24': 22   # مخزون ذهب عيار 24
+    # تحديد حساب المخزون حسب العيار (الترقيم القديم)
+    inventory_account_map_cash = {
+        '18': '1300',  # مخزون ذهب عيار 18 (مالي - نقد)
+        '21': '1310',  # مخزون ذهب عيار 21 (مالي - نقد)
+        '22': '1320',  # مخزون ذهب عيار 22 (مالي - نقد)
+        '24': '1330'   # مخزون ذهب عيار 24 (مالي - نقد)
     }
     
-    account_id = inventory_account_map.get(str(karat))
-    if not account_id:
+    inventory_account_map_weight = {
+        '18': '71300',  # مخزون ذهب عيار 18 (وزني - مذكرة)
+        '21': '71310',  # مخزون ذهب عيار 21 (وزني - مذكرة)
+        '22': '71320',  # مخزون ذهب عيار 22 (وزني - مذكرة)
+        '24': '71330'   # مخزون ذهب عيار 24 (وزني - مذكرة)
+    }
+    
+    cash_account_number = inventory_account_map_cash.get(str(karat))
+    weight_account_number = inventory_account_map_weight.get(str(karat))
+    
+    if not cash_account_number or not weight_account_number:
         return 0.0
     
-    # حساب المجاميع من جدول journal_entry_line
-    result = db.session.query(
+    # 1. حساب إجمالي النقد من الحساب المالي
+    cash_account = Account.query.filter_by(account_number=cash_account_number).first()
+    if not cash_account:
+        return 0.0
+    
+    cash_result = db.session.query(
         func.coalesce(func.sum(JournalEntryLine.cash_debit), 0).label('total_debit_cash'),
-        func.coalesce(func.sum(JournalEntryLine.cash_credit), 0).label('total_credit_cash'),
+        func.coalesce(func.sum(JournalEntryLine.cash_credit), 0).label('total_credit_cash')
+    ).filter(
+        JournalEntryLine.account_id == cash_account.id
+    ).first()
+    
+    total_cash = (cash_result.total_debit_cash or 0) - (cash_result.total_credit_cash or 0)
+    
+    # 2. حساب إجمالي الوزن من حساب المذكرة الوزني
+    weight_account = Account.query.filter_by(account_number=weight_account_number).first()
+    if not weight_account:
+        return 0.0
+    
+    weight_result = db.session.query(
         func.coalesce(func.sum(getattr(JournalEntryLine, f'debit_{karat}k')), 0).label('total_debit_weight'),
         func.coalesce(func.sum(getattr(JournalEntryLine, f'credit_{karat}k')), 0).label('total_credit_weight')
     ).filter(
-        JournalEntryLine.account_id == account_id
+        JournalEntryLine.account_id == weight_account.id
     ).first()
     
-    # حساب الرصيد (المدين - الدائن)
-    total_cash = (result.total_debit_cash or 0) - (result.total_credit_cash or 0)
-    total_weight = (result.total_debit_weight or 0) - (result.total_credit_weight or 0)
+    total_weight = (weight_result.total_debit_weight or 0) - (weight_result.total_credit_weight or 0)
     
-    # حساب المتوسط
+    # 3. حساب المتوسط
     if total_weight > 0:
         average_cost = total_cash / total_weight
         return round(average_cost, 2)
@@ -1251,7 +2120,8 @@ def calculate_profit_in_gold(items_sold):
         }
         
     المعادلة:
-        الربح بالذهب (جم) = الربح النقدي (ر.س) ÷ متوسط سعر الشراء (ر.س/جم)
+        الربح النقدي يعتمد على متوسط تكلفة الجرام
+        الربح بالذهب (جم) = الربح النقدي (ر.س) ÷ سعر البيع المباشر للفاتورة (ر.س/جم)
     """
     total_profit_cash = 0.0
     total_profit_gold = 0.0
@@ -1266,14 +2136,15 @@ def calculate_profit_in_gold(items_sold):
         # 1. حساب متوسط سعر الشراء (تكلفة/جم)
         avg_cost_per_gram = get_inventory_average_cost(karat)
         
-        # 2. حساب التكلفة الإجمالية لهذا الصنف
+        # 2. حساب متوسط سعر البيع (سعر الفاتورة المباشر)
+        sale_price_per_gram = (sale_price / weight) if weight > 0 else 0
+        
+        # 3. حساب التكلفة والربح النقدي باستخدام متوسط التكلفة/جم
         item_cost = weight * avg_cost_per_gram
+        profit_cash = (sale_price_per_gram - avg_cost_per_gram) * weight if weight > 0 else 0
         
-        # 3. حساب الربح النقدي
-        profit_cash = sale_price - item_cost
-        
-        # 4. حساب الربح بالذهب
-        profit_gold = (profit_cash / avg_cost_per_gram) if avg_cost_per_gram > 0 else 0
+        # 4. حساب الربح بالذهب باستخدام سعر الفاتورة المباشر
+        profit_gold = (profit_cash / sale_price_per_gram) if sale_price_per_gram > 0 else 0
         
         # 5. حساب نسبة الربح
         profit_percentage = (profit_cash / item_cost * 100) if item_cost > 0 else 0
@@ -1292,17 +2163,24 @@ def calculate_profit_in_gold(items_sold):
                 'total_cost': 0,
                 'profit_cash': 0,
                 'profit_gold': 0,
+                'sale_price_per_gram': 0,
                 'profit_percentage': 0
             }
         
-        details_by_karat[karat]['weight_sold'] += weight
-        details_by_karat[karat]['sale_price'] += sale_price
-        details_by_karat[karat]['total_cost'] += item_cost
-        details_by_karat[karat]['profit_cash'] += profit_cash
-        details_by_karat[karat]['profit_gold'] += profit_gold
-        details_by_karat[karat]['profit_percentage'] = (
-            (details_by_karat[karat]['profit_cash'] / details_by_karat[karat]['total_cost'] * 100)
-            if details_by_karat[karat]['total_cost'] > 0 else 0
+        details = details_by_karat[karat]
+        details['weight_sold'] += weight
+        details['sale_price'] += sale_price
+        details['total_cost'] += item_cost
+        details['profit_cash'] += profit_cash
+        details['profit_gold'] += profit_gold
+        details['avg_cost_per_gram'] = avg_cost_per_gram
+        details['sale_price_per_gram'] = (
+            details['sale_price'] / details['weight_sold']
+            if details['weight_sold'] > 0 else 0
+        )
+        details['profit_percentage'] = (
+            (details['profit_cash'] / details['total_cost'] * 100)
+            if details['total_cost'] > 0 else 0
         )
     
     return {
@@ -1324,15 +2202,33 @@ def add_invoice():
 
     # دعم كل من invoice_type و transaction_type للتوافق مع الشاشات المختلفة
     invoice_type = data.get('invoice_type')
+    transaction_type = data.get('transaction_type')
+    gold_type = data.get('gold_type', 'new')
+    
     if not invoice_type:
         # إذا كان transaction_type موجود، استخدمه لتحديد invoice_type
-        transaction_type = data.get('transaction_type', 'sell')
+        transaction_type = transaction_type or 'sell'
         if transaction_type == 'sell':
             invoice_type = 'بيع'
         elif transaction_type == 'buy':
-            invoice_type = 'شراء من عميل'
+            # تحديد نوع الشراء بناءً على gold_type ووجود supplier_id
+            if gold_type == 'new' or data.get('supplier_id'):
+                invoice_type = 'شراء من مورد'
+            else:
+                invoice_type = 'شراء من عميل'
         else:
             invoice_type = 'بيع'  # افتراضي
+    elif invoice_type == 'شراء':
+        # تحويل 'شراء' العام إلى نوع محدد
+        # ملاحظة: Flutter قد يرسل customer_id حتى للمورد، لذا نعتمد على gold_type
+        if gold_type == 'new':
+            invoice_type = 'شراء من مورد'
+            # نقل customer_id إلى supplier_id إذا لم يكن supplier_id موجوداً
+            if not data.get('supplier_id') and data.get('customer_id'):
+                print(f"⚠️ Converting customer_id to supplier_id for 'شراء من مورد'")
+                data['supplier_id'] = data.pop('customer_id')
+        else:
+            invoice_type = 'شراء من عميل'
     
     if not invoice_type:
         return jsonify({'error': 'invoice_type or transaction_type is required'}), 400
@@ -1371,6 +2267,7 @@ def add_invoice():
     # 2. payments (array من وسائل متعددة - الميزة الجديدة)
     
     payment_method_id = data.get('payment_method_id')  # للتوافق مع الكود القديم
+    safe_box_id = data.get('safe_box_id')
     payments_data = data.get('payments', [])  # 🆕 دعم وسائل متعددة
     payment_method_obj = None  # نستخدمه لاحقاً عند الحاجة للخزينة الافتراضية
     karat_lines_data = data.get('karat_lines', [])
@@ -1423,6 +2320,7 @@ def add_invoice():
             commission_amount = data['total'] * (payment_method_obj.commission_rate / 100)
             net_amount = data['total'] - commission_amount
     
+    wage_mode_snapshot = _get_manufacturing_wage_mode()
     print(f"🔴 ENTERING try block for invoice creation, invoice_type={invoice_type}")
     try:
         # --- 1. Create Invoice and Items ---
@@ -1486,6 +2384,14 @@ def add_invoice():
 
             item_id = item_data.get('item_id')
             item = Item.query.get(item_id) if item_id else None
+
+            if (item_data.get('create_inline') or False) and not item:
+                try:
+                    item = create_item_from_invoice_payload(item_data)
+                    item_id = item.id
+                except InlineItemCreationError as exc:
+                    db.session.rollback()
+                    return jsonify({'error': str(exc)}), 400
 
             if item_id and not item:
                 return jsonify({'error': f"Item {item_id} not found"}), 404
@@ -1592,7 +2498,17 @@ def add_invoice():
 
         if computed_total_weight > 0:
             new_invoice.total_weight = round(computed_total_weight, 4)
+        elif data.get('items'):
+            print("⚠️ Invoice contains items but computed_total_weight=0. Injecting fallback weight.")
+            fallback_weight = sum(
+                _to_float(item.get('weight'))
+                or _to_float(item.get('total_weight'))
+                or 0.0 for item in data.get('items', [])
+            )
+            fallback_weight = fallback_weight if fallback_weight > 0 else len(data.get('items', [])) * 0.001
+            new_invoice.total_weight = round(max(fallback_weight, 0.001), 4)
 
+        new_invoice.manufacturing_wage_mode_snapshot = wage_mode_snapshot
         db.session.add(new_invoice)
         db.session.flush()
         print(f"🟢 Invoice #{new_invoice.id} created successfully!")
@@ -1659,8 +2575,9 @@ def add_invoice():
             item_id = item_data.get('item_id')
             item = Item.query.get(item_id) if item_id else None
 
-            karat_value = item.karat if item else item_data.get('karat')
-            weight_value = item.weight if item else item_data.get('weight')
+            # ✅ أولوية لبيانات الوزن/العيار المرسلة مع الفاتورة
+            karat_value = item_data.get('karat') if item_data.get('karat') not in (None, '') else (item.karat if item else None)
+            weight_value = item_data.get('weight') if item_data.get('weight') is not None else (item.weight if item else None)
 
             if weight_value is None:
                 weight_value = item_data.get('total_weight')
@@ -1700,6 +2617,28 @@ def add_invoice():
         # إذا لم يكن هناك طرف، استخدم الصندوق
         if not party_account:
             party_account = cash_account
+
+        # معرف حساب العميل/الطرف المستخدم في القيود اللاحقة (مثل القيود الوزنية)
+        customer_account_id = None
+        # ✅ الصحيح: حساب النقدية الوزني هو 71100 (وليس 7100)
+        default_memo_cash_account = Account.query.filter_by(account_number='71100').first()
+        default_memo_cash_account_id = default_memo_cash_account.id if default_memo_cash_account else None
+
+        memo_party_account = None
+        if party_account and party_account.memo_account_id:
+            memo_party_account = Account.query.get(party_account.memo_account_id)
+            if not memo_party_account:
+                print(
+                    f"⚠️ Linked memo account {party_account.memo_account_id} for account {party_account.account_number} not found. "
+                    "Falling back to default memo cash account."
+                )
+
+        if memo_party_account:
+            customer_account_id = memo_party_account.id
+        elif default_memo_cash_account_id:
+            customer_account_id = default_memo_cash_account_id
+        elif party_account and party_account.tracks_weight:
+            customer_account_id = party_account.id
 
         # --- 4. Create Journal Entry ---
         journal_desc = f"فاتورة {invoice_type} رقم #{new_invoice.invoice_type_id}"
@@ -1759,8 +2698,8 @@ def add_invoice():
             
             # الحصول على الحسابات من الربط المحاسبي
             cash_acc_id = get_account_id_for_mapping('بيع', 'cash')
-            sales_gold_new_acc_id = get_account_id_for_mapping('بيع', 'sales_gold_new') or 55  # الإيرادات
-            cost_of_sales_acc_id = get_account_id_for_mapping('بيع', 'cost_of_sales') or 83  # تكلفة المبيعات
+            sales_gold_new_acc_id = get_account_id_for_mapping('بيع', 'sales_gold_new') or get_account_id_for_mapping('بيع', 'revenue')
+            cost_of_sales_acc_id = get_account_id_for_mapping('بيع', 'cost_of_sales')
             vat_payable_acc_id = get_account_id_for_mapping('بيع', 'vat_payable')
             commission_acc_id = get_account_id_for_mapping('بيع', 'commission')
             commission_vat_acc_id = get_account_id_for_mapping('بيع', 'commission_vat')
@@ -1800,7 +2739,8 @@ def add_invoice():
                             journal_entry_id=journal_entry.id,
                             account_id=safe_box.account.id,
                             cash_debit=pm_net,
-                            description=f"استلام دفعة عبر {pm_obj.name} - {safe_box.name}"
+                            description=f"استلام دفعة عبر {pm_obj.name} - {safe_box.name}",
+                            apply_golden_rule=False
                         )
                     
                     # قيد العمولة وضريبتها
@@ -1809,7 +2749,8 @@ def add_invoice():
                             journal_entry_id=journal_entry.id,
                             account_id=commission_acc_id,
                             cash_debit=pm_commission,
-                            description=f"عمولة {pm_obj.name}"
+                            description=f"عمولة {pm_obj.name}",
+                            apply_golden_rule=False
                         )
                     
                     if pm_commission_vat > 0 and commission_vat_acc_id:
@@ -1817,7 +2758,8 @@ def add_invoice():
                             journal_entry_id=journal_entry.id,
                             account_id=commission_vat_acc_id,
                             cash_debit=pm_commission_vat,
-                            description=f"ضريبة عمولة {pm_obj.name}"
+                            description=f"ضريبة عمولة {pm_obj.name}",
+                            apply_golden_rule=False
                         )
             
             # وسيلة دفع واحدة
@@ -1836,15 +2778,17 @@ def add_invoice():
                         journal_entry_id=journal_entry.id,
                         account_id=safe_box.account.id,
                         cash_debit=actual_debit_amount,
-                        description=f"استلام دفعة عبر {payment_method_obj.name} - {safe_box.name}"
+                        description=f"استلام دفعة عبر {payment_method_obj.name} - {safe_box.name}",
+                        apply_golden_rule=False
                     )
                 else:
                     acc_id = cash_acc_id or 15
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=acc_id,
-                        cash_debit=total_cash,
-                        description="استلام نقدي"
+                        cash_debit=actual_debit_amount,
+                        description="استلام نقدي",
+                        apply_golden_rule=False
                     )
                 
                 # قيد العمولة
@@ -1853,7 +2797,8 @@ def add_invoice():
                         journal_entry_id=journal_entry.id,
                         account_id=commission_acc_id,
                         cash_debit=commission_amount,
-                        description="عمولة الدفع"
+                        description="عمولة الدفع",
+                        apply_golden_rule=False  # تبقى نقدية ولا تتحول لوزن
                     )
             
             # لا توجد وسيلة دفع - استخدام الصندوق
@@ -1863,7 +2808,8 @@ def add_invoice():
                     journal_entry_id=journal_entry.id,
                     account_id=acc_id,
                     cash_debit=total_cash,
-                    description="استلام نقدي"
+                    description="استلام نقدي",
+                    apply_golden_rule=False
                 )
             
             # ✅ دائن حساب المبيعات (الإيراد بدون الضريبة)
@@ -1891,7 +2837,8 @@ def add_invoice():
                 journal_entry_id=journal_entry.id,
                 account_id=sales_gold_new_acc_id,
                 cash_credit=sales_amount,
-                description="مبيعات ذهب (بدون ضريبة)"
+                description="مبيعات ذهب (بدون ضريبة)",
+                apply_golden_rule=False
             )
             
             # قيد الضريبة (إن وجدت)
@@ -1901,20 +2848,26 @@ def add_invoice():
                     journal_entry_id=journal_entry.id,
                     account_id=vat_payable_acc_id,
                     cash_credit=total_tax,
-                    description="ضريبة القيمة المضافة"
+                    description="ضريبة القيمة المضافة",
+                    apply_golden_rule=False
                 )
             else:
                 print(f"⚠️ Skipping VAT entry: total_tax={total_tax}, vat_payable_acc_id={vat_payable_acc_id}")
             
             # ============================================
-            # القيد الثاني: إثبات التكلفة (متوسط المخزون)
+            # القيد الثاني: إثبات التكلفة (متوسط المخزون + المصنعية)
             # من حـ/ تكلفة المبيعات → إلى حـ/ المخزون
+            # نسجل النقد فقط في الحسابات الأساسية
+            # الأوزان تُسجل في حسابات المذكرة الوزنية فقط
             # ============================================
             
-            total_cost_cash = 0.0  # إجمالي التكلفة النقدية
+            total_cost_cash = 0.0  # إجمالي التكلفة النقدية (وزن × متوسط)
+            total_weight_sold = 0.0  # إجمالي الوزن المباع
             
             for karat, weight in gold_by_karat.items():
                 if weight > 0 and karat in inventory_accounts:
+                    total_weight_sold += weight
+                    
                     # 1. حساب متوسط سعر الشراء لهذا العيار
                     avg_cost_per_gram = get_inventory_average_cost(karat)
                     
@@ -1922,49 +2875,339 @@ def add_invoice():
                     item_cost_cash = round(weight * avg_cost_per_gram, 2)
                     total_cost_cash += item_cost_cash
                     
-                    # 3. مدين تكلفة المبيعات (نقد + وزن)
+                    # 3. مدين تكلفة المبيعات (نقد فقط)
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=cost_of_sales_acc_id,
                         cash_debit=item_cost_cash,
-                        **{f"weight_{karat}k_debit": weight},
-                        description=f"تكلفة المبيعات عيار {karat}"
+                        description=f"تكلفة المبيعات عيار {karat}",
+                        apply_golden_rule=False
                     )
                     
-                    # 4. دائن المخزون (نقد + وزن)
-                    inv_acc_id = inventory_accounts[karat]
+                    # 4. دائن المخزون (نقد فقط في الحسابات الأساسية)
+                    # الوزن سيُسجل في حسابات المذكرة الوزنية أدناه
+                    inv_acc_id = inventory_accounts.get(karat)
+                    if not inv_acc_id:
+                        raise ValueError(f"No inventory account configured for karat {karat}")
+                    
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=inv_acc_id,
                         cash_credit=item_cost_cash,
-                        **{f"weight_{karat}k_credit": weight},
-                        description=f"خصم من مخزون عيار {karat}"
+                        description=f"خصم من مخزون عيار {karat}",
+                        apply_golden_rule=False
                     )
+            
+            # ============================================
+            # 🆕 ملاحظة الهامة: نظام المصنعية الجديد
+            # - في الشراء: المصنعية تُضاف لحساب 1340 (مخزون أجور المصنعية)
+            # - في البيع: المصنعية تُستهلك من 1340 وتُعترف كمصروف (وليس كجزء من تكلفة المبيعات)
+            # - لا تُضاف للمبلغ المستخدم لحساب تكلفة المبيعات النقدية
+            # - الهدف: فصل المصنعية عن تكلفة المشتريات والحفاظ على شفافية التكاليف
+            # ============================================
+
+            # حساب إجمالي المصنعية من items و karat_lines
+            total_wage_cash_for_cost = 0.0
+
+            # المصنعية من items
+            for item_data in data.get('items', []):
+                item_wage = _to_float(item_data.get('wage', 0), 0.0)
+                quantity = _to_float(item_data.get('quantity', 1), 1.0)
+                total_wage_cash_for_cost += item_wage * quantity
+
+            # المصنعية من karat_lines (القيمة المرسلة للجرام الواحد ➜ نضرب في الوزن)
+            if karat_lines_data and isinstance(karat_lines_data, list):
+                for line_data in karat_lines_data:
+                    wage_rate = _to_float(line_data.get('manufacturing_wage_cash', 0), 0.0)
+                    weight_val = _to_float(line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight'))), 0.0)
+                    total_wage_cash_for_cost += wage_rate * weight_val
+
+            print(f"💰 Total manufacturing wage for sale: {total_wage_cash_for_cost} SAR")
+
+            # 🆕 استهلاك المصنعية من مخزون أجور المصنعية (1340)
+            wage_inventory_account_id = get_account_id_by_number('1340')
+
+            if total_wage_cash_for_cost > 0:
+                if not wage_inventory_account_id:
+                    # تحذير: إذا لم يكن الحساب موجوداً
+                    print("⚠️ حساب مخزون أجور المصنعية (1340) غير موجود")
+                else:
+                    # بدلًا من إثبات المصنعية ضمن تكلفة المبيعات، نثبتها كمصروف تشغيلى
+                    # نحاول الحصول على حساب مصروف المصنعية المخصص، وإلا نستخدم حساب المصروفات التشغيلية العام (51)
+                    manufacturing_wage_expense_acc_id = (
+                        get_account_id_for_mapping('بيع', 'manufacturing_wage')
+                        or _ensure_manufacturing_wage_expense_account()
+                        or get_account_id_for_mapping('بيع', 'operating_expenses')
+                        or get_account_id_by_number('51')
+                    )
+
+                    if not manufacturing_wage_expense_acc_id:
+                        # إذا لم نجد حساب مصروفات، نستخدم حساب تكلفة المبيعات كحل احترازي لكن بدون إضافة للمجموع
+                        manufacturing_wage_expense_acc_id = cost_of_sales_acc_id
+
+                    # القيد: من حـ/ مصروفات أجور المصنعية → إلى حـ/ مخزون أجور المصنعية
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=manufacturing_wage_expense_acc_id,
+                        cash_debit=round(total_wage_cash_for_cost, 2),
+                        description="استهلاك أجور المصنعية - مصروفات",
+                        apply_golden_rule=False
+                    )
+
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=wage_inventory_account_id,
+                        cash_credit=round(total_wage_cash_for_cost, 2),
+                        description="خصم من مخزون أجور المصنعية",
+                        apply_golden_rule=False
+                    )
+
+                    # ملاحظة: لا نضيف قيمة المصنعية إلى total_cost_cash - لأنها تُعامل كمصروف منفصل
+                    print(f"✅ Wage inventory consumed and expensed: {total_wage_cash_for_cost} SAR (1340 -> expense)")
+            
+            # ============================================
+            # 🆕 قيود المذكرة الوزنية (Weight Ledger System)
+            # القاعدة الذهبية: كل المبالغ تُحول إلى وزن ÷ السعر المباشر
+            # الاستثناء: المخزون يُسجل بالوزن الفعلي فقط
+            # ============================================
+            
+            # ✅ الحصول على السعر المباشر للذهب من السوق (وليس من سعر البيع!)
+            gold_price_data = get_current_gold_price()
+            # 🔧 FIXED: استخدام سعر العيار الرئيسي بدلاً من 24k
+            direct_gold_price_main = gold_price_data.get('price_per_gram_main_karat', 
+                                                         gold_price_data.get('price_main_karat', 350.0))
+            
+            print(f"💰 Direct gold price (main karat): {direct_gold_price_main} SAR/gram")
+            print(f"📊 Sale total: {total_cash} SAR for {total_weight_sold} grams")
+            
+            # ============================================
+            # A) القيد الوزني للنقدية والإيرادات (الوزن الفعلي فقط)
+            # ============================================
+            
+            # 1) مدين: الصندوق الوزني (الوزن الفعلي المباع فقط)
+            # 🔧 FIX: استخدام الوزن الفعلي بدلاً من التحويل من المبلغ النقدي
+            # القاعدة: كل جرام مباع = جرام واحد في الصندوق الوزني
+            # ❌ لا تحويل من نقد إلى وزن في البيع
+            # ✅ الوزن الفعلي فقط
+            
+            print(f"⚖️ Recording actual weight sold: {total_weight_sold} grams (no cash conversion)")
+            
+            memo_cash_account_id = customer_account_id or default_memo_cash_account_id
+            memo_cash_entries_created = False
+
+            if not memo_cash_account_id:
+                print("⚠️ Skipping memo cash weight entries: no memo cash account available")
+            else:
+                # استخدام الوزن الفعلي لكل عيار
+                for karat, weight in gold_by_karat.items():
+                    if weight > 0:
+                        weight_params = {}
+                        weight_params[f'weight_{karat}k_debit'] = weight  # ✅ الوزن الفعلي
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=memo_cash_account_id,
+                            **weight_params,
+                            description=f"صندوق وزني - وزن فعلي عيار {karat}"
+                        )
+                        memo_cash_entries_created = True
+            
+            # 2) دائن: الإيرادات الوزنية (الوزن الفعلي المباع - لا تحويل!)
+            # 
+            # ⚠️ القاعدة الذهبية الحاسمة:
+            # الإيراد الوزني = الوزن الفعلي المباع فقط (10 جرام = 10 جرام)
+            # ❌ لا تحويل من النقد إلى وزن
+            # ❌ المصنعية لا تدخل في الإيراد الوزني أبداً
+            # ✅ الوزن الفعلي فقط، بدون أي إضافات أو تحويلات
+            # 
+            sales_account = db.session.query(Account).get(sales_gold_new_acc_id)
+            if not memo_cash_entries_created:
+                print("⚠️ Skipping memo sales weight entries: no matching memo cash entry was recorded")
+            elif sales_account and sales_account.memo_account_id:
+                for karat, weight in gold_by_karat.items():
+                    if weight > 0:
+                        # ✅ الوزن الفعلي المباع فقط (بدون أي تحويل أو إضافة)
+                        karat_revenue_weight = weight
+                        
+                        weight_params = {}
+                        weight_params[f'weight_{karat}k_credit'] = karat_revenue_weight
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=sales_account.memo_account_id,
+                            **weight_params,
+                            description=f"إيرادات وزنية (وزن فعلي) - مبيعات عيار {karat}"
+                        )
+            else:
+                print(f"⚠️ No memo account for sales revenue (account {sales_gold_new_acc_id})")
+            
+            # ============================================
+            # B) القيد الوزني للمخزون (استثناء - وزن فعلي وليس تحويل)
+            # ============================================
+            
+            # 1) دائن: المخزون الوزني (الوزن الفعلي المباع)
+            # يجب تسجيله في حساب المذكرة الخاص بالمخزون
+            for karat, weight in gold_by_karat.items():
+                if weight > 0 and karat in inventory_accounts:
+                    inv_acc_id = inventory_accounts[karat]
+                    
+                    # الحصول على حساب المذكرة للمخزون
+                    inv_account = db.session.query(Account).get(inv_acc_id)
+                    if inv_account and inv_account.memo_account_id:
+                        # إنشاء قيد وزني في حساب مذكرة المخزون
+                        weight_params = {}
+                        weight_params[f'weight_{karat}k_credit'] = weight  # ✅ الوزن الفعلي (استثناء)
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=inv_account.memo_account_id,
+                            **weight_params,
+                            description=f"خصم مخزون وزني فعلي - عيار {karat}"
+                        )
+                    else:
+                        print(f"⚠️ No memo account for inventory {karat}k (account {inv_acc_id})")
+            
+            # ============================================
+            # 🆕 2) مدين: تكلفة المبيعات الوزنية (الوزن + المصنعية)
+            # القاعدة: تكلفة = الوزن الفعلي + (المصنعية ÷ السعر المباشر)
+            # ============================================
+            
+            # حساب إجمالي المصنعية من items و karat_lines
+            total_wage_cash = 0.0
+            
+            # المصنعية من items
+            for item_data in data.get('items', []):
+                item_wage = _to_float(item_data.get('wage', 0), 0.0)
+                quantity = _to_float(item_data.get('quantity', 1), 1.0)
+                total_wage_cash += item_wage * quantity
+            
+            # المصنعية من karat_lines (سعر للجرام ➜ إجمالي = السعر × الوزن)
+            if karat_lines_data and isinstance(karat_lines_data, list):
+                for line_data in karat_lines_data:
+                    wage_rate = _to_float(line_data.get('manufacturing_wage_cash', 0), 0.0)
+                    weight_val = _to_float(line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight'))), 0.0)
+                    total_wage_cash += wage_rate * weight_val
+            
+            print(f"💰 Total manufacturing wage: {total_wage_cash} SAR")
+            
+            # تحويل المصنعية إلى وزن (مذكرة فقط)
+            wage_weight_equivalent = (
+                total_wage_cash / direct_gold_price_main
+                if (direct_gold_price_main and direct_gold_price_main > 0)
+                else 0
+            )
+            print(f"⚖️ Wage weight equivalent (memo): {wage_weight_equivalent} grams at {direct_gold_price_main} SAR/gram")
+
+            # حساب حساب المذكرة لمخزون الأجور (7340)
+            wage_memo_account_id = None
+            wage_fin_acc_id = _get_manufacturing_wage_inventory_account_id()
+            if wage_fin_acc_id:
+                wage_account = db.session.query(Account).get(wage_fin_acc_id)
+                if not wage_account or not wage_account.memo_account_id:
+                    # حاول إنشاء/ربط الحسابات الوزنية المفقودة
+                    ensure_weight_closing_support_accounts()
+                    wage_account = db.session.query(Account).get(wage_fin_acc_id)
+                if wage_account:
+                    _ensure_weight_tracking_account(wage_account.id)
+                    wage_memo_account_id = wage_account.memo_account_id
+            if wage_weight_equivalent > 0 and not wage_memo_account_id:
+                print("⚠️ Wage memo account not available; skipping wage-to-weight to keep memo balance.")
+                wage_weight_equivalent = 0
+            
+            # إضافة قيد تكلفة المبيعات الوزنية
+            cost_account = db.session.query(Account).get(cost_of_sales_acc_id)
+            if cost_account and cost_account.memo_account_id:
+                for karat, weight in gold_by_karat.items():
+                    if weight > 0 and total_weight_sold > 0:
+                        # حساب نسبة هذا العيار من الوزن الإجمالي
+                        karat_proportion = weight / total_weight_sold
+                        
+                        # ✅ FIX: التكلفة الوزنية = الوزن الفعلي فقط (بدون المصنعية)
+                        # المصنعية تُضاف تحليلياً في قائمة الدخل فقط، لا في القيود
+                        karat_weight_cost = weight
+                        
+                        weight_params = {}
+                        weight_params[f'weight_{karat}k_debit'] = karat_weight_cost
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=cost_account.memo_account_id,
+                            **weight_params,
+                            description=f"تكلفة مبيعات وزنية (وزن فعلي فقط) - عيار {karat}"
+                        )
+            else:
+                print("⚠️ Memo cost account 7500 not found. Skipping weight cost entry.")
+
+            # ============================================
+            # 🔧 FIX: تعطيل قيد المصنعية الوزني
+            # المصنعية نقدية فقط ولا تُسجل في الحسابات الوزنية
+            # القيد النقدي للمصنعية موجود أعلاه (5105 -> 1340)
+            # ============================================
+            # الكود القديم معطل:
+            # if wage_memo_account_id and wage_weight_equivalent > 0:
+            #     for karat, weight in gold_by_karat.items():
+            #         if weight > 0 and total_weight_sold > 0:
+            #             karat_proportion = weight / total_weight_sold
+            #             wage_weight_share_main = wage_weight_equivalent * karat_proportion
+            #             karat_wage_weight = convert_from_main_karat(wage_weight_share_main, karat)
+            #             weight_params = {}
+            #             weight_params[f'weight_{karat}k_credit'] = karat_wage_weight
+            #             create_dual_journal_entry(
+            #                 journal_entry_id=journal_entry.id,
+            #                 account_id=wage_memo_account_id,
+            #                 **weight_params,
+            #                 description=f"إخراج مصنعية وزني - عيار {karat}"
+            #             )
             
             # ============================================
             # 🆕 حساب الربح بالذهب وإضافته للفاتورة
             # ============================================
-            # الربح النقدي = الإيراد - التكلفة
-            profit_cash = total_cash - total_cost_cash
-            
-            # حساب الربح بالذهب (إجمالي)
-            # نستخدم متوسط الأسعار المرجحة
             total_weight_sold = sum(gold_by_karat.values())
-            weighted_avg_cost = (total_cost_cash / total_weight_sold) if total_weight_sold > 0 else 0
-            profit_gold = (profit_cash / weighted_avg_cost) if weighted_avg_cost > 0 else 0
+            avg_cost_per_gram = (total_cost_cash / total_weight_sold) if total_weight_sold > 0 else 0
+            avg_sale_price_per_gram = (total_cash / total_weight_sold) if total_weight_sold > 0 else 0
+
+            # الربح النقدي
+            profit_cash = (
+                (avg_sale_price_per_gram - avg_cost_per_gram) * total_weight_sold
+                if total_weight_sold > 0 else total_cash - total_cost_cash
+            )
             
-            # حفظ الربح في الفاتورة
+            # ✅ الربح الوزني: تحويل الربح النقدي إلى وزن باستخدام السعر المباشر (العيار الرئيسي)
+            profit_gold = (
+                profit_cash / direct_gold_price_main
+                if direct_gold_price_main > 0 else 0
+            )
+            
             new_invoice.profit_cash = round(profit_cash, 2)
             new_invoice.profit_gold = round(profit_gold, 3)
+            # ✅ حفظ السعر المباشر المستخدم في الحساب (العيار الرئيسي)
+            new_invoice.profit_weight_price_per_gram = round(direct_gold_price_main, 4)
             new_invoice.total_cost = round(total_cost_cash, 2)
+
+            # إنشاء أمر تسكير الوزن فوراً بعد البيع
+            try:
+                closing_price = _coerce_float(
+                    data.get('weight_closing_price')
+                    or data.get('close_price_per_gram')
+                    or new_invoice.profit_weight_price_per_gram,
+                    0.0,
+                )
+                if closing_price <= 0:
+                    price_snapshot = get_current_gold_price()
+                    closing_price = price_snapshot.get('price_per_gram_24k', 0.0)
+
+                if closing_price > 0:
+                    _upsert_weight_closing_order(
+                        new_invoice,
+                        close_price_per_gram=closing_price,
+                        settings=_load_weight_closing_settings(),
+                    )
+            except Exception as exc:
+                print(f"⚠️ Failed to initialize weight closing order for invoice {new_invoice.id}: {exc}")
         
         elif invoice_type == 'شراء من عميل':
             # ============================================
-            # 2. شراء كسر من عميل - النظام المحاسبي الصحيح
+            # 2. شراء كسر من عميل - تطبيق القاعدة الذهبية
             # ============================================
-            # القيد المباشر للمخزون:
-            #     من حـ/ مخزون الذهب عيار XX [مدين نقد + وزن]
-            #         إلى حـ/ النقدية [دائن نقد]
+            # القاعدة: 
+            # - المخزون: نقد + وزن فعلي (استثناء)
+            # - النقدية: تحويل لوزن باستخدام السعر المباشر
             # ============================================
             
             # الحصول على الحسابات
@@ -1978,14 +3221,22 @@ def add_invoice():
                 if inv_acc_id:
                     inventory_accounts[karat] = inv_acc_id
             
+            # ✅ الحصول على السعر المباشر للذهب (العيار الرئيسي)
+            gold_price_data = get_current_gold_price()
+            direct_gold_price_main = gold_price_data.get('price_per_gram_main_karat', 
+                                                         gold_price_data.get('price_main_karat', 350.0))
+            
+            print(f"💰 Direct gold price (main karat): {direct_gold_price_main} SAR/gram (Purchase)")
+            
             # ============================================
-            # القيد المباشر: إضافة للمخزون
-            # من حـ/ المخزون (نقد + وزن) → إلى حـ/ النقدية
+            # A) القيود المالية (نقد فقط)
             # ============================================
             
-            # 1. مدين المخزون (نقد + وزن حسب العيار)
+            # 1. مدين المخزون (نقد فقط - الوزن في حساب المذكرة)
+            total_weight_purchased = 0.0
             for karat, weight in gold_by_karat.items():
                 if weight > 0 and karat in inventory_accounts:
+                    total_weight_purchased += weight
                     inv_acc_id = inventory_accounts[karat]
                     
                     # حساب نسبة التكلفة لهذا العيار من الإجمالي
@@ -1993,12 +3244,12 @@ def add_invoice():
                     karat_proportion = weight / total_weight_all_karats if total_weight_all_karats > 0 else 0
                     karat_cash = round(total_cash * karat_proportion, 2)
                     
+                    # ✅ القيد المالي فقط (بدون أوزان)
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=inv_acc_id,
                         cash_debit=karat_cash,
-                        **{f"weight_{karat}k_debit": weight},
-                        description=f"شراء ذهب عيار {karat}"
+                        description=f"شراء ذهب عيار {karat} (قيمة)"
                     )
             
             # 2. دائن حساب النقدية (من الخزينة)
@@ -2020,6 +3271,57 @@ def add_invoice():
                 cash_credit=total_cash,
                 description="دفع نقدي لشراء ذهب"
             )
+            
+            # ============================================
+            # B) القيود الوزنية (وزن فقط)
+            # ============================================
+            
+            # 1) مدين: المخزون الوزني (الوزن الفعلي - استثناء من القاعدة)
+            for karat, weight in gold_by_karat.items():
+                if weight > 0 and karat in inventory_accounts:
+                    inv_acc_id = inventory_accounts[karat]
+                    
+                    # الحصول على حساب المذكرة للمخزون
+                    inv_account = db.session.query(Account).get(inv_acc_id)
+                    if inv_account and inv_account.memo_account_id:
+                        weight_params = {}
+                        weight_params[f'weight_{karat}k_debit'] = weight  # ✅ الوزن الفعلي
+                        
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=inv_account.memo_account_id,
+                            **weight_params,
+                            description=f"شراء ذهب عيار {karat} (وزن فعلي)"
+                        )
+                    else:
+                        print(f"⚠️ No memo account for inventory {karat}k (account {inv_acc_id})")
+            
+            # 2) دائن: النقدية الوزنية (تحويل المبلغ المدفوع إلى وزن)
+            # ✅ تطبيق القاعدة: النقد ÷ السعر المباشر (العيار الرئيسي)
+            cash_weight_equivalent = (total_cash / direct_gold_price_main) if direct_gold_price_main > 0 else 0
+            
+            print(f"⚖️ Cash weight equivalent (purchase): {cash_weight_equivalent} grams")
+            
+            # الحصول على حساب المذكرة الخاص بالنقدية
+            cash_account = db.session.query(Account).get(acc_id)
+            if cash_account and cash_account.memo_account_id:
+                # توزيع الوزن المعادل حسب نسبة كل عيار
+                for karat, weight in gold_by_karat.items():
+                    if weight > 0 and total_weight_purchased > 0:
+                        karat_proportion = weight / total_weight_purchased
+                        karat_cash_weight = cash_weight_equivalent * karat_proportion
+                        
+                        # دائن: حساب النقدية الوزني
+                        weight_params = {}
+                        weight_params[f'weight_{karat}k_credit'] = karat_cash_weight
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=cash_account.memo_account_id,
+                            **weight_params,
+                            description=f"دفع وزني - شراء عيار {karat}"
+                        )
+            else:
+                print(f"⚠️ No memo account for cash (account {acc_id})")
             
             # ============================================
             # قيد ضريبة القيمة المضافة (إن وجدت)
@@ -2054,15 +3356,31 @@ def add_invoice():
             
             total_cost = data.get('total_cost', 0) or (total_cash * 0.8)
             
-            # Line 1: مدين المخزون
+            # Line 1: مدين المخزون (نقد فقط)
             if inventory_acc_id:
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
                     account_id=inventory_acc_id,
                     cash_debit=total_cost,
-                    **{f"weight_{k}k_debit": v for k, v in gold_by_karat.items() if v > 0},
                     description="مرتجع للمخزون"
                 )
+                
+                # 🆕 قيد المذكرة الوزنية للمرتجع (وزن فقط)
+                weight_inventory_memo_acc_id = get_account_id_by_number('7521')
+                if weight_inventory_memo_acc_id:
+                    for k, v in gold_by_karat.items():
+                        if v > 0:
+                            create_dual_journal_entry(
+                                journal_entry_id=journal_entry.id,
+                                account_id=weight_inventory_memo_acc_id,
+                                debit_18k=v if k == '18' else 0,
+                                debit_21k=v if k == '21' else 0,
+                                debit_22k=v if k == '22' else 0,
+                                debit_24k=v if k == '24' else 0,
+                                description=f"مرتجع وزني - عيار {k}"
+                            )
+                else:
+                    print("⚠️ Memo inventory account 7521 not found. Skipping return weight entry.")
             
             # Line 2: مدين مردودات المبيعات
             if sales_returns_acc_id:
@@ -2075,11 +3393,12 @@ def add_invoice():
             
             # Line 3: دائن العميل/الصندوق
             acc_id = customers_acc_id or cash_acc_id or party_account.id
+            sale_return_weight_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=acc_id,
                 cash_credit=total_cash,
-                **{f"weight_{k}k_credit": v for k, v in gold_by_karat.items() if v > 0},
+                **sale_return_weight_credit,
                 description="استرداد نقدي للعميل"
             )
         
@@ -2103,21 +3422,23 @@ def add_invoice():
             
             # Line 1: مدين العميل/الصندوق
             acc_id = customers_acc_id or cash_acc_id or party_account.id
+            purchase_return_debit = _weight_kwargs_from_map(gold_by_karat, 'debit')
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=acc_id,
                 cash_debit=total_cash,
-                **{f"weight_{k}k_debit": v for k, v in gold_by_karat.items() if v > 0},
+                **purchase_return_debit,
                 description="استلام نقدي من مرتجع شراء"
             )
             
             # Line 2: دائن المخزون
             if inventory_acc_id:
+                purchase_return_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
                     account_id=inventory_acc_id,
                     cash_credit=total_cash,
-                    **{f"weight_{k}k_credit": v for k, v in gold_by_karat.items() if v > 0},
+                    **purchase_return_credit,
                     description="خصم من المخزون (مرتجع)"
                 )
         
@@ -2126,14 +3447,14 @@ def add_invoice():
             # السيناريو الجديد: المخزون يُثبت بالوزن والقيمة، المورد دائن بالذهب،
             # ويتم تسجيل التقييم النقدي على حساب جسر مستقل.
             
-            print("\n" + "="*60)
+            print("\n" + "="*80)
             print("🔍 DEBUGGING: شراء من مورد - START")
-            print("="*60)
-            print(f"invoice_type = {invoice_type}")
-            print(f"data keys = {list(data.keys())}")
-            print(f"gold_tax_total = {data.get('gold_tax_total')}")
-            print(f"wage_tax_total = {data.get('wage_tax_total')}")
-            print("="*60 + "\n")
+            print("="*80)
+            print(f"📋 gold_by_karat (from karat_lines/items) = {gold_by_karat}")
+            print(f"💰 wage_cash = {data.get('manufacturing_wage_cash')}")
+            print(f"💵 gold_subtotal = {data.get('gold_subtotal')}")
+            print(f"📦 karat_lines = {data.get('karat_lines')}")
+            print("="*80 + "\n")
 
             # محاولة الحصول على حساب الجسر من الطلب أو إعدادات الربط
             bridge_acc_id = (
@@ -2169,10 +3490,26 @@ def add_invoice():
 
                 # حسابات أساسية
                 vat_receivable_acc_id = _mapping('vat_receivable')
-                wage_expense_acc_id = (
-                    data.get('wage_expense_account_id')
-                    or _mapping('manufacturing_wage')
-                )
+                wage_mode = _get_manufacturing_wage_mode()
+                wage_expense_acc_id = None
+                wage_inventory_acc_id = None
+                if wage_mode == 'inventory':
+                    wage_inventory_acc_id = (
+                        data.get('wage_inventory_account_id')
+                        or _get_manufacturing_wage_inventory_account_id()
+                        or _mapping('manufacturing_wage_inventory')
+                        or _mapping('manufacturing_wage')
+                    )
+                if wage_mode != 'inventory' or not wage_inventory_acc_id:
+                    wage_expense_acc_id = (
+                        data.get('wage_expense_account_id')
+                        or _mapping('manufacturing_wage')
+                        or _mapping('manufacturing_wage_inventory')
+                    )
+                if wage_inventory_acc_id:
+                    _ensure_weight_tracking_account(wage_inventory_acc_id)
+                if wage_expense_acc_id:
+                    _ensure_weight_tracking_account(wage_expense_acc_id)
 
                 # بناء قاموس حسابات المخزون حسب العيار
                 inventory_accounts = {}
@@ -2183,29 +3520,43 @@ def add_invoice():
 
                 # تحديد حساب المورد (يجب أن يتتبع الوزن دائماً)
                 supplier_account_id = None
+                supplier_account_obj = None
+
+                def _try_assign_supplier(account_id, *, auto_enable=False):
+                    nonlocal supplier_account_id, supplier_account_obj
+                    if not account_id:
+                        return False
+                    account = Account.query.get(account_id)
+                    if not account:
+                        return False
+
+                    if not account.tracks_weight and auto_enable:
+                        account.tracks_weight = True
+                        db.session.add(account)
+                        db.session.flush()
+
+                    if account.tracks_weight:
+                        supplier_account_id = account.id
+                        supplier_account_obj = account
+                        return True
+                    return False
+
+                # الأولوية: حساب المورد المحدد يتتبع الوزن، ثم ربط suppliers_weight ثم suppliers، وأخيراً party_account (إن كان يدعم الوزن)
                 if party_account and party_account.tracks_weight:
                     supplier_account_id = party_account.id
+                    supplier_account_obj = party_account
                 else:
-                    mapped_supplier = _mapping('suppliers')
-                    supplier_account_id = mapped_supplier or (party_account.id if party_account else None)
+                    for candidate_id, auto_enable in [
+                        (_mapping('suppliers_weight'), True),
+                        (_mapping('suppliers'), True),
+                        (party_account.id if party_account else None, True),
+                    ]:
+                        if _try_assign_supplier(candidate_id, auto_enable=auto_enable):
+                            break
 
-                supplier_account_obj = Account.query.get(supplier_account_id) if supplier_account_id else None
-                if supplier_account_obj and not supplier_account_obj.tracks_weight:
-                    # نحاول الحصول على حساب مورد يتتبع الوزن من إعدادات الربط
-                    alt_supplier_id = _mapping('suppliers')
-                    if alt_supplier_id and alt_supplier_id != supplier_account_id:
-                        alt_supplier_obj = Account.query.get(alt_supplier_id)
-                        if alt_supplier_obj and alt_supplier_obj.tracks_weight:
-                            supplier_account_id = alt_supplier_id
-                            supplier_account_obj = alt_supplier_obj
-
-                # إذا كان الحساب النهائي لا يتتبع الوزن، نستخدم party_account إن كان يدعم ذلك
+                # إذا تعذر إيجاد حساب يتتبع الوزن، نتركه فارغاً الآن ليتم التعامل معه لاحقاً
                 if supplier_account_obj is None or not supplier_account_obj.tracks_weight:
-                    if party_account and party_account.tracks_weight:
-                        supplier_account_id = party_account.id
-                        supplier_account_obj = party_account
-                    else:
-                        supplier_account_id = None
+                    supplier_account_id = None
 
                 # تجميع أوزان المورد (يمكن تمريرها من الواجهة، وإلا نستخدم أوزان الأصناف)
                 supplier_gold_lines = data.get('supplier_gold_lines') or data.get('supplier_gold_weights')
@@ -2229,7 +3580,11 @@ def add_invoice():
                         supplier_gold_by_karat[karat_key] = supplier_gold_by_karat.get(karat_key, 0.0) + weight_val
 
                 if not supplier_gold_by_karat:
+                    # استخدام الأوزان الفعلية من karat_lines
                     supplier_gold_by_karat = {k: v for k, v in gold_by_karat.items() if v > 0}
+                    print(f"📦 supplier_gold_by_karat set from gold_by_karat = {supplier_gold_by_karat}")
+                else:
+                    print(f"📦 supplier_gold_by_karat received from client = {supplier_gold_by_karat}")
 
                 # حفظ إجمالي الذهب (عيار رئيسي) في الفاتورة للرجوع إليه لاحقاً
                 supplier_gold_main = sum(
@@ -2297,7 +3652,54 @@ def add_invoice():
 
                 cash_debit_booked = 0.0
 
+                # 🆕 محاولة استخراج التوزيع النقدي الفعلي من بيانات الفاتورة
+                # هذا يدعم: خصومات، تفاوت سعر حسب العيار، أسعار مخصصة
+                explicit_cash_by_karat = {}
+                
+                # 1. التحقق من وجود توزيع نقدي صريح في البيانات
+                if isinstance(data.get('cash_allocation_by_karat'), dict):
+                    explicit_cash_by_karat = data['cash_allocation_by_karat']
+                
+                # 2. حساب التوزيع من سطور الفاتورة إن وجدت
+                elif data.get('items') and isinstance(data['items'], list):
+                    for item_data in data['items']:
+                        item_karat = _normalize_karat(item_data.get('karat'))
+                        if not item_karat:
+                            continue
+                        
+                        # الحصول على القيمة النقدية الفعلية للصنف
+                        item_cash_value = _to_float(
+                            item_data.get('net') or 
+                            item_data.get('net_price') or
+                            item_data.get('selling_price', 0), 
+                            0.0
+                        )
+                        
+                        # طرح الضريبة والخصم للحصول على قيمة الذهب فقط
+                        item_tax = _to_float(item_data.get('tax_amount', 0), 0.0)
+                        item_discount = _to_float(item_data.get('discount_amount', 0), 0.0)
+                        item_wage = _to_float(item_data.get('wage', 0), 0.0)
+                        
+                        # القيمة النقدية للذهب = السعر - الضريبة - الخصم - الأجور
+                        gold_cash = item_cash_value - item_tax - item_discount
+                        
+                        if gold_cash > 0:
+                            explicit_cash_by_karat[item_karat] = (
+                                explicit_cash_by_karat.get(item_karat, 0.0) + gold_cash
+                            )
+
                 # --- 1) إثبات المخزون (نقد + وزن لكل عيار) ---
+                # 🆕 تخزين الأوزان الفعلية للقيود الوزنية (من karat_lines فقط، بدون المصنعية)
+                actual_gold_weights_for_memo = {}
+                if karat_lines_data and isinstance(karat_lines_data, list):
+                    for line_data in karat_lines_data:
+                        k = _normalize_karat(line_data.get('karat'))
+                        w = _to_float(line_data.get('weight_grams', 0), 0.0)
+                        if k and w > 0:
+                            actual_gold_weights_for_memo[k] = actual_gold_weights_for_memo.get(k, 0.0) + w
+                
+                print(f"✅ DEBUG: actual_gold_weights_for_memo (physical gold only) = {actual_gold_weights_for_memo}")
+                
                 if valuation_cash_total > 0 or total_weight_for_allocation > 0:
                     remaining_cash = valuation_cash_total
                     positive_karats = [k for k in valuation_weights if k in inventory_accounts and valuation_weights[k] > 0]
@@ -2308,22 +3710,55 @@ def add_invoice():
                         if not inv_account_id:
                             continue
 
-                        if total_weight_for_allocation > 0 and index < len(positive_karats) - 1:
+                        # 🆕 استخدام التوزيع النقدي الصريح إن وجد، وإلا التوزيع النسبي
+                        if explicit_cash_by_karat and karat in explicit_cash_by_karat:
+                            # استخدام القيمة الفعلية من سطور الفاتورة
+                            cash_share = round(explicit_cash_by_karat[karat], 2)
+                            remaining_cash = round(remaining_cash - cash_share, 2)
+                        elif total_weight_for_allocation > 0 and index < len(positive_karats) - 1:
+                            # التوزيع النسبي التقليدي (fallback)
                             cash_share = round(valuation_cash_total * (weight_value / total_weight_for_allocation), 2)
                             remaining_cash = round(remaining_cash - cash_share, 2)
                         else:
+                            # آخر عيار يأخذ الباقي لتجنب فروقات التقريب
                             cash_share = max(round(remaining_cash, 2), 0)
                             remaining_cash = 0
 
-                        weight_kwargs = {f'weight_{karat}k_debit': round(weight_value, 3)}
-
+                        # إثبات المخزون نقداً فقط (بدون وزن)
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,
                             account_id=inv_account_id,
                             cash_debit=cash_share if cash_share > 0 else 0,
-                            **weight_kwargs,
+                            apply_golden_rule=False,  # الوزن يثبت يدوياً لاحقاً
                             description=f"إثبات مخزون عيار {karat} شراء من مورد"
                         )
+                        
+                        # 🆕 القيد الوزني: استخدام الوزن الفعلي من karat_lines (بدون المصنعية)
+                        actual_weight_for_karat = actual_gold_weights_for_memo.get(karat, 0.0)
+                        if actual_weight_for_karat > 0:
+                            # حاول استخدام حساب مذكرة مرتبط بحساب المخزون المالي
+                            weight_inventory_memo_acc_id = None
+                            try:
+                                inv_acc_obj = Account.query.get(inv_account_id)
+                                if inv_acc_obj and inv_acc_obj.memo_account_id:
+                                    weight_inventory_memo_acc_id = inv_acc_obj.memo_account_id
+                            except Exception:
+                                weight_inventory_memo_acc_id = None
+
+                            # fallback على الحساب المذكرة الافتراضي 7521
+                            if not weight_inventory_memo_acc_id:
+                                weight_inventory_memo_acc_id = get_account_id_by_number('7521')
+
+                            if weight_inventory_memo_acc_id:
+                                print(f"🟢 DEBUG Posting memo weight debit to account {weight_inventory_memo_acc_id} for karat {karat}: {actual_weight_for_karat}")
+                                create_dual_journal_entry(
+                                    journal_entry_id=journal_entry.id,
+                                    account_id=weight_inventory_memo_acc_id,
+                                    **_weight_kwargs_for_karat(karat, round(actual_weight_for_karat, 3), 'debit'),
+                                    description=f"شراء وزني من مورد - عيار {karat}"
+                                )
+                            else:
+                                print("⚠️ Memo inventory account not found. Skipping supplier weight entry.")
 
                         cash_debit_booked = round(cash_debit_booked + max(cash_share, 0), 2)
 
@@ -2334,20 +3769,28 @@ def add_invoice():
                             journal_entry_id=journal_entry.id,
                             account_id=fallback_account_id,
                             cash_debit=valuation_cash_total,
+                            apply_golden_rule=False,
                             description="إثبات مخزون شراء من مورد (بدون توزيع عيارات)"
                         )
                         cash_debit_booked = round(cash_debit_booked + valuation_cash_total, 2)
 
-                # --- 2) أجور المصنعية (إن وجدت) ---
-                if wage_cash > 0 and not wage_expense_acc_id:
-                    wage_expense_acc_id = next(iter(inventory_accounts.values()), None)
-
-                if wage_cash > 0 and wage_expense_acc_id:
+                # --- 2) أجور المصنعية → مخزون أجور المصنعية (1340) ---
+                # 🆕 النظام الجديد: فصل المصنعية في حساب مستقل
+                wage_inventory_account_id = get_account_id_by_number('1340')  # مخزون أجور المصنعية
+                
+                if wage_cash > 0:
+                    if not wage_inventory_account_id:
+                        return jsonify({
+                            'error': 'حساب مخزون أجور المصنعية (1340) غير موجود. يرجى إنشاؤه أولاً.'
+                        }), 400
+                    
+                    # إضافة المصنعية لحساب مخزون المصنعية (1340)
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
-                        account_id=wage_expense_acc_id,
+                        account_id=wage_inventory_account_id,
                         cash_debit=round(wage_cash, 2),
-                        description="أجور مصنعية شراء من مورد"
+                        apply_golden_rule=False,
+                        description="إضافة أجور مصنعية للمخزون - شراء من مورد"
                     )
                     cash_debit_booked = round(cash_debit_booked + wage_cash, 2)
 
@@ -2359,6 +3802,7 @@ def add_invoice():
                         journal_entry_id=journal_entry.id,
                         account_id=vat_receivable_acc_id,
                         cash_debit=round(wage_tax_total, 2),
+                        apply_golden_rule=False,
                         description="ضريبة على أجور المصنعية - مشتريات من مورد"
                     )
                     cash_debit_booked = round(cash_debit_booked + wage_tax_total, 2)
@@ -2369,6 +3813,7 @@ def add_invoice():
                         journal_entry_id=journal_entry.id,
                         account_id=vat_receivable_acc_id,
                         cash_debit=round(gold_tax_total, 2),
+                        apply_golden_rule=False,
                         description="ضريبة على قيمة الذهب - مشتريات من مورد"
                     )
                     cash_debit_booked = round(cash_debit_booked + gold_tax_total, 2)
@@ -2381,26 +3826,22 @@ def add_invoice():
                         journal_entry_id=journal_entry.id,
                         account_id=bridge_acc_id,
                         cash_credit=bridge_total_cash,
+                        apply_golden_rule=False,  # لا نحول جسر المورد إلى وزن
                         description="جسر تقييم المورد (مستحق نقدي)"
                     )
 
                 # --- 5) المورد دائن بالذهب (حسب العيارات) ---
                 if not supplier_account_id and supplier_gold_by_karat:
                     fallback_candidates = [
-                        get_account_id_for_mapping('شراء من مورد', 'suppliers_weight'),
-                        get_account_id_for_mapping('شراء', 'suppliers_weight'),
-                        get_account_id_for_mapping('شراء من مورد', 'suppliers'),
-                        get_account_id_for_mapping('شراء', 'suppliers'),
-                        party_account.id if party_account and party_account.tracks_weight else None,
+                        (get_account_id_for_mapping('شراء من مورد', 'suppliers_weight'), True),
+                        (get_account_id_for_mapping('شراء', 'suppliers_weight'), True),
+                        (get_account_id_for_mapping('شراء من مورد', 'suppliers'), True),
+                        (get_account_id_for_mapping('شراء', 'suppliers'), True),
+                        (party_account.id if party_account else None, True),
                     ]
 
-                    for candidate_id in fallback_candidates:
-                        if not candidate_id:
-                            continue
-                        candidate_account = Account.query.get(candidate_id)
-                        if candidate_account and candidate_account.tracks_weight:
-                            supplier_account_id = candidate_id
-                            supplier_account_obj = candidate_account
+                    for candidate_id, auto_enable in fallback_candidates:
+                        if _try_assign_supplier(candidate_id, auto_enable=auto_enable):
                             break
 
                 if supplier_gold_by_karat and (not supplier_account_obj or not supplier_account_obj.tracks_weight):
@@ -2409,21 +3850,29 @@ def add_invoice():
                     }), 400
 
                 if supplier_account_id and supplier_gold_by_karat:
+                    # 🆕 استخدام الأوزان الفعلية (بدون المصنعية) لقيد المورد الوزني
+                    print(f"🟢 DEBUG supplier_weight_kwargs calculation:")
+                    print(f"   actual_gold_weights_for_memo = {actual_gold_weights_for_memo}")
+                    print(f"   supplier_gold_by_karat (request/fallback) = {supplier_gold_by_karat}")
+                    print(f"   dual_entry_params = {list(dual_entry_params)}")
+                    
                     supplier_weight_kwargs = {
                         f'weight_{karat}k_credit': round(weight, 3)
-                        for karat, weight in supplier_gold_by_karat.items()
+                        for karat, weight in actual_gold_weights_for_memo.items()  # ← استخدام الأوزان الفعلية
                         if weight > 0 and f'weight_{karat}k_credit' in dual_entry_params
                     }
+                    
+                    print(f"   supplier_weight_kwargs (before unsupported) = {supplier_weight_kwargs}")
 
                     # إن لم تُطابق أسماء الوسائط (عيار غير مدعوم)، نحاول تحويله إلى العيار الرئيسي
                     unsupported_karats = [
-                        karat for karat in supplier_gold_by_karat
+                        karat for karat in actual_gold_weights_for_memo  # ← استخدام الأوزان الفعلية
                         if f'weight_{karat}k_credit' not in dual_entry_params
                     ]
 
                     additional_21k = 0.0
                     for karat in unsupported_karats:
-                        weight = supplier_gold_by_karat.get(karat, 0)
+                        weight = actual_gold_weights_for_memo.get(karat, 0)  # ← استخدام الأوزان الفعلية
                         additional_21k += convert_to_main_karat(weight, int(round(float(karat))))
 
                     if additional_21k > 0:
@@ -2433,12 +3882,28 @@ def add_invoice():
                         )
 
                     if supplier_weight_kwargs:
+                        print(f"   supplier_weight_kwargs (final) = {supplier_weight_kwargs}")
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,
                             account_id=supplier_account_id,
                             **supplier_weight_kwargs,
                             description="رصيد مورد بالذهب"
                         )
+                
+                # 🆕 التحقق من توازن حساب الجسر بعد الفاتورة
+                db.session.flush()  # تطبيق التغييرات قبل التحقق
+                bridge_validation = validate_bridge_account_balance(bridge_acc_id, tolerance=0.01)
+                
+                if not bridge_validation['is_balanced']:
+                    # تسجيل تحذير في السجل
+                    print(f"⚠️ BRIDGE ACCOUNT IMBALANCE DETECTED:")
+                    print(f"   Invoice ID: {new_invoice.id}")
+                    print(f"   Invoice Type: {invoice_type}")
+                    print(f"   Bridge Balance: {bridge_validation['bridge_balance']} SAR")
+                    print(f"   Warning: {bridge_validation['warning']}")
+                    
+                    # يمكن إضافة تنبيه للمستخدم أو إرسال إشعار للمدير
+                    # لكن لا نوقف العملية لأنها قد تكون بسبب فواصل عشرية
 
             else:
                 return jsonify({
@@ -2464,21 +3929,23 @@ def add_invoice():
             
             # Line 1: مدين المورد/الصندوق
             acc_id = suppliers_acc_id or cash_acc_id or party_account.id
+            vendor_return_debit = _weight_kwargs_from_map(gold_by_karat, 'debit')
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=acc_id,
                 cash_debit=total_cash,
-                **{f"weight_{k}k_debit": v for k, v in gold_by_karat.items() if v > 0},
+                **vendor_return_debit,
                 description="استلام نقدي من مرتجع شراء"
             )
             
             # Line 2: دائن المخزون
             if inventory_acc_id:
+                vendor_return_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
                     account_id=inventory_acc_id,
                     cash_credit=total_cash,
-                    **{f"weight_{k}k_credit": v for k, v in gold_by_karat.items() if v > 0},
+                    **vendor_return_credit,
                     description="خصم من المخزون (مرتجع)"
                 )
 
@@ -2818,7 +4285,17 @@ def get_account_capacity_api(category_number):
 
 @api.route('/accounts', methods=['POST'])
 def add_account():
+    """
+    إضافة حساب جديد مع إنشاء حساب موازي تلقائياً
+    
+    🆕 الميزة الجديدة:
+    - عند إضافة حساب مالي (cash) → ينشئ حساب وزني (gold) موازي تلقائياً
+    - عند إضافة حساب وزني (gold) → ينشئ حساب مالي (cash) موازي تلقائياً
+    - يتم الربط التلقائي عبر memo_account_id
+    """
     data = request.json
+    
+    # إنشاء الحساب الأساسي
     new_account = Account(
         account_number=data['account_number'],
         name=data['name'],
@@ -2827,11 +4304,36 @@ def add_account():
         transaction_type=data.get('transaction_type', 'both'),
         bank_name=data.get('bank_name'),
         account_number_external=data.get('account_number_external'),
-        account_type=data.get('account_type')
+        account_type=data.get('account_type'),
+        tracks_weight=data.get('tracks_weight', False)
     )
     db.session.add(new_account)
+    db.session.flush()
+    
+    # 🆕 إنشاء الحساب الموازي تلقائياً
+    parallel_account = None
+    if data.get('create_parallel', True):  # يمكن تعطيله عبر create_parallel=False
+        try:
+            parallel_account = new_account.create_parallel_account()
+            if parallel_account:
+                print(f"✅ تم إنشاء حساب موازي: {parallel_account.account_number} - {parallel_account.name}")
+        except Exception as e:
+            print(f"⚠️  تعذر إنشاء حساب موازي: {e}")
+            # نكمل العملية حتى لو فشل إنشاء الحساب الموازي
+    
     db.session.commit()
-    return jsonify(new_account.to_dict()), 201
+    
+    # إرجاع معلومات الحساب مع الحساب الموازي إن وُجد
+    result = new_account.to_dict()
+    if parallel_account:
+        result['parallel_account'] = {
+            'id': parallel_account.id,
+            'account_number': parallel_account.account_number,
+            'name': parallel_account.name,
+            'transaction_type': parallel_account.transaction_type
+        }
+    
+    return jsonify(result), 201
 
 @api.route('/accounts/<int:id>', methods=['PUT'])
 def update_account(id):
@@ -2850,6 +4352,10 @@ def update_account(id):
         account.account_number_external = data['account_number_external']
     if 'account_type' in data:
         account.account_type = data['account_type']
+    
+    # 🆕 تحديث tracks_weight
+    if 'tracks_weight' in data:
+        account.tracks_weight = bool(data['tracks_weight'])
     
     db.session.commit()
     return jsonify(account.to_dict())
@@ -2902,21 +4408,165 @@ def get_main_karat():
     return settings.main_karat if settings else 21
 
 def convert_to_main_karat(weight, karat):
-    main_karat = get_main_karat()
-    if karat == 0 or main_karat == 0:
+    """
+    يحول وزن عيار معين إلى العيار الرئيسي مع معالجة الأنواع النصية.
+    """
+    main_karat = _coerce_float(get_main_karat(), 0.0)
+    karat_val = _coerce_float(karat, 0.0)
+
+    if karat_val == 0 or main_karat == 0:
         return 0
-    return (weight * karat) / main_karat
+
+    return (weight * karat_val) / main_karat
+
 
 def convert_from_main_karat(weight, karat):
-    main_karat = get_main_karat()
-    if karat == 0:
+    """
+    يحول من الوزن بالعيار الرئيسي إلى عيار محدد مع معالجة الأنواع النصية.
+    """
+    main_karat = _coerce_float(get_main_karat(), 0.0)
+    karat_val = _coerce_float(karat, 0.0)
+
+    if karat_val == 0:
         return 0
-    return (weight * main_karat) / karat
+
+    return (weight * main_karat) / karat_val
+
+
+def _get_manufacturing_wage_mode():
+    settings = Settings.query.first()
+    if not settings or not getattr(settings, 'manufacturing_wage_mode', None):
+        return 'expense'
+    return settings.manufacturing_wage_mode or 'expense'
+
+
+def _ensure_weight_tracking_account(account_id):
+    if not account_id:
+        return None
+    account = Account.query.get(account_id)
+    if account and not account.tracks_weight:
+        account.tracks_weight = True
+        db.session.add(account)
+        db.session.flush()
+    return account
+
+
+def _get_manufacturing_wage_inventory_account_id():
+    for operation in ('شراء من مورد', 'شراء', 'بيع'):
+        acc_id = get_account_id_for_mapping(operation, 'manufacturing_wage_inventory')
+        if acc_id:
+            return acc_id
+    return None
+
+
+def _account_weight_balance_main_karat(account):
+    if not account or not account.tracks_weight:
+        return 0.0
+    total = 0.0
+    total += convert_to_main_karat(account.balance_18k or 0.0, 18)
+    total += convert_to_main_karat(account.balance_21k or 0.0, 21)
+    total += convert_to_main_karat(account.balance_22k or 0.0, 22)
+    total += convert_to_main_karat(account.balance_24k or 0.0, 24)
+    return round(total, 6)
+
+
+def _line_weight_total_in_main_karat(line, side, main_karat_value=None):
+    """Normalize a journal line's weight columns to the main karat (default 21k)."""
+    if not line:
+        return 0.0
+    prefix = 'debit' if side == 'debit' else 'credit'
+    if main_karat_value is None or main_karat_value <= 0:
+        main_karat_value = get_main_karat() or 21
+
+    total = 0.0
+    karat_fields = {
+        18: getattr(line, f'{prefix}_18k', 0) or 0,
+        21: getattr(line, f'{prefix}_21k', 0) or 0,
+        22: getattr(line, f'{prefix}_22k', 0) or 0,
+        24: getattr(line, f'{prefix}_24k', 0) or 0,
+    }
+
+    for karat, value in karat_fields.items():
+        if value:
+            total += (float(value) * karat) / main_karat_value
+
+    if total == 0:
+        fallback = getattr(line, f'{prefix}_weight', 0) or 0
+        total = float(fallback)
+
+    return float(total)
+
+
+def _net_line_weight_in_main_karat(line, main_karat_value=None):
+    credit_total = _line_weight_total_in_main_karat(line, 'credit', main_karat_value)
+    debit_total = _line_weight_total_in_main_karat(line, 'debit', main_karat_value)
+    return float(credit_total - debit_total)
+
+
+def _weight_kwargs_for_karat(karat, weight, side='debit'):
+    """Return keyword args for create_dual_journal_entry for a single karat."""
+    if not weight or weight <= 0:
+        return {}
+    try:
+        karat_key = str(int(round(float(karat))))
+    except (TypeError, ValueError):
+        karat_key = str(karat)
+    suffix_map = {
+        '18': '18k',
+        '21': '21k',
+        '22': '22k',
+        '24': '24k',
+    }
+    suffix = suffix_map.get(karat_key)
+    if not suffix:
+        return {}
+    if side not in ('debit', 'credit'):
+        side = 'debit'
+    return {f"{side}_{suffix}": weight}
+
+
+def _weight_kwargs_from_map(gold_map, side='debit'):
+    kwargs = {}
+    if not gold_map:
+        return kwargs
+    for karat, weight in gold_map.items():
+        kwargs.update(_weight_kwargs_for_karat(karat, weight, side))
+    return kwargs
 
 @api.route('/journal_entries', methods=['POST'])
 def add_journal_entry():
+    """
+    إضافة قيد يومية يدوي
+    
+    🆕 دعم القاعدة الذهبية:
+    - إذا كان apply_golden_rule=true في الطلب، يتم تطبيق القاعدة تلقائياً
+    - القاعدة: الوزن = المبلغ النقدي ÷ سعر الذهب المباشر
+    - يمكن تعطيل القاعدة بإرسال apply_golden_rule=false
+    """
     data = request.get_json()
     lines_data = data.get('lines', [])
+    
+    # 🆕 التحقق من طلب تطبيق القاعدة الذهبية
+    apply_golden_rule = data.get('apply_golden_rule', False)
+    
+    if apply_golden_rule:
+        # الحصول على سعر الذهب الحالي
+        try:
+            from dual_system_helpers import apply_golden_rule_to_line
+            gold_price_data = get_current_gold_price()
+            gold_price_main_karat = gold_price_data['price_per_gram_main_karat']  # 🔥 سعر العيار الرئيسي
+            main_karat = gold_price_data['main_karat']  # 🔥 العيار الرئيسي
+            
+            # تطبيق القاعدة على كل سطر
+            lines_data = [
+                apply_golden_rule_to_line(line, gold_price_main_karat, main_karat, apply_rule=True)
+                for line in lines_data
+            ]
+            
+            print(f"✅ تم تطبيق القاعدة الذهبية (سعر عيار {main_karat}: {gold_price_main_karat} ريال/جرام)")
+        except Exception as e:
+            print(f"⚠️  تعذر تطبيق القاعدة الذهبية: {e}")
+            # نكمل بدون تطبيق القاعدة
 
     # --- Pre-validation ---
     # Filter out completely empty lines first
@@ -5162,12 +6812,243 @@ def get_general_ledger_all():
     - show_balances: عرض الأرصدة التراكمية (true/false)
     - karat_detail: عرض تفاصيل الأعيرة (true/false)
     """
-    # Get query parameters
     account_id = request.args.get('account_id', type=int)
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
+    start_date_param = request.args.get('start_date')
+    end_date_param = request.args.get('end_date')
     show_balances = request.args.get('show_balances', 'true').lower() == 'true'
     karat_detail = request.args.get('karat_detail', 'false').lower() == 'true'
+    posted_only = request.args.get('posted_only', 'false').lower() == 'true'
+    reference_types_param = request.args.get('reference_types')
+    single_reference_type = request.args.get('reference_type')
+    created_by_param = request.args.get('created_by')
+    posted_by_param = request.args.get('posted_by')
+    user_param = request.args.get('user')
+    branch_param = request.args.get('branch') or request.args.get('branch_name')
+
+    # Parse/validate date filters
+    try:
+        start_value = _parse_iso_date(start_date_param, 'start_date') if start_date_param else None
+        end_value = _parse_iso_date(end_date_param, 'end_date') if end_date_param else None
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    start_dt = datetime.combine(start_value, datetime.min.time()) if start_value else None
+    end_dt = datetime.combine(end_value, datetime.min.time()) + timedelta(days=1) if end_value else None
+
+    if start_dt and end_dt and end_dt <= start_dt:
+        end_dt = start_dt + timedelta(days=1)
+
+    reference_filters = []
+    if single_reference_type:
+        value = single_reference_type.strip()
+        if value:
+            reference_filters.append(value)
+    if reference_types_param:
+        for raw in str(reference_types_param).split(','):
+            value = raw.strip()
+            if value:
+                reference_filters.append(value)
+    if reference_filters:
+        # إزالة التكرارات مع الحفاظ على الترتيب
+        seen = []
+        for value in reference_filters:
+            if value not in seen:
+                seen.append(value)
+        reference_filters = seen
+
+    query = (
+        JournalEntryLine.query
+        .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+        .join(Account, Account.id == JournalEntryLine.account_id)
+        .options(
+            joinedload(JournalEntryLine.account).joinedload(Account.safe_boxes),
+            joinedload(JournalEntryLine.journal_entry),
+        )
+        .filter(JournalEntryLine.is_deleted == False)
+        .filter(JournalEntry.is_deleted == False)
+    )
+
+    if account_id:
+        query = query.filter(JournalEntryLine.account_id == account_id)
+    if start_dt:
+        query = query.filter(JournalEntry.date >= start_dt)
+    if end_dt:
+        query = query.filter(JournalEntry.date < end_dt)
+    if posted_only:
+        query = query.filter(JournalEntry.is_posted == True)
+    if reference_filters:
+        query = query.filter(JournalEntry.reference_type.in_(reference_filters))
+    if created_by_param:
+        query = query.filter(JournalEntry.created_by == created_by_param)
+    if posted_by_param:
+        query = query.filter(JournalEntry.posted_by == posted_by_param)
+    if user_param:
+        query = query.filter(or_(
+            JournalEntry.created_by == user_param,
+            JournalEntry.posted_by == user_param,
+        ))
+
+    branch_normalized = None
+    if branch_param:
+        branch_normalized = branch_param.strip().lower()
+        if branch_normalized:
+            query = query.outerjoin(SafeBox, SafeBox.account_id == Account.id)
+            query = query.filter(
+                func.lower(func.coalesce(SafeBox.branch, '')) == branch_normalized
+            )
+
+    lines = (
+        query
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .all()
+    )
+
+    running_cash_balance = 0.0
+    running_gold_18k = 0.0
+    running_gold_21k = 0.0
+    running_gold_22k = 0.0
+    running_gold_24k = 0.0
+    total_cash_debit = 0.0
+    total_cash_credit = 0.0
+    total_gold_debit_normalized = 0.0
+    total_gold_credit_normalized = 0.0
+
+    entries_payload = []
+
+    for line in lines:
+        gold_debit_normalized = _line_weight_total_in_main_karat(line, 'debit')
+        gold_credit_normalized = _line_weight_total_in_main_karat(line, 'credit')
+
+        cash_debit = float(line.cash_debit or 0.0)
+        cash_credit = float(line.cash_credit or 0.0)
+
+        total_cash_debit += cash_debit
+        total_cash_credit += cash_credit
+        total_gold_debit_normalized += gold_debit_normalized
+        total_gold_credit_normalized += gold_credit_normalized
+
+        running_cash_balance += cash_debit - cash_credit
+        running_gold_18k += (line.debit_18k or 0.0) - (line.credit_18k or 0.0)
+        running_gold_21k += (line.debit_21k or 0.0) - (line.credit_21k or 0.0)
+        running_gold_22k += (line.debit_22k or 0.0) - (line.credit_22k or 0.0)
+        running_gold_24k += (line.debit_24k or 0.0) - (line.credit_24k or 0.0)
+
+        account_branch = None
+        if line.account and getattr(line.account, 'safe_boxes', None):
+            for safe_box in line.account.safe_boxes:
+                if safe_box and safe_box.branch:
+                    account_branch = safe_box.branch
+                    break
+
+        entry_data = {
+            'id': line.id,
+            'journal_entry_id': line.journal_entry_id,
+            'journal_entry_number': line.journal_entry.entry_number if line.journal_entry else None,
+            'date': line.journal_entry.date.isoformat() if line.journal_entry and line.journal_entry.date else None,
+            'description': (line.journal_entry.description if line.journal_entry else None) or line.description,
+            'entry_type': line.journal_entry.entry_type if line.journal_entry else None,
+            'account_id': line.account_id,
+            'account_name': line.account.name if line.account else 'حساب غير معروف',
+            'account_number': line.account.account_number if line.account else None,
+            'account_branch': account_branch,
+            'reference_type': line.journal_entry.reference_type if line.journal_entry else None,
+            'reference_number': line.journal_entry.reference_number if line.journal_entry else None,
+            'is_posted': bool(line.journal_entry.is_posted) if line.journal_entry else False,
+            'created_by': line.journal_entry.created_by if line.journal_entry else None,
+            'posted_by': line.journal_entry.posted_by if line.journal_entry else None,
+            'cash_debit': round(cash_debit, 2),
+            'cash_credit': round(cash_credit, 2),
+            'gold_debit': round(gold_debit_normalized, 3),
+            'gold_credit': round(gold_credit_normalized, 3),
+        }
+
+        if karat_detail:
+            entry_data['karat_details'] = {
+                '18k': {
+                    'debit': round(float(line.debit_18k or 0.0), 3),
+                    'credit': round(float(line.credit_18k or 0.0), 3),
+                },
+                '21k': {
+                    'debit': round(float(line.debit_21k or 0.0), 3),
+                    'credit': round(float(line.credit_21k or 0.0), 3),
+                },
+                '22k': {
+                    'debit': round(float(line.debit_22k or 0.0), 3),
+                    'credit': round(float(line.credit_22k or 0.0), 3),
+                },
+                '24k': {
+                    'debit': round(float(line.debit_24k or 0.0), 3),
+                    'credit': round(float(line.credit_24k or 0.0), 3),
+                },
+            }
+
+        if show_balances:
+            entry_data['running_balance'] = {
+                'cash': round(running_cash_balance, 2),
+                'gold_normalized': round(
+                    convert_to_main_karat(running_gold_18k, 18)
+                    + convert_to_main_karat(running_gold_21k, 21)
+                    + convert_to_main_karat(running_gold_22k, 22)
+                    + convert_to_main_karat(running_gold_24k, 24),
+                    3,
+                ),
+            }
+
+            if karat_detail:
+                entry_data['running_balance']['by_karat'] = {
+                    '18k': round(running_gold_18k, 3),
+                    '21k': round(running_gold_21k, 3),
+                    '22k': round(running_gold_22k, 3),
+                    '24k': round(running_gold_24k, 3),
+                }
+
+        entries_payload.append(entry_data)
+
+    summary = {
+        'total_entries': len(entries_payload),
+        'totals': {
+            'cash_debit': round(total_cash_debit, 2),
+            'cash_credit': round(total_cash_credit, 2),
+            'gold_debit_normalized': round(total_gold_debit_normalized, 3),
+            'gold_credit_normalized': round(total_gold_credit_normalized, 3),
+        },
+        'final_balance': {
+            'cash': round(running_cash_balance, 2),
+            'gold_normalized': round(
+                convert_to_main_karat(running_gold_18k, 18)
+                + convert_to_main_karat(running_gold_21k, 21)
+                + convert_to_main_karat(running_gold_22k, 22)
+                + convert_to_main_karat(running_gold_24k, 24),
+                3,
+            ),
+        },
+    }
+
+    if karat_detail:
+        summary['final_balance']['by_karat'] = {
+            '18k': round(running_gold_18k, 3),
+            '21k': round(running_gold_21k, 3),
+            '22k': round(running_gold_22k, 3),
+            '24k': round(running_gold_24k, 3),
+        }
+
+    return jsonify({
+        'entries': entries_payload,
+        'summary': summary,
+        'filters': {
+            'account_id': account_id,
+            'start_date': start_date_param,
+            'end_date': end_date_param,
+            'show_balances': show_balances,
+            'karat_detail': karat_detail,
+            'posted_only': posted_only,
+            'reference_types': reference_filters,
+            'created_by': created_by_param,
+            'posted_by': posted_by_param,
+            'user': user_param,
+            'branch': branch_param,
+        },
+    })
 
 
 @api.route('/reports/sales_vs_purchases_trend', methods=['GET'])
@@ -7551,6 +9432,75 @@ def approve_voucher(voucher_id):
         return jsonify({'error': f'فشل ترحيل السند: {str(e)}'}), 500
 
 
+def _reverse_voucher_journal_entry(voucher, cancelled_by='system', reason=None):
+    """Create a reversing journal entry for a voucher if one exists."""
+    if not voucher or not voucher.journal_entry_id:
+        return None
+
+    existing = (
+        JournalEntry.query.filter_by(reference_type='voucher_reversal', reference_id=voucher.id)
+        .order_by(JournalEntry.id.desc())
+        .first()
+    )
+    if existing:
+        return existing
+
+    original_entry = JournalEntry.query.get(voucher.journal_entry_id)
+    if not original_entry:
+        return None
+
+    description_parts = [f'عكس سند #{voucher.voucher_number}']
+    if reason:
+        description_parts.append(f'({reason})')
+    reversal_description = ' - '.join(description_parts)
+
+    reversal_entry = JournalEntry(
+        entry_number=_generate_journal_entry_number('REV'),
+        date=datetime.now(),
+        description=reversal_description,
+        entry_type='عكسي',
+        reference_type='voucher_reversal',
+        reference_id=voucher.id,
+        reference_number=voucher.voucher_number,
+        created_by=cancelled_by,
+        is_posted=original_entry.is_posted,
+        posted_at=datetime.now() if original_entry.is_posted else None,
+        posted_by=cancelled_by if original_entry.is_posted else None,
+    )
+
+    db.session.add(reversal_entry)
+    db.session.flush()
+
+    for line in original_entry.lines:
+        if getattr(line, 'is_deleted', False):
+            continue
+
+        line_description = line.description or reversal_description
+        reversal_line = JournalEntryLine(
+            journal_entry_id=reversal_entry.id,
+            account_id=line.account_id,
+            customer_id=line.customer_id,
+            supplier_id=line.supplier_id,
+            cash_debit=line.cash_credit,
+            cash_credit=line.cash_debit,
+            debit_18k=line.credit_18k,
+            credit_18k=line.debit_18k,
+            debit_21k=line.credit_21k,
+            credit_21k=line.debit_21k,
+            debit_22k=line.credit_22k,
+            credit_22k=line.debit_22k,
+            debit_24k=line.credit_24k,
+            credit_24k=line.debit_24k,
+            debit_weight=line.credit_weight,
+            credit_weight=line.debit_weight,
+            gold_price_snapshot=line.gold_price_snapshot,
+            description=f"عكس: {line_description}",
+        )
+        db.session.add(reversal_line)
+
+    return reversal_entry
+
+
 @api.route('/vouchers/<int:voucher_id>/cancel', methods=['POST'])
 def cancel_voucher(voucher_id):
     """Cancel voucher"""
@@ -7559,19 +9509,34 @@ def cancel_voucher(voucher_id):
     if voucher.status == 'cancelled':
         return jsonify({'error': 'Voucher is already cancelled'}), 400
     
-    data = request.get_json()
+    data = request.get_json() or {}
     reason = data.get('reason', 'No reason provided')
+    cancelled_by = data.get('cancelled_by', 'system')
     
     try:
+        reversal_entry = None
+        if voucher.journal_entry_id:
+            reversal_entry = _reverse_voucher_journal_entry(
+                voucher,
+                cancelled_by=cancelled_by,
+                reason=reason
+            )
+
         voucher.status = 'cancelled'
         voucher.cancellation_reason = reason
         voucher.cancelled_at = datetime.now()
         
-        # TODO: Reverse journal entry if exists
-        
         db.session.commit()
         
-        return jsonify(voucher.to_dict())
+        response_payload = voucher.to_dict()
+        if reversal_entry:
+            response_payload['reversal_journal_entry'] = {
+                'id': reversal_entry.id,
+                'entry_number': reversal_entry.entry_number,
+                'date': reversal_entry.date.isoformat() if reversal_entry.date else None
+            }
+        
+        return jsonify(response_payload)
         
     except Exception as e:
         db.session.rollback()
@@ -8905,5 +10870,1993 @@ def get_gold_safe_box_by_karat(karat):
         return jsonify({'error': f'لا توجد خزينة ذهب لعيار {karat}'}), 404
     
     return jsonify(safe_box.to_dict(include_account=True, include_balance=True))
+
+
+# ============================================================================
+# Weight Closing Helpers & Office Reservations
+# ============================================================================
+
+
+def _upsert_weight_closing_order(invoice: Invoice, close_price_per_gram: float, settings=None):
+    if not invoice:
+        raise ValueError('invoice is required')
+
+    settings = settings or _load_weight_closing_settings()
+    main_karat = settings.get('main_karat') or get_main_karat()
+    close_price = _coerce_float(close_price_per_gram, 0.0)
+    total_weight_main_karat = round(_invoice_weight_in_main_karat(invoice), 6)
+    total_cash_value = round(total_weight_main_karat * close_price, 2)
+
+    order = WeightClosingOrder.query.filter_by(invoice_id=invoice.id).first()
+    if order:
+        order.main_karat = main_karat
+        order.close_price_per_gram = close_price
+        order.price_source = settings.get('price_source', order.price_source)
+        order.gold_value_cash = total_cash_value
+        order.total_cash_value = total_cash_value
+        order.total_weight_main_karat = total_weight_main_karat
+        order.remaining_weight_main_karat = max(
+            total_weight_main_karat - (order.executed_weight_main_karat or 0.0),
+            0.0,
+        )
+    else:
+        order = WeightClosingOrder(
+            invoice_id=invoice.id,
+            order_number=_generate_weight_closing_order_number(settings.get('order_number_prefix', 'WCO')),
+            status='open',
+            main_karat=main_karat,
+            price_source=settings.get('price_source', 'manual'),
+            close_price_per_gram=close_price,
+            gold_value_cash=total_cash_value,
+            total_cash_value=total_cash_value,
+            total_weight_main_karat=total_weight_main_karat,
+            executed_weight_main_karat=0.0,
+            remaining_weight_main_karat=total_weight_main_karat,
+        )
+        db.session.add(order)
+        db.session.flush()
+
+    invoice.weight_closing_status = order.status
+    invoice.weight_closing_main_karat = main_karat
+    invoice.weight_closing_total_weight = total_weight_main_karat
+    invoice.weight_closing_executed_weight = order.executed_weight_main_karat or 0.0
+    invoice.weight_closing_remaining_weight = order.remaining_weight_main_karat or 0.0
+    invoice.weight_closing_close_price = close_price
+    invoice.weight_closing_order_number = order.order_number
+    invoice.weight_closing_price_source = order.price_source
+    db.session.add(invoice)
+    db.session.flush()
+    return order
+
+
+def _auto_consume_weight_closing(
+    source_invoice_id: int = None,
+    *,
+    weight_override=None,
+    price_per_gram=None,
+    cash_amount=None,
+    execution_type: str = 'purchase_scrap',
+    journal_entry_id=None,
+    notes=None,
+):
+    invoice = Invoice.query.get(source_invoice_id) if source_invoice_id else None
+
+    requested_weight = _coerce_float(weight_override, None)
+    execution_price = _coerce_float(price_per_gram, None)
+
+    if requested_weight is None:
+        if cash_amount is not None:
+            if execution_price is None or execution_price <= 0:
+                price_snapshot = get_current_gold_price()
+                execution_price = price_snapshot.get('price_per_gram_24k', 0.0)
+            grams_24k = (cash_amount or 0.0) / execution_price if execution_price else 0.0
+            requested_weight = convert_to_main_karat(grams_24k, 24)
+        elif invoice:
+            requested_weight = _invoice_weight_in_main_karat(invoice)
+        else:
+            requested_weight = 0.0
+
+    requested_weight = max(requested_weight or 0.0, 0.0)
+
+    summary = {
+        'weight_requested': requested_weight,
+        'weight_consumed': 0.0,
+        'executions_created': 0,
+        'orders_updated': [],
+        'orders_closed': [],
+        'difference_value_total': 0.0,
+        'difference_weight_total': 0.0,
+        'cash_requested': round(cash_amount or 0.0, 2),
+        'cash_consumed': 0.0,
+    }
+
+    if requested_weight <= 0:
+        return summary
+
+    orders = (
+        WeightClosingOrder.query.filter(WeightClosingOrder.status.in_(['open', 'partially_closed']))
+        .order_by(WeightClosingOrder.created_at.asc())
+        .all()
+    )
+
+    remaining = requested_weight
+    cash_spent = 0.0
+
+    for order in orders:
+        if remaining <= 0:
+            break
+
+        available = max((order.total_weight_main_karat or 0.0) - (order.executed_weight_main_karat or 0.0), 0.0)
+        if available <= 0:
+            order.status = 'closed'
+            summary['orders_closed'].append(order.id)
+            continue
+
+        chunk = min(available, remaining)
+        exec_price = execution_price if execution_price is not None else order.close_price_per_gram
+        exec_price = _coerce_float(exec_price, 0.0)
+
+        # إنشاء قيد محاسبي للتنفيذ إذا كان هناك journal_entry_id
+        if journal_entry_id and invoice:
+            karat_line = InvoiceKaratLine.query.filter_by(invoice_id=invoice.id).first()
+            execution_karat = karat_line.karat if karat_line else get_main_karat()
+
+            inventory_account_id = _get_inventory_account_by_karat(execution_karat)
+
+            bridge_account_id = Account.query.filter_by(account_number='1290').first()
+            if not bridge_account_id:
+                bridge_account_id = Account.query.filter_by(name='جسر مشتريات الكسر والتسكير').first()
+            bridge_id = bridge_account_id.id if bridge_account_id else None
+
+            if bridge_id:
+                weight_in_karat = convert_from_main_karat(chunk, execution_karat)
+
+                karat_debit = f'debit_{execution_karat}k'
+                karat_credit = f'credit_{execution_karat}k'
+
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry_id,
+                    account_id=inventory_account_id,
+                    description=f'تنفيذ تسكير عيار {execution_karat}',
+                    **{karat_debit: weight_in_karat}
+                )
+
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry_id,
+                    account_id=bridge_id,
+                    description=f'إخراج من جسر التسكير عيار {execution_karat}',
+                    **{karat_credit: weight_in_karat}
+                )
+
+        chunk_24k = convert_from_main_karat(chunk, 24)
+        chunk_cash_value = round(chunk_24k * exec_price, 2) if exec_price else 0.0
+        cash_spent += chunk_cash_value
+
+        difference_value = 0.0
+        difference_weight = 0.0
+        reference_price = order.close_price_per_gram or 0.0
+
+        if exec_price and reference_price:
+            difference_value = round((exec_price - reference_price) * chunk_24k, 2)
+            if reference_price > 0:
+                baseline_grams_24k = chunk_cash_value / reference_price if reference_price else 0.0
+                baseline_weight_main = convert_to_main_karat(baseline_grams_24k, 24)
+                difference_weight = round(baseline_weight_main - chunk, 6)
+
+        execution = WeightClosingExecution(
+            order_id=order.id,
+            source_invoice_id=invoice.id if invoice else None,
+            execution_type=execution_type,
+            weight_main_karat=chunk,
+            price_per_gram=exec_price,
+            difference_value=difference_value,
+            difference_weight=difference_weight,
+            journal_entry_id=journal_entry_id,
+            notes=notes,
+        )
+        db.session.add(execution)
+
+        order.executed_weight_main_karat = (order.executed_weight_main_karat or 0.0) + chunk
+        order.remaining_weight_main_karat = max((order.total_weight_main_karat or 0.0) - order.executed_weight_main_karat, 0.0)
+        if order.remaining_weight_main_karat <= 0.0001:
+            order.status = 'closed'
+            summary['orders_closed'].append(order.id)
+        else:
+            order.status = 'partially_closed'
+
+        order.invoice.weight_closing_executed_weight = order.executed_weight_main_karat
+        order.invoice.weight_closing_remaining_weight = order.remaining_weight_main_karat
+        order.invoice.weight_closing_status = order.status
+
+        remaining -= chunk
+        summary['executions_created'] += 1
+        summary['weight_consumed'] += chunk
+        summary['difference_value_total'] += difference_value
+        summary['difference_weight_total'] += difference_weight
+        summary['orders_updated'].append(order.id)
+
+    summary['cash_consumed'] = round(cash_spent, 2)
+    db.session.flush()
+    return summary
+
+
+@api.route('/weight-closing/cash-settlement', methods=['POST'])
+def create_weight_closing_cash_settlement():
+    """Consume open weight-closing orders using a cash amount and live gold price."""
+    data = request.get_json(silent=True) or {}
+    cash_amount = _coerce_float(data.get('cash_amount'))
+    if cash_amount <= 0:
+        return jsonify({'error': 'cash_amount must be greater than zero'}), 400
+
+    execution_price = _coerce_float(data.get('price_per_gram'), None)
+    if execution_price is None or execution_price <= 0:
+        price_snapshot = get_current_gold_price()
+        execution_price = price_snapshot.get('price_per_gram_24k', 0.0)
+
+    if execution_price <= 0:
+        return jsonify({'error': 'Unable to determine gold price per gram'}), 400
+
+    summary = _auto_consume_weight_closing(
+        data.get('source_invoice_id'),
+        price_per_gram=execution_price,
+        cash_amount=cash_amount,
+        execution_type=data.get('execution_type', 'expense'),
+        journal_entry_id=data.get('journal_entry_id'),
+        notes=data.get('notes'),
+    )
+    summary['price_per_gram'] = execution_price
+    return jsonify(summary)
+
+
+@api.route('/weight-closing/execute-profile', methods=['POST'])
+def execute_weight_closing_profile():
+    data = request.get_json(silent=True) or {}
+    profile_key = data.get('profile_key')
+    if not profile_key:
+        return jsonify({'error': 'profile_key مطلوب'}), 400
+
+    ensure_weight_closing_support_accounts()
+
+    try:
+        profile = resolve_weight_profile(profile_key)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    financial_account = profile.get('financial_account')
+    if not financial_account:
+        return jsonify({'error': 'الحساب المالي للبروفايل غير متوفر'}), 400
+
+    settings = _load_weight_closing_settings()
+    cash_account_id = settings.get('cash_account_id', 1100)
+    cash_account = Account.query.get(cash_account_id)
+    if not cash_account:
+        return jsonify({'error': 'حساب الصندوق غير معرف في الإعدادات'}), 400
+
+    price_per_gram = _coerce_float(data.get('price_per_gram'), None)
+    price_strategy = profile['meta'].get('price_strategy', 'manual')
+    if price_strategy in ('live_or_manual', 'live_only'):
+        if price_per_gram is None or price_per_gram <= 0:
+            snapshot = get_current_gold_price()
+            price_per_gram = snapshot.get('price_per_gram_24k', 0.0)
+    if price_per_gram is None or price_per_gram <= 0:
+        return jsonify({'error': 'price_per_gram غير صالح'}), 400
+
+    cash_amount = _coerce_float(data.get('cash_amount'))
+    weight_main = _coerce_float(data.get('weight_main_karat'))
+    if weight_main <= 0 and data.get('weight_grams'):
+        karat = int(data.get('karat') or get_main_karat() or 21)
+        weight_main = convert_to_main_karat(_coerce_float(data.get('weight_grams')), karat)
+
+    if cash_amount <= 0 and weight_main > 0:
+        grams_24k = convert_from_main_karat(weight_main, 24)
+        cash_amount = round(grams_24k * price_per_gram, 2)
+
+    if weight_main <= 0 and cash_amount > 0 and price_per_gram > 0:
+        grams_24k = cash_amount / price_per_gram
+        weight_main = convert_to_main_karat(grams_24k, 24)
+
+    if profile['meta'].get('requires_cash_amount') and cash_amount <= 0:
+        return jsonify({'error': 'هذا البروفايل يتطلب cash_amount أكبر من صفر'}), 400
+    if profile['meta'].get('requires_weight') and weight_main <= 0:
+        return jsonify({'error': 'هذا البروفايل يتطلب إدخال وزن'}), 400
+
+    now = datetime.utcnow()
+    description = data.get('notes') or profile['meta'].get('display_name') or profile_key
+    journal_entry = JournalEntry(
+        entry_number=_generate_journal_entry_number('WXP'),
+        date=now,
+        description=f'تنفيذ بروفايل {profile_key}: {description}',
+        reference_type='weight_profile',
+        reference_id=None,
+        is_posted=True,
+        posted_at=now,
+        posted_by='system',
+    )
+    db.session.add(journal_entry)
+    db.session.flush()
+
+    if cash_amount > 0:
+        create_dual_journal_entry(
+            journal_entry_id=journal_entry.id,
+            account_id=financial_account.id,
+            cash_debit=cash_amount,
+            description=description,
+        )
+        create_dual_journal_entry(
+            journal_entry_id=journal_entry.id,
+            account_id=cash_account.id,
+            cash_credit=cash_amount,
+            description=description,
+        )
+
+    memo_debit_account = Account.query.get(financial_account.memo_account_id) if financial_account.memo_account_id else None
+    memo_credit_account = Account.query.get(cash_account.memo_account_id) if cash_account.memo_account_id else None
+    if memo_debit_account and memo_credit_account and weight_main > 0:
+        _record_memo_weight_transfer(
+            journal_entry.id,
+            debit_account_id=memo_debit_account.id,
+            credit_account_id=memo_credit_account.id,
+            weight_main_karat=weight_main,
+        )
+
+    verify_dual_balance(journal_entry.id)
+
+    consumption = _auto_consume_weight_closing(
+        weight_override=weight_main if weight_main > 0 else None,
+        price_per_gram=price_per_gram,
+        cash_amount=cash_amount,
+        execution_type=profile['meta'].get('execution_type', 'expense'),
+        journal_entry_id=journal_entry.id,
+        notes=description,
+    )
+    consumption['price_per_gram'] = price_per_gram
+
+    db.session.commit()
+
+    return jsonify(
+        {
+            'profile': {
+                'key': profile_key,
+                'display_name': profile['meta'].get('display_name', profile_key),
+            },
+            'cash_amount': cash_amount,
+            'weight_main_karat': weight_main,
+            'price_per_gram': price_per_gram,
+            'journal_entry': {
+                'id': journal_entry.id,
+                'entry_number': journal_entry.entry_number,
+                'date': journal_entry.date.isoformat(),
+            },
+            'weight_consumption': consumption,
+        }
+    )
+
+
+def _serialize_office_reservation(reservation: OfficeReservation):
+    payload = reservation.to_dict()
+    payload['office'] = reservation.office.to_dict() if reservation.office else None
+    return payload
+
+
+@api.route('/office-reservations', methods=['GET'])
+def list_office_reservations():
+    query = OfficeReservation.query.options(joinedload(OfficeReservation.office))
+
+    office_id = request.args.get('office_id', type=int)
+    status = request.args.get('status')
+    payment_status = request.args.get('payment_status')
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+
+    if office_id:
+        query = query.filter(OfficeReservation.office_id == office_id)
+    if status:
+        query = query.filter(OfficeReservation.status == status)
+    if payment_status:
+        query = query.filter(OfficeReservation.payment_status == payment_status)
+    if date_from:
+        try:
+            query = query.filter(OfficeReservation.reservation_date >= datetime.fromisoformat(date_from))
+        except ValueError:
+            return jsonify({'error': 'date_from must be ISO format'}), 400
+    if date_to:
+        try:
+            query = query.filter(OfficeReservation.reservation_date <= datetime.fromisoformat(date_to))
+        except ValueError:
+            return jsonify({'error': 'date_to must be ISO format'}), 400
+
+    order_by = request.args.get('order_by', 'reservation_date')
+    order_direction = request.args.get('order_direction', 'desc').lower()
+    order_map = {
+        'reservation_date': OfficeReservation.reservation_date,
+        'total_amount': OfficeReservation.total_amount,
+        'paid_amount': OfficeReservation.paid_amount,
+        'weight_main_karat': OfficeReservation.weight_main_karat,
+    }
+    sort_column = order_map.get(order_by, OfficeReservation.reservation_date)
+    if order_direction == 'asc':
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+
+    limit = request.args.get('limit', type=int)
+    page = request.args.get('page', type=int) or 1
+    per_page = request.args.get('per_page', type=int) or limit or 25
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    data = [_serialize_office_reservation(reservation) for reservation in pagination.items]
+
+    return jsonify(
+        {
+            'data': data,
+            'pagination': {
+                'page': pagination.page,
+                'per_page': pagination.per_page,
+                'total': pagination.total,
+                'pages': pagination.pages,
+            },
+        }
+    )
+
+
+@api.route('/office-reservations/<int:reservation_id>', methods=['GET'])
+def get_office_reservation(reservation_id):
+    reservation = OfficeReservation.query.options(joinedload(OfficeReservation.office)).get(reservation_id)
+    if not reservation:
+        return jsonify({'error': 'الحجز غير موجود'}), 404
+    return jsonify(_serialize_office_reservation(reservation))
+
+
+@api.route('/office-reservations', methods=['POST'])
+def create_office_reservation():
+    data = request.get_json(silent=True) or {}
+    office_id = data.get('office_id')
+    if not office_id:
+        return jsonify({'error': 'office_id مطلوب'}), 400
+
+    office = Office.query.get(office_id)
+    if not office:
+        return jsonify({'error': 'المكتب غير موجود'}), 404
+    ensure_office_account(office)
+    if not office.account_category_id:
+        return jsonify({'error': 'المكتب لا يملك حساباً محاسبياً مرتبطاً'}), 400
+
+    weight_grams = _coerce_float(data.get('weight') or data.get('weight_grams'))
+    if weight_grams <= 0:
+        return jsonify({'error': 'الوزن يجب أن يكون أكبر من صفر'}), 400
+
+    price_per_gram = _coerce_float(data.get('price_per_gram'))
+    if price_per_gram <= 0:
+        return jsonify({'error': 'price_per_gram مطلوب'}), 400
+
+    execution_price = _coerce_float(data.get('execution_price_per_gram'), price_per_gram)
+    karat = int(data.get('karat') or get_main_karat())
+    weight_main_karat = round(convert_to_main_karat(weight_grams, karat), 6)
+    total_amount = _coerce_float(data.get('total_amount'), round(weight_grams * price_per_gram, 2))
+    paid_amount = _coerce_float(data.get('paid_amount'), total_amount)
+
+    payment_status = data.get('payment_status')
+    if not payment_status:
+        if paid_amount >= total_amount and total_amount > 0:
+            payment_status = 'paid'
+        elif paid_amount > 0:
+            payment_status = 'partial'
+        else:
+            payment_status = 'pending'
+
+    settings = _load_weight_closing_settings()
+
+    try:
+        reservation_date = datetime.fromisoformat(data.get('reservation_date')) if data.get('reservation_date') else datetime.utcnow()
+    except ValueError:
+        return jsonify({'error': 'reservation_date يجب أن يكون بصيغة ISO'}), 400
+
+    try:
+        supplier = ensure_office_supplier(office)
+        supplier_override = data.get('supplier_id')
+        if supplier_override and supplier_override != supplier.id:
+            return jsonify({'error': 'لا يمكن تحديد مورد مختلف عن مورد المكتب'}), 400
+
+        last_invoice = (
+            Invoice.query.filter_by(invoice_type='شراء من مورد')
+            .order_by(Invoice.invoice_type_id.desc())
+            .first()
+        )
+        next_invoice_type_id = (last_invoice.invoice_type_id + 1) if last_invoice else 1
+
+        purchase_invoice = Invoice(
+            invoice_type_id=next_invoice_type_id,
+            supplier_id=supplier.id,
+            office_id=office.id,
+            date=reservation_date,
+            total=total_amount,
+            invoice_type='شراء من مورد',
+            status='paid' if payment_status == 'paid' else ('partially_paid' if payment_status == 'partial' else 'unpaid'),
+            total_weight=weight_main_karat,
+            gold_subtotal=total_amount,
+            wage_subtotal=0.0,
+            gold_tax_total=0.0,
+            wage_tax_total=0.0,
+            amount_paid=paid_amount,
+            gold_type='scrap',
+        )
+        db.session.add(purchase_invoice)
+        db.session.flush()
+
+        karat_line = InvoiceKaratLine(
+            invoice_id=purchase_invoice.id,
+            karat=karat,
+            weight_grams=weight_grams,
+            gold_value_cash=total_amount,
+            manufacturing_wage_cash=0.0,
+        )
+        db.session.add(karat_line)
+
+        _upsert_weight_closing_order(purchase_invoice, execution_price, settings=settings)
+
+        reservation = OfficeReservation(
+            office_id=office.id,
+            reservation_code=_generate_reservation_code(settings.get('reservation_code_prefix', 'RES')),
+            reservation_date=reservation_date,
+            karat=karat,
+            weight_grams=weight_grams,
+            weight_main_karat=weight_main_karat,
+            price_per_gram=price_per_gram,
+            execution_price_per_gram=execution_price,
+            total_amount=total_amount,
+            paid_amount=paid_amount,
+            payment_status=payment_status,
+            status=data.get('status', 'reserved'),
+            contact_person=data.get('contact_person'),
+            contact_phone=data.get('contact_phone'),
+            notes=data.get('notes'),
+            weight_consumed_main_karat=0.0,
+            weight_remaining_main_karat=weight_main_karat,
+            purchase_invoice_id=purchase_invoice.id,
+        )
+        db.session.add(reservation)
+        db.session.flush()
+
+        invoice_entry = JournalEntry(
+            entry_number=_generate_journal_entry_number('INV'),
+            date=reservation_date,
+            description=f'سداد حجز مكتب {office.name}',
+            reference_type='invoice',
+            reference_id=purchase_invoice.id,
+        )
+        db.session.add(invoice_entry)
+        db.session.flush()
+
+        if paid_amount > 0:
+            cash_account_id = settings.get('cash_account_id', 15)
+            # قيد الدفع: المكتب مدين (ندفع له = نقلل الدين) والصندوق دائن (يخرج المال)
+            create_dual_journal_entry(
+                journal_entry_id=invoice_entry.id,
+                account_id=office.account_category_id,
+                cash_debit=paid_amount,
+                supplier_id=supplier.id,
+                description='دفع نقدية للمكتب (مدين)'
+            )
+            create_dual_journal_entry(
+                journal_entry_id=invoice_entry.id,
+                account_id=cash_account_id,
+                cash_credit=paid_amount,
+                description='خروج نقدية من الصندوق (دائن)'
+            )
+            verify_dual_balance(invoice_entry.id)
+
+        gold_entry = JournalEntry(
+            entry_number=_generate_journal_entry_number('WGT'),
+            date=reservation_date,
+            description=f'حجز ذهب عيار {karat} من مكتب {office.name}',
+            reference_type='office_reservation',
+            reference_id=reservation.id,
+            is_posted=True,
+            posted_at=reservation_date,
+            posted_by='system',
+        )
+        db.session.add(gold_entry)
+        db.session.flush()
+
+        # حساب الجسر (1290)
+        bridge_account = Account.query.filter_by(account_number='1290').first()
+        if not bridge_account:
+            bridge_account = Account.query.filter_by(name='جسر مشتريات الكسر والتسكير').first()
+        
+        if not bridge_account:
+            db.session.rollback()
+            return jsonify({'error': 'حساب الجسر (1290) غير موجود في شجرة الحسابات'}), 500
+        
+        # قيد الحجز: الجسر مدين (نقداً + ذهباً) والمكتب دائن (نقداً + ذهباً)
+        # استخدام المعاملات الديناميكية مباشرة
+        karat_debit = f'debit_{karat}k'
+        karat_credit = f'credit_{karat}k'
+        
+        # حساب الجسر: مدين نقداً ومدين ذهباً
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=bridge_account.id,
+            cash_debit=total_amount,
+            description=f'حجز ذهب عيار {karat} في الجسر',
+            **{karat_debit: weight_grams}  # معامل ديناميكي ✅
+        )
+        
+        # المكتب: دائن نقداً ودائن ذهباً
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=office.account_category_id,
+            cash_credit=total_amount,
+            supplier_id=supplier.id,
+            description=f'بيع ذهب عيار {karat} للمحل (مكتب)',
+            **{karat_credit: weight_grams}  # معامل ديناميكي ✅
+        )
+        verify_dual_balance(gold_entry.id)
+
+        consumption = _auto_consume_weight_closing(
+            purchase_invoice.id,
+            weight_override=weight_main_karat,
+            price_per_gram=execution_price,
+            execution_type='office_reservation',
+            journal_entry_id=gold_entry.id,
+            notes=f'Office reservation #{reservation.reservation_code}',
+        )
+
+        reservation.weight_consumed_main_karat = consumption['weight_consumed']
+        reservation.weight_remaining_main_karat = max(weight_main_karat - consumption['weight_consumed'], 0.0)
+        reservation.executions_created = consumption['executions_created']
+        if reservation.weight_remaining_main_karat <= 0.0001:
+            reservation.status = 'executed'
+
+        office.total_reservations = (office.total_reservations or 0) + 1
+        office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
+        office.total_amount_paid = (office.total_amount_paid or 0.0) + paid_amount
+        db.session.add(office)
+
+        db.session.commit()
+
+        response = _serialize_office_reservation(reservation)
+        response['weight_consumption'] = consumption
+        return jsonify(response), 201
+
+    except Exception as exc:
+        db.session.rollback()
+        print(f"❌ Failed to create office reservation: {exc}")
+        return jsonify({'error': f'فشل إنشاء الحجز: {exc}'}), 500
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔥 النظام المزدوج: التقارير الوزنية
+# ═══════════════════════════════════════════════════════════════
+
+@api.route('/dual_system/income_statement', methods=['GET'])
+def get_weight_based_income_statement():
+    """
+    قائمة الدخل بالوزن المعادل
+    تحسب الإيرادات والمصروفات بالجرام المعادل بناءً على أسعار الذهب
+    وقت المعاملة (gold_price_snapshot)
+    """
+    try:
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+        
+        # التحقق من التواريخ
+        if not start_date_str or not end_date_str:
+            return jsonify({'error': 'يجب تحديد تاريخ البداية والنهاية'}), 400
+        
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+
+        # سعر الذهب المباشر (عيار 24) لتحويل النقد إلى وزن عند الحاجة
+        latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+        live_gold_price_per_gram_24k = 0.0
+        if latest_gold_price and latest_gold_price.price:
+            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+        if live_gold_price_per_gram_24k <= 0:
+            live_gold_price_per_gram_24k = 400.0  # fallback يمنع القسمة على صفر
+
+        def cash_to_weight(net_cash: float, price_snapshot: float) -> float:
+            price = price_snapshot or live_gold_price_per_gram_24k
+            if price and price > 0:
+                return net_cash / price
+            return 0.0
+
+        # سعر الذهب المباشر (عيار 24) لاستخدامه في تحويل النقد إلى وزن للمصنعية
+        latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+        live_gold_price_per_gram_24k = 0.0
+        if latest_gold_price and latest_gold_price.price:
+            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+        if live_gold_price_per_gram_24k <= 0:
+            live_gold_price_per_gram_24k = 400.0  # قيمة احتياطية لضمان عدم القسمة على صفر
+
+        def cash_to_weight(net_cash: float, price_snapshot: float) -> float:
+            price = price_snapshot or live_gold_price_per_gram_24k
+            if price and price > 0:
+                return net_cash / price
+            return 0.0
+        main_karat_value = get_main_karat() or 21
+        
+        # سعر الذهب المباشر (عيار 24) لتحويل الربح النقدي إلى وزن
+        latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+        live_gold_price_per_gram_24k = 0.0
+        gold_price_source = 'not_available'
+        gold_price_updated_at = None
+        if latest_gold_price and latest_gold_price.price:
+            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+            gold_price_source = 'database'
+            gold_price_updated_at = latest_gold_price.date.isoformat() if latest_gold_price.date else None
+        if live_gold_price_per_gram_24k <= 0:
+            live_gold_price_per_gram_24k = 400.0  # fallback value
+            gold_price_source = 'fallback'
+        
+        # جلب قيود اليومية المرحّلة فقط في الفترة المحددة (مع استبعاد المحذوف)
+        entries = db.session.query(JournalEntryLine).join(JournalEntry).filter(
+            JournalEntry.date >= start_date,
+            JournalEntry.date < end_date,
+            or_(JournalEntry.is_posted == True, JournalEntry.is_posted.is_(None)),
+            JournalEntry.is_deleted == False,
+            JournalEntryLine.is_deleted == False
+        ).all()
+        
+        # حسابات الإيرادات النقدية (لتحويلها إلى وزن بالسعر المباشر)
+        revenue_accounts_cash = db.session.query(Account).filter(
+            Account.account_number.like('4%'),
+            ~Account.account_number.like('7%')
+        ).all()
+        revenue_cash_ids = {acc.id for acc in revenue_accounts_cash}
+
+        # محوّل نقد → وزن باستخدام snapshot القيد أو السعر الحالي
+        def cash_to_weight(net_cash: float, price_snapshot: float) -> float:
+            price = price_snapshot or live_gold_price_per_gram_24k
+            if price and price > 0:
+                return net_cash / price
+            return 0.0
+
+        revenues_weight = defaultdict(float)
+
+        for line in entries:
+            if line.account_id in revenue_cash_ids:
+                net_cash = (line.cash_credit or 0.0) - (line.cash_debit or 0.0)
+                weight = cash_to_weight(net_cash, line.gold_price_snapshot)
+                revenues_weight[line.account_id] += weight
+
+        # ─────────────────────────────────────────────
+        # الوزن الفعلي المباع من الفواتير (بيع/مرتجع بيع)
+        # ─────────────────────────────────────────────
+        actual_sold_weight = 0.0
+
+        sale_invoice_types = ['بيع', 'مرتجع بيع']
+        sale_invoices = (
+            Invoice.query
+            .filter(
+                Invoice.date >= start_date,
+                Invoice.date < end_date,
+                Invoice.is_posted == True,
+                Invoice.invoice_type.in_(sale_invoice_types)
+            )
+            .all()
+        )
+
+        for inv in sale_invoices:
+            direction = 1.0
+            inv_type = (inv.invoice_type or '').strip()
+            if 'مرتجع' in inv_type and 'بيع' in inv_type:
+                direction = -1.0
+
+            # استخدم الوزن المحسوب إن لم يكن الحقل مخزناً
+            weight_value = inv.total_weight
+            if weight_value in (None, 0):
+                try:
+                    weight_value = inv.calculate_total_weight()
+                except Exception:
+                    weight_value = 0.0
+
+            if weight_value:
+                actual_sold_weight += direction * float(weight_value)
+
+        # مصروفات أجور المصنعية → تحويل من النقد إلى وزن بالسعر المباشر للسطر
+        manufacturing_wage_acc_id = (
+            get_account_id_for_mapping('بيع', 'manufacturing_wage')
+            or _ensure_manufacturing_wage_expense_account()
+            or get_account_id_by_number('51')
+        )
+        manufacturing_wage_weight = 0.0
+        manufacturing_wage_details = []
+
+        if manufacturing_wage_acc_id:
+            for line in entries:
+                if line.account_id == manufacturing_wage_acc_id:
+                    net_cash = (line.cash_debit or 0.0) - (line.cash_credit or 0.0)
+                    weight = cash_to_weight(net_cash, line.gold_price_snapshot)
+                    if weight:
+                        manufacturing_wage_weight += weight
+                        manufacturing_wage_details.append({
+                            'account_code': line.account.account_number if line.account else None,
+                            'account_name': line.account.name if line.account else 'أجور مصنعية',
+                            'weight_grams': round(weight, 6),
+                            'price_snapshot': round(line.gold_price_snapshot, 2) if line.gold_price_snapshot else None
+                        })
+
+        # بناء التقرير
+        revenue_details = []
+        total_revenue_weight = 0.0
+        
+        for acc_id, weight in revenues_weight.items():
+            if weight != 0:
+                account = db.session.query(Account).get(acc_id)
+                revenue_details.append({
+                    'account_code': account.account_number,
+                    'account_name': account.name,
+                    'weight_grams': round(weight, 6)
+                })
+                total_revenue_weight += weight
+        
+        # تكلفة المبيعات الوزنية = الوزن الفعلي المباع
+        total_cost_of_sales_weight = actual_sold_weight
+        cost_of_sales_details = [{
+            'account_code': 'actual_sold_weight',
+            'account_name': 'الوزن الفعلي المباع (من الفواتير المرحّلة)',
+            'weight_grams': round(actual_sold_weight, 6)
+        }]
+        
+        # المصروفات الوزنية (حالياً: أجور المصنعية محولة للوزن)
+        operating_expense_details = manufacturing_wage_details
+        total_operating_expense_weight = manufacturing_wage_weight
+        
+        # حساب ربح الفواتير النقدي وتحويله إلى وزن بالعيار الرئيسي
+        profit_cash_total = (
+            db.session.query(func.coalesce(func.sum(Invoice.profit_cash), 0.0))
+            .filter(
+                Invoice.date >= start_date,
+                Invoice.date < end_date,
+                Invoice.is_posted == True,
+                Invoice.invoice_type.in_(['بيع', 'مرتجع بيع'])
+            )
+            .scalar()
+            or 0.0
+        )
+
+        profit_weight_grams_24k = (profit_cash_total / live_gold_price_per_gram_24k) if live_gold_price_per_gram_24k > 0 else 0.0
+        profit_weight_main_karat = convert_to_main_karat(profit_weight_grams_24k, 24) if profit_weight_grams_24k else 0.0
+        # صافي الوزن لحسابات المذكرة (غير مستخدم حالياً في العرض، يُترك للحفاظ على التوافق)
+        memo_net_weight = total_revenue_weight - total_operating_expense_weight
+        
+        # حساب الربح الإجمالي والصافي
+        gross_profit_weight = total_revenue_weight - total_cost_of_sales_weight
+        net_profit_weight = gross_profit_weight - total_operating_expense_weight
+        
+        # حساب هامش الربح
+        profit_margin_pct = (net_profit_weight / total_revenue_weight * 100) if total_revenue_weight > 0 else 0.0
+        
+        return jsonify({
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'report_type': 'weight_based_income_statement',
+            
+            # 1️⃣ صافي المبيعات وزن (الإيرادات)
+            'net_sales_weight': {
+                'total_weight_grams': round(total_revenue_weight, 6),
+                'details': sorted(revenue_details, key=lambda x: x['account_code']),
+                'note': 'صافي المبيعات بالوزن (من حسابات الإيرادات الوزنية 74xxx)'
+            },
+            
+            # 2️⃣ الوزن المباع (تكلفة المبيعات الوزنية)
+            'sold_weight': {
+                'total_weight_grams': round(total_cost_of_sales_weight, 6),
+                'details': sorted(cost_of_sales_details, key=lambda x: x['account_code']),
+                'note': 'الوزن الفعلي المباع من الفواتير المرحّلة (بيع / مرتجع بيع)'
+            },
+            
+            # 3️⃣ الربح الإجمالي الوزني
+            'gross_profit_weight': {
+                'total_weight_grams': round(gross_profit_weight, 6),
+                'note': 'الربح الإجمالي الوزني = صافي المبيعات - الوزن المباع'
+            },
+            
+            # 4️⃣ المصاريف الوزنية (أجور المصنعية + المصاريف التشغيلية)
+            'operating_expenses_weight': {
+                'total_weight_grams': round(total_operating_expense_weight, 6),
+                'details': sorted(operating_expense_details, key=lambda x: x['account_code']),
+                'note': 'المصاريف الوزنية (أجور المصنعية والمصاريف التشغيلية)'
+            },
+            
+            # 5️⃣ صافي الربح الوزني
+            'net_profit_weight': {
+                'total_weight_grams': round(net_profit_weight, 6),
+                'note': 'صافي الربح الوزني = الربح الإجمالي - المصاريف الوزنية'
+            },
+            
+            # 6️⃣ هامش الربح
+            'profit_margin': {
+                'percentage': round(profit_margin_pct, 2),
+                'note': 'هامش الربح % = (صافي الربح ÷ صافي المبيعات) × 100'
+            },
+            
+            # معلومات السعر
+            'pricing_info': {
+                'live_gold_price_per_gram_24k': round(live_gold_price_per_gram_24k, 2) if live_gold_price_per_gram_24k else None,
+                'source': gold_price_source,
+                'updated_at': gold_price_updated_at,
+                'main_karat_reference': main_karat_value
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating weight-based income statement: {e}")
+        return jsonify({'error': f'فشل إنشاء قائمة الدخل الوزنية: {str(e)}'}), 500
+
+
+@api.route('/release-wage-weight', methods=['POST'])
+def release_wage_weight():
+    data = request.get_json(silent=True) or {}
+    grams_raw = data.get('grams')
+    note = data.get('note') or data.get('description') or 'تحرير وزن أجور المصنعية'
+    karat_value = data.get('karat') or data.get('main_karat') or get_main_karat()
+
+    try:
+        grams_value = float(normalize_number(str(grams_raw))) if grams_raw not in (None, '') else 0.0
+    except Exception:
+        grams_value = 0.0
+
+    if grams_value <= 0:
+        return jsonify({'error': 'Invalid weight value'}), 400
+
+    try:
+        journal_entry = create_wage_weight_release_journal(
+            weight_grams=grams_value,
+            note=note,
+            karat=karat_value
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.session.rollback()
+        print(f"❌ Error releasing wage weight: {exc}")
+        return jsonify({'error': 'فشل تحرير وزن الأجور'}), 500
+
+    return jsonify({
+        'status': 'ok',
+        'journal_entry_id': journal_entry.id,
+        'entry_number': journal_entry.entry_number,
+        'weight_grams': round(grams_value, 6)
+    }), 201
+
+
+@api.route('/dual_system/account_statement', methods=['GET'])
+def get_dual_account_statement():
+    """
+    كشف حساب مزدوج: يعرض النقد والوزن معاً
+    """
+    try:
+        account_id = request.args.get('account_id', type=int)
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+        
+        if not account_id:
+            return jsonify({'error': 'يجب تحديد رقم الحساب'}), 400
+        
+        account = db.session.query(Account).get(account_id)
+        if not account:
+            return jsonify({'error': 'الحساب غير موجود'}), 404
+        
+        # بناء الاستعلام
+        query = db.session.query(JournalEntryLine).join(JournalEntry).filter(
+            JournalEntryLine.account_id == account_id,
+            JournalEntry.is_posted == True
+        )
+        
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+            query = query.filter(JournalEntry.date >= start_date)
+        
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+            query = query.filter(JournalEntry.date <= end_date)
+        
+        lines = query.order_by(JournalEntry.date, JournalEntry.id).all()
+        
+        # حساب الأرصدة الجارية
+        balance_cash = 0.0
+        balance_weight = 0.0
+        
+        transactions = []
+        for line in lines:
+            balance_cash += line.cash_debit - line.cash_credit
+            balance_weight += line.debit_weight - line.credit_weight
+            
+            transactions.append({
+                'date': line.journal_entry.date.strftime('%Y-%m-%d'),
+                'entry_number': line.journal_entry.entry_number,
+                'description': line.journal_entry.description,
+                'cash_debit': round(line.cash_debit, 2),
+                'cash_credit': round(line.cash_credit, 2),
+                'weight_debit': round(line.debit_weight, 6),
+                'weight_credit': round(line.credit_weight, 6),
+                'balance_cash': round(balance_cash, 2),
+                'balance_weight': round(balance_weight, 6),
+                'gold_price_snapshot': round(line.gold_price_snapshot, 2) if line.gold_price_snapshot else None
+            })
+        
+        return jsonify({
+            'account': {
+                'id': account.id,
+                'code': account.account_number,
+                'name': account.name,
+                'has_memo_account': account.memo_account_id is not None
+            },
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'transactions': transactions,
+            'final_balance_cash': round(balance_cash, 2),
+            'final_balance_weight': round(balance_weight, 6)
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating dual account statement: {e}")
+        return jsonify({'error': f'فشل إنشاء كشف الحساب المزدوج: {str(e)}'}), 500
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 قائمة الدخل التقليدية (نقدية)
+# ═══════════════════════════════════════════════════════════════
+
+@api.route('/reports/income_statement', methods=['GET'])
+def get_income_statement():
+    """
+    قائمة الدخل المزدوجة (income statement) - مالي + وزني
+    تعرض الإيرادات والمصروفات في النظامين:
+    - النظام المالي (4xxx, 5xxx)
+    - النظام الوزني (74xxx, 75xxx)
+    """
+    try:
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+        
+        if not start_date_str or not end_date_str:
+            return jsonify({'error': 'يجب تحديد تاريخ البداية والنهاية'}), 400
+        
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+
+        # سعر الذهب المباشر (عيار 24) لتحويل النقد إلى وزن عند الحاجة
+        latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+        live_gold_price_per_gram_24k = 0.0
+        if latest_gold_price and latest_gold_price.price:
+            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+        if live_gold_price_per_gram_24k <= 0:
+            live_gold_price_per_gram_24k = 400.0  # fallback يمنع القسمة على صفر
+
+        def cash_to_weight(net_cash: float, price_snapshot: float) -> float:
+            price = price_snapshot or live_gold_price_per_gram_24k
+            if price and price > 0:
+                return net_cash / price
+            return 0.0
+
+        # جلب قيود اليومية المرحّلة فقط
+        entries = db.session.query(JournalEntryLine).join(JournalEntry).filter(
+            JournalEntry.date >= start_date,
+            JournalEntry.date < end_date,
+            or_(JournalEntry.is_posted == True, JournalEntry.is_posted.is_(None))
+        ).all()
+        
+        # حسابات الإيرادات (4xxx) والمصروفات (5xxx)
+        revenue_accounts = db.session.query(Account).filter(
+            Account.account_number.like('4%'),
+            ~Account.account_number.like('7%')  # استبعاد حسابات المذكرة
+        ).all()
+        
+        # تشمل المصروفات 5xxx (تكلفة/مصاريف) و6xxx (تشغيلية)، مع استبعاد 7xxx (مذكرة)
+        expense_accounts = db.session.query(Account).filter(
+            or_(
+                Account.account_number.like('5%'),
+                Account.account_number.like('6%')
+            ),
+            ~Account.account_number.like('7%')
+        ).all()
+        
+        revenue_ids = {acc.id for acc in revenue_accounts}
+        expense_ids = {acc.id for acc in expense_accounts}
+        
+        # حسابات النظام الوزني (74xxx, 75xxx)
+        weight_revenue_accounts = db.session.query(Account).filter(
+            Account.account_number.like('74%')
+        ).all()
+        
+        weight_expense_accounts = db.session.query(Account).filter(
+            Account.account_number.like('75%')
+        ).all()
+        
+        weight_revenue_ids = {acc.id for acc in weight_revenue_accounts}
+        weight_expense_ids = {acc.id for acc in weight_expense_accounts}
+        
+        # حساب الإيرادات والمصروفات - النظام المالي
+        revenues = defaultdict(float)
+        expenses = defaultdict(float)
+        
+        # حساب الإيرادات والمصروفات - النظام الوزني
+        revenues_weight = defaultdict(float)
+        expenses_weight = defaultdict(float)
+        
+        for line in entries:
+            # النظام المالي
+            if line.account_id in revenue_ids:
+                # الإيرادات: الدائن - المدين
+                net_amount = line.cash_credit - line.cash_debit
+                revenues[line.account_id] += net_amount
+            elif line.account_id in expense_ids:
+                # المصروفات: المدين - الدائن
+                net_amount = line.cash_debit - line.cash_credit
+                expenses[line.account_id] += net_amount
+            
+            # النظام الوزني
+            if line.account_id in weight_revenue_ids:
+                net_weight = line.credit_weight - line.debit_weight
+                revenues_weight[line.account_id] += net_weight
+            elif line.account_id in weight_expense_ids:
+                net_weight = line.debit_weight - line.credit_weight
+                expenses_weight[line.account_id] += net_weight
+        
+        # بناء التقرير
+        revenue_details = []
+        total_revenue = 0.0
+        
+        for acc_id, amount in revenues.items():
+            if amount != 0:
+                account = db.session.query(Account).get(acc_id)
+                revenue_details.append({
+                    'account_code': account.account_number,
+                    'account_name': account.name,
+                    'amount': round(amount, 2)
+                })
+                total_revenue += amount
+        
+        expense_details = []
+        total_expense = 0.0
+
+        for acc_id, amount in expenses.items():
+            if amount != 0:
+                account = db.session.query(Account).get(acc_id)
+                expense_details.append({
+                    'account_code': account.account_number,
+                    'account_name': account.name,
+                    'account_id': acc_id,
+                    'amount': round(amount, 2)
+                })
+                total_expense += amount
+
+        # تحديد حساب مصروفات المصنعية وإخراجها بشكل صريح
+        # 
+        # ⚠️ ملاحظة هيكلية: حساب 51 (أجور مصنعية)
+        # - حالياً: 51 (رقم مكون من خانتين)
+        # - محاسبياً أدق: 510 أو 511 (ثلاث خانات)
+        # - السبب: تفادي التباس مع مجموعات أو parsing مستقبلي
+        # - ليس خطأ، لكن تحسين هيكلي طويل المدى
+        # - التغيير يتطلب: تعديل دليل الحسابات + migration للبيانات القديمة
+        # ─────────────────────────────────────────────
+        manufacturing_wage_acc_id = (
+            get_account_id_for_mapping('بيع', 'manufacturing_wage')
+            or _ensure_manufacturing_wage_expense_account()
+            or get_account_id_by_number('51')  # يُفضل استبداله بـ 510 أو 511 مستقبلاً
+        )
+
+        manufacturing_wage_amount = 0.0
+        manufacturing_wage_detail = None
+        if manufacturing_wage_acc_id:
+            for detail in expense_details:
+                if detail.get('account_id') == manufacturing_wage_acc_id:
+                    manufacturing_wage_amount = detail['amount']
+                    manufacturing_wage_detail = detail
+                    break
+
+        # تقسيم المصروفات إلى تكلفة مبيعات ومصاريف تشغيلية (باستثناء مصروف المصنعية حتى نظهره مستقلاً)
+        # 
+        # ⚠️ ملاحظة مهمة عن COGS النقدي (5xxx):
+        # - يجب تسجيل قيد تكلفة البضاعة المباعة عند كل عملية بيع
+        # - يُحسب من متوسط تكلفة المخزون النقدية
+        # - إذا ظهر total_cogs = 0، فهذا يعني عدم وجود قيود COGS (خطأ محاسبي)
+        # - القيد الصحيح عند البيع:
+        #   مدين: 501 (تكلفة بضاعة مباعة) - بمتوسط التكلفة
+        #   دائن: 140 (مخزون) - نقدياً
+        # ─────────────────────────────────────────────
+        cost_of_goods_details = []
+        operating_expense_details = []
+        total_cogs = 0.0
+        total_operating = 0.0
+
+        # تشمل حسابات تكلفة المبيعات الشائعة 50xx و 52x، مع استثناء 51xx لأنها مصاريف تشغيلية وليست تكلفة مبيعات
+        cost_prefixes = ('50', '52', '520')
+
+        for detail in expense_details:
+            if manufacturing_wage_detail and detail is manufacturing_wage_detail:
+                # سيتم التعامل معه كمصروف مصنعية منفصل أدناه
+                continue
+
+            code = detail['account_code'] or ''
+            if code.startswith(cost_prefixes):
+                cost_of_goods_details.append(detail)
+                total_cogs += detail['amount']
+            else:
+                operating_expense_details.append(detail)
+                total_operating += detail['amount']
+
+        # إضافة مصروف المصنعية إلى المصاريف التشغيلية الإجمالية (مع عرضه بشكل مستقل)
+        operating_expenses_total = total_operating + manufacturing_wage_amount
+
+        gross_profit = total_revenue - total_cogs
+        net_income = gross_profit - operating_expenses_total
+        
+        # حساب المؤشرات الوزنية
+        total_revenue_weight = sum(revenues_weight.values())
+        total_expense_weight = sum(expenses_weight.values())
+        
+        # ─────────────────────────────────────────────
+        # تكلفة المبيعات الوزنية: من حسابات القيود اليومية (752xx) فقط
+        # COGS weight = sold_weight + (manufacturing_cost_cash / live_gold_price)
+        # ─────────────────────────────────────────────
+        weight_cogs = 0.0
+        
+        # جمع تكلفة المبيعات الوزنية من حسابات 752xx في القيود اليومية المرحلة
+        cogs_weight_accounts = db.session.query(Account).filter(
+            Account.account_number.like('752%')
+        ).all()
+        cogs_weight_ids = {acc.id for acc in cogs_weight_accounts}
+        
+        for line in entries:
+            if line.account_id in cogs_weight_ids:
+                weight_cogs += (line.debit or 0.0) - (line.credit or 0.0)
+        
+        # ─────────────────────────────────────────────
+        # 🔧 FIX: المصنعية لا تُضاف إلى COGS الوزني
+        # 
+        # القاعدة الذهبية:
+        # - المصنعية نقدية فقط (حساب 51 أو 5105)
+        # - لا تظهر في الحسابات الوزنية (لا في القيود ولا في القوائم)
+        # - COGS الوزني = الوزن الفعلي المباع فقط (من 752xx)
+        # 
+        # الكود القديم (معطل):
+        # manufacturing_wage_in_weight = 0.0
+        # if manufacturing_wage_acc_id and manufacturing_wage_amount > 0:
+        #     for line in entries:
+        #         if line.account_id == manufacturing_wage_acc_id:
+        #             net_cash = (line.cash_debit or 0.0) - (line.cash_credit or 0.0)
+        #             if net_cash > 0:
+        #                 price_snapshot = line.gold_price_snapshot or live_gold_price_per_gram_24k
+        #                 if price_snapshot > 0:
+        #                     manufacturing_wage_in_weight += net_cash / price_snapshot
+        #     weight_cogs += manufacturing_wage_in_weight  # ❌ معطل
+        # ─────────────────────────────────────────────
+        
+        # حفظ للعرض فقط (بدون إضافة إلى COGS)
+        manufacturing_wage_in_weight = 0.0
+
+        # ─────────────────────────────────────────────
+        # المصروفات الوزنية الأخرى من حسابات 75xxx (تشغيلية فقط)
+        # 
+        # 📋 قواعد استخدام المصاريف الوزنية (75xxx):
+        # ✅ مسموح: مصاريف مدفوعة بالذهب فعلياً (نادرة جداً)
+        #    مثال: تبادل ذهب مقابل خدمة، هدايا ذهبية، عينات مجانية
+        # 
+        # ❌ ممنوع: تحويل مصاريف نقدية إلى وزن
+        #    مثال خاطئ: "مصروف تسويق" أو "إيجار" بالوزن
+        # 
+        # القاعدة الذهبية:
+        # - إذا دُفع نقداً → يُسجل في 6xxx (نقدي فقط)
+        # - إذا دُفع ذهباً → يُسجل في 75xxx (وزني فقط)
+        # - لا تحويل بينهما إلا للمصنعية (استثناء وحيد)
+        # 
+        # ملاحظات:
+        # - 752xx محسوبة في weight_cogs أعلاه
+        # - المصنعية محسوبة في weight_cogs أيضاً (لا نعيد إضافتها هنا)
+        # - هنا فقط المصاريف التشغيلية الوزنية الأخرى (75xxx غير 752xx)
+        # ─────────────────────────────────────────────
+        weight_operating = 0.0
+        for acc_id, weight in expenses_weight.items():
+            account = db.session.query(Account).get(acc_id)
+            code = account.account_number or ''
+            if code.startswith('752'):
+                # تكلفة المبيعات الوزنية محسوبة في weight_cogs أعلاه
+                continue
+            weight_operating += weight
+
+        # حفظ المصنعية الوزنية للعرض فقط (بدون إضافتها مرة أخرى للمصروفات)
+        # تم حسابها أعلاه باستخدام الأسعار التاريخية من القيود
+        manufacturing_wage_weight = manufacturing_wage_in_weight
+
+        weight_gross_profit = total_revenue_weight - weight_cogs
+        weight_expenses_total = weight_operating  # ❌ لا نضيف manufacturing_wage_weight هنا لأنها داخل COGS
+        weight_net_profit = weight_gross_profit - weight_expenses_total
+        weight_net_profit_grams = weight_net_profit
+        
+        # ─────────────────────────────────────────────
+        # 💰 تقييم الربح الوزني بالقيمة النقدية (لأن النقد يُسكَّر دائماً)
+        # القاعدة: قيمة الربح الوزني = الربح الوزني × السعر الحالي
+        # ─────────────────────────────────────────────
+        weight_net_profit_value = 0.0
+        if weight_net_profit != 0 and live_gold_price_per_gram_24k > 0:
+            # تحويل الربح الوزني (عيار رئيسي) إلى قيمة نقدية
+            # استخدام السعر الحالي للعيار الرئيسي
+            weight_net_profit_value = weight_net_profit * live_gold_price_per_gram_24k
+        
+        weight_expenses_posted = weight_expenses_total
+        weight_expenses_pending = 0.0
+        weight_expenses_pending_cash = 0.0
+        
+        # حساب النسب المئوية
+        net_margin_pct = (net_income / total_revenue * 100) if total_revenue != 0 else 0.0
+        weight_net_margin_pct = (weight_net_profit / total_revenue_weight * 100) if total_revenue_weight != 0 else 0.0
+        
+        return jsonify({
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'report_type': 'income_statement',
+            'summary': {
+                # المؤشرات المالية (نقدي)
+                'net_revenue': round(total_revenue, 2),
+                'gross_profit': round(gross_profit, 2),
+                'operating_expenses': round(operating_expenses_total, 2),
+                'operating_expenses_excl_wage': round(total_operating, 2),
+                'manufacturing_wage_expense': round(manufacturing_wage_amount, 2),
+                'net_profit': round(net_income, 2),
+                'net_margin_pct': round(net_margin_pct, 2),
+                
+                # المؤشرات الوزنية (ذهب)
+                'weight_revenue': round(total_revenue_weight, 6),
+                'weight_revenue': round(total_revenue_weight, 6),
+                'weight_cogs': round(weight_cogs, 6),
+                'weight_gross_profit': round(weight_gross_profit, 6),
+                'weight_manufacturing_wage': round(manufacturing_wage_weight, 6),
+                'weight_expenses': round(weight_expenses_total, 6),
+                'weight_expenses_posted': round(weight_expenses_posted, 6),
+                'weight_expenses_pending': round(weight_expenses_pending, 6),
+                'weight_expenses_pending_cash': round(weight_expenses_pending_cash, 2),
+                'weight_net_profit': round(weight_net_profit, 6),
+                'weight_net_profit_grams': round(weight_net_profit_grams, 6),
+                'weight_net_profit_value': round(weight_net_profit_value, 2),  # 💰 قيمة الربح الوزني بالريال
+                'weight_net_margin_pct': round(weight_net_margin_pct, 2),
+                'gold_price_for_valuation': round(live_gold_price_per_gram_24k, 2),  # السعر المستخدم للتقييم
+            },
+            'series': [],  # يمكن إضافة بيانات السلاسل الزمنية لاحقاً
+            'revenues': {
+                'details': sorted(revenue_details, key=lambda x: x['account_code']),
+                'total': round(total_revenue, 2)
+            },
+            'expenses': {
+                'details': sorted(expense_details, key=lambda x: x['account_code']),
+                'total': round(total_expense, 2)
+            },
+            'cost_of_goods_sold': {
+                'details': sorted(cost_of_goods_details, key=lambda x: x['account_code']),
+                'total': round(total_cogs, 2)
+            },
+            'gross_profit': round(gross_profit, 2),
+            'operating_expenses': {
+                'details': sorted(operating_expense_details, key=lambda x: x['account_code']),
+                'total': round(total_operating, 2),
+                'manufacturing_wage': manufacturing_wage_detail or {
+                    'account_code': None,
+                    'account_name': 'مصروفات أجور المصنعية',
+                    'amount': round(manufacturing_wage_amount, 2),
+                }
+            },
+            'manufacturing_wage_expense': {
+                'amount': round(manufacturing_wage_amount, 2),
+                'account': manufacturing_wage_detail['account_code'] if manufacturing_wage_detail else None,
+                'name': manufacturing_wage_detail['account_name'] if manufacturing_wage_detail else 'مصروفات أجور المصنعية'
+            },
+            'expense_breakdown': sorted(
+                ([manufacturing_wage_detail] if manufacturing_wage_detail else []) + operating_expense_details,
+                key=lambda x: abs(x.get('amount', 0)),
+                reverse=True
+            )[:5],
+            'net_income': round(net_income, 2),
+            'weight_net_profit_grams': round(weight_net_profit_grams, 6)
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating income statement: {e}")
+        return jsonify({'error': f'فشل إنشاء قائمة الدخل: {str(e)}'}), 500
+
+
+# ==================== 🆕 Dual Chart of Accounts Endpoints ====================
+
+@api.route('/reports/bridge-balance-monitor', methods=['GET'])
+def get_bridge_balance_monitor():
+    """
+    🆕 تقرير مراقبة رصيد حساب الجسر
+    
+    القاعدة الذهبية: رصيد حساب الجسر يجب أن يكون = صفر دائماً
+    
+    هذا التقرير:
+    1. يعرض جميع حسابات الجسر في النظام
+    2. يحدد أي حساب جسر به رصيد غير صفري
+    3. يوفر تفاصيل للتحقيق في الخلل المحاسبي
+    
+    Returns:
+    - bridge_accounts: قائمة حسابات الجسر مع أرصدتها
+    - alerts: تحذيرات لأي حساب به رصيد غير صفري
+    - status: 'balanced' أو 'unbalanced'
+    """
+    try:
+        # البحث عن حسابات الجسر
+        # 1. من الإعدادات المحاسبية
+        bridge_mapping = AccountingMapping.query.filter(
+            or_(
+                AccountingMapping.mapping_key == 'supplier_bridge',
+                AccountingMapping.mapping_key == 'customer_bridge',
+                AccountingMapping.mapping_key.like('%bridge%')
+            )
+        ).all()
+        
+        bridge_account_ids = set()
+        for mapping in bridge_mapping:
+            if mapping.account_id:
+                bridge_account_ids.add(mapping.account_id)
+        
+        # 2. من أسماء الحسابات التي تحتوي على "جسر"
+        bridge_accounts_by_name = Account.query.filter(
+            or_(
+                Account.name.like('%جسر%'),
+                Account.name.like('%bridge%'),
+                Account.account_number.like('%999%')  # نمط شائع لحسابات الجسر
+            )
+        ).all()
+        
+        for acc in bridge_accounts_by_name:
+            bridge_account_ids.add(acc.id)
+        
+        # جمع البيانات
+        accounts_data = []
+        alerts = []
+        total_imbalance = 0.0
+        
+        for acc_id in bridge_account_ids:
+            account = Account.query.get(acc_id)
+            if not account:
+                continue
+            
+            balance = account.balance_cash or 0.0
+            
+            # التحقق من التوازن (هامش خطأ 0.01)
+            is_balanced = abs(balance) <= 0.01
+            
+            account_info = {
+                'account_id': account.id,
+                'account_number': account.account_number,
+                'account_name': account.name,
+                'balance': round(balance, 2),
+                'is_balanced': is_balanced,
+                'status': '✅ متوازن' if is_balanced else '⚠️ غير متوازن'
+            }
+            
+            accounts_data.append(account_info)
+            
+            if not is_balanced:
+                total_imbalance += abs(balance)
+                alerts.append({
+                    'severity': 'warning' if abs(balance) < 10 else 'error',
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'balance': round(balance, 2),
+                    'message': f'حساب الجسر {account.account_number} ({account.name}) به رصيد غير صفري: {balance:.2f} ريال',
+                    'recommendation': 'يرجى مراجعة القيود المحاسبية للفواتير المرتبطة بهذا الحساب'
+                })
+        
+        overall_status = 'balanced' if len(alerts) == 0 else 'unbalanced'
+        
+        return jsonify({
+            'status': overall_status,
+            'summary': {
+                'total_bridge_accounts': len(accounts_data),
+                'balanced_accounts': sum(1 for acc in accounts_data if acc['is_balanced']),
+                'unbalanced_accounts': sum(1 for acc in accounts_data if not acc['is_balanced']),
+                'total_imbalance': round(total_imbalance, 2)
+            },
+            'bridge_accounts': accounts_data,
+            'alerts': alerts,
+            'notes': [
+                '📌 القاعدة الذهبية: رصيد حساب الجسر = صفر دائماً',
+                '⚠️ أي رصيد غير صفري يشير إلى خلل محاسبي',
+                '🔍 يجب التحقيق في القيود المرتبطة بالحسابات غير المتوازنة',
+                '💡 هامش الخطأ المسموح: ±0.01 ريال (للفواصل العشرية)'
+            ]
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating bridge balance monitor: {e}")
+        return jsonify({'error': f'فشل إنشاء تقرير مراقبة حساب الجسر: {str(e)}'}), 500
+
+
+@api.route('/reports/trial-balance/cash', methods=['GET'])
+def get_cash_trial_balance():
+    """
+    ميزان المراجعة المالي (النقدي)
+    
+    يعرض أرصدة الحسابات من الشجرة المالية فقط (transaction_type='cash')
+    
+    Query Parameters:
+    - date: تاريخ نهاية التقرير (YYYY-MM-DD) - افتراضي: اليوم
+    
+    Returns:
+    - accounts: قائمة الحسابات مع أرصدتها
+    - totals: إجماليات المدين والدائن والرصيد
+    """
+    try:
+        end_date_str = request.args.get('date')
+        if end_date_str:
+            end_date = datetime.fromisoformat(end_date_str).date()
+        else:
+            end_date = datetime.now().date()
+        
+        # جلب جميع الحسابات النقدية
+        cash_accounts = Account.query.filter_by(transaction_type='cash').order_by(Account.account_number).all()
+        
+        accounts_data = []
+        total_debit = 0.0
+        total_credit = 0.0
+        
+        for account in cash_accounts:
+            # حساب الرصيد من القيود حتى التاريخ المحدد
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == account.id,
+                JournalEntry.date <= end_date
+            ).all()
+            
+            debit_sum = sum(line.cash_debit or 0 for line in lines)
+            credit_sum = sum(line.cash_credit or 0 for line in lines)
+            balance = debit_sum - credit_sum
+            
+            # عرض فقط الحسابات التي لها رصيد أو حركة
+            if abs(balance) > 0.001 or abs(debit_sum) > 0.001 or abs(credit_sum) > 0.001:
+                accounts_data.append({
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'account_type': account.type,
+                    'debit': round(debit_sum, 2),
+                    'credit': round(credit_sum, 2),
+                    'balance': round(balance, 2)
+                })
+                
+                if balance > 0:
+                    total_debit += balance
+                else:
+                    total_credit += abs(balance)
+        
+        return jsonify({
+            'report_type': 'trial_balance_cash',
+            'date': end_date.isoformat(),
+            'accounts': accounts_data,
+            'totals': {
+                'total_debit': round(total_debit, 2),
+                'total_credit': round(total_credit, 2),
+                'difference': round(total_debit - total_credit, 2)
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating cash trial balance: {e}")
+        return jsonify({'error': f'فشل إنشاء ميزان المراجعة النقدي: {str(e)}'}), 500
+
+
+@api.route('/reports/trial-balance/gold', methods=['GET'])
+def get_gold_trial_balance():
+    """
+    ميزان المراجعة الوزني (الذهب)
+    
+    يعرض أرصدة الحسابات من الشجرة الوزنية فقط (transaction_type='gold')
+    
+    Query Parameters:
+    - date: تاريخ نهاية التقرير (YYYY-MM-DD) - افتراضي: اليوم
+    - karat: العيار المطلوب (18, 21, 22, 24) - افتراضي: جميع الأعيرة محولة للعيار الرئيسي
+    
+    Returns:
+    - accounts: قائمة الحسابات مع أرصدتها الوزنية
+    - totals: إجماليات المدين والدائن بالجرامات
+    """
+    try:
+        from config import MAIN_KARAT
+        
+        end_date_str = request.args.get('date')
+        if end_date_str:
+            end_date = datetime.fromisoformat(end_date_str).date()
+        else:
+            end_date = datetime.now().date()
+        
+        karat_filter = request.args.get('karat')
+        main_karat = MAIN_KARAT or 21
+        
+        # جلب جميع الحسابات الوزنية
+        gold_accounts = Account.query.filter_by(transaction_type='gold').order_by(Account.account_number).all()
+        
+        accounts_data = []
+        total_debit = 0.0
+        total_credit = 0.0
+        
+        for account in gold_accounts:
+            # حساب الرصيد من القيود حتى التاريخ المحدد
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == account.id,
+                JournalEntry.date <= end_date
+            ).all()
+            
+            # جمع الأوزان من جميع الأعيرة (محولة للعيار الرئيسي)
+            debit_18k = sum(line.debit_18k or 0 for line in lines) * (18 / main_karat)
+            debit_21k = sum(line.debit_21k or 0 for line in lines) * (21 / main_karat)
+            debit_22k = sum(line.debit_22k or 0 for line in lines) * (22 / main_karat)
+            debit_24k = sum(line.debit_24k or 0 for line in lines) * (24 / main_karat)
+            
+            credit_18k = sum(line.credit_18k or 0 for line in lines) * (18 / main_karat)
+            credit_21k = sum(line.credit_21k or 0 for line in lines) * (21 / main_karat)
+            credit_22k = sum(line.credit_22k or 0 for line in lines) * (22 / main_karat)
+            credit_24k = sum(line.credit_24k or 0 for line in lines) * (24 / main_karat)
+            
+            total_debit_weight = debit_18k + debit_21k + debit_22k + debit_24k
+            total_credit_weight = credit_18k + credit_21k + credit_22k + credit_24k
+            balance_weight = total_debit_weight - total_credit_weight
+            
+            # عرض فقط الحسابات التي لها رصيد أو حركة
+            if abs(balance_weight) > 0.001 or abs(total_debit_weight) > 0.001 or abs(total_credit_weight) > 0.001:
+                accounts_data.append({
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'account_type': account.type,
+                    'debit_grams': round(total_debit_weight, 3),
+                    'credit_grams': round(total_credit_weight, 3),
+                    'balance_grams': round(balance_weight, 3),
+                    'main_karat': main_karat
+                })
+                
+                if balance_weight > 0:
+                    total_debit += balance_weight
+                else:
+                    total_credit += abs(balance_weight)
+        
+        return jsonify({
+            'report_type': 'trial_balance_gold',
+            'date': end_date.isoformat(),
+            'main_karat': main_karat,
+            'accounts': accounts_data,
+            'totals': {
+                'total_debit_grams': round(total_debit, 3),
+                'total_credit_grams': round(total_credit, 3),
+                'difference_grams': round(total_debit - total_credit, 3)
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating gold trial balance: {e}")
+        return jsonify({'error': f'فشل إنشاء ميزان المراجعة الوزني: {str(e)}'}), 500
+
+
+@api.route('/reports/income-statement/cash', methods=['GET'])
+def get_cash_income_statement():
+    """
+    قائمة الدخل المالية (النقدي)
+    
+    تعرض الإيرادات والمصروفات من الشجرة المالية فقط
+    
+    Query Parameters:
+    - start_date: تاريخ البداية (YYYY-MM-DD)
+    - end_date: تاريخ النهاية (YYYY-MM-DD)
+    
+    Returns:
+    - revenues: الإيرادات (حسابات 40x)
+    - expenses: المصروفات (حسابات 50x)
+    - net_income: صافي الربح بالريال
+    """
+    try:
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'error': 'يجب تحديد تاريخ البداية والنهاية'}), 400
+
+        start_date = datetime.fromisoformat(start_date_str).date()
+        end_date = datetime.fromisoformat(end_date_str).date()
+
+        # ---------- صافي المبيعات النقدية ----------
+        revenue_accounts = Account.query.filter(
+            Account.transaction_type.in_(['cash', 'both']),
+            Account.account_number.like('4%')
+        ).all()
+
+        revenues_data = []
+        total_revenue = 0.0
+        for account in revenue_accounts:
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == account.id,
+                JournalEntry.date >= start_date,
+                JournalEntry.date <= end_date
+            ).all()
+
+            credit_sum = sum(line.cash_credit or 0 for line in lines)
+            debit_sum = sum(line.cash_debit or 0 for line in lines)
+            net_revenue = credit_sum - debit_sum
+
+            if abs(net_revenue) > 0.01:
+                revenues_data.append({
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'amount': round(net_revenue, 2)
+                })
+                total_revenue += net_revenue
+
+        # ---------- تكلفة المبيعات النقدية (بدون المصنعية) ----------
+        # نجمع أوزان الأصناف المباعه من karat lines، ثم نضرب كل عيار في متوسط سعر الشراء لذلك العيار
+        sold_weights = {}
+        cost_of_sales_details = []
+        total_cost_of_sales = 0.0
+
+        for karat in (18, 21, 22, 24):
+            sold_weight = db.session.query(func.coalesce(func.sum(InvoiceKaratLine.weight_grams), 0.0)).join(Invoice).filter(
+                InvoiceKaratLine.karat == str(karat),
+                Invoice.date >= start_date,
+                Invoice.date <= end_date,
+                Invoice.is_posted == True,
+                Invoice.invoice_type.in_(['بيع'])
+            ).scalar() or 0.0
+
+            if sold_weight and sold_weight > 0:
+                avg_cost = get_inventory_average_cost(karat) or 0.0
+                cost = round(sold_weight * avg_cost, 2)
+                sold_weights[str(karat)] = sold_weight
+                cost_of_sales_details.append({
+                    'karat': str(karat),
+                    'weight_grams': round(sold_weight, 3),
+                    'avg_cost_per_gram': round(avg_cost, 2),
+                    'cost': cost
+                })
+                total_cost_of_sales += cost
+
+        # ---------- المصاريف: أجور المصنعية + المصاريف التشغيلية ----------
+        # حساب أجور المصنعية المسجلة كمصروف (الحساب المخصص أو الحساب العام 51)
+        manufacturing_wage_expense_acc_id = (
+            get_account_id_for_mapping('بيع', 'manufacturing_wage')
+            or _ensure_manufacturing_wage_expense_account()
+            or get_account_id_for_mapping('بيع', 'operating_expenses')
+            or get_account_id_by_number('51')
+        )
+
+        manufacturing_wage_amount = 0.0
+        manufacturing_wage_details = []
+        if manufacturing_wage_expense_acc_id:
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == manufacturing_wage_expense_acc_id,
+                JournalEntry.date >= start_date,
+                JournalEntry.date <= end_date
+            ).all()
+            debit_sum = sum(line.cash_debit or 0 for line in lines)
+            credit_sum = sum(line.cash_credit or 0 for line in lines)
+            manufacturing_wage_amount = round(debit_sum - credit_sum, 2)
+            if abs(manufacturing_wage_amount) > 0.01:
+                acc = Account.query.get(manufacturing_wage_expense_acc_id)
+                manufacturing_wage_details.append({
+                    'account_number': acc.account_number if acc else None,
+                    'account_name': acc.name if acc else 'مصروفات مصنعية',
+                    'amount': manufacturing_wage_amount
+                })
+
+        # حساب المصاريف التشغيلية (حسابات 5x) باستثناء تكلفة المبيعات (50x) وأي حساب مصروف مصنعية تم احتسابه أعلاه
+        expense_accounts = Account.query.filter(
+            Account.transaction_type.in_(['cash', 'both']),
+            Account.account_number.like('5%')
+        ).all()
+
+        operating_expenses_details = []
+        total_operating_expenses = 0.0
+        for account in expense_accounts:
+            # استبعد حساب 50x (تكلفة المبيعات) لأننا حسبناها أعلاه
+            if (account.account_number or '').startswith('50'):
+                continue
+            if manufacturing_wage_expense_acc_id and account.id == manufacturing_wage_expense_acc_id:
+                # تم حسابه بالفعل
+                continue
+
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == account.id,
+                JournalEntry.date >= start_date,
+                JournalEntry.date <= end_date
+            ).all()
+            debit_sum = sum(line.cash_debit or 0 for line in lines)
+            credit_sum = sum(line.cash_credit or 0 for line in lines)
+            net_exp = round(debit_sum - credit_sum, 2)
+            if abs(net_exp) > 0.01:
+                operating_expenses_details.append({
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'amount': net_exp
+                })
+                total_operating_expenses += net_exp
+
+        total_expenses = round((manufacturing_wage_amount or 0.0) + (total_operating_expenses or 0.0), 2)
+
+        # ---------- المجاميع النهائية ----------
+        gross_profit = round(total_revenue - total_cost_of_sales, 2)
+        net_profit = round(gross_profit - total_expenses, 2)
+        profit_margin_pct = round((net_profit / total_revenue * 100) if total_revenue > 0 else 0.0, 2)
+
+        return jsonify({
+            'report_type': 'income_statement_cash',
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+
+            # 1️⃣ صافي المبيعات
+            'net_sales': {
+                'total': round(total_revenue, 2),
+                'details': sorted(revenues_data, key=lambda x: x['account_number'])
+            },
+
+            # 2️⃣ تكلفة المبيعات (الوزن × متوسط سعر الشراء للجرام) - بدون المصنعية
+            'cost_of_sales': {
+                'total': round(total_cost_of_sales, 2),
+                'details': sorted(cost_of_sales_details, key=lambda x: x['karat'])
+            },
+
+            # 3️⃣ الربح النقدي (إجمالي)
+            'gross_profit': {
+                'total': gross_profit,
+                'note': 'الربح الإجمالي = صافي المبيعات - تكلفة المبيعات'
+            },
+
+            # 4️⃣ المصاريف (أجور المصنعية + المصاريف التشغيلية)
+            'expenses': {
+                'manufacturing_wages': {
+                    'total': manufacturing_wage_amount,
+                    'details': manufacturing_wage_details
+                },
+                'operating_expenses': {
+                    'total': round(total_operating_expenses, 2),
+                    'details': sorted(operating_expenses_details, key=lambda x: x['account_number'])
+                },
+                'total': total_expenses
+            },
+
+            # 5️⃣ صافي الربح
+            'net_profit': {
+                'total': net_profit
+            },
+
+            # 6️⃣ هامش الربح
+            'profit_margin_pct': profit_margin_pct
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error generating cash income statement: {e}")
+        return jsonify({'error': f'فشل إنشاء قائمة الدخل النقدية: {str(e)}'}), 500
+
+
+@api.route('/reports/income-statement/gold', methods=['GET'])
+def get_gold_income_statement():
+    """
+    قائمة الدخل الوزنية (الذهب)
+    
+    تعرض الإيرادات والمصروفات من الشجرة الوزنية فقط
+    
+    Query Parameters:
+    - start_date: تاريخ البداية (YYYY-MM-DD)
+    - end_date: تاريخ النهاية (YYYY-MM-DD)
+    
+    Returns:
+    - revenues: الإيرادات بالجرامات (حسابات 4Wx)
+    - expenses: المصروفات بالجرامات (حسابات 5Wx)
+    - net_profit_grams: صافي الربح بالجرامات
+    """
+    try:
+        from config import MAIN_KARAT
+        
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+        
+        if not start_date_str or not end_date_str:
+            return jsonify({'error': 'يجب تحديد تاريخ البداية والنهاية'}), 400
+        
+        start_date = datetime.fromisoformat(start_date_str).date()
+        end_date = datetime.fromisoformat(end_date_str).date()
+        main_karat = MAIN_KARAT or 21
+        
+        # جلب حسابات الإيرادات (74xx) من شجرة المذكرة
+        revenue_accounts = Account.query.filter(
+            Account.transaction_type == 'gold',
+            Account.account_number.like('74%')
+        ).all()
+        
+        # جلب حسابات المصروفات (75xx) من شجرة المذكرة
+        expense_accounts = Account.query.filter(
+            Account.transaction_type == 'gold',
+            Account.account_number.like('75%')
+        ).all()
+        
+        revenues_data = []
+        total_revenue_grams = 0.0
+        
+        for account in revenue_accounts:
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == account.id,
+                JournalEntry.date >= start_date,
+                JournalEntry.date <= end_date
+            ).all()
+            
+            # جمع الأوزان من جميع الأعيرة (محولة للعيار الرئيسي)
+            credit_18k = sum(line.credit_18k or 0 for line in lines) * (18 / main_karat)
+            credit_21k = sum(line.credit_21k or 0 for line in lines) * (21 / main_karat)
+            credit_22k = sum(line.credit_22k or 0 for line in lines) * (22 / main_karat)
+            credit_24k = sum(line.credit_24k or 0 for line in lines) * (24 / main_karat)
+            
+            debit_18k = sum(line.debit_18k or 0 for line in lines) * (18 / main_karat)
+            debit_21k = sum(line.debit_21k or 0 for line in lines) * (21 / main_karat)
+            debit_22k = sum(line.debit_22k or 0 for line in lines) * (22 / main_karat)
+            debit_24k = sum(line.debit_24k or 0 for line in lines) * (24 / main_karat)
+            
+            total_credit = credit_18k + credit_21k + credit_22k + credit_24k
+            total_debit = debit_18k + debit_21k + debit_22k + debit_24k
+            net_revenue = total_credit - total_debit  # الإيرادات دائنة
+            
+            if abs(net_revenue) > 0.001:
+                revenues_data.append({
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'amount_grams': round(net_revenue, 3)
+                })
+                total_revenue_grams += net_revenue
+        
+        expenses_data = []
+        total_expense_grams = 0.0
+        
+        for account in expense_accounts:
+            lines = JournalEntryLine.query.join(JournalEntry).filter(
+                JournalEntryLine.account_id == account.id,
+                JournalEntry.date >= start_date,
+                JournalEntry.date <= end_date
+            ).all()
+            
+            # جمع الأوزان من جميع الأعيرة (محولة للعيار الرئيسي)
+            debit_18k = sum(line.debit_18k or 0 for line in lines) * (18 / main_karat)
+            debit_21k = sum(line.debit_21k or 0 for line in lines) * (21 / main_karat)
+            debit_22k = sum(line.debit_22k or 0 for line in lines) * (22 / main_karat)
+            debit_24k = sum(line.debit_24k or 0 for line in lines) * (24 / main_karat)
+            
+            credit_18k = sum(line.credit_18k or 0 for line in lines) * (18 / main_karat)
+            credit_21k = sum(line.credit_21k or 0 for line in lines) * (21 / main_karat)
+            credit_22k = sum(line.credit_22k or 0 for line in lines) * (22 / main_karat)
+            credit_24k = sum(line.credit_24k or 0 for line in lines) * (24 / main_karat)
+            
+            total_debit = debit_18k + debit_21k + debit_22k + debit_24k
+            total_credit = credit_18k + credit_21k + credit_22k + credit_24k
+            net_expense = total_debit - total_credit  # المصروفات مدينة
+            
+            if abs(net_expense) > 0.001:
+                expenses_data.append({
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'amount_grams': round(net_expense, 3)
+                })
+                total_expense_grams += net_expense
+        
+        net_profit_grams = total_revenue_grams - total_expense_grams
+        net_margin_pct = (net_profit_grams / total_revenue_grams * 100) if total_revenue_grams > 0 else 0.0
+        
+        return jsonify({
+            'report_type': 'income_statement_gold',
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'main_karat': main_karat,
+            'revenues': {
+                'details': revenues_data,
+                'total_grams': round(total_revenue_grams, 3)
+            },
+            'expenses': {
+                'details': expenses_data,
+                'total_grams': round(total_expense_grams, 3)
+            },
+            'net_profit_grams': round(net_profit_grams, 3),
+            'net_margin_pct': round(net_margin_pct, 2)
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error generating gold income statement: {e}")
+        return jsonify({'error': f'فشل إنشاء قائمة الدخل الوزنية: {str(e)}'}), 500
+
+
+
+
 
 

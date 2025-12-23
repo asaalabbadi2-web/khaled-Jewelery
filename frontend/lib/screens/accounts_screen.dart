@@ -4,7 +4,12 @@ import 'account_statement_screen.dart';
 import 'account_ledger_screen.dart';
 
 class AccountsScreen extends StatefulWidget {
-  const AccountsScreen({super.key});
+  final bool initialOnlyDetailAccounts;
+
+  const AccountsScreen({
+    super.key,
+    this.initialOnlyDetailAccounts = false,
+  });
 
   @override
   State<AccountsScreen> createState() => _AccountsScreenState();
@@ -15,12 +20,13 @@ class _AccountsScreenState extends State<AccountsScreen> {
   List<dynamic> _filteredAccounts = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _onlyDetailAccounts = false;
+  late bool _onlyDetailAccounts;
   bool _onlyWithBalance = false;
 
   @override
   void initState() {
     super.initState();
+    _onlyDetailAccounts = widget.initialOnlyDetailAccounts;
     _fetchAccounts();
     _searchController.addListener(_filterAccounts);
   }

@@ -11,19 +11,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
 from config import Config
 
 # Create simple Flask app
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Initialize database
-db = SQLAlchemy()
-db.init_app(app)
+# Import models (db is already defined in models.py)
+from models import db, Account, AccountingMapping
 
-# Import models after db initialization
-from models import Account, AccountingMapping
+# Initialize database
+db.init_app(app)
 
 def setup_mappings():
     """إعداد الربط المحاسبي لفواتير شراء من مورد"""

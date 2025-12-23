@@ -917,9 +917,8 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   }
 
   Widget _buildCashInputFields(JournalLine line) {
-    if (line.accountTransactionType == 'gold') {
-      return const SizedBox.shrink();
-    }
+    // ✅ تم إلغاء منطق الإخفاء بناءً على نوع الحساب
+    // جميع الحسابات (نقدية وذهبية) يمكنها استخدام حقول النقد
 
     // في وضع التعديل، اعرض جميع الصفوف دائماً
     if (!widget.isEditMode) {
@@ -994,13 +993,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   }
 
   Widget _buildGoldInputFields(JournalLine line) {
+    // ✅ تم إلغاء منطق الإخفاء بناءً على نوع الحساب
+    // جميع الحسابات (نقدية وذهبية) يمكنها استخدام حقول الذهب
     final hasAnyGoldValue = line.hasGoldValues;
-
-    final allowsGoldSection =
-        line.accountTransactionType != 'cash' || hasAnyGoldValue;
-    if (!allowsGoldSection) {
-      return const SizedBox.shrink();
-    }
 
     final shouldDelayDisplay =
         !widget.isEditMode && line.accountId == null && !hasAnyGoldValue;

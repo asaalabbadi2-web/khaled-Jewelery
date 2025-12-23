@@ -31,7 +31,14 @@ class _RolesManagementScreenState extends State<RolesManagementScreen> {
 
   Future<void> _loadToken() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('auth_token');
+    _token = prefs.getString('jwt_token');
+    if (_token == null || _token!.isEmpty) {
+      final legacy = prefs.getString('auth_token');
+      if (legacy != null && legacy.isNotEmpty) {
+        _token = legacy;
+        await prefs.setString('jwt_token', legacy);
+      }
+    }
     if (_token != null) {
       _loadRoles();
       _loadPermissions();

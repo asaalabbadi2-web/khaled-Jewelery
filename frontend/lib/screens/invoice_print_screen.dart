@@ -31,6 +31,7 @@ class InvoicePrintScreen extends StatefulWidget {
 
 class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   bool _isGenerating = false;
+  Uint8List? _cachedPdf; // لتخزين PDF المولد وتجنب إعادة التوليد المستمرة
 
   // إعدادات الطباعة الافتراضية
   late bool _showLogo;
@@ -82,7 +83,11 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
           : kIsWeb
               ? _buildWebPreview()
               : PdfPreview(
-                  build: (format) => _generatePdf(format),
+                  build: (format) async {
+                    // استخدام الـ cache لتجنب إعادة التوليد المستمرة
+                    _cachedPdf ??= await _generatePdf(format);
+                    return _cachedPdf!;
+                  },
                   canChangePageFormat: true,
                   canChangeOrientation: true,
                   canDebug: false,
@@ -700,32 +705,50 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
               SwitchListTile(
                 title: Text(widget.isArabic ? 'عرض الشعار' : 'Show Logo'),
                 value: _showLogo,
-                onChanged: (val) => setState(() => _showLogo = val),
+                onChanged: (val) => setState(() {
+                  _showLogo = val;
+                  _cachedPdf = null; // إعادة تعيين الـ cache
+                }),
               ),
               SwitchListTile(
                 title: Text(widget.isArabic ? 'عرض العنوان' : 'Show Address'),
                 value: _showAddress,
-                onChanged: (val) => setState(() => _showAddress = val),
+                onChanged: (val) => setState(() {
+                  _showAddress = val;
+                  _cachedPdf = null;
+                }),
               ),
               SwitchListTile(
                 title: Text(widget.isArabic ? 'عرض الأسعار' : 'Show Prices'),
                 value: _showPrices,
-                onChanged: (val) => setState(() => _showPrices = val),
+                onChanged: (val) => setState(() {
+                  _showPrices = val;
+                  _cachedPdf = null;
+                }),
               ),
               SwitchListTile(
                 title: Text(widget.isArabic ? 'معلومات الضريبة' : 'Tax Info'),
                 value: _showTaxInfo,
-                onChanged: (val) => setState(() => _showTaxInfo = val),
+                onChanged: (val) => setState(() {
+                  _showTaxInfo = val;
+                  _cachedPdf = null;
+                }),
               ),
               SwitchListTile(
                 title: Text(widget.isArabic ? 'عرض الملاحظات' : 'Show Notes'),
                 value: _showNotes,
-                onChanged: (val) => setState(() => _showNotes = val),
+                onChanged: (val) => setState(() {
+                  _showNotes = val;
+                  _cachedPdf = null;
+                }),
               ),
               SwitchListTile(
                 title: Text(widget.isArabic ? 'طباعة ملونة' : 'Color Print'),
                 value: _printInColor,
-                onChanged: (val) => setState(() => _printInColor = val),
+                onChanged: (val) => setState(() {
+                  _printInColor = val;
+                  _cachedPdf = null;
+                }),
               ),
             ],
           ),

@@ -24,6 +24,7 @@ class AuthProvider extends ChangeNotifier {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      await _ensureJwtToken(prefs);
       final raw = prefs.getString(_storageKey);
 
       if (raw != null && raw.isNotEmpty) {
@@ -47,6 +48,16 @@ class AuthProvider extends ChangeNotifier {
     } finally {
       _loading = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _ensureJwtToken(SharedPreferences prefs) async {
+    final jwtToken = prefs.getString('jwt_token');
+    if (jwtToken == null || jwtToken.isEmpty) {
+      final legacy = prefs.getString('auth_token');
+      if (legacy != null && legacy.isNotEmpty) {
+        await prefs.setString('jwt_token', legacy);
+      }
     }
   }
 

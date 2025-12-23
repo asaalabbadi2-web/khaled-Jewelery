@@ -92,7 +92,7 @@ class _MyAppState extends State<MyApp> {
                 padding: const EdgeInsets.all(24),
                 margin: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
+                  color: Colors.red.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.red, width: 2),
                 ),
@@ -153,6 +153,16 @@ class _MyAppState extends State<MyApp> {
       routes: {
         '/add_item': (context) => AddItemScreenEnhanced(api: ApiService()),
         '/items': (context) => ItemsScreenEnhanced(api: ApiService()),
+      },
+      onUnknownRoute: (settings) {
+        // معالجة الصفحات غير الموجودة (404)
+        // إعادة التوجيه للصفحة الرئيسية تلقائياً
+        return MaterialPageRoute(
+          builder: (context) => AuthGate(
+            onToggleLocale: _toggleLocale,
+            isArabic: _locale.languageCode == 'ar',
+          ),
+        );
       },
       home: AuthGate(
         onToggleLocale: _toggleLocale,

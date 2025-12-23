@@ -21,6 +21,7 @@ class ReportCatalog {
             descriptionEn: 'Analyze revenues, expenses, and net profit by period.',
             route: 'income_statement',
             type: ReportType.financial,
+            available: true,
             requiresFilters: true,
           ),
           ReportDescriptor(

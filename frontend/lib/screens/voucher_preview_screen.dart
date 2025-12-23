@@ -106,7 +106,7 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
       elevation: 4,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: _voucherColor.withOpacity(0.3), width: 2),
+        side: BorderSide(color: _voucherColor.withValues(alpha: 0.3), width: 2),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -155,14 +155,14 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            _voucherColor.withOpacity(0.1),
-            _voucherColor.withOpacity(0.05),
+            _voucherColor.withValues(alpha: 0.1),
+            _voucherColor.withValues(alpha: 0.05),
           ],
           begin: Alignment.topRight,
           end: Alignment.bottomLeft,
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _voucherColor.withOpacity(0.3)),
+        border: Border.all(color: _voucherColor.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -226,7 +226,7 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.lightGold.withOpacity(0.2),
+        color: AppColors.lightGold.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -366,7 +366,7 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
             // Header
             TableRow(
               decoration: BoxDecoration(
-                color: AppColors.lightGold.withOpacity(0.4),
+                color: AppColors.lightGold.withValues(alpha: 0.4),
               ),
               children: [
                 _buildTableHeader('#'),
@@ -433,8 +433,8 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            AppColors.primaryGold.withOpacity(0.2),
-            AppColors.primaryGold.withOpacity(0.1),
+            AppColors.primaryGold.withValues(alpha: 0.2),
+            AppColors.primaryGold.withValues(alpha: 0.1),
           ],
         ),
         borderRadius: BorderRadius.circular(12),

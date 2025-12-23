@@ -1,4 +1,6 @@
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,8 +10,29 @@ import 'models/employee_model.dart';
 import 'models/payroll_model.dart';
 import 'models/safe_box_model.dart';
 
+const String _envApiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+
+String _resolveApiBaseUrl() {
+  if (_envApiBaseUrl.isNotEmpty) {
+    return _envApiBaseUrl;
+  }
+
+  if (kIsWeb) {
+    return 'http://127.0.0.1:8001/api';
+  }
+
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    // عندما نعمل من داخل محاكي أندرويد نحتاج 10.0.2.2 للإشارة إلى جهاز التطوير
+    return 'http://10.0.2.2:8001/api';
+  }
+
+  return 'http://127.0.0.1:8001/api';
+}
+
 class ApiService {
-  final String _baseUrl = 'http://127.0.0.1:8001/api'; // For local development
+  final String _baseUrl;
+
+  ApiService({String? baseUrl}) : _baseUrl = baseUrl ?? _resolveApiBaseUrl();
 
   // Customer Methods
   Future<List<dynamic>> getCustomers() async {
@@ -185,9 +208,82 @@ class ApiService {
     }
   }
 
+  // Office Reservations (حجوزات الذهب للمكاتب)
+  Future<Map<String, dynamic>> getOfficeReservations({
+    int? officeId,
+    String? status,
+    String? paymentStatus,
+    String? dateFrom,
+    String? dateTo,
+    int? limit,
+    int? page,
+    int? perPage,
+    String? orderBy,
+    String? orderDirection,
+  }) async {
+    final queryParams = <String, String>{};
+    if (officeId != null) queryParams['office_id'] = officeId.toString();
+    if (status != null && status.isNotEmpty) queryParams['status'] = status;
+    if (paymentStatus != null && paymentStatus.isNotEmpty) {
+      queryParams['payment_status'] = paymentStatus;
+    }
+    if (limit != null) queryParams['limit'] = limit.toString();
+    if (dateFrom != null && dateFrom.isNotEmpty) queryParams['date_from'] = dateFrom;
+    if (dateTo != null && dateTo.isNotEmpty) queryParams['date_to'] = dateTo;
+    if (page != null) queryParams['page'] = page.toString();
+    if (perPage != null) queryParams['per_page'] = perPage.toString();
+    if (orderBy != null && orderBy.isNotEmpty) queryParams['order_by'] = orderBy;
+    if (orderDirection != null && orderDirection.isNotEmpty) {
+      queryParams['order_direction'] = orderDirection;
+    }
+
+    final uri = Uri.parse('$_baseUrl/office-reservations').replace(
+      queryParameters: queryParams.isEmpty ? null : queryParams,
+    );
+
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load office reservations');
+    }
+  }
+
+  Future<Map<String, dynamic>> getOfficeReservation(int id) async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/office-reservations/$id'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load office reservation');
+    }
+  }
+
+  Future<Map<String, dynamic>> createOfficeReservation(
+    Map<String, dynamic> reservationData,
+  ) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/office-reservations'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(reservationData),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to create office reservation: ${response.body}');
+    }
+  }
+
   // Item Methods
-  Future<List<dynamic>> getItems() async {
-    final response = await http.get(Uri.parse('$_baseUrl/items'));
+  Future<List<dynamic>> getItems({bool? inStockOnly}) async {
+    Uri uri = Uri.parse('$_baseUrl/items');
+    if (inStockOnly != null) {
+      uri = uri.replace(queryParameters: {
+        'in_stock_only': inStockOnly ? 'true' : 'false',
+      });
+    }
+    final response = await http.get(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -222,6 +318,49 @@ class ApiService {
     }
   }
 
+  /// 🚀 إضافة سريعة لعدة أصناف
+  Future<Map<String, dynamic>> quickAddItems(Map<String, dynamic> data) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/items/quick-add'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(data),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(response.body);
+    } else {
+      final errorBody = json.decode(response.body);
+      throw Exception(errorBody['error'] ?? 'Failed to quick add items');
+    }
+  }
+
+  /// ♻️ إعادة مزامنة حالة توافر الأصناف
+  Future<Map<String, dynamic>> rebuildItemStockStatus() async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/items/rebuild-stock'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final errorBody = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(errorBody['error'] ?? 'Failed to rebuild item stock status');
+    }
+  }
+
+  /// 🔄 استنساخ صنف موجود
+  Future<Map<String, dynamic>> cloneItem(int id, Map<String, dynamic> data) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/items/$id/clone'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(data),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(response.body);
+    } else {
+      final errorBody = json.decode(response.body);
+      throw Exception(errorBody['error'] ?? 'Failed to clone item');
+    }
+  }
+
   Future<Map<String, dynamic>> updateItem(
     int id,
     Map<String, dynamic> itemData,
@@ -243,6 +382,71 @@ class ApiService {
     if (response.statusCode != 200) {
       // Changed from 204 to 200
       throw Exception('Failed to delete item');
+    }
+  }
+
+  // ============================================
+  // 📁 Category Methods - تصنيفات الأصناف
+  // ============================================
+
+  /// جلب جميع التصنيفات
+  Future<List<dynamic>> getCategories() async {
+    final response = await http.get(Uri.parse('$_baseUrl/categories'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load categories');
+    }
+  }
+
+  /// جلب تصنيف واحد
+  Future<Map<String, dynamic>> getCategory(int id) async {
+    final response = await http.get(Uri.parse('$_baseUrl/categories/$id'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load category');
+    }
+  }
+
+  /// إضافة تصنيف جديد
+  Future<Map<String, dynamic>> addCategory(
+      Map<String, dynamic> categoryData) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/categories'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(categoryData),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to add category');
+    }
+  }
+
+  /// تعديل تصنيف
+  Future<Map<String, dynamic>> updateCategory(
+      int id, Map<String, dynamic> categoryData) async {
+    final response = await http.put(
+      Uri.parse('$_baseUrl/categories/$id'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(categoryData),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to update category');
+    }
+  }
+
+  /// حذف تصنيف
+  Future<void> deleteCategory(int id) async {
+    final response = await http.delete(Uri.parse('$_baseUrl/categories/$id'));
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to delete category');
     }
   }
 
@@ -319,6 +523,35 @@ class ApiService {
     }
   }
 
+  Future<void> deleteInvoice(int invoiceId) async {
+    final response = await http.delete(
+      Uri.parse('$_baseUrl/invoices/$invoiceId'),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete invoice: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> updateInvoiceStatus(
+    int invoiceId,
+    String status,
+  ) async {
+    final response = await http.patch(
+      Uri.parse('$_baseUrl/invoices/$invoiceId/status'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'status': status}),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(
+        'Failed to update invoice status: ${response.statusCode} ${response.body}',
+      );
+    }
+  }
+
   // Gold Price Methods
   Future<Map<String, dynamic>> getGoldPrice() async {
     final response = await http.get(Uri.parse('$_baseUrl/gold_price'));
@@ -338,6 +571,43 @@ class ApiService {
       return json.decode(response.body);
     } else {
       throw Exception('Failed to update gold price');
+    }
+  }
+
+  // Gold Costing (Moving Average)
+  Future<Map<String, dynamic>> getGoldCostingSnapshot() async {
+    final response = await http.get(Uri.parse('$_baseUrl/gold-costing'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load gold costing snapshot: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> calculateGoldCostingCogs(double weightGrams) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/gold-costing/cogs'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'weight_grams': weightGrams}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to calculate gold costing COGS: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> recomputeGoldCosting({int? limit}) async {
+    Uri uri = Uri.parse('$_baseUrl/gold-costing/recompute');
+    if (limit != null) {
+      uri = uri.replace(queryParameters: {'limit': limit.toString()});
+    }
+
+    final response = await http.post(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to recompute gold costing: ${response.body}');
     }
   }
 
@@ -361,6 +631,17 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to load customer statement: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> getSupplierStatement(int supplierId) async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/suppliers/$supplierId/statement'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load supplier statement: ${response.body}');
     }
   }
 
@@ -695,6 +976,66 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to load sales overview report: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> getIncomeStatementReport({
+    DateTime? startDate,
+    DateTime? endDate,
+    String groupBy = 'month',
+    bool includeUnposted = false,
+  }) async {
+    final queryParams = <String, String>{
+      'group_by': groupBy,
+    };
+
+    if (startDate != null) {
+      queryParams['start_date'] = startDate.toIso8601String().split('T').first;
+    }
+
+    if (endDate != null) {
+      queryParams['end_date'] = endDate.toIso8601String().split('T').first;
+    }
+
+    if (includeUnposted) {
+      queryParams['include_unposted'] = 'true';
+    }
+
+    final uri = Uri.parse('$_baseUrl/reports/income_statement')
+        .replace(queryParameters: queryParams);
+
+    Map<String, dynamic> ensureWeightExpenseFields(Map<String, dynamic> payload) {
+      payload.putIfAbsent('weight_expenses_posted', () => payload['weight_expenses'] ?? 0.0);
+      payload.putIfAbsent('weight_expenses_pending', () => 0.0);
+      payload.putIfAbsent('weight_expenses_pending_cash', () => 0.0);
+      payload.putIfAbsent('weight_expenses', () => payload['weight_expenses_posted'] ?? 0.0);
+      payload.putIfAbsent('manufacturing_wage_expense', () => 0.0);
+      payload.putIfAbsent('operating_expenses_excl_wage', () => payload['operating_expenses'] ?? 0.0);
+      payload.putIfAbsent('operating_expenses', () => payload['operating_expenses_excl_wage'] ?? 0.0);
+      payload.putIfAbsent('weight_net_profit', () => 0.0);
+      return payload;
+    }
+
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+    final summary = Map<String, dynamic>.from(decoded['summary'] ?? {});
+    decoded['summary'] = ensureWeightExpenseFields(summary);
+
+        final dynamic rawSeries = decoded['series'];
+        if (rawSeries is List) {
+          decoded['series'] = rawSeries
+      .map((entry) => ensureWeightExpenseFields(Map<String, dynamic>.from(entry ?? {})))
+              .toList();
+        }
+
+        return decoded;
+      }
+      return {'summary': {}, 'series': []};
+    } else {
+      throw Exception('Failed to load income statement report: ${response.body}');
     }
   }
 
@@ -1120,6 +1461,33 @@ class ApiService {
     }
   }
 
+  /// إعدادات التسكير الوزني (auto-close)
+  Future<Map<String, dynamic>> getWeightClosingSettings() async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/weight-closing/settings'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load weight closing settings');
+    }
+  }
+
+  Future<Map<String, dynamic>> updateWeightClosingSettings(
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await http.put(
+      Uri.parse('$_baseUrl/weight-closing/settings'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to update weight closing settings: ${response.body}');
+    }
+  }
+
   // System Methods
 
   /// إعادة تهيئة النظام مع دعم خيارات متعددة
@@ -1147,6 +1515,26 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to get system info: ${response.body}');
+    }
+  }
+
+  /// تصفير أو إعادة بناء متوسط التكلفة المتحرك
+  Future<Map<String, dynamic>> resetGoldCosting({required String mode, int? limit}) async {
+    final Map<String, dynamic> payload = {'mode': mode};
+    if (limit != null) {
+      payload['limit'] = limit;
+    }
+
+    final response = await http.post(
+      Uri.parse('$_baseUrl/gold-costing/reset'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to reset gold costing: ${response.body}');
     }
   }
 
@@ -2350,19 +2738,11 @@ class ApiService {
 
   /// Get unposted invoices
   Future<Map<String, dynamic>> getUnpostedInvoices() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/invoices/unposted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 401) {
@@ -2379,19 +2759,11 @@ class ApiService {
 
   /// Get posted invoices
   Future<Map<String, dynamic>> getPostedInvoices() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/invoices/posted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 401) {
@@ -2408,19 +2780,11 @@ class ApiService {
 
   /// Get unposted journal entries
   Future<Map<String, dynamic>> getUnpostedJournalEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/journal-entries/unposted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 401) {
@@ -2437,19 +2801,11 @@ class ApiService {
 
   /// Get posted journal entries
   Future<Map<String, dynamic>> getPostedJournalEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/journal-entries/posted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 401) {
@@ -2466,15 +2822,11 @@ class ApiService {
 
   /// Post a single invoice
   Future<Map<String, dynamic>> postInvoice(int invoiceId, String postedBy) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/post/$invoiceId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
       body: json.encode({'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -2489,15 +2841,11 @@ class ApiService {
     List<int> invoiceIds,
     String postedBy,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/post-batch'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
       body: json.encode({
         'invoice_ids': invoiceIds,
         'posted_by': postedBy,
@@ -2512,15 +2860,11 @@ class ApiService {
 
   /// Unpost an invoice
   Future<Map<String, dynamic>> unpostInvoice(int invoiceId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/unpost/$invoiceId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2534,15 +2878,11 @@ class ApiService {
     int entryId,
     String postedBy,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.post(
       Uri.parse('$_baseUrl/journal-entries/post/$entryId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
       body: json.encode({'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -2557,15 +2897,11 @@ class ApiService {
     List<int> entryIds,
     String postedBy,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.post(
       Uri.parse('$_baseUrl/journal-entries/post-batch'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
       body: json.encode({
         'entry_ids': entryIds,
         'posted_by': postedBy,
@@ -2580,15 +2916,11 @@ class ApiService {
 
   /// Unpost a journal entry
   Future<Map<String, dynamic>> unpostJournalEntry(int entryId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.post(
       Uri.parse('$_baseUrl/journal-entries/unpost/$entryId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2624,16 +2956,11 @@ class ApiService {
     if (fromDate != null) queryParams['from_date'] = fromDate;
     if (toDate != null) queryParams['to_date'] = toDate;
     
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
     final uri = Uri.parse('$_baseUrl/audit-logs').replace(queryParameters: queryParams);
     final response = await http.get(
       uri,
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 200) {
@@ -2645,15 +2972,11 @@ class ApiService {
 
   /// Get audit log detail
   Future<Map<String, dynamic>> getAuditLogDetail(int logId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/audit-logs/$logId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2667,15 +2990,11 @@ class ApiService {
     String entityType,
     int entityId,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/audit-logs/entity/$entityType/$entityId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2689,17 +3008,13 @@ class ApiService {
     String userName, {
     int limit = 100,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final uri = Uri.parse('$_baseUrl/audit-logs/user/$userName')
         .replace(queryParameters: {'limit': limit.toString()});
     final response = await http.get(
       uri,
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 200) {
@@ -2711,17 +3026,13 @@ class ApiService {
 
   /// Get failed audit logs
   Future<Map<String, dynamic>> getFailedAuditLogs({int limit = 50}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final uri = Uri.parse('$_baseUrl/audit-logs/failed')
         .replace(queryParameters: {'limit': limit.toString()});
     final response = await http.get(
       uri,
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     
     if (response.statusCode == 200) {
@@ -2733,15 +3044,11 @@ class ApiService {
 
   /// Get audit log statistics
   Future<Map<String, dynamic>> getAuditStats() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await _requireAuthToken();
     
     final response = await http.get(
       Uri.parse('$_baseUrl/audit-logs/stats'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -3159,5 +3466,33 @@ class ApiService {
       final error = json.decode(utf8.decode(response.bodyBytes));
       throw Exception(error['message'] ?? 'فشل تغيير حالة المستخدم');
     }
+  }
+
+  // ==========================================
+  // 🔐 Helpers: Token Handling
+  // ==========================================
+
+  Future<String> _requireAuthToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jwtToken = prefs.getString('jwt_token');
+    if (jwtToken != null && jwtToken.isNotEmpty) {
+      return jwtToken;
+    }
+
+    final legacyToken = prefs.getString('auth_token');
+    if (legacyToken != null && legacyToken.isNotEmpty) {
+      // مهاجرة التوكن القديم إلى المفتاح الجديد لضمان التوافق
+      await prefs.setString('jwt_token', legacyToken);
+      return legacyToken;
+    }
+
+    throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
+  }
+
+  Map<String, String> _jsonHeaders({String? token}) {
+    return {
+      'Content-Type': 'application/json; charset=UTF-8',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
   }
 }

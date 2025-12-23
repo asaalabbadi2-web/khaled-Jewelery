@@ -14,12 +14,11 @@ Reorganize and Fix Chart of Accounts
 import sys
 import os
 
-backend_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(backend_dir)
-sys.path.insert(0, parent_dir)
+# Add current directory to path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from backend.app import app
-from backend.models import db, Account
+from app import app
+from models import db, Account
 
 def fix_chart_of_accounts():
     """تطبيق التصحيحات على شجرة الحسابات"""
@@ -139,40 +138,34 @@ def fix_chart_of_accounts():
                     acc.type = 'Asset'
                     changes_made.append(f"✅ {acc_num}: تصحيح type إلى 'Asset'")
         
-        # 8. نقل "مشتريات الكسر" من الإيرادات إلى المصروفات
-        acc_431 = Account.query.filter_by(account_number='431').first()
-        if acc_431 and acc_431.type == 'asset':  # مكتوب خطأ في النوع
-            # التحقق من عدم وجود 5230
-            acc_5230 = Account.query.filter_by(account_number='5230').first()
-            if not acc_5230:
-                parent_520 = Account.query.filter_by(account_number='520').first()
-                if not parent_520:
-                    # إنشاء 520 إذا لم يكن موجوداً
-                    parent_52 = Account.query.filter_by(account_number='52').first()
-                    parent_520 = Account(
-                        account_number='520',
-                        name='تكلفة البضاعة المباعة',
-                        type='Expense',
-                        transaction_type='both',
-                        parent_id=parent_52.id if parent_52 else None
-                    )
-                    db.session.add(parent_520)
-                    db.session.flush()
-                
-                # نقل 431 إلى 5230
-                acc_5230 = Account(
-                    account_number='5230',
-                    name='مشتريات الكسر والتسكير',
-                    type='Expense',
-                    transaction_type='both',
-                    parent_id=parent_520.id
-                )
-                db.session.add(acc_5230)
-                changes_made.append("✅ نقل: 431 → 5230 (مشتريات الكسر من الإيرادات إلى المصروفات)")
-                
-                # حذف 431 القديم
-                db.session.delete(acc_431)
-                changes_made.append("✅ حذف: 431 (القديم)")
+        # 8. ضمان وجود حساب جسر مشتريات الكسر ضمن المخزون
+        bridge_number = '1290'
+        legacy_number = '5230'
+        bridge_name = 'جسر مشتريات الكسر والتسكير'
+        bridge_parent = Account.query.filter_by(account_number='120').first()
+
+        bridge_account = Account.query.filter_by(account_number=bridge_number).first()
+        legacy_bridge = Account.query.filter_by(account_number=legacy_number).first()
+
+        if legacy_bridge:
+            legacy_bridge.account_number = bridge_number
+            legacy_bridge.name = bridge_name
+            legacy_bridge.type = 'Asset'
+            legacy_bridge.transaction_type = 'both'
+            legacy_bridge.parent_id = bridge_parent.id if bridge_parent else None
+            bridge_account = legacy_bridge
+            changes_made.append("✅ تحويل حساب 5230 إلى الجسر الجديد 1290 تحت المخزون")
+
+        if not bridge_account:
+            bridge_account = Account(
+                account_number=bridge_number,
+                name=bridge_name,
+                type='Asset',
+                transaction_type='both',
+                parent_id=bridge_parent.id if bridge_parent else None
+            )
+            db.session.add(bridge_account)
+            changes_made.append("✅ إنشاء حساب الجسر 1290 - جسر مشتريات الكسر والتسكير")
         
         # 9. تصحيح نوع حساب 5200
         acc_5200 = Account.query.filter_by(account_number='5200').first()
@@ -240,7 +233,7 @@ def fix_chart_of_accounts():
         # 11. ربط الحسابات التفصيلية ذات العلاقة
         adjustments = [
             ('5200', '50'),   # مصروف العمولات ضمن المصاريف التشغيلية
-            ('5230', '52'),   # مشتريات الكسر ضمن تكلفة البضاعة المباعة
+            ('1290', '120'),  # جسر مشتريات الكسر ضمن المخزون
         ]
         for acc_number, parent_number in adjustments:
             acc = Account.query.filter_by(account_number=acc_number).first()
@@ -270,6 +263,36 @@ def fix_chart_of_accounts():
             )
             db.session.add(acc_150)
             changes_made.append("✅ إنشاء: 150 - ضريبة القيمة المضافة (مدينة)")
+
+        # 14. ضمان وجود حساب إعادة تقييم الذهب ضمن حقوق الملكية
+        reval_account = Account.query.filter_by(account_number='331').first()
+        parent_33 = Account.query.filter_by(account_number='33').first()
+        if not reval_account:
+            reval_account = Account(
+                account_number='331',
+                name='فائض/عجز إعادة تقييم الذهب (OCI)',
+                type='Equity',
+                transaction_type='cash',
+                parent_id=parent_33.id if parent_33 else None
+            )
+            db.session.add(reval_account)
+            changes_made.append("✅ إنشاء: 331 - فائض/عجز إعادة تقييم الذهب (OCI)")
+        else:
+            if reval_account.name != 'فائض/عجز إعادة تقييم الذهب (OCI)':
+                old_name = reval_account.name
+                reval_account.name = 'فائض/عجز إعادة تقييم الذهب (OCI)'
+                changes_made.append(
+                    f"✅ تحديث اسم حساب 331: '{old_name}' → 'فائض/عجز إعادة تقييم الذهب (OCI)'"
+                )
+            if reval_account.type != 'Equity':
+                reval_account.type = 'Equity'
+                changes_made.append("✅ 331: تصحيح type إلى 'Equity'")
+            if reval_account.transaction_type != 'cash':
+                reval_account.transaction_type = 'cash'
+                changes_made.append("✅ 331: ضبط نوع المعاملات إلى 'cash'")
+            if parent_33 and reval_account.parent_id != parent_33.id:
+                reval_account.parent_id = parent_33.id
+                changes_made.append("✅ 331: ربط الحساب تحت 33 (أرباح العام الجاري)")
         
         # الآن نطبق التغييرات
         try:

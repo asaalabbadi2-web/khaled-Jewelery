@@ -124,7 +124,7 @@ class _UsersScreenState extends State<UsersScreen> {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: color.withOpacity(0.12),
+                  backgroundColor: color.withValues(alpha: 0.12),
                   child: Icon(icon, color: color, size: 20),
                 ),
                 const SizedBox(width: 10),
@@ -330,7 +330,7 @@ class _UsersScreenState extends State<UsersScreen> {
                           radius: 16,
                           backgroundColor: Theme.of(
                             context,
-                          ).colorScheme.primary.withOpacity(0.15),
+                          ).colorScheme.primary.withValues(alpha: 0.15),
                           child: Icon(
                             Icons.person,
                             color: Theme.of(context).colorScheme.primary,
@@ -480,7 +480,7 @@ class _UsersScreenState extends State<UsersScreen> {
                               leading: Stack(
                                 children: [
                                   CircleAvatar(
-                                    backgroundColor: statusColor.withOpacity(
+                                    backgroundColor: statusColor.withValues(alpha: 
                                       0.15,
                                     ),
                                     child: Icon(
@@ -541,7 +541,7 @@ class _UsersScreenState extends State<UsersScreen> {
                                       vertical: 4,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: statusColor.withOpacity(0.16),
+                                      color: statusColor.withValues(alpha: 0.16),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Text(

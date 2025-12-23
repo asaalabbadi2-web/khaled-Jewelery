@@ -137,7 +137,7 @@ class _LowStockReportScreenState extends State<LowStockReportScreen> {
         label = isArabic ? 'مستقر' : 'OK';
     }
     return Chip(
-      backgroundColor: color.withOpacity(0.15),
+      backgroundColor: color.withValues(alpha: 0.15),
       label: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
     );
   }
@@ -726,7 +726,7 @@ class _SummaryTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: metric.color.withOpacity(0.08),
+        color: metric.color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -737,7 +737,7 @@ class _SummaryTile extends StatelessWidget {
                 isArabic ? MainAxisAlignment.end : MainAxisAlignment.start,
             children: [
               CircleAvatar(
-                backgroundColor: metric.color.withOpacity(0.2),
+                backgroundColor: metric.color.withValues(alpha: 0.2),
                 child: Icon(metric.icon, color: metric.color),
               ),
             ],
