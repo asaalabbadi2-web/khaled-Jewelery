@@ -13,6 +13,11 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
+    env:
+      # GHCR requires lowercase image names. If the repo name contains uppercase
+      # (e.g. khaled-Jewelery), pushes will fail unless we normalize.
+      GHCR_REPO: ${{ toLower(github.repository) }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,8 +39,8 @@ jobs:
           file: backend/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/backend:latest
-            ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+            ghcr.io/${{ env.GHCR_REPO }}/backend:latest
+            ghcr.io/${{ env.GHCR_REPO }}/backend:${{ github.sha }}
 
       - name: Build & push web (nginx+flutter) image
         uses: docker/build-push-action@v6
@@ -46,5 +51,5 @@ jobs:
           build-args: |
             API_BASE_URL=/api
           tags: |
-            ghcr.io/${{ github.repository }}/web:latest
-            ghcr.io/${{ github.repository }}/web:${{ github.sha }}
+            ghcr.io/${{ env.GHCR_REPO }}/web:latest
+            ghcr.io/${{ env.GHCR_REPO }}/web:${{ github.sha }}
