@@ -21,6 +21,12 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
+      - name: Compute GHCR repo (lowercase)
+        id: vars
+        shell: bash
+        run: |
+          echo "ghcr_repo=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -40,6 +46,7 @@ jobs:
           PROJECT_PATH: ${{ vars.PROJECT_PATH }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
           GHCR_USERNAME: ${{ github.repository_owner }}
+          GHCR_REPO: ${{ steps.vars.outputs.ghcr_repo }}
         run: |
           if [ -z "${PROJECT_PATH}" ]; then
             echo "Missing GitHub Variable: PROJECT_PATH" >&2
@@ -55,10 +62,27 @@ jobs:
           test -f docker-compose.prod.images.yml
           test -f .env.production
 
-          echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+          # Ensure correct image repo name (GHCR requires lowercase; repo may have been renamed).
+          export GITHUB_REPOSITORY="${GHCR_REPO}"
 
-          docker compose -f docker-compose.prod.images.yml --env-file .env.production pull
-          docker compose -f docker-compose.prod.images.yml --env-file .env.production up -d
-          docker compose -f docker-compose.prod.images.yml --env-file .env.production run --rm backend alembic upgrade head
+          # Support both Docker Compose v2 plugin and legacy docker-compose.
+          COMPOSE="docker compose"
+          if ! docker compose version >/dev/null 2>&1; then
+            COMPOSE="docker-compose"
+          fi
+
+          echo "Using compose command: ${COMPOSE}"
+          docker --version
+          ${COMPOSE} version || true
+
+          if [ -n "${GHCR_PAT}" ]; then
+            echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+          else
+            echo "Warning: GHCR_PAT is empty; skipping docker login" >&2
+          fi
+
+          ${COMPOSE} -f docker-compose.prod.images.yml --env-file .env.production pull
+          ${COMPOSE} -f docker-compose.prod.images.yml --env-file .env.production up -d
+          ${COMPOSE} -f docker-compose.prod.images.yml --env-file .env.production run --rm backend alembic upgrade head
 
           EOF
