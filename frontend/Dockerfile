@@ -16,7 +16,7 @@ COPY frontend /app
 # Compile-time API base URL for the web app (ApiService reads dart-define API_BASE_URL)
 ARG API_BASE_URL=/api
 
-RUN flutter build web --release --dart-define=API_BASE_URL=${API_BASE_URL}
+RUN flutter build web --release --no-tree-shake-icons --dart-define=API_BASE_URL=${API_BASE_URL}
 
 # 2) Serve with nginx
 FROM nginx:1.27-alpine
