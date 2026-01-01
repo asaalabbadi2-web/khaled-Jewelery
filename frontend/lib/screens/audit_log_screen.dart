@@ -25,7 +25,6 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
   
   // Statistics
   Map<String, dynamic>? _stats;
-  bool _isLoadingStats = false;
 
   @override
   void initState() {
@@ -65,18 +64,15 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
   }
 
   Future<void> _loadStats() async {
-    if (mounted) setState(() => _isLoadingStats = true);
     try {
       final data = await _apiService.getAuditStats();
       if (mounted) {
         setState(() {
           _stats = data['stats'];
-          _isLoadingStats = false;
         });
       }
     } catch (e) {
       debugPrint('خطأ في تحميل إحصائيات سجل التدقيق: $e');
-      if (mounted) setState(() => _isLoadingStats = false);
     }
   }
 

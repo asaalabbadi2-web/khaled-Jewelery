@@ -1,3 +1,7 @@
+from config import MAIN_KARAT
+from models import Settings
+
+
 # دالة لتحويل أي أرقام عربية أو هندية أو فارسية إلى أرقام عالمية (0-9)
 def normalize_number(text):
     eastern = '٠١٢٣٤٥٦٧٨٩'
@@ -6,3 +10,10 @@ def normalize_number(text):
         text = text.replace(eastern[i], str(i))
         text = text.replace(persian[i], str(i))
     return text
+
+
+def get_main_karat(default=MAIN_KARAT):
+    """الحصول على العيار الرئيسي للنظام من إعدادات قاعدة البيانات."""
+    settings = Settings.query.first()
+    main_karat = getattr(settings, 'main_karat', None)
+    return main_karat or default

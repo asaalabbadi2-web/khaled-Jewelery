@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-API Routes لإدارة المكاتب (مكاتب بيع وشراء الذهب الخام)
-"""
+"""API Routes لإدارة مكاتب تسكير الذهب."""
 
 from flask import Blueprint, request, jsonify
 from models import (
     db,
     Office,
+    Account,
 )
+from office_supplier_service import ensure_office_supplier
+from office_account_service import ensure_office_account
 
 # إنشاء Blueprint
 offices_bp = Blueprint('offices', __name__, url_prefix='/api/offices')
@@ -20,7 +21,16 @@ def get_offices():
     الحصول على قائمة المكاتب
     """
     try:
-        offices = db.session.query(Office).all()
+        active_param = request.args.get('active')
+        query = db.session.query(Office)
+        if active_param is not None:
+            normalized = str(active_param).strip().lower()
+            if normalized in ('1', 'true', 'yes', 'active'):
+                query = query.filter(Office.active.is_(True))
+            elif normalized in ('0', 'false', 'no', 'inactive'):
+                query = query.filter(Office.active.is_(False))
+
+        offices = query.all()
         return jsonify([office.to_dict() for office in offices]), 200
     except Exception as e:
         print(f"❌ خطأ في جلب المكاتب: {e}")
@@ -53,7 +63,8 @@ def create_office():
             return jsonify({'error': 'اسم المكتب مطلوب'}), 400
         
         # توليد كود المكتب
-        office_code = "OFF-000001"  # generate_office_code()
+        from code_generator import generate_office_code
+        office_code = generate_office_code()
         
         # إنشاء المكتب
         office = Office(
@@ -74,46 +85,29 @@ def create_office():
             active=data.get('active', True)
         )
         
-        # إنشاء حساب محاسبي للمكتب (إذا لم يكن موجوداً)
-        if data.get('create_account', True):
-            # البحث عن الحساب الأب للمكاتب (يمكن إنشاؤه مسبقاً)
-            parent_account = Account.query.filter_by(
-                account_number='2120',
-                name='مكاتب بيع وشراء الذهب'
-            ).first()
-            
-            if not parent_account:
-                # إنشاء الحساب الأب إذا لم يكن موجوداً
-                parent_account = Account(
-                    account_number='2120',
-                    name='مكاتب بيع وشراء الذهب',
-                    type='Liability',
-                    transaction_type='both',
-                    tracks_weight=True,
-                    parent_id=None  # يمكن ربطه بحساب الخصوم
-                )
-                db.session.add(parent_account)
-                db.session.flush()
-            
-            # إنشاء حساب فرعي للمكتب
-            # رقم الحساب: 2120 + رقم المكتب (مثال: 2120-000001)
-            office_account_number = f"2120-{office_code.split('-')[1]}"
-            
-            office_account = Account(
-                account_number=office_account_number,
-                name=f'{office.name} - {office_code}',
-                type='Liability',
-                transaction_type='both',
-                tracks_weight=True,
-                parent_id=parent_account.id
-            )
-            
-            db.session.add(office_account)
-            db.session.flush()
-            
-            office.account_id = office_account.id
-        
         db.session.add(office)
+        db.session.flush()
+
+        # ربط حساب الخزينة/المكتب بالحساب المستهدف (يُستخدم لاحقاً في الصرف)
+        # يمكن تحديده صراحةً من الواجهة لتجنب الربط التلقائي بحسابات أخرى.
+        explicit_account_set = False
+        if data.get('account_category_id') is not None:
+            office.account_category_id = int(data['account_category_id'])
+            explicit_account_set = True
+        elif data.get('account_category_number'):
+            account_category = Account.query.filter_by(account_number=str(data['account_category_number']).strip()).first()
+            if not account_category:
+                return jsonify({'error': f"الحساب غير موجود: {data['account_category_number']}"}), 400
+            office.account_category_id = account_category.id
+            explicit_account_set = True
+
+        # إذا لم يتم تحديد حساب صراحةً، يمكن إنشاء الحساب الافتراضي/التلقائي حسب النظام الحالي
+        if data.get('create_account', True) and not explicit_account_set:
+            ensure_office_account(office)
+
+        # Ensure a supplier exists for this office to keep reservations consistent
+        ensure_office_supplier(office)
+
         db.session.commit()
         
         print(f"✅ تم إنشاء المكتب: {office.office_code} - {office.name}")
@@ -138,9 +132,15 @@ def update_office(office_id):
         # تحديث البيانات
         if 'name' in data:
             office.name = data['name']
-            # تحديث اسم الحساب المحاسبي أيضاً
-            if office.account:
-                office.account.name = f"{data['name']} - {office.office_code}"
+
+        # تحديث الحساب المستهدف للخزينة/المكتب (من شجرة الحسابات)
+        if 'account_category_id' in data and data['account_category_id'] is not None:
+            office.account_category_id = int(data['account_category_id'])
+        elif 'account_category_number' in data and data['account_category_number']:
+            account_category = Account.query.filter_by(account_number=str(data['account_category_number']).strip()).first()
+            if not account_category:
+                return jsonify({'error': f"الحساب غير موجود: {data['account_category_number']}"}), 400
+            office.account_category_id = account_category.id
         
         if 'phone' in data:
             office.phone = data['phone']

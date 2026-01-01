@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart' as theme;
 import 'audit_log_screen.dart';
+import '../providers/auth_provider.dart';
 
 /// شاشة إدارة الترحيل (Posting Management)
 /// تسمح بترحيل الفواتير والقيود، ومراجعتها قبل التأثير على الحسابات
@@ -37,6 +39,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
   List<dynamic> _postedEntries = [];
   bool _isLoadingEntries = false;
   Set<int> _selectedEntryIds = {};
+  bool _userInfoInitialized = false;
 
   // User name for posting
   final TextEditingController _userNameController = TextEditingController();
@@ -88,6 +91,18 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     _loadUnpostedInvoices();
     _loadSettings();
     _checkScheduledPosting();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_userInfoInitialized) {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      if (_userNameController.text.isEmpty && auth.username.isNotEmpty) {
+        _userNameController.text = auth.username;
+      }
+      _userInfoInitialized = true;
+    }
   }
 
   @override
@@ -634,13 +649,54 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
 
   void _showError(String message) {
     if (!mounted) return;
+    final cleanMessage = message.replaceFirst(RegExp(r'^Exception:\s*'), '');
+
+    if (_isSessionError(cleanMessage)) {
+      _handleSessionExpired(cleanMessage);
+      return;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(cleanMessage.isEmpty ? message : cleanMessage),
         backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 5),
       ),
+    );
+  }
+
+  bool _isSessionError(String message) {
+    final normalized = message.toLowerCase();
+    return normalized.contains('تسجيل الدخول') || normalized.contains('الجلسة');
+  }
+
+  Future<void> _handleSessionExpired(String message) async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: AlertDialog(
+            title: const Text('انتهت صلاحية الجلسة'),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('إغلاق'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  Navigator.of(dialogContext).pop();
+                  await auth.logout();
+                },
+                child: const Text('تسجيل الدخول مجدداً'),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

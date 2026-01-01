@@ -111,13 +111,9 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
     int? parentId = isEditing
         ? editingAccount['parent_id']
         : parentAccount?['id'];
-    // Add state for the new transaction type field
-    String transactionType = isEditing
-        ? editingAccount['transaction_type'] ?? 'both'
-        : 'both';
 
-    final accNumController = TextEditingController();
-    final originalAccNumController = TextEditingController();
+    final accountNumberController = TextEditingController();
+    bool isSuggestingNumber = false;
 
     final Map<String, String> accountTypeTranslations = {
       'Asset': 'أصل',
@@ -127,38 +123,45 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
       'Expense': 'مصروف',
     };
 
-    void updateAccountFields(int? pId) {
+    Future<void> updateAccountFields(int? pId, StateSetter setState) async {
       parentId = pId;
+
       if (pId != null) {
         final parentAcc = _accounts.firstWhere((acc) => acc['id'] == pId);
         final parentNumber = normalizeNumber(parentAcc['account_number']);
-        originalAccNumController.text = parentNumber;
 
-        // Suggest new number only when adding a new account or re-parenting an existing one
-        final children = _accounts
-            .where((acc) => acc['parent_id'] == pId)
-            .toList();
-        if (children.isEmpty) {
-          accNumController.text = '1';
-        } else {
-          int maxChildSuffix = 0;
-          for (var child in children) {
-            final childNumber = normalizeNumber(child['account_number']);
-            if (childNumber.startsWith(parentNumber)) {
-              final suffix = childNumber.substring(parentNumber.length);
-              final suffixInt = int.tryParse(suffix) ?? 0;
-              if (suffixInt > maxChildSuffix) {
-                maxChildSuffix = suffixInt;
-              }
-            }
-          }
-          accNumController.text = (maxChildSuffix + 1).toString();
-        }
         // When adding a child, inherit the parent's type
         type = parentAcc['type'];
+
+        setState(() {
+          isSuggestingNumber = true;
+          accountNumberController.text = '';
+        });
+
+        try {
+          final suggestion = await ApiService().getNextAccountNumber(
+            parentNumber,
+          );
+          final suggestedNumber = normalizeNumber(
+            suggestion['suggested_number']?.toString() ?? '',
+          );
+          if (!mounted) return;
+          setState(() {
+            accountNumberController.text = suggestedNumber;
+          });
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('تعذر اقتراح رقم الحساب: $e')));
+        } finally {
+          if (!mounted) return;
+          setState(() {
+            isSuggestingNumber = false;
+          });
+        }
       } else {
-        originalAccNumController.text = '';
-        // Suggest a new top-level account number
+        // Suggest a new top-level account number locally (no parent constraints)
         final rootAccounts = _accounts
             .where((acc) => acc['parent_id'] == null)
             .toList();
@@ -170,32 +173,19 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
             maxRootNumber = rootNumber;
           }
         }
-        accNumController.text = (maxRootNumber + 1).toString();
+        setState(() {
+          accountNumberController.text = (maxRootNumber + 1).toString();
+        });
       }
     }
 
     if (isEditing) {
       final fullNumber = normalizeNumber(editingAccount['account_number']);
-      if (parentId != null) {
-        try {
-          final parent = _accounts.firstWhere((acc) => acc['id'] == parentId);
-          final parentNumber = normalizeNumber(parent['account_number']);
-          originalAccNumController.text = parentNumber;
-          if (fullNumber.startsWith(parentNumber)) {
-            accNumController.text = fullNumber.substring(parentNumber.length);
-          } else {
-            accNumController.text =
-                fullNumber; // Fallback if numbers are inconsistent
-          }
-        } catch (e) {
-          originalAccNumController.text = '';
-          accNumController.text = fullNumber;
-        }
-      } else {
-        accNumController.text = fullNumber;
-      }
+      accountNumberController.text = fullNumber;
     } else {
-      updateAccountFields(parentId);
+      // Initial suggestion
+      // ignore: discarded_futures
+      // (executed inside StatefulBuilder after it mounts)
     }
 
     showDialog(
@@ -211,6 +201,12 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
           ),
           content: StatefulBuilder(
             builder: (BuildContext context, StateSetter setState) {
+              if (!isEditing &&
+                  accountNumberController.text.isEmpty &&
+                  !isSuggestingNumber) {
+                // ignore: discarded_futures
+                updateAccountFields(parentId, setState);
+              }
               return Form(
                 key: _formKey,
                 child: SingleChildScrollView(
@@ -244,48 +240,36 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                               .toList(),
                         ],
                         onChanged: (value) {
-                          setState(() => updateAccountFields(value));
+                          // ignore: discarded_futures
+                          updateAccountFields(value, setState);
                         },
                       ),
                       SizedBox(height: 16),
-                      Directionality(
-                        textDirection: TextDirection.ltr,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (originalAccNumController.text.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 18.0,
-                                  right: 4.0,
-                                ),
-                                child: Text(
-                                  originalAccNumController.text,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.grey[600],
+                      TextFormField(
+                        controller: accountNumberController,
+                        decoration: InputDecoration(
+                          labelText: 'رقم الحساب',
+                          suffixIcon: isSuggestingNumber
+                              ? Padding(
+                                  padding: const EdgeInsets.all(12.0),
+                                  child: SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
                                   ),
-                                ),
-                              ),
-                            Expanded(
-                              child: TextFormField(
-                                controller: accNumController,
-                                decoration: InputDecoration(
-                                  labelText: 'رقم الحساب',
-                                ),
-                                keyboardType: TextInputType.number,
-                                inputFormatters: [
-                                  NormalizeNumberFormatter(),
-                                  FilteringTextInputFormatter.digitsOnly,
-                                ],
-                                validator: (value) =>
-                                    value == null || value.isEmpty
-                                    ? 'الرجاء إدخال رقم'
-                                    : null,
-                              ),
-                            ),
-                          ],
+                                )
+                              : null,
                         ),
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          NormalizeNumberFormatter(),
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        validator: (value) => value == null || value.isEmpty
+                            ? 'الرجاء إدخال رقم'
+                            : null,
                       ),
                       TextFormField(
                         initialValue: name,
@@ -296,29 +280,6 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                         onSaved: (value) => name = value!,
                       ),
                       SizedBox(height: 8),
-                      DropdownButtonFormField<String>(
-                        value: transactionType,
-                        decoration: InputDecoration(labelText: 'نوع المعاملات'),
-                        items: [
-                          DropdownMenuItem(
-                            value: 'both',
-                            child: Text('نقدي وذهبي'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'cash',
-                            child: Text('نقدي فقط'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'gold',
-                            child: Text('ذهب فقط'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => transactionType = value);
-                          }
-                        },
-                      ),
                       if (parentId == null)
                         DropdownButtonFormField<String>(
                           value: type,
@@ -351,14 +312,38 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                 if (_formKey.currentState!.validate()) {
                   _formKey.currentState!.save();
                   try {
-                    final finalAccountNumber =
-                        originalAccNumController.text + accNumController.text;
+                    final finalAccountNumber = normalizeNumber(
+                      accountNumberController.text,
+                    );
+
+                    if (parentId != null) {
+                      final parentAcc = _accounts.firstWhere(
+                        (acc) => acc['id'] == parentId,
+                      );
+                      final parentNumber = normalizeNumber(
+                        parentAcc['account_number'],
+                      );
+                      final validation = await ApiService()
+                          .validateAccountNumber(
+                            accountNumber: finalAccountNumber,
+                            parentAccountNumber: parentNumber,
+                          );
+                      if (validation['is_valid'] != true) {
+                        final message =
+                            validation['message']?.toString() ??
+                            'رقم الحساب غير صالح';
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text(message)));
+                        return;
+                      }
+                    }
                     final data = {
                       'name': name,
                       'account_number': finalAccountNumber,
                       'type': type,
                       'parent_id': parentId,
-                      'transaction_type': transactionType,
                     };
 
                     if (isEditing) {
@@ -388,8 +373,7 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
         );
       },
     ).whenComplete(() {
-      accNumController.dispose();
-      originalAccNumController.dispose();
+      accountNumberController.dispose();
     });
   }
 

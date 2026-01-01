@@ -3,6 +3,7 @@ from config import MAIN_KARAT
 from datetime import datetime, date, time
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
+from sqlalchemy import event
 
 db = SQLAlchemy()
 
@@ -44,7 +45,14 @@ class Account(db.Model):
     # True: حسابات المخزون، المبيعات، المشتريات
     # False: حسابات النقدية البحتة، المصروفات الإدارية
     
-    children = db.relationship('Account', backref=db.backref('parent', remote_side=[id]))
+    # 🔥 ربط مع حساب المذكرة الموازي (للنظام المزدوج الكامل)
+    memo_account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=True)
+    # يشير إلى الحساب الوزني الموازي في قسم (7) حسابات المذكرة
+    # مثال: حساب "1000 صندوق النقدية" له حساب موازي "7100 صندوق النقدية (وزن معادل)"
+    
+    children = db.relationship('Account', 
+                               foreign_keys=[parent_id],
+                               backref=db.backref('parent', remote_side=[id]))
 
     def to_dict(self):
         """تحويل الحساب إلى dict مع جميع المعلومات"""
@@ -115,6 +123,101 @@ class Account(db.Model):
             '24': self.balance_24k
         }
         return karat_map.get(str(karat), 0.0)
+    
+    def create_parallel_account(self):
+        """
+        🆕 إنشاء حساب موازي تلقائياً
+        
+        القواعد:
+        - إذا كان الحساب مالي (cash) → ينشئ حساب وزني (gold)
+        - إذا كان الحساب وزني (gold) → ينشئ حساب مالي (cash)
+        - رقم الحساب الوزني = 7 + رقم الحساب المالي
+        - رقم الحساب المالي يُستخرج بحذف 7 من البداية
+        - اسم الحساب الموازي = اسم الحساب الأصلي + "وزني" أو يُحذف "وزني"
+        
+        Returns:
+            Account: الحساب الموازي المُنشأ
+        """
+        if self.transaction_type == 'both':
+            # حسابات "both" لا تحتاج حساب موازي
+            return None
+        
+        # تحديد اتجاه الإنشاء
+        if self.transaction_type == 'cash':
+            # إنشاء حساب وزني موازي
+            parallel_number = f"7{self.account_number}"
+            parallel_name = f"{self.name} وزني"
+            parallel_type = 'gold'
+            parallel_tracks_weight = True
+            
+            # إيجاد الحساب الأب الموازي
+            parallel_parent_id = None
+            if self.parent_id:
+                parent_account = Account.query.get(self.parent_id)
+                if parent_account and parent_account.memo_account_id:
+                    parallel_parent_id = parent_account.memo_account_id
+        
+        elif self.transaction_type == 'gold':
+            # إنشاء حساب مالي موازي
+            # التحقق من أن الرقم يبدأ بـ 7
+            if not self.account_number.startswith('7'):
+                # حساب وزني لكن لا يبدأ بـ 7، لا يمكن إنشاء موازي
+                return None
+            
+            parallel_number = self.account_number[1:]  # حذف الـ 7
+            parallel_name = self.name.replace(' وزني', '').strip()
+            parallel_type = 'cash'
+            parallel_tracks_weight = False
+            
+            # إيجاد الحساب الأب الموازي
+            parallel_parent_id = None
+            if self.parent_id:
+                parent_account = Account.query.get(self.parent_id)
+                if parent_account:
+                    # البحث عن الحساب المالي الذي يشير إلى الأب الوزني
+                    financial_parent = Account.query.filter_by(
+                        memo_account_id=parent_account.id
+                    ).first()
+                    if financial_parent:
+                        parallel_parent_id = financial_parent.id
+        
+        else:
+            return None
+        
+        # التحقق من عدم وجود الحساب مسبقاً
+        existing = Account.query.filter_by(account_number=parallel_number).first()
+        if existing:
+            # ربط الحساب الموجود
+            if self.transaction_type == 'cash':
+                self.memo_account_id = existing.id
+                db.session.flush()
+            return existing
+        
+        # إنشاء الحساب الموازي
+        parallel_account = Account(
+            account_number=parallel_number,
+            name=parallel_name,
+            type=self.type,  # نفس النوع (Asset, Liability, etc.)
+            transaction_type=parallel_type,
+            tracks_weight=parallel_tracks_weight,
+            parent_id=parallel_parent_id
+        )
+        
+        db.session.add(parallel_account)
+        db.session.flush()
+        
+        # ربط الحسابين
+        if self.transaction_type == 'cash':
+            # الحساب الأصلي مالي → الموازي وزني
+            self.memo_account_id = parallel_account.id
+        else:
+            # الحساب الأصلي وزني → الموازي مالي
+            # نربط الحساب المالي (الموازي) بالحساب الوزني (الأصلي)
+            parallel_account.memo_account_id = self.id
+        
+        db.session.flush()
+        
+        return parallel_account
 
     def __repr__(self):
         return f'<Account {self.name}>'
@@ -222,8 +325,32 @@ class PaymentType(db.Model):
         return f'<PaymentType {self.code}>'
 
 
+class Branch(db.Model):
+    """فروع المعرض/المحل (كيان منفصل عن مكاتب التسكير)."""
+
+    __tablename__ = 'branch'
+
+    id = db.Column(db.Integer, primary_key=True)
+    branch_code = db.Column(db.String(20), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'branch_code': self.branch_code,
+            'name': self.name,
+            'active': self.active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<Branch {self.name}>'
+
+
 class Office(db.Model):
-    """مكاتب بيع وشراء الذهب الخام (التسكير)"""
+    """مكاتب تسكير الذهب"""
     __tablename__ = 'office'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -252,6 +379,8 @@ class Office(db.Model):
     # الربط مع الحساب التجميعي في شجرة الحسابات
     account_category_id = db.Column(db.Integer, db.ForeignKey('account.id', name='fk_office_account_category'), nullable=True)
     account_category = db.relationship('Account', foreign_keys=[account_category_id])
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id', name='fk_office_supplier'), unique=True, nullable=True)
+    supplier = db.relationship('Supplier', foreign_keys=[supplier_id], backref=db.backref('office', uselist=False))
     
     # الأرصدة (لتسريع الاستعلامات)
     balance_cash = db.Column(db.Float, default=0.0)
@@ -259,6 +388,11 @@ class Office(db.Model):
     balance_gold_21k = db.Column(db.Float, default=0.0)
     balance_gold_22k = db.Column(db.Float, default=0.0)
     balance_gold_24k = db.Column(db.Float, default=0.0)
+    total_reservations = db.Column(db.Integer, default=0)
+    total_weight_purchased = db.Column(db.Float, default=0.0)
+    total_amount_paid = db.Column(db.Float, default=0.0)
+
+    reservations = db.relationship('OfficeReservation', backref='office', lazy=True, cascade='all, delete-orphan')
 
     def to_dict(self):
         return {
@@ -281,15 +415,75 @@ class Office(db.Model):
             'tax_number': self.tax_number,
             'account_category_id': self.account_category_id,
             'account_category_name': self.account_category.name if self.account_category else None,
+            'supplier_id': self.supplier_id,
+            'supplier_code': self.supplier.supplier_code if self.supplier else None,
+            'supplier_name': self.supplier.name if self.supplier else None,
             'balance_cash': self.balance_cash,
             'balance_gold_18k': self.balance_gold_18k,
             'balance_gold_21k': self.balance_gold_21k,
             'balance_gold_22k': self.balance_gold_22k,
             'balance_gold_24k': self.balance_gold_24k,
+            'total_reservations': self.total_reservations,
+            'total_weight_purchased': self.total_weight_purchased,
+            'total_amount_paid': self.total_amount_paid,
         }
 
     def __repr__(self):
         return f'<Office {self.name}>'
+
+
+class OfficeReservation(db.Model):
+    __tablename__ = 'office_reservation'
+
+    id = db.Column(db.Integer, primary_key=True)
+    office_id = db.Column(db.Integer, db.ForeignKey('office.id'), nullable=False, index=True)
+    reservation_code = db.Column(db.String(30), nullable=False, unique=True)
+    reservation_date = db.Column(db.DateTime, default=db.func.now())
+    karat = db.Column(db.Integer, default=24)
+    weight_grams = db.Column(db.Float, nullable=False)
+    weight_main_karat = db.Column(db.Float, nullable=False)
+    price_per_gram = db.Column(db.Float, nullable=False)
+    execution_price_per_gram = db.Column(db.Float, nullable=False)
+    total_amount = db.Column(db.Float, nullable=False)
+    paid_amount = db.Column(db.Float, default=0.0)
+    payment_status = db.Column(db.String(20), default='pending')
+    status = db.Column(db.String(20), default='reserved')
+    contact_person = db.Column(db.String(100))
+    contact_phone = db.Column(db.String(50))
+    notes = db.Column(db.Text)
+    executions_created = db.Column(db.Integer, default=0)
+    weight_consumed_main_karat = db.Column(db.Float, default=0.0)
+    weight_remaining_main_karat = db.Column(db.Float, default=0.0)
+    # ربط بالفاتورة التي تثبت سداد الحجز (اختياري)
+    purchase_invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'office_id': self.office_id,
+            'reservation_code': self.reservation_code,
+            'reservation_date': self.reservation_date.isoformat() if self.reservation_date else None,
+            'karat': self.karat,
+            'weight_grams': self.weight_grams,
+            'weight_main_karat': self.weight_main_karat,
+            'price_per_gram': self.price_per_gram,
+            'execution_price_per_gram': self.execution_price_per_gram,
+            'total_amount': self.total_amount,
+            'paid_amount': self.paid_amount,
+            'payment_status': self.payment_status,
+            'status': self.status,
+            'contact_person': self.contact_person,
+            'contact_phone': self.contact_phone,
+            'notes': self.notes,
+            'executions_created': self.executions_created,
+            'weight_consumed_main_karat': self.weight_consumed_main_karat,
+            'weight_remaining_main_karat': self.weight_remaining_main_karat,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'purchase_invoice_id': self.purchase_invoice_id,
+        }
 
 
 class Supplier(db.Model):
@@ -325,6 +519,9 @@ class Supplier(db.Model):
     balance_gold_21k = db.Column(db.Float, default=0.0)
     balance_gold_22k = db.Column(db.Float, default=0.0)
     balance_gold_24k = db.Column(db.Float, default=0.0)
+    gold_balance_weight = db.Column(db.Float, default=0.0)
+    gold_balance_cash_equivalent = db.Column(db.Float, default=0.0)
+    last_gold_transaction_date = db.Column(db.DateTime, nullable=True)
     
     invoices = db.relationship('Invoice', backref='supplier', lazy=True)
 
@@ -353,6 +550,9 @@ class Supplier(db.Model):
             'balance_gold_21k': self.balance_gold_21k,
             'balance_gold_22k': self.balance_gold_22k,
             'balance_gold_24k': self.balance_gold_24k,
+            'gold_balance_weight': self.gold_balance_weight,
+            'gold_balance_cash_equivalent': self.gold_balance_cash_equivalent,
+            'last_gold_transaction_date': self.last_gold_transaction_date.isoformat() if self.last_gold_transaction_date else None,
         }
 
     def to_dict_with_account(self):
@@ -433,6 +633,26 @@ class Customer(db.Model):
     def to_dict_with_account(self):
         return self.to_dict()
 
+class Category(db.Model):
+    """تصنيفات الأصناف - لتحسين دقة التقارير"""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, unique=True)
+    description = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # العلاقة مع الأصناف
+    items = db.relationship('Item', backref='category', lazy=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'items_count': len(self.items)
+        }
+
+
 class Item(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     
@@ -441,8 +661,17 @@ class Item(db.Model):
     
     name = db.Column(db.String(100), nullable=False)
     barcode = db.Column(db.String(100), unique=True, nullable=True, index=True)  # باركود فريد (اختياري - يُولّد تلقائياً إذا كان فارغاً)
+    
+    # 🆕 التصنيف
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
+    
     karat = db.Column(db.String(10))  # عيار
     weight = db.Column(db.Float)      # وزن
+    
+    # 🆕 معلومات الأحجار
+    has_stones = db.Column(db.Boolean, default=False, nullable=False)  # هل يحتوي على أحجار؟
+    stones_weight = db.Column(db.Float, default=0.0, nullable=True)    # وزن الأحجار (بالجرام)
+    stones_value = db.Column(db.Float, default=0.0, nullable=True)     # قيمة الأحجار (بالريال)
     def weight_in_main_karat(self):
         """
         تحويل الوزن إلى العيار الرئيسي
@@ -496,9 +725,12 @@ class Invoice(db.Model):
     invoice_type_id = db.Column(db.Integer, nullable=False)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
+    branch_id = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True)  # 🆕 الفرع (منفصل عن مكاتب التسكير)
     office_id = db.Column(db.Integer, db.ForeignKey('office.id'), nullable=True)  # 🆕 للتسكير من المكاتب
     date = db.Column(db.DateTime, nullable=False)
     total = db.Column(db.Float, nullable=False)
+
+    branch = db.relationship('Branch', foreign_keys=[branch_id])
     
     # نوع الفاتورة - 6 أنواع
     # 'بيع', 'شراء من عميل', 'مرتجع بيع', 'مرتجع شراء', 'شراء من مورد', 'مرتجع شراء من مورد'
@@ -529,10 +761,35 @@ class Invoice(db.Model):
     gold_tax_total = db.Column(db.Float, default=0.0)
     wage_tax_total = db.Column(db.Float, default=0.0)
     apply_gold_tax = db.Column(db.Boolean, default=False)
+    avg_cost_per_gram_snapshot = db.Column(db.Float, default=0.0)
+    avg_cost_gold_component = db.Column(db.Float, default=0.0)
+    avg_cost_manufacturing_component = db.Column(db.Float, default=0.0)
+    avg_cost_total_snapshot = db.Column(db.Float, default=0.0)
+    settlement_status = db.Column(db.String(20), default='pending')
+    settlement_method = db.Column(db.String(20), nullable=True)
+    settlement_date = db.Column(db.DateTime, nullable=True)
+    settlement_price_per_gram = db.Column(db.Float, nullable=True)
+    settlement_cash_amount = db.Column(db.Float, default=0.0)
+    settlement_gold_weight = db.Column(db.Float, default=0.0)
+
+    # 🆕 ملخص أمر التسكير (التزامات الذهب)
+    weight_closing_status = db.Column(db.String(20), default='not_initialized')
+    weight_closing_main_karat = db.Column(db.Float, default=21.0)
+    weight_closing_total_weight = db.Column(db.Float, default=0.0)
+    weight_closing_executed_weight = db.Column(db.Float, default=0.0)
+    weight_closing_remaining_weight = db.Column(db.Float, default=0.0)
+    weight_closing_close_price = db.Column(db.Float, default=0.0)
+    weight_closing_order_number = db.Column(db.String(30), nullable=True)
+    weight_closing_price_source = db.Column(db.String(20), nullable=True)
     
     # 🆕 حقول الربح بالذهب
     profit_cash = db.Column(db.Float, default=0.0)  # الربح النقدي (ر.س)
     profit_gold = db.Column(db.Float, default=0.0)  # الربح بالذهب (جم)
+    profit_weight_price_per_gram = db.Column(db.Float, default=0.0)  # سعر التحويل المستخدم للربح الوزني
+
+    # 🆕 قالب الطباعة الخاص بهذه الفاتورة (Preset key from Template Studio)
+    # مثال: a4_portrait, a5_portrait, thermal_80x200
+    print_template_preset_key = db.Column(db.String(64), nullable=True)
     
     # 🆕 ربط بوسيلة الدفع (Foreign Key)
     payment_method_id = db.Column(db.Integer, db.ForeignKey('payment_method.id'), nullable=True)
@@ -558,6 +815,10 @@ class Invoice(db.Model):
     net_gold_difference_21k = db.Column(db.Float, nullable=True)
     total_wage = db.Column(db.Float, nullable=True)
     wage_in_gold_21k = db.Column(db.Float, nullable=True)
+    manufacturing_wage_mode_snapshot = db.Column(db.String(20), nullable=True)
+    wage_inventory_account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=True)
+    wage_inventory_account = db.relationship('Account', foreign_keys=[wage_inventory_account_id])
+    wage_inventory_balance_main_karat = db.Column(db.Float, default=0.0)
 
     # Fields for partial/deferred payments
     settled_gold_weight = db.Column(db.Float, nullable=True)
@@ -574,6 +835,9 @@ class Invoice(db.Model):
     # العلاقة بالفاتورة الأصلية (للمرتجعات)
     original_invoice = db.relationship('Invoice', remote_side=[id], foreign_keys=[original_invoice_id], backref='returns', uselist=False)
 
+    # 🆕 تسويات الوزن (مصروف/تسكير)
+    weight_settlements = db.relationship('InvoiceWeightSettlement', backref='invoice', lazy=True, cascade='all, delete-orphan')
+
     __table_args__ = (db.UniqueConstraint('invoice_type', 'invoice_type_id', name='_invoice_type_uc'),)
 
     def to_dict(self):
@@ -582,6 +846,7 @@ class Invoice(db.Model):
             'invoice_type_id': self.invoice_type_id,
             'customer_id': self.customer_id,
             'supplier_id': self.supplier_id,
+            'branch_id': self.branch_id,
             'office_id': self.office_id,  # 🆕 المكتب
             'date': self.date.isoformat(),
             'total': self.total,
@@ -598,19 +863,48 @@ class Invoice(db.Model):
             'gold_tax_total': self.gold_tax_total,
             'wage_tax_total': self.wage_tax_total,
             'apply_gold_tax': self.apply_gold_tax,
+            'avg_cost_per_gram_snapshot': self.avg_cost_per_gram_snapshot,
+            'avg_cost_gold_component': self.avg_cost_gold_component,
+            'avg_cost_manufacturing_component': self.avg_cost_manufacturing_component,
+            'avg_cost_total_snapshot': self.avg_cost_total_snapshot,
+            'settlement_status': self.settlement_status,
+            'settlement_method': self.settlement_method,
+            'settlement_date': self.settlement_date.isoformat() if self.settlement_date else None,
+            'settlement_price_per_gram': self.settlement_price_per_gram,
+            'settlement_cash_amount': self.settlement_cash_amount,
+            'settlement_gold_weight': self.settlement_gold_weight,
+            'weight_closing_status': self.weight_closing_status,
+            'weight_closing_main_karat': self.weight_closing_main_karat,
+            'weight_closing_total_weight': self.weight_closing_total_weight,
+            'weight_closing_executed_weight': self.weight_closing_executed_weight,
+            'weight_closing_remaining_weight': self.weight_closing_remaining_weight,
+            'weight_closing_close_price': self.weight_closing_close_price,
+            'weight_closing_order_number': self.weight_closing_order_number,
+            'weight_closing_price_source': self.weight_closing_price_source,
             'profit_cash': self.profit_cash,  # 🆕 الربح النقدي
             'profit_gold': self.profit_gold,  # 🆕 الربح بالذهب
+            'profit_weight_price_per_gram': self.profit_weight_price_per_gram,
+            'print_template_preset_key': self.print_template_preset_key,
             'payment_method': self.payment_method,  # للتوافق مع الفواتير القديمة
             'payment_method_id': self.payment_method_id,
             'commission_amount': self.commission_amount,
             'net_amount': self.net_amount,
             'amount_paid': self.amount_paid,
+            'manufacturing_wage_mode_snapshot': self.manufacturing_wage_mode_snapshot,
+            'wage_inventory_account_id': self.wage_inventory_account_id,
+            'wage_inventory_balance_main_karat': self.wage_inventory_balance_main_karat,
             'safe_box_id': self.safe_box_id,  # 🆕 الخزينة
             'original_invoice_id': self.original_invoice_id,
             'return_reason': self.return_reason,
             'gold_type': self.gold_type,
             'items': [item.to_dict() for item in self.items]
         }
+
+        # 🆕 اسم الفرع (اختياري) لتسهيل العرض في الواجهات
+        try:
+            result['branch_name'] = self.branch.name if self.branch else None
+        except Exception:
+            result['branch_name'] = None
         
         # 🆕 إضافة تفاصيل الخزينة
         if self.safe_box:
@@ -622,15 +916,19 @@ class Invoice(db.Model):
         
         # 🆕 إضافة تفاصيل وسيلة الدفع القديمة (للتوافق)
         if self.payment_method_obj:
+            account_info = None
+            default_safe_box = getattr(self.payment_method_obj, 'default_safe_box', None)
+            if default_safe_box and getattr(default_safe_box, 'account', None):
+                account_info = {
+                    'id': default_safe_box.account.id,
+                    'account_number': default_safe_box.account.account_number,
+                    'name': default_safe_box.account.name
+                }
             result['payment_method_details'] = {
                 'id': self.payment_method_obj.id,
                 'name': self.payment_method_obj.name,
                 'commission_rate': self.payment_method_obj.commission_rate,
-                'account': {
-                    'id': self.payment_method_obj.account.id,
-                    'account_number': self.payment_method_obj.account.account_number,
-                    'name': self.payment_method_obj.account.name
-                } if self.payment_method_obj.account else None
+                'account': account_info
             }
         
         # 🆕 إضافة دفعات متعددة (الميزة الجديدة)
@@ -647,16 +945,48 @@ class Invoice(db.Model):
             result['karat_lines'] = [line.to_dict() for line in self.karat_lines]
         else:
             result['karat_lines'] = []
+
+        if self.weight_settlements:
+            result['weight_settlements'] = [settlement.to_dict() for settlement in self.weight_settlements]
+        else:
+            result['weight_settlements'] = []
         
         return result
 
     def calculate_total_weight(self):
         """
-        حساب إجمالي وزن الفاتورة بالعيار الرئيسي
+        حساب إجمالي وزن الفاتورة بالعيار الرئيسي، بما في ذلك الأصناف اليدوية.
         """
-        base_weight = sum(ii.item.weight_in_main_karat() * ii.quantity for ii in self.items if ii.item)
+
+        def _to_float(value, default=0.0):
+            try:
+                if value in (None, ''):
+                    return default
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _convert_to_main_karat(weight_value, karat_value):
+            weight_float = _to_float(weight_value, 0.0)
+            karat_float = _to_float(karat_value, MAIN_KARAT)
+            if weight_float <= 0 or karat_float <= 0:
+                return 0.0
+            return (weight_float * karat_float) / MAIN_KARAT
+
+        base_weight = 0.0
+
+        for invoice_item in self.items:
+            quantity = invoice_item.quantity or 1
+            if invoice_item.item:
+                base_weight += (invoice_item.item.weight_in_main_karat() or 0.0) * quantity
+            else:
+                manual_weight = _convert_to_main_karat(invoice_item.weight, invoice_item.karat)
+                if manual_weight:
+                    base_weight += manual_weight * quantity
+
         if self.karat_lines:
             base_weight += sum(line.weight_grams or 0 for line in self.karat_lines)
+
         return base_weight
 
     def total_wage_in_gold(self):
@@ -682,9 +1012,16 @@ class InvoiceItem(db.Model):
     price = db.Column(db.Float, nullable=False)
     karat = db.Column(db.Float)
     weight = db.Column(db.Float)
+    standing_weight = db.Column(db.Float, default=0.0)
+    stones_weight = db.Column(db.Float, default=0.0)
+    direct_purchase_price_per_gram = db.Column(db.Float, default=0.0)
     wage = db.Column(db.Float)
     net = db.Column(db.Float)
     tax = db.Column(db.Float)
+    avg_cost_per_gram_snapshot = db.Column(db.Float, default=0.0)
+    profit_cash = db.Column(db.Float, default=0.0)
+    profit_weight = db.Column(db.Float, default=0.0)
+    profit_weight_price_per_gram = db.Column(db.Float, default=0.0)
 
     def to_dict(self):
         return {
@@ -696,10 +1033,25 @@ class InvoiceItem(db.Model):
             'price': self.price,
             'karat': self.karat,
             'weight': self.weight,
+            'standing_weight': self.standing_weight,
+            'stones_weight': self.stones_weight,
+            'direct_purchase_price_per_gram': self.direct_purchase_price_per_gram,
             'wage': self.wage,
             'net': self.net,
-            'tax': self.tax
+            'tax': self.tax,
+            'avg_cost_per_gram_snapshot': self.avg_cost_per_gram_snapshot,
+            'profit_cash': self.profit_cash,
+            'profit_weight': self.profit_weight,
+            'profit_weight_price_per_gram': self.profit_weight_price_per_gram,
+            'weight_closing_logs': [log.to_dict() for log in self.weight_closing_logs]
         }
+
+    weight_closing_logs = db.relationship(
+        'WeightClosingLog',
+        backref='sale_item',
+        lazy=True,
+        cascade='all, delete-orphan'
+    )
 
 
 class InvoiceKaratLine(db.Model):
@@ -726,6 +1078,165 @@ class InvoiceKaratLine(db.Model):
             'description': self.description,
         }
 
+
+class WeightClosingLog(db.Model):
+    __tablename__ = 'weight_closing_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sale_item_id = db.Column(db.Integer, db.ForeignKey('invoice_item.id'), nullable=False, index=True)
+    profit_weight = db.Column(db.Float, default=0.0)
+    profit_cash = db.Column(db.Float, default=0.0)
+    snapshot_cost_per_gram = db.Column(db.Float, default=0.0)
+    close_price = db.Column(db.Float, nullable=False)
+    close_value = db.Column(db.Float, default=0.0)
+    difference_value = db.Column(db.Float, default=0.0)
+    difference_weight = db.Column(db.Float, default=0.0)
+    close_date = db.Column(db.DateTime, default=db.func.now())
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey('journal_entry.id'), nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'sale_item_id': self.sale_item_id,
+            'profit_weight': self.profit_weight,
+            'profit_cash': self.profit_cash,
+            'snapshot_cost_per_gram': self.snapshot_cost_per_gram,
+            'close_price': self.close_price,
+            'close_value': self.close_value,
+            'difference_value': self.difference_value,
+            'difference_weight': self.difference_weight,
+            'close_date': self.close_date.isoformat() if self.close_date else None,
+            'journal_entry_id': self.journal_entry_id,
+            'difference_value_realized': self.difference_value if self.journal_entry_id else 0.0,
+        }
+
+
+class WeightClosingOrder(db.Model):
+    __tablename__ = 'weight_closing_order'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False, unique=True, index=True)
+    order_number = db.Column(db.String(30), unique=True, nullable=False)
+    status = db.Column(db.String(20), default='open', nullable=False)
+    main_karat = db.Column(db.Float, default=21.0, nullable=False)
+    price_source = db.Column(db.String(20), default='live', nullable=False)
+    close_price_per_gram = db.Column(db.Float, default=0.0, nullable=False)
+    gold_value_cash = db.Column(db.Float, default=0.0)
+    manufacturing_wage_cash = db.Column(db.Float, default=0.0)
+    profit_weight_main_karat = db.Column(db.Float, default=0.0)
+    total_cash_value = db.Column(db.Float, default=0.0)
+    total_weight_main_karat = db.Column(db.Float, default=0.0)
+    executed_weight_main_karat = db.Column(db.Float, default=0.0)
+    remaining_weight_main_karat = db.Column(db.Float, default=0.0)
+    valuation_journal_entry_id = db.Column(db.Integer, db.ForeignKey('journal_entry.id'), nullable=True)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    invoice = db.relationship('Invoice', backref=db.backref('weight_closing_order', uselist=False))
+    valuation_journal_entry = db.relationship('JournalEntry', backref='weight_closing_orders', lazy=True)
+
+    executions = db.relationship(
+        'WeightClosingExecution',
+        backref='order',
+        lazy=True,
+        cascade='all, delete-orphan'
+    )
+
+    def to_dict(self, include_executions: bool = True):
+        payload = {
+            'id': self.id,
+            'invoice_id': self.invoice_id,
+            'order_number': self.order_number,
+            'status': self.status,
+            'main_karat': self.main_karat,
+            'price_source': self.price_source,
+            'close_price_per_gram': self.close_price_per_gram,
+            'gold_value_cash': self.gold_value_cash,
+            'manufacturing_wage_cash': self.manufacturing_wage_cash,
+            'profit_weight_main_karat': self.profit_weight_main_karat,
+            'total_cash_value': self.total_cash_value,
+            'total_weight_main_karat': self.total_weight_main_karat,
+            'executed_weight_main_karat': self.executed_weight_main_karat,
+            'remaining_weight_main_karat': self.remaining_weight_main_karat,
+            'valuation_journal_entry_id': self.valuation_journal_entry_id,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_executions:
+            payload['executions'] = [execution.to_dict() for execution in self.executions]
+        return payload
+
+
+class WeightClosingExecution(db.Model):
+    __tablename__ = 'weight_closing_execution'
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('weight_closing_order.id'), nullable=False, index=True)
+    source_invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=True)
+    execution_type = db.Column(db.String(30), nullable=False, default='purchase_scrap')
+    weight_main_karat = db.Column(db.Float, default=0.0)
+    price_per_gram = db.Column(db.Float, default=0.0)
+    difference_value = db.Column(db.Float, default=0.0)
+    difference_weight = db.Column(db.Float, default=0.0)
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey('journal_entry.id'), nullable=True)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    source_invoice = db.relationship('Invoice', backref='weight_closing_executions', foreign_keys=[source_invoice_id])
+    journal_entry = db.relationship('JournalEntry', backref='weight_closing_executions', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'order_id': self.order_id,
+            'source_invoice_id': self.source_invoice_id,
+            'execution_type': self.execution_type,
+            'weight_main_karat': self.weight_main_karat,
+            'price_per_gram': self.price_per_gram,
+            'difference_value': self.difference_value,
+            'difference_weight': self.difference_weight,
+            'journal_entry_id': self.journal_entry_id,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class InvoiceWeightSettlement(db.Model):
+    __tablename__ = 'invoice_weight_settlement'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False, index=True)
+    settlement_type = db.Column(db.String(20), default='expense', nullable=False)  # expense | weight
+    required_weight = db.Column(db.Float, default=0.0)
+    required_cash = db.Column(db.Float, default=0.0)
+    executed_weight = db.Column(db.Float, default=0.0)
+    executed_cash = db.Column(db.Float, default=0.0)
+    rate_used = db.Column(db.Float, default=0.0)
+    status = db.Column(db.String(20), default='pending')  # pending | partially_closed | closed
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey('journal_entry.id'), nullable=True)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'invoice_id': self.invoice_id,
+            'settlement_type': self.settlement_type,
+            'required_weight': round(self.required_weight or 0.0, 6),
+            'required_cash': round(self.required_cash or 0.0, 2),
+            'executed_weight': round(self.executed_weight or 0.0, 6),
+            'executed_cash': round(self.executed_cash or 0.0, 2),
+            'rate_used': round(self.rate_used or 0.0, 4),
+            'status': self.status,
+            'journal_entry_id': self.journal_entry_id,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
 # Install Flask-SQLAlchemy
 # RUN: pip install flask_sqlalchemy
 
@@ -734,6 +1245,89 @@ class GoldPrice(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     price = db.Column(db.Float, nullable=False)
     date = db.Column(db.DateTime, default=db.func.now())
+
+
+class InventoryCostingConfig(db.Model):
+    __tablename__ = 'inventory_costing_config'
+
+    id = db.Column(db.Integer, primary_key=True)
+    costing_method = db.Column(db.String(20), default='moving_average')
+    current_avg_cost_per_gram = db.Column(db.Float, default=0.0)
+    avg_gold_price_per_gram = db.Column(db.Float, default=0.0)
+    avg_manufacturing_per_gram = db.Column(db.Float, default=0.0)
+    avg_total_cost_per_gram = db.Column(db.Float, default=0.0)
+    total_inventory_weight = db.Column(db.Float, default=0.0)
+    total_gold_value = db.Column(db.Float, default=0.0)
+    total_manufacturing_value = db.Column(db.Float, default=0.0)
+    last_purchase_price = db.Column(db.Float, nullable=True)
+    last_purchase_weight = db.Column(db.Float, nullable=True)
+    last_updated = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'costing_method': self.costing_method,
+            'current_avg_cost_per_gram': self.current_avg_cost_per_gram,
+            'avg_gold_price_per_gram': self.avg_gold_price_per_gram,
+            'avg_manufacturing_per_gram': self.avg_manufacturing_per_gram,
+            'avg_total_cost_per_gram': self.avg_total_cost_per_gram,
+            'total_inventory_weight': self.total_inventory_weight,
+            'total_gold_value': self.total_gold_value,
+            'total_manufacturing_value': self.total_manufacturing_value,
+            'last_purchase_price': self.last_purchase_price,
+            'last_purchase_weight': self.last_purchase_weight,
+            'last_updated': self.last_updated.isoformat() if self.last_updated else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class SupplierGoldTransaction(db.Model):
+    __tablename__ = 'supplier_gold_transaction'
+
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=False)
+    supplier = db.relationship('Supplier', backref=db.backref('gold_transactions', lazy='dynamic'))
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=True)
+    invoice = db.relationship('Invoice', backref='gold_transactions')
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey('journal_entry.id'), nullable=True)
+    journal_entry = db.relationship('JournalEntry', backref='supplier_gold_transactions')
+    transaction_type = db.Column(db.String(50), nullable=False)
+    gold_weight = db.Column(db.Float, nullable=False)
+    original_karat = db.Column(db.Float, nullable=True)
+    original_weight = db.Column(db.Float, nullable=True)
+    price_per_gram = db.Column(db.Float, nullable=False)
+    manufacturing_wage_per_gram = db.Column(db.Float, default=0.0)
+    cash_amount = db.Column(db.Float, nullable=False)
+    settlement_price_per_gram = db.Column(db.Float, nullable=True)
+    settlement_cash_amount = db.Column(db.Float, default=0.0)
+    settlement_gold_weight = db.Column(db.Float, default=0.0)
+    notes = db.Column(db.Text, nullable=True)
+    transaction_date = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+    created_by = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'supplier_id': self.supplier_id,
+            'invoice_id': self.invoice_id,
+            'journal_entry_id': self.journal_entry_id,
+            'transaction_type': self.transaction_type,
+            'gold_weight': self.gold_weight,
+            'original_karat': self.original_karat,
+            'original_weight': self.original_weight,
+            'price_per_gram': self.price_per_gram,
+            'manufacturing_wage_per_gram': self.manufacturing_wage_per_gram,
+            'cash_amount': self.cash_amount,
+            'settlement_price_per_gram': self.settlement_price_per_gram,
+            'settlement_cash_amount': self.settlement_cash_amount,
+            'settlement_gold_weight': self.settlement_gold_weight,
+            'notes': self.notes,
+            'transaction_date': self.transaction_date.isoformat() if self.transaction_date else None,
+            'created_by': self.created_by,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 # نموذج قيد اليومية
 class JournalEntry(db.Model):
@@ -810,6 +1404,49 @@ class JournalEntry(db.Model):
             
         return result
 
+
+# Auto-generate `entry_number` for JournalEntry when not provided.
+def _generate_journal_entry_number_for_date(entry_date: datetime) -> str:
+    year = entry_date.year
+    prefix = f'JE-{year}-'
+
+    last_entry = (
+        JournalEntry.query
+        .filter(JournalEntry.entry_number.like(f"{prefix}%"))
+        .order_by(JournalEntry.entry_number.desc())
+        .first()
+    )
+
+    if last_entry:
+        try:
+            last_sequence = int(str(last_entry.entry_number).split('-')[-1])
+        except (ValueError, AttributeError):
+            # Fallback: count entries in the year
+            start_of_year = datetime(year, 1, 1)
+            end_of_year = datetime(year + 1, 1, 1)
+            last_sequence = (
+                JournalEntry.query
+                .filter(JournalEntry.date >= start_of_year, JournalEntry.date < end_of_year)
+                .count()
+            )
+    else:
+        last_sequence = 0
+
+    next_sequence = last_sequence + 1
+    return f'{prefix}{next_sequence:05d}'
+
+
+@event.listens_for(JournalEntry, 'before_insert')
+def _ensure_entry_number(mapper, connection, target):
+    # Only set if not provided
+    if not getattr(target, 'entry_number', None):
+        entry_dt = getattr(target, 'date', None) or datetime.utcnow()
+        try:
+            target.entry_number = _generate_journal_entry_number_for_date(entry_dt)
+        except Exception:
+            # As a last resort, set a placeholder to avoid NOT NULL failure
+            target.entry_number = f'JE-{datetime.utcnow().year}-00000'
+
 # نموذج لأسطر قيد اليومية
 class JournalEntryLine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -827,6 +1464,10 @@ class JournalEntryLine(db.Model):
     # حقول الحذف الناعم
     is_deleted = db.Column(db.Boolean, default=False, nullable=False)
     deleted_at = db.Column(db.DateTime, nullable=True)
+    gold_transaction_id = db.Column(db.Integer, db.ForeignKey('supplier_gold_transaction.id'), nullable=True)
+    gold_transaction = db.relationship('SupplierGoldTransaction', backref='journal_lines')
+    gold_weight_equiv = db.Column(db.Float, nullable=True)
+    gold_price_applied = db.Column(db.Float, nullable=True)
     
     # Cash
     cash_debit = db.Column(db.Float, default=0.0)
@@ -847,6 +1488,27 @@ class JournalEntryLine(db.Model):
     # Gold Karat 24
     debit_24k = db.Column(db.Float, default=0.0)
     credit_24k = db.Column(db.Float, default=0.0)
+    
+    # أعمدة الوزن المعادل (للحسابات المذكرة - النظام المزدوج)
+    # تحسب بقسمة القيمة النقدية على السعر المباشر للذهب
+    debit_weight = db.Column(db.Float, default=0.0)  # الوزن المعادل المدين
+    credit_weight = db.Column(db.Float, default=0.0)  # الوزن المعادل الدائن
+    gold_price_snapshot = db.Column(db.Float, nullable=True)  # السعر المباشر المستخدم للتحويل
+    description = db.Column(db.String(500), nullable=True)  # وصف القيد
+    
+    # 🆕 نوع الوزن: فعلي (PHYSICAL) أو تحليلي (ANALYTICAL)
+    # PHYSICAL: وزن حقيقي للمخزون (inventory actual weight)
+    # ANALYTICAL: وزن محسوب من القيمة النقدية (converted from cash value)
+    weight_type = db.Column(db.String(20), default='ANALYTICAL', nullable=True)  # PHYSICAL | ANALYTICAL
+
+    # 🆕 Financial Dimensions (SAP/D365-style)
+    dimension_set_id = db.Column(db.Integer, db.ForeignKey('dimension_set.id'), nullable=True)
+
+    # 🆕 Analytics measures (line-level)
+    # Signed metrics: debit positive, credit negative.
+    analytic_amount_cash = db.Column(db.Float, nullable=True)
+    analytic_weight_24k = db.Column(db.Float, nullable=True)
+    analytic_weight_main = db.Column(db.Float, nullable=True)
 
     def to_dict(self):
         return {
@@ -862,6 +1524,9 @@ class JournalEntryLine(db.Model):
             'supplier_code': self.supplier.supplier_code if self.supplier else None,
             'cash_debit': self.cash_debit,
             'cash_credit': self.cash_credit,
+            'gold_weight_equiv': self.gold_weight_equiv,
+            'gold_price_applied': self.gold_price_applied,
+            'gold_transaction_id': self.gold_transaction_id,
             'debit_18k': self.debit_18k,
             'credit_18k': self.credit_18k,
             'debit_21k': self.debit_21k,
@@ -870,7 +1535,65 @@ class JournalEntryLine(db.Model):
             'credit_22k': self.credit_22k,
             'debit_24k': self.debit_24k,
             'credit_24k': self.credit_24k,
+            'debit_weight': self.debit_weight,
+            'credit_weight': self.credit_weight,
+            'gold_price_snapshot': self.gold_price_snapshot,
+            'weight_type': self.weight_type,  # 🆕
+            'dimension_set_id': self.dimension_set_id,
+            'analytic_amount_cash': self.analytic_amount_cash,
+            'analytic_weight_24k': self.analytic_weight_24k,
+            'analytic_weight_main': self.analytic_weight_main,
+            'description': self.description,
         }
+
+
+class DimensionDefinition(db.Model):
+    __tablename__ = 'dimension_definition'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    name_ar = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+
+class DimensionValue(db.Model):
+    __tablename__ = 'dimension_value'
+
+    id = db.Column(db.Integer, primary_key=True)
+    definition_id = db.Column(db.Integer, db.ForeignKey('dimension_definition.id'), nullable=False, index=True)
+    definition = db.relationship('DimensionDefinition')
+
+    int_value = db.Column(db.Integer, nullable=True, index=True)
+    str_value = db.Column(db.String(200), nullable=True, index=True)
+    label_ar = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    __table_args__ = (
+        db.UniqueConstraint('definition_id', 'int_value', 'str_value', name='uq_dimension_value_def_val'),
+    )
+
+
+class DimensionSet(db.Model):
+    __tablename__ = 'dimension_set'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+
+class DimensionSetItem(db.Model):
+    __tablename__ = 'dimension_set_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    dimension_set_id = db.Column(db.Integer, db.ForeignKey('dimension_set.id'), nullable=False, index=True)
+    dimension_set = db.relationship('DimensionSet', backref='items')
+
+    dimension_value_id = db.Column(db.Integer, db.ForeignKey('dimension_value.id'), nullable=False, index=True)
+    dimension_value = db.relationship('DimensionValue')
+
+    __table_args__ = (
+        db.UniqueConstraint('dimension_set_id', 'dimension_value_id', name='uq_dimension_set_item'),
+    )
 
 class Settings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -883,6 +1606,10 @@ class Settings(db.Model):
     # إعدادات الضريبة
     tax_rate = db.Column(db.Float, default=0.15)  # 15%
     tax_enabled = db.Column(db.Boolean, default=True)
+
+    # 🆕 العيارات المعفاة من ضريبة الذهب (JSON list stored as TEXT)
+    # مثال: ["24"] أو [24]
+    vat_exempt_karats = db.Column(db.Text, nullable=True)
     
     # وسائل الدفع (JSON)
     # مثال: [{"name": "نقداً", "commission": 0}, {"name": "بطاقة", "commission": 2.5}]
@@ -891,10 +1618,17 @@ class Settings(db.Model):
     # إعدادات الفواتير
     invoice_prefix = db.Column(db.String(10), default='INV')
     show_company_logo = db.Column(db.Boolean, default=True)
-    company_name = db.Column(db.String(100), default='محل ياسر للذهب والمجوهرات')
+    company_name = db.Column(db.String(100), default='مجوهرات خالد')
+    # Base64-encoded image bytes (optionally with data URL prefix).
+    # Kept as TEXT for SQLite compatibility.
+    company_logo_base64 = db.Column(db.Text, nullable=True)
     company_address = db.Column(db.Text)
     company_phone = db.Column(db.String(50))
     company_tax_number = db.Column(db.String(50))
+
+    # 🆕 افتراضي قالب الطباعة حسب نوع الفاتورة (JSON)
+    # مثال: {"بيع":"a4_portrait","شراء من عميل":"a5_portrait"}
+    print_template_by_invoice_type = db.Column(db.Text, nullable=True)
     
     # إعدادات التنسيق
     decimal_places = db.Column(db.Integer, default=2)
@@ -903,34 +1637,101 @@ class Settings(db.Model):
     # إعدادات الخصم
     default_discount_rate = db.Column(db.Float, default=0.0)  # نسبة خصم افتراضية
     allow_discount = db.Column(db.Boolean, default=True)
+    allow_manual_invoice_items = db.Column(db.Boolean, default=True)
+
+    # 🆕 إعدادات الأمان
+    # عند التفعيل: يمنع إنشاء الفواتير بدون Authorization token
+    require_auth_for_invoice_create = db.Column(db.Boolean, default=False)
+
+    # 🆕 السماح بالدفع الجزئي/البيع الآجل عند إنشاء الفواتير
+    # عند التعطيل: يجب أن يساوي مجموع الدفعات إجمالي الفاتورة
+    allow_partial_invoice_payments = db.Column(db.Boolean, default=False)
     
     # 🆕 إعدادات السندات
     voucher_auto_post = db.Column(db.Boolean, default=False)  # False = يتطلب اعتماد قبل الترحيل، True = ترحيل تلقائي
+    weight_closing_settings = db.Column(db.Text, nullable=True)
+
+    # 🆕 تحديث سعر الذهب تلقائياً حسب توقيت معين
+    gold_price_auto_update_enabled = db.Column(db.Boolean, default=False)
+    # Stored as "HH:MM" in server local time.
+    gold_price_auto_update_time = db.Column(db.String(5), default='09:00')
+    # interval | daily
+    gold_price_auto_update_mode = db.Column(db.String(20), default='interval')
+    gold_price_auto_update_interval_minutes = db.Column(db.Integer, default=60)
+
+    # 🆕 سياسة كلمات المرور (JSON)
+    # مثال: {"min_length": 6, "require_numbers": false}
+    password_policy = db.Column(db.Text, nullable=True)
     
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
     def to_dict(self):
         import json
+        policy = None
+        if self.password_policy:
+            try:
+                policy = json.loads(self.password_policy)
+            except Exception:
+                policy = None
+
+        template_by_type = None
+        if self.print_template_by_invoice_type:
+            try:
+                decoded = json.loads(self.print_template_by_invoice_type)
+                if isinstance(decoded, dict):
+                    template_by_type = decoded
+            except Exception:
+                template_by_type = None
+        exempt_karats = ['24']
+        raw_exempt = getattr(self, 'vat_exempt_karats', None)
+        if raw_exempt:
+            try:
+                decoded = json.loads(raw_exempt) if isinstance(raw_exempt, str) else raw_exempt
+                if isinstance(decoded, (list, tuple, set)):
+                    normalized: list[str] = []
+                    for v in decoded:
+                        try:
+                            k = int(str(v).strip())
+                        except Exception:
+                            continue
+                        if k in (18, 21, 22, 24):
+                            normalized.append(str(k))
+                    exempt_karats = sorted(set(normalized), key=lambda x: int(x)) or ['24']
+            except Exception:
+                exempt_karats = ['24']
+
         return {
             'id': self.id,
             'main_karat': self.main_karat,
             'currency_symbol': self.currency_symbol,
             'tax_rate': self.tax_rate,
             'tax_enabled': self.tax_enabled,
+            'vat_exempt_karats': exempt_karats,
             'payment_methods': json.loads(self.payment_methods) if self.payment_methods else [],
             'invoice_prefix': self.invoice_prefix,
             'show_company_logo': self.show_company_logo,
             'company_name': self.company_name,
+            'company_logo_base64': self.company_logo_base64,
             'company_address': self.company_address,
             'company_phone': self.company_phone,
             'company_tax_number': self.company_tax_number,
+            'print_template_by_invoice_type': template_by_type,
             'decimal_places': self.decimal_places,
             'date_format': self.date_format,
             'default_discount_rate': self.default_discount_rate,
             'allow_discount': self.allow_discount,
+            'allow_manual_invoice_items': self.allow_manual_invoice_items,
+            'require_auth_for_invoice_create': bool(self.require_auth_for_invoice_create),
+            'allow_partial_invoice_payments': bool(self.allow_partial_invoice_payments),
             'manufacturing_wage_mode': (self.manufacturing_wage_mode or 'expense'),
-            'voucher_auto_post': self.voucher_auto_post  # إعداد سير عمل السندات
+            'voucher_auto_post': self.voucher_auto_post,
+            'weight_closing_settings': json.loads(self.weight_closing_settings) if self.weight_closing_settings else None,
+            'gold_price_auto_update_enabled': bool(self.gold_price_auto_update_enabled),
+            'gold_price_auto_update_time': self.gold_price_auto_update_time or '09:00',
+            'gold_price_auto_update_mode': (self.gold_price_auto_update_mode or 'interval'),
+            'gold_price_auto_update_interval_minutes': int(self.gold_price_auto_update_interval_minutes or 60),
+            'password_policy': policy,
         }
 
 
@@ -1268,7 +2069,7 @@ class Employee(db.Model):
 
     account = db.relationship('Account', backref=db.backref('employees', lazy='dynamic'))
 
-    def to_dict(self, include_details: bool = False):
+    def to_dict(self, include_details: bool = False, include_bonuses: bool = False):
         data = {
             'id': self.id,
             'employee_code': self.employee_code,
@@ -1289,6 +2090,7 @@ class Employee(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
+        # `include_bonuses` kept for backward compatibility; not used currently
         if include_details:
             if self.account:
                 data['account'] = {
@@ -1314,15 +2116,46 @@ class AppUser(db.Model):
     full_name = db.Column(db.String(200), nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=True)
-    role = db.Column(db.String(50), nullable=False, default='staff')
-    permissions = db.Column(db.JSON, nullable=True)
+    # الأدوار: system_admin, manager, accountant, employee
+    role = db.Column(db.String(50), nullable=False, default='employee')
+    permissions = db.Column(db.JSON, nullable=True)  # صلاحيات مخصصة تتجاوز الافتراضية
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     last_login_at = db.Column(db.DateTime, nullable=True)
+
+    # 🆕 Two-Factor Authentication (TOTP)
+    totp_secret = db.Column(db.Text, nullable=True)
+    two_factor_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    two_factor_verified_at = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False)
 
     employee = db.relationship('Employee', backref=db.backref('user_account', uselist=False))
+
+    @property
+    def is_admin(self) -> bool:
+        """مسؤول النظام فقط"""
+        return (self.role or '').lower() == 'system_admin'
+    
+    @property
+    def is_manager(self) -> bool:
+        """مدير أو أعلى"""
+        role = (self.role or '').lower()
+        return role in ['system_admin', 'manager']
+    
+    @property
+    def is_accountant(self) -> bool:
+        """محاسب أو أعلى"""
+        role = (self.role or '').lower()
+        return role in ['system_admin', 'manager', 'accountant']
+
+    def has_permission(self, permission_code: str) -> bool:
+        """
+        تحقق من وجود صلاحية معينة
+        يستخدم نظام الصلاحيات من permissions.py
+        """
+        from permissions import has_permission as check_permission
+        return check_permission(self.role, self.permissions, permission_code)
 
     def set_password(self, password: str):
         # استخدام خوارزمية مدعومة عبر OpenSSL لضمان التوافق عبر البيئات
@@ -1342,7 +2175,9 @@ class AppUser(db.Model):
             'role': self.role,
             'permissions': self.permissions,
             'is_active': self.is_active,
+            'is_admin': self.is_admin,
             'last_login_at': self.last_login_at.isoformat() if self.last_login_at else None,
+            'two_factor_enabled': bool(self.two_factor_enabled),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1354,6 +2189,79 @@ class AppUser(db.Model):
 
     def __repr__(self):
         return f'<AppUser {self.username}>'
+
+
+# ==========================================
+# 🔐 Auth Security Models
+# ==========================================
+
+
+class TokenBlacklist(db.Model):
+    """سجل توكنات JWT المحظورة (logout / security events)."""
+
+    __tablename__ = 'token_blacklist'
+
+    id = db.Column(db.Integer, primary_key=True)
+    jti = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    token_type = db.Column(db.String(10), nullable=True)  # access | refresh
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    blacklisted_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    reason = db.Column(db.String(100), nullable=True)
+
+
+class RefreshToken(db.Model):
+    """Refresh token sessions stored server-side (revocable)."""
+
+    __tablename__ = 'refresh_tokens'
+
+    id = db.Column(db.Integer, primary_key=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+
+    user_id = db.Column(db.Integer, nullable=False, index=True)
+    user_type = db.Column(db.String(20), nullable=False, index=True)  # user | app_user
+
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    is_revoked = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    revoked_reason = db.Column(db.String(100), nullable=True)
+
+    ip_address = db.Column(db.String(45), nullable=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    device_fingerprint = db.Column(db.String(255), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = db.Column(db.DateTime, nullable=True)
+
+
+class LoginAttempt(db.Model):
+    """محاولات تسجيل الدخول (لـ rate limit + security reporting)."""
+
+    __tablename__ = 'login_attempts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), nullable=True, index=True)
+    ip_address = db.Column(db.String(45), nullable=True, index=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    success = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    failure_reason = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class PasswordResetToken(db.Model):
+    """توكن إعادة تعيين كلمة المرور (مخصص للعمليات الإدارية/المساعدة)."""
+
+    __tablename__ = 'password_reset_tokens'
+
+    id = db.Column(db.Integer, primary_key=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    user_id = db.Column(db.Integer, nullable=False, index=True)
+    user_type = db.Column(db.String(20), nullable=False, index=True)  # user | app_user
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    is_used = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    used_at = db.Column(db.DateTime, nullable=True)
+    used_ip = db.Column(db.String(45), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
 
 
 class Payroll(db.Model):
@@ -2232,6 +3140,159 @@ class Permission(db.Model):
     
     def __repr__(self):
         return f'<Permission {self.code}>'
+
+
+# =============================
+# 🆕 نماذج نظام المكافآت
+# =============================
+
+
+class BonusRule(db.Model):
+    __tablename__ = 'bonus_rule'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    rule_type = db.Column(db.String(50), nullable=False)  # sales_target, attendance, performance, fixed, profit_based, custom
+    conditions = db.Column(db.JSON)
+    bonus_type = db.Column(db.String(50), nullable=False)  # percentage, fixed, sales_percentage, profit_percentage
+    bonus_value = db.Column(db.Float, nullable=False)
+    min_bonus = db.Column(db.Float, default=0.0)
+    max_bonus = db.Column(db.Float)
+    target_departments = db.Column(db.JSON)
+    target_positions = db.Column(db.JSON)
+    target_employee_ids = db.Column(db.JSON)
+    applicable_invoice_types = db.Column(db.JSON)
+    is_active = db.Column(db.Boolean, default=True)
+    valid_from = db.Column(db.Date)
+    valid_to = db.Column(db.Date)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    created_by = db.Column(db.String(100))
+
+    def is_valid_for_employee(self, employee):
+        today = date.today()
+        if self.valid_from and today < self.valid_from:
+            return False
+        if self.valid_to and today > self.valid_to:
+            return False
+
+        if self.target_departments:
+            if not employee.department or employee.department not in self.target_departments:
+                return False
+
+        if self.target_positions:
+            if not employee.job_title or employee.job_title not in self.target_positions:
+                return False
+
+        if self.target_employee_ids:
+            if employee.id not in self.target_employee_ids:
+                return False
+
+        return True
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'rule_type': self.rule_type,
+            'conditions': self.conditions,
+            'bonus_type': self.bonus_type,
+            'bonus_value': self.bonus_value,
+            'min_bonus': self.min_bonus,
+            'max_bonus': self.max_bonus,
+            'target_departments': self.target_departments,
+            'target_positions': self.target_positions,
+            'target_employee_ids': self.target_employee_ids,
+            'applicable_invoice_types': self.applicable_invoice_types,
+            'is_active': self.is_active,
+            'valid_from': self.valid_from.isoformat() if self.valid_from else None,
+            'valid_to': self.valid_to.isoformat() if self.valid_to else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_by': self.created_by,
+        }
+
+
+class EmployeeBonus(db.Model):
+    __tablename__ = 'employee_bonus'
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
+    bonus_rule_id = db.Column(db.Integer, db.ForeignKey('bonus_rule.id'), nullable=True)
+    bonus_type = db.Column(db.String(50), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(20), default='pending')  # pending, approved, rejected, paid
+    period_start = db.Column(db.Date)
+    period_end = db.Column(db.Date)
+    calculation_data = db.Column(db.JSON)
+    notes = db.Column(db.Text)
+    payment_reference = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    approved_at = db.Column(db.DateTime)
+    approved_by = db.Column(db.String(100))
+    paid_at = db.Column(db.DateTime)
+    
+    # ربط مع الخزينة عند الدفع
+    office_id = db.Column(db.Integer, db.ForeignKey('office.id'), nullable=True)
+
+    employee = db.relationship('Employee', backref=db.backref('bonuses', lazy=True))
+    rule = db.relationship('BonusRule', backref=db.backref('bonuses', lazy=True))
+    office = db.relationship('Office', backref=db.backref('bonus_payments', lazy=True))
+
+    def approve(self, approved_by='system'):
+        self.status = 'approved'
+        self.approved_by = approved_by
+        self.approved_at = datetime.utcnow()
+
+    def reject(self, reason=None):
+        self.status = 'rejected'
+        if reason:
+            self.notes = f"{self.notes or ''}\nرفض: {reason}".strip()
+
+    def mark_as_paid(self, reference=None):
+        self.status = 'paid'
+        self.paid_at = datetime.utcnow()
+        if reference:
+            self.payment_reference = reference
+
+    def to_dict(self, include_employee=False, include_rule=False):
+        result = {
+            'id': self.id,
+            'employee_id': self.employee_id,
+            'bonus_rule_id': self.bonus_rule_id,
+            'bonus_type': self.bonus_type,
+            'amount': self.amount,
+            'status': self.status,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'calculation_data': self.calculation_data,
+            'notes': self.notes,
+            'payment_reference': self.payment_reference,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'approved_at': self.approved_at.isoformat() if self.approved_at else None,
+            'approved_by': self.approved_by,
+            'paid_at': self.paid_at.isoformat() if self.paid_at else None,
+            'office_id': self.office_id,
+            'office_name': self.office.name if self.office else None,
+        }
+        if include_employee and self.employee:
+            result['employee'] = self.employee.to_dict() if hasattr(self.employee, 'to_dict') else {
+                'id': self.employee.id,
+                'name': getattr(self.employee, 'name', None),
+                'department': getattr(self.employee, 'department', None),
+                'job_title': getattr(self.employee, 'job_title', None),
+            }
+        if include_rule and self.rule:
+            result['rule'] = self.rule.to_dict()
+        return result
+
+
+class BonusInvoiceLink(db.Model):
+    __tablename__ = 'bonus_invoice_link'
+
+    id = db.Column(db.Integer, primary_key=True)
+    bonus_id = db.Column(db.Integer, db.ForeignKey('employee_bonus.id'), nullable=False)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False)
 
 
 

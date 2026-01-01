@@ -57,6 +57,12 @@ class _PermissionsEditorState extends State<PermissionsEditor> {
     'settings_system': {'ar': 'إعدادات النظام', 'en': 'System Settings'},
     'settings_users': {'ar': 'إدارة المستخدمين', 'en': 'Manage Users'},
     'settings_gold_price': {'ar': 'تحديث سعر الذهب', 'en': 'Update Gold Price'},
+
+    // Bonuses
+    'bonuses': {'ar': 'المكافآت', 'en': 'Bonuses'},
+    'bonus.calculate': {'ar': 'حساب المكافآت', 'en': 'Calculate Bonuses'},
+    'bonus.approve': {'ar': 'اعتماد/رفض المكافآت', 'en': 'Approve/Reject Bonuses'},
+    'bonus.pay': {'ar': 'صرف المكافآت', 'en': 'Pay Bonuses'},
   };
 
   // تنظيم الصلاحيات في مجموعات
@@ -83,6 +89,8 @@ class _PermissionsEditorState extends State<PermissionsEditor> {
     'reports': ['reports_financial', 'reports_sales', 'reports_inventory'],
     'hr': ['hr_employees', 'hr_payroll', 'hr_attendance'],
     'settings': ['settings_system', 'settings_users', 'settings_gold_price'],
+
+    'bonuses': ['bonus.calculate', 'bonus.approve', 'bonus.pay'],
   };
 
   @override

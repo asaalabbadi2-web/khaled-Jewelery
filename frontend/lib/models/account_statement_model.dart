@@ -6,6 +6,9 @@ class AccountStatement {
   final double closingBalanceGoldNormalized;
   final double closingBalanceCash;
   final Map<String, double> closingBalanceGoldDetails;
+  final double? entityBalanceGoldNormalized;
+  final double? entityBalanceCash;
+  final Map<String, double> entityBalanceGoldDetails;
   final int mainKarat;
   final double totalDebitGold;
   final double totalCreditGold;
@@ -19,6 +22,9 @@ class AccountStatement {
     required this.closingBalanceGoldNormalized,
     required this.closingBalanceCash,
     required this.closingBalanceGoldDetails,
+  required this.entityBalanceGoldNormalized,
+  required this.entityBalanceCash,
+  required this.entityBalanceGoldDetails,
     required this.mainKarat,
     required this.totalDebitGold,
     required this.totalCreditGold,
@@ -33,9 +39,15 @@ class AccountStatement {
         .map((i) => StatementLine.fromJson(i))
         .toList();
 
-    double runningGold =
-        json['opening_balance_gold_normalized']?.toDouble() ?? 0.0;
-    double runningCash = json['opening_balance_cash']?.toDouble() ?? 0.0;
+  double runningGold =
+    json['opening_balance_gold_normalized']?.toDouble() ?? 0.0;
+  double runningCash = json['opening_balance_cash']?.toDouble() ?? 0.0;
+
+  final entityBalances = json['entity_balances'] as Map<String, dynamic>?;
+  final entityBalanceGoldDetails = (entityBalances?['gold_details'] as Map<String, dynamic>?)?.map(
+      (key, value) => MapEntry(key, (value is num) ? value.toDouble() : 0.0),
+    ) ??
+    {};
 
     List<StatementLine> linesWithBalances = [];
     for (var line in statementLines) {
@@ -56,9 +68,17 @@ class AccountStatement {
       closingBalanceGoldNormalized:
           json['closing_balance_gold_normalized']?.toDouble() ?? 0.0,
       closingBalanceCash: json['closing_balance_cash']?.toDouble() ?? 0.0,
-      closingBalanceGoldDetails: Map<String, double>.from(
-        json['closing_balance_gold_details'] ?? {},
-      ),
+      closingBalanceGoldDetails: (json['closing_balance_gold_details'] as Map<String, dynamic>?)?.map(
+            (key, value) => MapEntry(key, (value is num) ? value.toDouble() : 0.0),
+          ) ??
+          {},
+    entityBalanceGoldNormalized: entityBalances?['gold_normalized'] != null
+      ? (entityBalances?['gold_normalized'] as num).toDouble()
+      : null,
+    entityBalanceCash: entityBalances?['cash'] != null
+      ? (entityBalances?['cash'] as num).toDouble()
+      : null,
+    entityBalanceGoldDetails: entityBalanceGoldDetails,
       mainKarat: json['main_karat'] ?? 21,
       totalDebitGold:
           json['totals']?['gold_debit_normalized']?.toDouble() ?? 0.0,
@@ -69,6 +89,22 @@ class AccountStatement {
       lines: linesWithBalances,
     );
   }
+}
+
+extension AccountStatementDisplay on AccountStatement {
+  double get effectiveClosingGold =>
+    entityBalanceGoldNormalized ?? closingBalanceGoldNormalized;
+
+  double get effectiveClosingCash =>
+    entityBalanceCash ?? closingBalanceCash;
+
+  Map<String, double> get effectiveClosingGoldDetails =>
+    entityBalanceGoldDetails.isNotEmpty
+      ? entityBalanceGoldDetails
+      : closingBalanceGoldDetails;
+
+  bool get hasEntityBalances =>
+    entityBalanceCash != null || entityBalanceGoldNormalized != null;
 }
 
 @immutable

@@ -4,6 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import '../widgets/currency_manager_dialog.dart';
 import '../widgets/widgets.dart'; // Import shared widgets
+import '../theme/app_theme.dart';
+import '../utils.dart';
+import 'invoice_print_screen.dart';
 
 /// Screen for creating return invoices (مرتجعات)
 /// Supports: مرتجع بيع, مرتجع شراء, مرتجع شراء من مورد
@@ -138,7 +141,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   double exchangeRate = 1.0;
   String currencySymbol = '\$';
   String currencyName = 'USD';
-  final double taxRate = 0.15;
 
   // Payment
   String paymentMethod = 'cash';
@@ -233,6 +235,19 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         return 'مرتجع فاتورة شراء من مورد';
       default:
         return widget.returnType;
+    }
+  }
+  
+  String _getReturnTypeDescription() {
+    switch (widget.returnType) {
+      case 'مرتجع بيع':
+        return 'استرجاع ذهب تم بيعه للعميل مع تحديث المخزون والدفعات.';
+      case 'مرتجع شراء':
+        return 'عكس عملية شراء من عميل وإرجاع الوزن إلى المخزون.';
+      case 'مرتجع شراء من مورد':
+        return 'إرجاع ذهب للمورد مع تسوية حسابات المورد والخزينة.';
+      default:
+        return 'إدارة عمليات الاسترجاع المحاسبية للذهب.';
     }
   }
 
@@ -406,6 +421,14 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       return;
     }
 
+    final originalBranchId = selectedOriginalInvoice?['branch_id'];
+    if (originalBranchId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('الفاتورة الأصلية لا تحتوي على فرع. لا يمكن حفظ المرتجع بدون فرع.')),
+      );
+      return;
+    }
+
     final returnItems = selectedItems.map((item) => item.toPayload()).toList();
 
     final payload = {
@@ -415,6 +438,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       'supplier_id': widget.returnType == 'مرتجع شراء من مورد'
           ? selectedOriginalInvoice!['supplier_id']
           : null,
+      'branch_id': originalBranchId,
       'date': DateTime.now().toIso8601String(),
       'invoice_type': widget.returnType,
       'original_invoice_id': selectedOriginalInvoice!['id'],
@@ -429,13 +453,58 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     };
 
     try {
-      await widget.api.addInvoice(payload);
-      if (mounted) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('تم حفظ المرتجع بنجاح')));
+      final response = await widget.api.addInvoice(payload);
+      if (!mounted) return;
+
+      final invoiceForPrint = Map<String, dynamic>.from(response);
+
+      if (selectedOriginalInvoice != null) {
+        invoiceForPrint['customer_name'] ??=
+            selectedOriginalInvoice!['customer_name'] ??
+            selectedOriginalInvoice!['name'];
+        invoiceForPrint['supplier_name'] ??=
+            selectedOriginalInvoice!['supplier_name'] ??
+            selectedOriginalInvoice!['name'];
       }
+
+      final shouldPrint = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('تم حفظ المرتجع'),
+            content: Text(
+              '✅ تم حفظ المرتجع #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعته الآن؟',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('تم'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.print),
+                label: const Text('طباعة'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted) return;
+      if (shouldPrint == true) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => InvoicePrintScreen(
+              invoice: invoiceForPrint,
+              isArabic: true,
+            ),
+          ),
+        );
+      }
+
+      if (!mounted) return;
+      Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -644,6 +713,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                               keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true,
                               ),
+                              inputFormatters: [NormalizeNumberFormatter()],
                               onChanged: (value) {
                                 final newWeight = double.tryParse(value.replaceAll(',', '.')) ?? item.weight;
                                 setState(() {
@@ -664,6 +734,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                                   border: const OutlineInputBorder(),
                                 ),
                                 keyboardType: TextInputType.number,
+                                inputFormatters: [NormalizeNumberFormatter()],
                                 onChanged: (value) {
                                   final newQty = int.tryParse(value) ?? item.quantity;
                                   setState(() {
@@ -797,6 +868,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
               suffixText: currencySymbol,
             ),
             keyboardType: TextInputType.number,
+            inputFormatters: [NormalizeNumberFormatter()],
             initialValue: amountPaid.toString(),
             onChanged: (value) {
               setState(() {
@@ -1044,66 +1116,93 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final subtitle = _getReturnTypeDescription();
+    final theme = Theme.of(context);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_getReturnTypeDisplayName()),
-        backgroundColor: const Color(0xFFFFD700),
-        foregroundColor: Colors.black,
-        iconTheme: const IconThemeData(color: Colors.black),
+        backgroundColor: AppColors.invoiceReturn,
+        foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Stepper(
-        currentStep: _currentStep,
-        onStepContinue: _onStepContinue,
-        onStepCancel: _onStepCancel,
-        controlsBuilder: (context, details) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: Row(
-              children: [
-                ElevatedButton(
-                  onPressed: details.onStepContinue,
-                  child: Text(_currentStep == 4 ? 'حفظ' : 'التالي'),
-                ),
-                const SizedBox(width: 8),
-                if (_currentStep > 0)
-                  TextButton(
-                    onPressed: details.onStepCancel,
-                    child: const Text('السابق'),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            child: InvoiceTypeBanner(
+              title: _getReturnTypeDisplayName(),
+              subtitle: subtitle,
+              color: AppColors.invoiceReturn,
+              icon: Icons.undo_rounded,
+              trailing: Text(
+                'نوع الفاتورة',
+                style: theme.textTheme.labelLarge,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: Stepper(
+              currentStep: _currentStep,
+              onStepContinue: _onStepContinue,
+              onStepCancel: _onStepCancel,
+              controlsBuilder: (context, details) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Row(
+                    children: [
+                      ElevatedButton(
+                        onPressed: details.onStepContinue,
+                        child: Text(_currentStep == 4 ? 'حفظ' : 'التالي'),
+                      ),
+                      const SizedBox(width: 8),
+                      if (_currentStep > 0)
+                        TextButton(
+                          onPressed: details.onStepCancel,
+                          child: const Text('السابق'),
+                        ),
+                    ],
                   ),
+                );
+              },
+              steps: [
+                Step(
+                  title: const Text('اختيار الفاتورة'),
+                  content: _buildSelectInvoiceStep(),
+                  isActive: _currentStep >= 0,
+                  state:
+                      _currentStep > 0 ? StepState.complete : StepState.indexed,
+                ),
+                Step(
+                  title: const Text('الأصناف المرتجعة'),
+                  content: _buildSelectItemsStep(),
+                  isActive: _currentStep >= 1,
+                  state:
+                      _currentStep > 1 ? StepState.complete : StepState.indexed,
+                ),
+                Step(
+                  title: const Text('سبب الإرجاع'),
+                  content: _buildReturnReasonStep(),
+                  isActive: _currentStep >= 2,
+                  state:
+                      _currentStep > 2 ? StepState.complete : StepState.indexed,
+                ),
+                Step(
+                  title: const Text('الدفع'),
+                  content: _buildPaymentStep(),
+                  isActive: _currentStep >= 3,
+                  state:
+                      _currentStep > 3 ? StepState.complete : StepState.indexed,
+                ),
+                Step(
+                  title: const Text('مراجعة'),
+                  content: _buildReviewStep(),
+                  isActive: _currentStep >= 4,
+                  state: StepState.indexed,
+                ),
               ],
             ),
-          );
-        },
-        steps: [
-          Step(
-            title: const Text('اختيار الفاتورة'),
-            content: _buildSelectInvoiceStep(),
-            isActive: _currentStep >= 0,
-            state: _currentStep > 0 ? StepState.complete : StepState.indexed,
-          ),
-          Step(
-            title: const Text('الأصناف المرتجعة'),
-            content: _buildSelectItemsStep(),
-            isActive: _currentStep >= 1,
-            state: _currentStep > 1 ? StepState.complete : StepState.indexed,
-          ),
-          Step(
-            title: const Text('سبب الإرجاع'),
-            content: _buildReturnReasonStep(),
-            isActive: _currentStep >= 2,
-            state: _currentStep > 2 ? StepState.complete : StepState.indexed,
-          ),
-          Step(
-            title: const Text('الدفع'),
-            content: _buildPaymentStep(),
-            isActive: _currentStep >= 3,
-            state: _currentStep > 3 ? StepState.complete : StepState.indexed,
-          ),
-          Step(
-            title: const Text('مراجعة'),
-            content: _buildReviewStep(),
-            isActive: _currentStep >= 4,
-            state: StepState.indexed,
           ),
         ],
       ),

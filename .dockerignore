@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+backend/venv/
+backend/.venv/
+
+# Flutter
+frontend/.dart_tool/
+frontend/build/
+
+# IDE
+.vscode/
+
+# Backups
+backups/
+
+# OS
+.DS_Store

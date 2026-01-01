@@ -30,6 +30,7 @@ dependencies:
   barcode_widget: ^2.0.4  # Barcode generation for printing
   image_picker: ^1.0.4  # Image picker for camera & gallery
   fl_chart: ^0.68.0
+  file_picker: ^5.2.5
 
 dev_dependencies:
   flutter_test:

@@ -4,8 +4,10 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
-import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
+import '../widgets/invoice_type_banner.dart';
+import '../utils.dart';
+import 'invoice_print_screen.dart';
 
 /// شاشة فاتورة بيع الكسر - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
@@ -30,6 +32,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   final _smartInputFocus = FocusNode();
   final _customAmountController = TextEditingController(); // 🆕 للمبلغ المخصص
 
+  // Branches (فروع المعرض/المحل)
+  List<Map<String, dynamic>> _branches = [];
+  bool _isLoadingBranches = false;
+  String? _branchesLoadingError;
+  int? _selectedBranchId;
+
   // Customer
   int? _selectedCustomerId;
 
@@ -46,13 +54,13 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   int? _selectedPaymentMethodId; // للـ Dropdown
 
   // 🆕 الخزائن
-  List<SafeBoxModel> _safeBoxes = [];
   int? _selectedSafeBoxId;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
     _loadDefaultSafeBox(); // 🆕 تحميل الخزينة
     _smartInputFocus.requestFocus();
@@ -83,6 +91,42 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       });
     } catch (e) {
       _showError('فشل تحميل سعر الذهب: $e');
+    }
+  }
+
+  Future<void> _loadBranches() async {
+    if (_isLoadingBranches) return;
+    setState(() {
+      _isLoadingBranches = true;
+      _branchesLoadingError = null;
+    });
+
+    try {
+      final apiService = ApiService();
+      final raw = await apiService.getBranches(activeOnly: true);
+      if (!mounted) return;
+
+      final branches = raw
+          .whereType<Map>()
+          .map((b) => Map<String, dynamic>.from(b))
+          .toList();
+
+      setState(() {
+        _branches = branches;
+        if (_selectedBranchId == null && _branches.length == 1) {
+          _selectedBranchId = _parseInt(_branches.first['id']);
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _branchesLoadingError = e.toString();
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingBranches = false;
+      });
     }
   }
 
@@ -162,7 +206,6 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       if (!mounted) return;
 
       setState(() {
-        _safeBoxes = cashBoxes;
         if (cashBoxes.isNotEmpty) {
           final defaultBox = cashBoxes.firstWhere(
             (box) => box.isDefault == true,
@@ -390,7 +433,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           wage: wage,
           goldPrice24k: _goldPrice24k,
           mainKarat: _settingsProvider.mainKarat,
-          taxRate: _settingsProvider.taxRate,
+          taxRate: _settingsProvider.taxRateForKarat(karat),
         ),
       );
       debugPrint('📋 عدد الأصناف الآن: ${_items.length}');
@@ -405,6 +448,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       switch (field) {
         case 'karat':
           item.karat = value;
+          item.taxRate = _settingsProvider.taxRateForKarat(value);
           // إذا كان هناك إجمالي محدد، أعد حساب الحقول للوصول له
           if (item._hasManualTotal && item._targetTotal != null) {
             _recalculateFieldsForTarget(item);
@@ -482,6 +526,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
+              inputFormatters: [NormalizeNumberFormatter()],
               decoration: InputDecoration(
                 labelText: 'المبلغ المستهدف',
                 suffixText: _settingsProvider.currencySymbol,
@@ -560,6 +605,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       return;
     }
 
+    if (_selectedBranchId == null) {
+      _showError('يرجى اختيار الفرع لإكمال الفاتورة.');
+      return;
+    }
+
     // 🆕 التحقق من وجود دفعات
     if (_payments.isEmpty) {
       _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
@@ -610,6 +660,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
       final invoiceData = {
         'customer_id': customerId,
+        'branch_id': _selectedBranchId,
         'transaction_type': 'sell',
         'date': DateTime.now().toIso8601String(),
         'total': totalAmount,
@@ -628,13 +679,57 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       final response = await apiService.addInvoice(invoiceData);
 
       if (context.mounted) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ تم حفظ الفاتورة #${response['id']}'),
-            backgroundColor: AppColors.success,
-          ),
+        final invoiceForPrint = Map<String, dynamic>.from(response);
+        try {
+          final match = widget.customers.firstWhere(
+            (c) => c['id'].toString() == customerId.toString(),
+          );
+          invoiceForPrint['customer_name'] ??=
+              match['name'] ?? match['customer_name'];
+          invoiceForPrint['customer_phone'] ??=
+              match['phone'] ?? match['customer_phone'];
+        } catch (_) {
+          // ignore
+        }
+
+        final shouldPrint = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: const Text('تم حفظ الفاتورة'),
+              content: Text(
+                '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('تم'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  icon: const Icon(Icons.print),
+                  label: const Text('طباعة'),
+                ),
+              ],
+            );
+          },
         );
+
+        if (!context.mounted) return;
+        if (shouldPrint == true) {
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => InvoicePrintScreen(
+                invoice: invoiceForPrint,
+                isArabic: true,
+              ),
+            ),
+          );
+        }
+
+        if (!context.mounted) return;
+        Navigator.pop(context, true);
       }
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
@@ -923,6 +1018,16 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         final bodyContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            InvoiceTypeBanner(
+              title: 'فاتورة بيع ذهب كسر',
+              subtitle: 'مخصصة لبيع الذهب المستعمل بعد إعادة تقييم الوزن والسعر',
+              color: AppColors.invoiceSaleScrap,
+              icon: Icons.handshake_outlined,
+              trailing: Text(
+                'نوع الفاتورة',
+                style: theme.textTheme.labelLarge,
+              ),
+            ),
             _buildCustomerSection(theme),
             const SizedBox(height: 24),
             if (isWideLayout)
@@ -1000,6 +1105,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
         return Scaffold(
           appBar: AppBar(
+            backgroundColor: AppColors.invoiceSaleScrap,
+            foregroundColor: Colors.white,
+            iconTheme: const IconThemeData(color: Colors.white),
             title: const Text('فاتورة بيع الكسر'),
             actions: [
               IconButton(
@@ -1173,6 +1281,81 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 decoration: InputDecoration(
                   labelText: 'اختر العميل',
                   prefixIcon: Icon(Icons.people, color: colorScheme.primary),
+                ),
+                dropdownColor: theme.cardColor,
+                icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
+              ),
+
+            const SizedBox(height: 14),
+            if (_isLoadingBranches)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (_branchesLoadingError != null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colorScheme.error.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colorScheme.error.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.error_outline, color: colorScheme.error),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'فشل تحميل الفروع: $_branchesLoadingError',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: _loadBranches,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('إعادة'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              DropdownButtonFormField<int>(
+                initialValue: _selectedBranchId,
+                items: _branches
+                    .map((branch) {
+                      final id = _parseInt(branch['id']);
+                      if (id == null) return null;
+                      final name = (branch['name'] ?? 'فرع').toString();
+                      return DropdownMenuItem<int>(
+                        value: id,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.account_tree, color: colorScheme.primary, size: 20),
+                            const SizedBox(width: 10),
+                            Flexible(
+                              child: Text(
+                                name,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    })
+                    .whereType<DropdownMenuItem<int>>()
+                    .toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedBranchId = value;
+                  });
+                },
+                decoration: InputDecoration(
+                  labelText: 'اختر الفرع',
+                  prefixIcon: Icon(Icons.account_tree, color: colorScheme.primary),
                 ),
                 dropdownColor: theme.cardColor,
                 icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
@@ -1722,6 +1905,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     double currentValue,
   ) async {
     final controller = TextEditingController(text: currentValue.toString());
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -1755,6 +1942,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [NormalizeNumberFormatter()],
           decoration: InputDecoration(
             labelText: label,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -2801,7 +2989,7 @@ class InvoiceItem {
   double wage; // أجور المصنعية للجرام الواحد
   final double goldPrice24k;
   final int mainKarat;
-  final double taxRate;
+  double taxRate;
 
   // الربح الموزع (يتم حسابه في _distributeAmount)
   double profit = 0.0;

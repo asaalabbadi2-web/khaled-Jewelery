@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// نظام الألوان الذهبي لتطبيق ياسار للذهب
+/// نظام الألوان الذهبي لتطبيق مجوهرات خالد
 class AppColors {
   // ألوان ذهبية - مشتركة بين الوضعين
   static const Color primaryGold = Color(0xFFD4AF37); // ذهبي فاخر

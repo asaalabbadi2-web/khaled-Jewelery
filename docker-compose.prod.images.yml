@@ -1,0 +1,42 @@
+# Optional: production compose using pre-built images (recommended with CI/CD)
+# Build/push images via .github/workflows/docker-images.yml then deploy with:
+#   docker  -f docker-compose.prod.images.yml --env-file .env.production pull
+#   docker  -f docker-compose.prod.images.yml --env-file .env.production up -d
+
+services:
+  db:
+    image: postgres:16
+    container_name: yasargold-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yasargold}
+      POSTGRES_USER: ${POSTGRES_USER:-yasargold}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY:-owner/repo}/backend:latest
+    container_name: yasargold-backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://yasargold:change_me@db:5432/yasargold}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      BYPASS_AUTH_FOR_DEVELOPMENT: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nginx:
+    image: ghcr.io/${GITHUB_REPOSITORY:-owner/repo}/web:latest
+    container_name: yasargold-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

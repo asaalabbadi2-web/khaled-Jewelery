@@ -14,6 +14,8 @@ import '../api_service.dart';
 import 'voucher_details_screen.dart';
 import 'add_voucher_screen.dart';
 import '../theme/app_theme.dart' as theme;
+import '../providers/auth_provider.dart';
+import 'package:provider/provider.dart';
 
 class VouchersListScreen extends StatefulWidget {
   const VouchersListScreen({super.key});
@@ -56,8 +58,21 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     _tabController.addListener(_onTabChanged);
     _scrollController.addListener(_onScroll);
     _searchController.addListener(_onSearchChanged);
-    _loadVouchers();
-    _loadStats();
+
+    // Avoid 403 spam for users without vouchers permissions
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = context.read<AuthProvider>();
+      if (!auth.hasPermission('vouchers.view')) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _error = 'ليس لديك صلاحية لعرض السندات';
+        });
+        return;
+      }
+      _loadVouchers();
+      _loadStats();
+    });
   }
 
   @override

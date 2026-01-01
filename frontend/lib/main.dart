@@ -43,7 +43,12 @@ Future<void> main() async {
       providers: [
         ChangeNotifierProvider<AuthProvider>.value(value: authProvider),
         ChangeNotifierProvider(
-          create: (context) => SettingsProvider()..loadSettings(),
+          create: (context) {
+            final provider = SettingsProvider();
+            final auth = context.read<AuthProvider>();
+            provider.loadSettings(fetchRemote: auth.hasPermission('system.settings'));
+            return provider;
+          },
         ),
         ChangeNotifierProvider(
           create: (context) => ThemeProvider(), // 🆕 مزود الثيم
@@ -81,7 +86,7 @@ class _MyAppState extends State<MyApp> {
     final themeProvider = Provider.of<ThemeProvider>(context);
 
     return MaterialApp(
-      title: 'ياسار للذهب',
+      title: 'مجوهرات خالد',
       builder: (context, widget) {
         // تخصيص widget الخطأ
         ErrorWidget.builder = (FlutterErrorDetails errorDetails) {
@@ -153,6 +158,16 @@ class _MyAppState extends State<MyApp> {
       routes: {
         '/add_item': (context) => AddItemScreenEnhanced(api: ApiService()),
         '/items': (context) => ItemsScreenEnhanced(api: ApiService()),
+      },
+      onUnknownRoute: (settings) {
+        // معالجة الصفحات غير الموجودة (404)
+        // إعادة التوجيه للصفحة الرئيسية تلقائياً
+        return MaterialPageRoute(
+          builder: (context) => AuthGate(
+            onToggleLocale: _toggleLocale,
+            isArabic: _locale.languageCode == 'ar',
+          ),
+        );
       },
       home: AuthGate(
         onToggleLocale: _toggleLocale,

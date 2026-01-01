@@ -4,7 +4,10 @@
 		{
 			"label": "Run Backend Server",
 			"type": "shell",
-			"command": "cd \"${workspaceFolder}/backend\" && source venv/bin/activate && python app.py",
+			"command": "pids=$(lsof -ti tcp:8001 2>/dev/null || true); if [ -n \"$pids\" ]; then echo 'Killing backend (8001)...'; kill -TERM $pids 2>/dev/null || true; sleep 1; kill -KILL $pids 2>/dev/null || true; fi; if [ -x \"${workspaceFolder}/backend/venv/bin/python\" ]; then \"${workspaceFolder}/backend/venv/bin/python\" app.py; else python3 app.py; fi",
+			"options": {
+				"cwd": "${workspaceFolder}/backend"
+			},
 			"isBackground": true,
 			"problemMatcher": []
 		},
@@ -12,6 +15,16 @@
 			"label": "Run Flutter Web",
 			"type": "shell",
 			"command": "cd frontend && flutter run -d chrome --web-port=8080",
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart All Services",
+			"type": "shell",
+			"command": "pids=$(lsof -ti tcp:8001 2>/dev/null || true); if [ -n \"$pids\" ]; then echo 'Killing backend (8001)...'; kill -TERM $pids 2>/dev/null || true; sleep 1; kill -KILL $pids 2>/dev/null || true; fi; echo 'Ports cleared. Starting backend...' && sleep 1 && if [ -x \"${workspaceFolder}/backend/venv/bin/python\" ]; then \"${workspaceFolder}/backend/venv/bin/python\" app.py; else python3 app.py; fi",
+			"options": {
+				"cwd": "${workspaceFolder}/backend"
+			},
 			"isBackground": true,
 			"problemMatcher": []
 		}

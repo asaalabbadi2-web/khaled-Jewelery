@@ -8,6 +8,7 @@ import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 import 'voucher_preview_screen.dart';
+import '../utils.dart';
 
 /// نموذج لسطر حساب في السند
 class AccountLineModel {
@@ -792,6 +793,65 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     );
   }
 
+  /// Reusable cluster of status chips to keep the indicators consistent
+  /// wherever they are rendered (hero header, status board, etc.).
+  Widget _buildStatusChips({
+    required bool partyReady,
+    required bool accountsReady,
+    required bool hasAmounts,
+    required bool hasSafeOverdraft,
+    required String totalGoldText,
+  }) {
+    final theme = Theme.of(context);
+    final Color successColor = AppColors.success;
+    final Color warningColor = AppColors.warning;
+    final Color infoColor = AppColors.info;
+    final Color neutralColor = theme.colorScheme.outlineVariant;
+
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        _buildStatusChip(
+          icon: partyReady ? Icons.verified_user : Icons.person_search,
+          color: partyReady ? successColor : warningColor,
+          label: partyReady ? 'الطرف جاهز' : 'الطرف غير محدد',
+          subtitle:
+              partyReady ? 'يمكنك متابعة تعبئة السند.' : 'حدد الطرف المناسب قبل المتابعة.',
+        ),
+        _buildStatusChip(
+          icon: accountsReady ? Icons.check_circle : Icons.list_alt,
+          color: accountsReady ? infoColor : warningColor,
+          label: accountsReady ? 'سطور الحسابات مكتملة' : 'أكمل بيانات السطور',
+          subtitle: accountsReady
+              ? 'كل السطور تحتوي على حساب ومبلغ.'
+              : 'تأكد من اختيار الحساب وإدخال المبلغ لكل سطر.',
+        ),
+        _buildStatusChip(
+          icon: Icons.account_balance_wallet,
+          color: hasAmounts ? infoColor : neutralColor,
+          label:
+              hasAmounts ? 'إجمالي النقد: ${_formatCash(_totalCash)}' : 'لا يوجد مبلغ مُدخل',
+          subtitle: totalGoldText.isNotEmpty ? 'الذهب: $totalGoldText' : null,
+        ),
+        if (hasSafeOverdraft)
+          _buildStatusChip(
+            icon: Icons.warning_amber_rounded,
+            color: AppColors.error,
+            label: 'تحذير أرصدة الخزائن',
+            subtitle: 'يوجد سطر يتجاوز الرصيد المتاح للخزينة المختارة.',
+          )
+        else
+          _buildStatusChip(
+            icon: Icons.shield_outlined,
+            color: successColor,
+            label: 'الخزائن ضمن الحدود',
+            subtitle: 'لا توجد تجاوزات في أرصدة الخزائن الحالية.',
+          ),
+      ],
+    );
+  }
+
   Widget _buildStatusBoard() {
     final bool partyReady =
         (_partyType == 'customer' && _selectedCustomerId != null) ||
@@ -807,12 +867,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
     final bool hasAmounts =
         _totalCash > 0 || _totalGoldByKarat.values.any((value) => value > 0);
-
-    final theme = Theme.of(context);
-    final Color successColor = AppColors.success;
-    final Color warningColor = AppColors.warning;
-    final Color infoColor = AppColors.info;
-    final Color neutralColor = theme.colorScheme.outlineVariant;
 
     final bool hasSafeOverdraft = _accountLines.any((line) {
       if (widget.voucherType != 'payment') return false;
@@ -830,8 +884,21 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         )
         .join(' • ');
 
+    String statusSummary;
+    if (!partyReady) {
+      statusSummary = 'حدد الطرف لإكمال بيانات السند';
+    } else if (!accountsReady) {
+      statusSummary = 'أكمل تفاصيل السطور المتبقية';
+    } else if (!hasAmounts) {
+      statusSummary = 'أدخل المبالغ النقدية أو الذهبية';
+    } else if (hasSafeOverdraft) {
+      statusSummary = 'تحقق من أرصدة الخزائن قبل الحفظ';
+    } else {
+      statusSummary = 'السند مكتمل وجاهز للحفظ أو الترحيل';
+    }
+
     return Card(
-      elevation: 3,
+      elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
@@ -839,76 +906,44 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           width: 1.2,
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.dashboard_customize_outlined,
-                  color: AppColors.primaryGold,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'لوحة الحالة',
-                  style: TextStyle(
-                    color: AppColors.deepGold,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-              ],
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          maintainState: true,
+          leading: Icon(
+            Icons.dashboard_customize_outlined,
+            color: AppColors.primaryGold,
+          ),
+          title: Text(
+            'مؤشرات السند',
+            style: TextStyle(
+              color: AppColors.deepGold,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                _buildStatusChip(
-                  icon: partyReady ? Icons.verified_user : Icons.person_search,
-                  color: partyReady ? successColor : warningColor,
-                  label: partyReady ? 'الطرف جاهز' : 'الطرف غير محدد',
-                  subtitle: partyReady
-                      ? 'يمكنك متابعة تعبئة السند.'
-                      : 'حدد الطرف المناسب قبل المتابعة.',
-                ),
-                _buildStatusChip(
-                  icon: accountsReady ? Icons.check_circle : Icons.list_alt,
-                  color: accountsReady ? infoColor : warningColor,
-                  label: accountsReady
-                      ? 'سطور الحسابات مكتملة'
-                      : 'أكمل بيانات السطور',
-                  subtitle: accountsReady
-                      ? 'كل السطور تحتوي على حساب ومبلغ.'
-                      : 'تأكد من اختيار الحساب وإدخال المبلغ لكل سطر.',
-                ),
-                _buildStatusChip(
-                  icon: Icons.account_balance_wallet,
-                  color: hasAmounts ? infoColor : neutralColor,
-                  label: hasAmounts
-                      ? 'إجمالي النقد: ${_formatCash(_totalCash)}'
-                      : 'لا يوجد مبلغ مُدخل',
-                  subtitle: totalGoldText.isNotEmpty
-                      ? 'الذهب: $totalGoldText'
-                      : null,
-                ),
-                if (hasSafeOverdraft)
-                  _buildStatusChip(
-                    icon: Icons.warning_amber_rounded,
-                    color: AppColors.error,
-                    label: 'تحذير أرصدة الخزائن',
-                    subtitle: 'يوجد سطر يتجاوز الرصيد المتاح للخزينة المختارة.',
-                  )
-                else
-                  _buildStatusChip(
-                    icon: Icons.shield_outlined,
-                    color: successColor,
-                    label: 'الخزائن ضمن الحدود',
-                    subtitle: 'لا توجد تجاوزات في أرصدة الخزائن الحالية.',
-                  ),
-              ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              statusSummary,
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodySmall?.color,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          iconColor: AppColors.primaryGold,
+          collapsedIconColor: AppColors.primaryGold,
+          children: [
+            const SizedBox(height: 8),
+            _buildStatusChips(
+              partyReady: partyReady,
+              accountsReady: accountsReady,
+              hasAmounts: hasAmounts,
+              hasSafeOverdraft: hasSafeOverdraft,
+              totalGoldText: totalGoldText,
             ),
           ],
         ),
@@ -1358,46 +1393,63 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   }
 
   Widget _buildAttachmentsCard() {
+    final hasAttachments = _attachedFileNames.isNotEmpty;
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: AppColors.lightGold.withValues(alpha: 0.3)),
       ),
-      color: AppColors.lightGold.withValues(alpha: 0.15),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.attach_file, color: AppColors.primaryGold),
-                const SizedBox(width: 8),
-                Text(
-                  'إرفاق مستندات (صور/ملفات)',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).textTheme.titleLarge?.color,
-                  ),
-                ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('إرفاق'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGold,
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: _pickFiles,
-                ),
-              ],
+      color: AppColors.lightGold.withValues(alpha: 0.12),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          maintainState: true,
+          initiallyExpanded: hasAttachments,
+          leading: Icon(Icons.attach_file, color: AppColors.primaryGold),
+          title: Text(
+            'المرفقات (اختياري)',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).textTheme.titleLarge?.color,
             ),
-            if (_attachedFileNames.isNotEmpty)
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              hasAttachments
+                  ? 'تم إرفاق ${_attachedFileNames.length} ملف/ملفات'
+                  : 'أضف صور الفواتير، إيصالات البنك أو أي مستندات داعمة عند الحاجة',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodySmall?.color,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          iconColor: AppColors.primaryGold,
+          collapsedIconColor: AppColors.primaryGold,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('إرفاق مستند'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGold,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _pickFiles,
+              ),
+            ),
+            if (hasAttachments)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Wrap(
                   spacing: 8,
+                  runSpacing: 8,
                   children: _attachedFileNames
                       .map(
                         (f) => Chip(
@@ -1528,31 +1580,44 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   }
 
   Widget _buildNotesCard() {
+    final hasNotes = _notesController.text.isNotEmpty;
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: AppColors.lightGold.withValues(alpha: 0.4)),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.note_alt_outlined, color: AppColors.primaryGold),
-                const SizedBox(width: 8),
-                Text(
-                  'ملاحظات (اختياري)',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).textTheme.titleLarge?.color,
-                  ),
-                ),
-              ],
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          maintainState: true,
+          initiallyExpanded: hasNotes,
+          leading: Icon(Icons.note_alt_outlined, color: AppColors.primaryGold),
+          title: Text(
+            'ملاحظات (اختياري)',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).textTheme.titleLarge?.color,
             ),
-            const SizedBox(height: 12),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              hasNotes
+                  ? 'تمت إضافة ملاحظات للسند'
+                  : 'احفظ تفاصيل داخلية بدون إظهارها في الطباعة',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodySmall?.color,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          iconColor: AppColors.primaryGold,
+          collapsedIconColor: AppColors.primaryGold,
+          children: [
             TextFormField(
               controller: _notesController,
               decoration: const InputDecoration(
@@ -2520,6 +2585,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                       ),
                     ),
                     keyboardType: TextInputType.number,
+                    inputFormatters: [NormalizeNumberFormatter()],
                     onChanged: (value) {
                       setState(() {
                         line.amount = double.tryParse(value) ?? 0;
@@ -2607,25 +2673,25 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     final List<Widget> leftColumn = [
       // المساعد السريع في أعلى العمود الأيسر
       _buildTemplateSelector(),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       _buildStatusBoard(),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       _buildPartySelectorCard(),
     ];
 
     final partyInfo = _buildPartyInfoCard();
     if (partyInfo is! SizedBox) {
       leftColumn
-        ..add(const SizedBox(height: 12))
+        ..add(const SizedBox(height: 10))
         ..add(partyInfo);
     }
 
     leftColumn.addAll([
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       _buildDescriptionCard(),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       _buildReceiverCard(),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       _buildAttachmentsCard(),
     ]);
 
@@ -2661,9 +2727,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       ),
       const SizedBox(height: 12),
       _buildTotalsCard(),
-      const SizedBox(height: 24),
+      const SizedBox(height: 16),
       _buildNotesCard(),
-      const SizedBox(height: 24),
+      const SizedBox(height: 20),
       _buildSaveSection(accentColor),
     ];
 

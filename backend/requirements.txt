@@ -10,4 +10,8 @@ beautifulsoup4==4.12.3
 yfinance==0.2.37
 alembic==1.13.1
 PyJWT==2.8.0
+pyotp==2.9.0
+redis==5.0.8
 Werkzeug==3.0.3
+gunicorn==21.2.0
+pytest==8.4.2

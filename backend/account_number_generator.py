@@ -7,7 +7,60 @@ Account Number Generator - مولد أرقام الحسابات التلقائي
 - الترقيم مع التباعد (للحسابات العادية)
 """
 
-from backend.models import Account, db
+from models import Account, db
+
+
+def _digits_only(value: str) -> str:
+    return ''.join(ch for ch in str(value or '').strip() if ch.isdigit())
+
+
+def _compute_child_range_and_step(parent_account_number: str) -> tuple[int, int, int, int]:
+    """Return (start, end, step, child_len) for the next-level children of a parent.
+
+    قواعد الترقيم المعتمدة (مطابقة للشجرة الحالية):
+    - أب 1 خانة (1/2/3/..): أبناء خانتين 11..19 (خطوة 1)
+    - أب خانتين (11/12/..): أبناء 3 خانات 110..190 (خطوة 10)
+    - أب 3 خانات (110/120/..): أبناء 4 خانات 1100..1190 (خطوة 10)
+    - أب 4 خانات (مثل 1200/1300): أبناء تفصيلية 7 خانات 1200000..1200999 (خطوة 1)
+    - أطوال أخرى: افتراضي إضافة خانة واحدة (خطوة 1)
+    """
+
+    parent_digits = _digits_only(parent_account_number)
+    if not parent_digits:
+        raise ValueError('رقم الحساب الأب غير صالح')
+
+    parent_len = len(parent_digits)
+    parent_int = int(parent_digits)
+
+    if parent_len == 1:
+        # 1 -> 11..19
+        start = parent_int * 10 + 1
+        end = parent_int * 10 + 9
+        return start, end, 1, 2
+
+    if parent_len == 2:
+        # 11 -> 110..190 (10)
+        # (9 slots: 110, 120, ..., 190)
+        start = parent_int * 10
+        end = start + 80
+        return start, end, 10, 3
+
+    if parent_len == 3:
+        # 110 -> 1100..1190 (10)
+        start = parent_int * 10
+        end = start + 90
+        return start, end, 10, 4
+
+    if parent_len == 4:
+        # 1200 -> 1200000..1200999 (تفصيلي)
+        start = parent_int * 1000
+        end = start + 999
+        return start, end, 1, 7
+
+    # fallback: one extra digit
+    start = parent_int * 10
+    end = start + 9
+    return start, end, 1, parent_len + 1
 
 
 def get_next_account_number(parent_account_number: str, use_spacing: bool = False) -> str:
@@ -35,33 +88,7 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
         '1040'  # رابع حساب بنكي (بعد 1000, 1010, 1020, 1030)
     """
     
-    # حدد نطاق البحث بناءً على طول رقم الحساب الأب
-    parent_len = len(parent_account_number)
-    
-    if parent_len <= 3:
-        # حسابات من 3 خانات أو أقل (مثل 100، 110، 120)
-        # نضيف خانة واحدة (تباعد 10) أو نضيف 3 خانات للعملاء
-        # نتحقق من نوع الحساب
-        if parent_account_number in ['1100', '1110', '1120']:  # حسابات العملاء
-            # استخدم 6 خانات (ترقيم متصل للآلاف)
-            start_range = int(parent_account_number + '000')
-            end_range = int(parent_account_number.replace('11', '11') + '999')
-            # مثال: 1100 -> start=110000, end=119999
-        else:
-            # حسابات عادية (4 خانات)
-            start_range = int(parent_account_number + '0')
-            end_range = int(parent_account_number + '90')
-            
-    elif parent_len == 4:
-        # حسابات من 4 خانات (مثل 1000، 1100، 1200)
-        # نضيف خانتين
-        start_range = int(parent_account_number + '00')
-        end_range = int(parent_account_number + '99')
-        
-    else:
-        # حسابات أطول
-        start_range = int(parent_account_number + '0')
-        end_range = int(parent_account_number + '9')
+    start_range, end_range, step, _child_len = _compute_child_range_and_step(parent_account_number)
     
     # ابحث عن آخر رقم حساب مستخدم في هذا النطاق
     last_account = Account.query.filter(
@@ -71,12 +98,7 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
     
     if last_account:
         last_number = int(last_account.account_number)
-        if use_spacing:
-            # استخدم تباعد 10
-            next_number = last_number + 10
-        else:
-            # ترقيم متصل (+1)
-            next_number = last_number + 1
+        next_number = last_number + step
     else:
         # أول حساب في هذا النطاق
         next_number = start_range
@@ -91,7 +113,7 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
     return str(next_number)
 
 
-def get_customer_account_capacity(customer_category: str = '1100') -> dict:
+def get_customer_account_capacity(customer_category: str = '1200') -> dict:
     """
     احصل على معلومات السعة المتاحة لفئة عملاء معينة
     
@@ -112,16 +134,7 @@ def get_customer_account_capacity(customer_category: str = '1100') -> dict:
         }
     """
     
-    # حدد النطاق الكامل
-    start_range = int(customer_category + '000')
-    
-    # النطاق النهائي يعتمد على الرقم
-    if customer_category == '1100':
-        # عملاء بيع ذهب: من 110000 إلى 119999
-        end_range = 119999
-    else:
-        # فئات أخرى: من XXX000 إلى XXX999
-        end_range = int(customer_category + '999')
+    start_range, end_range, _step, _child_len = _compute_child_range_and_step(customer_category)
     
     total_capacity = end_range - start_range + 1
     
@@ -174,16 +187,14 @@ def suggest_account_number_with_validation(parent_account_number: str) -> dict:
     """
     
     try:
-        # تحديد ما إذا كان يجب استخدام التباعد
-        # العملاء والموردين: بدون تباعد
-        # البقية: مع تباعد
-        use_spacing = parent_account_number not in ['1100', '1110', '1120', '211', '212']
-        
-        suggested_number = get_next_account_number(parent_account_number, use_spacing)
-        
-        # احصل على معلومات السعة إذا كان حساب عملاء
+        start_range, end_range, step, child_len = _compute_child_range_and_step(parent_account_number)
+
+        use_spacing = step == 10
+        suggested_number = get_next_account_number(parent_account_number, use_spacing=use_spacing)
+
         capacity_info = None
-        if parent_account_number in ['1100', '1110', '1120']:
+        # التفصيلي تحت 4 خانات (مثل 1200/1210/1300..): أرجع معلومات السعة
+        if child_len == 7:
             capacity_info = get_customer_account_capacity(parent_account_number)
         
         return {
@@ -191,7 +202,13 @@ def suggest_account_number_with_validation(parent_account_number: str) -> dict:
             'is_valid': True,
             'message': 'رقم الحساب متاح',
             'use_spacing': use_spacing,
-            'capacity_info': capacity_info
+            'capacity_info': capacity_info,
+            'range': {
+                'start': start_range,
+                'end': end_range,
+                'step': step,
+                'child_len': child_len,
+            },
         }
         
     except ValueError as e:
@@ -220,45 +237,40 @@ def validate_account_number(account_number: str, parent_account_number: str) -> 
         {'is_valid': True, 'message': 'رقم الحساب صحيح ومتاح'}
     """
     
-    # تحقق من أن الرقم يبدأ برقم الأب
-    if not account_number.startswith(parent_account_number):
-        return {
-            'is_valid': False,
-            'message': f'رقم الحساب يجب أن يبدأ بـ {parent_account_number}'
-        }
-    
+    acc_digits = _digits_only(account_number)
+    parent_digits = _digits_only(parent_account_number)
+
+    if not acc_digits or not parent_digits:
+        return {'is_valid': False, 'message': 'رقم الحساب غير صالح'}
+
     # تحقق من أن الرقم غير مستخدم
-    existing = Account.query.filter_by(account_number=account_number).first()
+    existing = Account.query.filter_by(account_number=acc_digits).first()
     if existing:
         return {
             'is_valid': False,
-            'message': f'رقم الحساب {account_number} مستخدم بالفعل'
+            'message': f'رقم الحساب {acc_digits} مستخدم بالفعل'
         }
-    
-    # تحقق من النطاق
-    account_num = int(account_number)
-    parent_len = len(parent_account_number)
-    
-    if parent_account_number in ['1100', '1110', '1120']:
-        # عملاء
-        if parent_account_number == '1100':
-            start, end = 110000, 119999
-        else:
-            start = int(parent_account_number + '000')
-            end = int(parent_account_number + '999')
-    else:
-        # حسابات عادية
-        if parent_len <= 3:
-            start = int(parent_account_number + '0')
-            end = int(parent_account_number + '90')
-        else:
-            start = int(parent_account_number + '0')
-            end = int(parent_account_number + '9')
+
+    # تحقق من النطاق/الطول/الخطوة وفق القاعدة
+    start, end, step, child_len = _compute_child_range_and_step(parent_digits)
+    account_num = int(acc_digits)
+
+    if len(acc_digits) != child_len:
+        return {
+            'is_valid': False,
+            'message': f'طول رقم الحساب غير صحيح. المتوقع {child_len} خانات'
+        }
     
     if account_num < start or account_num > end:
         return {
             'is_valid': False,
-            'message': f'رقم الحساب خارج النطاق المسموح ({start} - {end})'
+            'message': f'رقم الحساب خارج النطاق المسموح للحساب الأب ({start} - {end})'
+        }
+
+    if (account_num - start) % step != 0:
+        return {
+            'is_valid': False,
+            'message': f'رقم الحساب لا يتبع قاعدة الترقيم (الخطوة {step})'
         }
     
     return {

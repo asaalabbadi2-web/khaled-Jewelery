@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_service.dart';
 import '../models/employee_model.dart';
+import '../utils.dart';
 
 class EmployeesScreen extends StatefulWidget {
   final ApiService api;
@@ -137,6 +138,135 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
       _showSnack(isAr ? 'تم حذف الموظف' : 'Employee deleted');
     } catch (e) {
       _showSnack(e.toString(), isError: true);
+    }
+  }
+
+  Future<void> _showCreateUserDialog(EmployeeModel employee) async {
+    final isAr = widget.isArabic;
+    final usernameController = TextEditingController();
+    final passwordController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    String selectedRole = 'staff';
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text(isAr ? 'إنشاء حساب مستخدم' : 'Create User Account'),
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isAr
+                            ? 'إنشاء حساب دخول للموظف: ${employee.name}'
+                            : 'Create login account for: ${employee.name}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: usernameController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'اسم المستخدم' : 'Username',
+                          hintText: isAr ? 'مثال: ${employee.name.split(' ').first}' : 'e.g., ${employee.name.split(' ').first}',
+                          border: const OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return isAr ? 'يجب إدخال اسم المستخدم' : 'Username is required';
+                          }
+                          if (value.length < 3) {
+                            return isAr ? 'اسم المستخدم قصير جداً' : 'Username too short';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: passwordController,
+                        obscureText: true,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'كلمة المرور' : 'Password',
+                          border: const OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return isAr ? 'يجب إدخال كلمة المرور' : 'Password is required';
+                          }
+                          if (value.length < 6) {
+                            return isAr ? 'كلمة المرور قصيرة جداً (6 أحرف على الأقل)' : 'Password too short (min 6 characters)';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<String>(
+                        value: selectedRole,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'الدور' : 'Role',
+                          border: const OutlineInputBorder(),
+                        ),
+                        items: [
+                          DropdownMenuItem(value: 'staff', child: Text(isAr ? 'موظف' : 'Staff')),
+                          DropdownMenuItem(value: 'manager', child: Text(isAr ? 'مدير' : 'Manager')),
+                          DropdownMenuItem(value: 'admin', child: Text(isAr ? 'مسؤول' : 'Admin')),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() {
+                              selectedRole = value;
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: Text(isAr ? 'إلغاء' : 'Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    if (formKey.currentState!.validate()) {
+                      Navigator.of(context).pop(true);
+                    }
+                  },
+                  child: Text(isAr ? 'إنشاء' : 'Create'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != true) return;
+
+    try {
+      await widget.api.createUserFromEmployee(
+        employeeId: employee.id!,
+        username: usernameController.text.trim(),
+        password: passwordController.text,
+        role: selectedRole,
+      );
+      
+      _showSnack(
+        isAr ? 'تم إنشاء حساب المستخدم بنجاح' : 'User account created successfully',
+      );
+      await _loadEmployees();
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    } finally {
+      usernameController.dispose();
+      passwordController.dispose();
     }
   }
 
@@ -283,13 +413,26 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                TextButton.icon(
-                  icon: const Icon(Icons.edit),
-                  label: Text(isAr ? 'تعديل البيانات' : 'Edit Employee'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _openEmployeeForm(employee: employee);
-                  },
+                Row(
+                  children: [
+                    TextButton.icon(
+                      icon: const Icon(Icons.edit),
+                      label: Text(isAr ? 'تعديل البيانات' : 'Edit Employee'),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        _openEmployeeForm(employee: employee);
+                      },
+                    ),
+                    const SizedBox(width: 12),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.person_add),
+                      label: Text(isAr ? 'إنشاء حساب مستخدم' : 'Create User Account'),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        _showCreateUserDialog(employee);
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -614,6 +757,7 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                     labelText: isAr ? 'الراتب الأساسي' : 'Basic Salary',
                   ),
                   keyboardType: TextInputType.number,
+                  inputFormatters: [NormalizeNumberFormatter()],
                 ),
                 TextFormField(
                   controller: _phoneController,

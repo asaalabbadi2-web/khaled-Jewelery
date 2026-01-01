@@ -4,9 +4,10 @@ import 'package:intl/intl.dart';
 import '../api_service.dart';
 import '../models/app_user_model.dart';
 import '../models/employee_model.dart';
-import '../widgets/permissions_editor.dart';
 import '../providers/auth_provider.dart';
 import 'package:provider/provider.dart';
+
+import 'permissions_management_screen.dart';
 
 class UsersScreen extends StatefulWidget {
   final ApiService api;
@@ -65,9 +66,10 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   void _showSnack(String message, {bool isError = false}) {
+    final cleaned = message.replaceFirst(RegExp(r'^Exception:\s*'), '');
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(cleaned),
         backgroundColor: isError
             ? Colors.red
             : Theme.of(context).colorScheme.primary,
@@ -77,11 +79,13 @@ class _UsersScreenState extends State<UsersScreen> {
 
   IconData _roleIcon(String role) {
     switch (role) {
-      case 'admin':
+      case 'system_admin':
         return Icons.workspace_premium_outlined;
       case 'manager':
         return Icons.manage_accounts_outlined;
-      case 'staff':
+      case 'accountant':
+        return Icons.account_balance_outlined;
+      case 'employee':
       default:
         return Icons.person_outline;
     }
@@ -107,7 +111,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
     final total = _users.length;
     final active = _users.where((user) => user.isActive).length;
-    final admins = _users.where((user) => user.role == 'admin').length;
+    final admins = _users.where((user) => user.role == 'system_admin').length;
 
     Widget buildCard(
       String titleAr,
@@ -185,6 +189,42 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _toggleUser(AppUserModel user) async {
+    final isAr = widget.isArabic;
+    final auth = context.read<AuthProvider>();
+    final current = auth.currentUser;
+
+    // Not logged in
+    if (current == null) {
+      _showSnack(isAr ? 'يرجى تسجيل الدخول أولاً' : 'Please login first',
+          isError: true);
+      return;
+    }
+
+    // Block self toggle
+    if (current.id != null && user.id != null && current.id == user.id) {
+      _showSnack(
+        isAr ? 'لا يمكنك تعطيل/تفعيل حسابك' : 'You cannot toggle your own account',
+        isError: true,
+      );
+      return;
+    }
+
+    // Policy: manager can toggle employee only
+    final actorRole = auth.role;
+    final targetRole = user.role;
+    final allowed = auth.isSystemAdmin ||
+        (actorRole == 'manager' && targetRole == 'employee');
+
+    if (!allowed) {
+      _showSnack(
+        isAr
+            ? 'غير مصرح: المدير يعطّل الموظف فقط'
+            : 'Not allowed: manager can toggle employee only',
+        isError: true,
+      );
+      return;
+    }
+
     try {
       final isActive = await widget.api.toggleUserActive(user.id ?? 0);
       setState(() {
@@ -271,6 +311,31 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _openUserForm({AppUserModel? user}) async {
+    final auth = context.read<AuthProvider>();
+    final isAr = widget.isArabic;
+
+    // Enforce UI-level RBAC to avoid forbidden server errors.
+    if (user == null) {
+      final canCreate = auth.isSystemAdmin || auth.role == 'manager';
+      if (!canCreate) {
+        _showSnack(
+          isAr ? 'غير مصرح بإنشاء مستخدم' : 'Not allowed to create users',
+          isError: true,
+        );
+        return;
+      }
+    } else {
+      final canEdit = auth.isSystemAdmin ||
+          (auth.role == 'manager' && user.role == 'employee');
+      if (!canEdit) {
+        _showSnack(
+          isAr ? 'غير مصرح بتعديل هذا المستخدم' : 'Not allowed to edit this user',
+          isError: true,
+        );
+        return;
+      }
+    }
+
     final result = await showDialog<Map<String, dynamic>?>(
       context: context,
       builder: (context) =>
@@ -304,6 +369,8 @@ class _UsersScreenState extends State<UsersScreen> {
     final isAr = widget.isArabic;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final auth = context.watch<AuthProvider>();
+    final canCreateUsers = auth.isSystemAdmin || auth.role == 'manager';
 
     return Scaffold(
       appBar: AppBar(
@@ -399,7 +466,7 @@ class _UsersScreenState extends State<UsersScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openUserForm(),
+        onPressed: canCreateUsers ? () => _openUserForm() : null,
         icon: const Icon(Icons.person_add_alt_1),
         label: Text(isAr ? 'مستخدم جديد' : 'New User'),
       ),
@@ -450,15 +517,17 @@ class _UsersScreenState extends State<UsersScreen> {
                           final user = _users[index];
                           final roleLabel = isAr
                               ? {
-                                      'admin': 'مدير النظام',
-                                      'manager': 'مشرف',
-                                      'staff': 'موظف',
+                                      'system_admin': 'مسؤول النظام',
+                                      'manager': 'مدير',
+                                      'accountant': 'محاسب',
+                                      'employee': 'موظف',
                                     }[user.role] ??
                                     'مستخدم'
                               : {
-                                      'admin': 'Administrator',
+                                      'system_admin': 'System Admin',
                                       'manager': 'Manager',
-                                      'staff': 'Staff',
+                                      'accountant': 'Accountant',
+                                      'employee': 'Employee',
                                     }[user.role] ??
                                     'User';
                           final lastLoginText = _formatLastLogin(
@@ -480,8 +549,8 @@ class _UsersScreenState extends State<UsersScreen> {
                               leading: Stack(
                                 children: [
                                   CircleAvatar(
-                                    backgroundColor: statusColor.withValues(alpha: 
-                                      0.15,
+                                    backgroundColor: statusColor.withValues(
+                                      alpha: 0.15,
                                     ),
                                     child: Icon(
                                       _roleIcon(user.role),
@@ -541,7 +610,9 @@ class _UsersScreenState extends State<UsersScreen> {
                                       vertical: 4,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: statusColor.withValues(alpha: 0.16),
+                                      color: statusColor.withValues(
+                                        alpha: 0.16,
+                                      ),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Text(
@@ -560,8 +631,23 @@ class _UsersScreenState extends State<UsersScreen> {
                                   ),
                                   const SizedBox(width: 6),
                                   PopupMenuButton<String>(
-                                    onSelected: (value) {
-                                      if (value == 'edit') {
+                                    onSelected: (value) async {
+                                      if (value == 'permissions') {
+                                        final result = await Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                PermissionsManagementScreen(
+                                                  user: user,
+                                                ),
+                                          ),
+                                        );
+
+                                        if (!mounted) return;
+                                        if (result == true) {
+                                          await _loadUsers();
+                                        }
+                                      } else if (value == 'edit') {
                                         _openUserForm(user: user);
                                       } else if (value == 'delete') {
                                         _deleteUser(user);
@@ -570,6 +656,12 @@ class _UsersScreenState extends State<UsersScreen> {
                                       }
                                     },
                                     itemBuilder: (context) => [
+                                      PopupMenuItem(
+                                        value: 'permissions',
+                                        child: Text(
+                                          isAr ? 'الصلاحيات' : 'Permissions',
+                                        ),
+                                      ),
                                       PopupMenuItem(
                                         value: 'edit',
                                         child: Text(isAr ? 'تعديل' : 'Edit'),
@@ -613,8 +705,7 @@ class _UserFormDialogState extends State<UserFormDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
-  Map<String, dynamic> _permissions = {};
-  String _role = 'staff';
+  String _role = 'employee';
   bool _isActive = true;
   int? _selectedEmployeeId;
   List<EmployeeModel> _employees = [];
@@ -627,10 +718,7 @@ class _UserFormDialogState extends State<UserFormDialog> {
     _usernameController = TextEditingController(text: user?.username ?? '');
     _passwordController = TextEditingController();
     _selectedEmployeeId = user?.employeeId;
-    _permissions = user?.permissions != null
-        ? Map<String, dynamic>.from(user!.permissions!)
-        : {};
-    _role = user?.role ?? 'staff';
+    _role = user?.role ?? 'employee';
     _isActive = user?.isActive ?? true;
     _loadEmployees();
   }
@@ -681,7 +769,6 @@ class _UserFormDialogState extends State<UserFormDialog> {
       'username': _usernameController.text.trim(),
       'employee_id': _selectedEmployeeId,
       'role': _role,
-      'permissions': _permissions.isEmpty ? null : _permissions,
       'is_active': _isActive,
     };
 
@@ -699,6 +786,25 @@ class _UserFormDialogState extends State<UserFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isAr = widget.isArabic;
+    final auth = context.read<AuthProvider>();
+
+    final isSystemAdmin = auth.isSystemAdmin;
+    final isManager = auth.role == 'manager';
+    final canChangeRole = isSystemAdmin;
+
+    final allowedRoles = isSystemAdmin
+        ? const ['system_admin', 'manager', 'accountant', 'employee']
+        : (isManager ? const ['employee'] : const ['employee']);
+
+    final effectiveRole =
+        allowedRoles.contains(_role) ? _role : allowedRoles.first;
+    if (effectiveRole != _role) {
+      // keep state consistent if current role is not allowed
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _role = effectiveRole);
+      });
+    }
+
     return AlertDialog(
       title: Text(
         widget.user == null
@@ -744,14 +850,33 @@ class _UserFormDialogState extends State<UserFormDialog> {
                   },
                 ),
                 DropdownButtonFormField<String>(
-                  value: _role,
-                  items: const [
-                    DropdownMenuItem(value: 'admin', child: Text('Admin')),
-                    DropdownMenuItem(value: 'manager', child: Text('Manager')),
-                    DropdownMenuItem(value: 'staff', child: Text('Staff')),
-                  ],
-                  onChanged: (value) =>
-                      setState(() => _role = value ?? 'staff'),
+                  value: effectiveRole,
+                  items: allowedRoles
+                      .map(
+                        (r) => DropdownMenuItem(
+                          value: r,
+                          child: Text(
+                            isAr
+                                ? {
+                                        'system_admin': 'مسؤول النظام',
+                                        'manager': 'مدير',
+                                        'accountant': 'محاسب',
+                                        'employee': 'موظف',
+                                      }[r] ?? r
+                                : {
+                                        'system_admin': 'System Admin',
+                                        'manager': 'Manager',
+                                        'accountant': 'Accountant',
+                                        'employee': 'Employee',
+                                      }[r] ?? r,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: canChangeRole
+                      ? (value) =>
+                          setState(() => _role = value ?? 'employee')
+                      : null,
                   decoration: InputDecoration(
                     labelText: isAr ? 'الدور' : 'Role',
                   ),
@@ -801,17 +926,6 @@ class _UserFormDialogState extends State<UserFormDialog> {
                           setState(() => _selectedEmployeeId = value);
                         },
                       ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  height: 300,
-                  child: PermissionsEditor(
-                    initialPermissions: _permissions,
-                    isArabic: isAr,
-                    onPermissionsChanged: (permissions) {
-                      _permissions = permissions;
-                    },
-                  ),
-                ),
                 const SizedBox(height: 16),
                 SwitchListTile(
                   value: _isActive,

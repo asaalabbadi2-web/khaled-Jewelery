@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Flask app setup with PostgreSQL, db init, register routes, create tables, run debug
 from flask import Flask, url_for
 from models import db
-from routes import api
+from routes import api, ensure_weight_closing_support_accounts
 print("DEBUG: Imported api blueprint from routes")  # Debug log
 from payment_methods_routes import payment_methods_api  # 🆕 استيراد payment methods routes
 print("DEBUG: Imported payment_methods_api blueprint")  # Debug log
@@ -16,10 +16,31 @@ import recurring_journal_routes  # 🆕 استيراد recurring journal routes
 print("DEBUG: Imported recurring_journal_routes")  # Debug log
 from offices_routes import offices_bp  # 🆕 استيراد offices routes
 print("DEBUG: Imported offices_bp blueprint")  # Debug log
+from branches_routes import branches_bp  # 🆕 استيراد branches routes
+print("DEBUG: Imported branches_bp blueprint")  # Debug log
 from posting_routes import posting_bp  # 🆕 استيراد posting routes
 print("DEBUG: Imported posting_bp blueprint")  # Debug log
 from auth_routes import auth_bp  # 🆕 استيراد auth routes
 print("DEBUG: Imported auth_bp blueprint")  # Debug log
+from permissions_routes import permissions_bp  # 🆕 استيراد permissions routes
+print("DEBUG: Imported permissions_bp blueprint")  # Debug log
+bonus_bp = None
+try:
+	from bonus_routes import bonus_bp  # 🆕 استيراد bonus routes
+	print("DEBUG: Imported bonus_bp blueprint")  # Debug log
+except ImportError as exc:
+	print(f"[WARNING] Bonus routes disabled: {exc}")
+from schema_guard import (
+	ensure_profit_weight_columns,
+	ensure_invoice_item_scrap_columns,
+	ensure_settings_columns,
+	ensure_app_user_security_columns,
+	ensure_auth_security_columns,
+	ensure_weight_closing_columns,
+	ensure_invoice_tax_columns,
+	ensure_invoice_branch_columns,
+	ensure_journal_line_dimension_columns,
+)
 
 import os
 from flask_cors import CORS
@@ -34,11 +55,58 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 CORS(app)
 
 db.init_app(app)
+
+# 🔓 تعطيل Authentication مؤقتاً لتطوير Flutter (اختياري)
+@app.before_request
+def bypass_auth_for_development():
+	"""تعطيل اختياري للـ authentication في وضع التطوير.
+
+	مهم: هذا يدمّر دقة posted_by وبالتالي حساب المكافآت.
+	لذلك أصبح Opt-in عبر env: BYPASS_AUTH_FOR_DEVELOPMENT=1
+	ويعمل فقط عند غياب Authorization header.
+	"""
+	from flask import request, g
+	from models import User
+
+	bypass_enabled = os.getenv('BYPASS_AUTH_FOR_DEVELOPMENT', '0') in ('1', 'true', 'True')
+	if not bypass_enabled:
+		return
+
+	if not request.path.startswith('/api/'):
+		return
+
+	# لا تتدخل في مسارات تسجيل الدخول/الفحص
+	if request.path in ('/api/auth/login', '/api/auth/check-setup'):
+		return
+
+	# إذا كان هناك توكن، اتركه يُحدد المستخدم الحقيقي
+	if request.headers.get('Authorization'):
+		return
+
+	admin = User.query.filter_by(username='admin').first()
+	if admin:
+		g.current_user = admin
+
+with app.app_context():
+	ensure_profit_weight_columns(db.engine)
+	ensure_invoice_item_scrap_columns(db.engine)
+	ensure_settings_columns(db.engine)
+	ensure_app_user_security_columns(db.engine)
+	ensure_auth_security_columns(db.engine)
+	ensure_weight_closing_columns(db.engine)
+	ensure_invoice_tax_columns(db.engine)
+	ensure_invoice_branch_columns(db.engine)
+	ensure_journal_line_dimension_columns(db.engine)
+	# ensure_weight_closing_support_accounts()  # Moved to after create_tables()
 # ⚠️ ترتيب التسجيل مهم: auth_bp يجب أن يُسجل قبل api لأن auth_bp.login له أولوية
 app.register_blueprint(auth_bp, url_prefix='/api')  # 🆕 تسجيل auth & permissions routes (أولاً!)
+app.register_blueprint(permissions_bp, url_prefix='/api')  # 🆕 تسجيل permissions routes
 app.register_blueprint(posting_bp, url_prefix='/api')  # 🆕 تسجيل posting routes
 app.register_blueprint(payment_methods_api, url_prefix='/api')  # 🆕 تسجيل payment methods routes
+if bonus_bp:
+	app.register_blueprint(bonus_bp, url_prefix='/api')  # 🆕 تسجيل bonus routes
 app.register_blueprint(offices_bp)  # 🆕 تسجيل offices routes (has its own prefix /api/offices)
+app.register_blueprint(branches_bp)  # 🆕 تسجيل branches routes (has its own prefix /api/branches)
 app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخيراً)
 # recurring_journal_routes تستخدم نفس api blueprint، لذا لا حاجة لتسجيلها
 
@@ -54,6 +122,15 @@ def list_routes():
 def create_tables():
 	with app.app_context():
 		db.create_all()
+		ensure_profit_weight_columns(db.engine)
+		ensure_invoice_item_scrap_columns(db.engine)
+		ensure_settings_columns(db.engine)
+		ensure_app_user_security_columns(db.engine)
+		ensure_auth_security_columns(db.engine)
+		ensure_weight_closing_columns(db.engine)
+		ensure_invoice_tax_columns(db.engine)
+		ensure_invoice_branch_columns(db.engine)
+		ensure_journal_line_dimension_columns(db.engine)
 
 
 def reset_database():
@@ -68,8 +145,29 @@ def reset_database():
 
 if __name__ == "__main__":
 	port = int(os.getenv("PORT", 8001))
+	debug_mode = os.getenv("FLASK_DEBUG", "0") in ("1", "true", "True")
 	print(f"\n[INFO] 🚀 Starting Flask server on http://0.0.0.0:{port} (CORS enabled for all origins)...")
 	print("[INFO] إذا كنت تستخدم جدار حماية أو VPN، أوقفه مؤقتاً.")
 	print(f"[INFO] افتح الرابط التالي من أي جهاز على الشبكة: http://<IP-الجهاز>:{port}/customers")
+	print(f"[INFO] Debug mode: {'ON' if debug_mode else 'OFF'}")
 	create_tables()
-	app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+	
+	# تنفيذ ensure_weight_closing_support_accounts داخل application context
+	with app.app_context():
+		ensure_weight_closing_support_accounts()
+	
+	# تفعيل مجدول المكافآت التلقائي
+	try:
+		from bonus_scheduler import start_bonus_scheduler
+		start_bonus_scheduler(app)
+	except Exception as e:
+		print(f"[WARNING] فشل تشغيل مجدول المكافآت: {e}")
+
+	# تفعيل مجدول تحديث سعر الذهب حسب الإعداد
+	try:
+		from gold_price_scheduler import start_gold_price_scheduler
+		start_gold_price_scheduler(app)
+	except Exception as e:
+		print(f"[WARNING] فشل تشغيل مجدول سعر الذهب: {e}")
+	
+	app.run(host="0.0.0.0", port=port, debug=debug_mode, threaded=True)

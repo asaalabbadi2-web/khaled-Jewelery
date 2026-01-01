@@ -355,7 +355,7 @@ class _GenericReportPrintScreenState extends State<GenericReportPrintScreen> {
               ),
               pw.SizedBox(height: 4),
               pw.Text(
-                widget.isArabic ? 'يسر للذهب والمجوهرات' : 'Yasar Gold & Jewelry',
+                widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry',
                 style: const pw.TextStyle(fontSize: 12),
               ),
             ],
@@ -370,7 +370,7 @@ class _GenericReportPrintScreenState extends State<GenericReportPrintScreen> {
               ),
               child: pw.Center(
                 child: pw.Text(
-                  widget.isArabic ? 'يسر' : 'YASAR',
+                  widget.isArabic ? 'خالد' : 'KHALED',
                   style: pw.TextStyle(
                     color: PdfColors.white,
                     fontWeight: pw.FontWeight.bold,

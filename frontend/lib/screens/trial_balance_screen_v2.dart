@@ -271,9 +271,9 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
         Expanded(
           child: _buildSummaryCard(
             'الذهب (عيار $_mainKarat)',
-            'المدين: ${_formatWeight(goldDebit, decimals: 3)}',
-            'الدائن: ${_formatWeight(goldCredit, decimals: 3)}',
-            'الرصيد: ${_formatWeight(goldBalance, decimals: 3)}',
+            'المدين: ${_formatWeight(goldDebit)}',
+            'الدائن: ${_formatWeight(goldCredit)}',
+            'الرصيد: ${_formatWeight(goldBalance)}',
             goldBalance >= 0 ? Colors.green.shade700 : Colors.red.shade700,
             Icons.savings,
           ),
@@ -393,7 +393,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
           ),
           SizedBox(height: 4),
           Text(
-            _formatWeight(balance, decimals: 3),
+            _formatWeight(balance),
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.bold,
@@ -555,7 +555,6 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
                 Text(
                   _formatWeight(
                     _entryDouble(entry, 'gold_debit'),
-                    decimals: 3,
                     includeUnit: false,
                   ),
                 ),
@@ -564,14 +563,13 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
                 Text(
                   _formatWeight(
                     _entryDouble(entry, 'gold_credit'),
-                    decimals: 3,
                     includeUnit: false,
                   ),
                 ),
               ),
               DataCell(
                 Text(
-                  _formatWeight(goldBalance, decimals: 3, includeUnit: false),
+                  _formatWeight(goldBalance, includeUnit: false),
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     color: goldBalance >= 0
@@ -629,7 +627,6 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
               Text(
                 _formatWeight(
                   _getTotal('gold_debit'),
-                  decimals: 3,
                   includeUnit: false,
                 ),
                 style: TextStyle(
@@ -642,7 +639,6 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
               Text(
                 _formatWeight(
                   _getTotal('gold_credit'),
-                  decimals: 3,
                   includeUnit: false,
                 ),
                 style: TextStyle(
@@ -655,7 +651,6 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
               Text(
                 _formatWeight(
                   _getTotal('gold_balance'),
-                  decimals: 3,
                   includeUnit: false,
                 ),
                 style: TextStyle(
@@ -1166,7 +1161,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
     int? decimals,
     bool includeUnit = true,
   }) {
-    final effectiveDecimals = decimals ?? (amount.abs() < 1 ? 3 : 2);
+    final effectiveDecimals = decimals ?? 3;
     final formatted = amount.toStringAsFixed(effectiveDecimals);
     return includeUnit ? '$formatted جم' : formatted;
   }

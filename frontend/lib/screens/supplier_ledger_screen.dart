@@ -244,6 +244,17 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
     }
   }
 
+  String _formatShortDate(String? raw) {
+    if (raw == null || raw.isEmpty) return _t('غير محدد', 'N/A');
+    try {
+      final date = DateTime.parse(raw);
+      final format = DateFormat('yyyy-MM-dd', widget.isArabic ? 'ar' : 'en');
+      return format.format(date);
+    } catch (_) {
+      return raw;
+    }
+  }
+
   String _t(String ar, String en) => widget.isArabic ? ar : en;
 
   Widget _buildInfoPill(String label, Color color) {
@@ -320,11 +331,88 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
     );
   }
 
-  Widget _buildClosingCard(Map<String, dynamic>? closing) {
-    if (closing == null) return const SizedBox.shrink();
+  Widget _buildSummaryHeader(Map<String, dynamic>? summary) {
+    if (summary == null) return const SizedBox.shrink();
 
-    final cash = _toDouble(closing['cash']);
-    final goldMain = _goldToMain(closing);
+    final supplierInfo = _mapFrom(summary['supplier']);
+    final supplierCode = supplierInfo?['code']?.toString();
+    final totalEntries = _parseInt(summary['total_entries']) ?? 0;
+    final lastDate = summary['last_transaction_date']?.toString();
+    final filters = _mapFrom(summary['filters']);
+    final dateFrom = _formatShortDate(filters?['date_from']?.toString());
+    final dateTo = _formatShortDate(filters?['date_to']?.toString());
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        supplierInfo?['name']?.toString() ?? widget.supplierName,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (supplierCode != null && supplierCode.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_t('كود المورد', 'Supplier Code')}: $supplierCode',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                _buildInfoPill(
+                  '${_t('إجمالي القيود', 'Journal lines')}: $totalEntries',
+                  Colors.indigo,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                _buildMetricTile(
+                  _t('آخر حركة', 'Last transaction'),
+                  lastDate != null && lastDate.isNotEmpty
+                      ? _formatDate(lastDate)
+                      : _t('لا توجد حركات', 'No transactions'),
+                  Icons.schedule,
+                  Colors.teal,
+                ),
+                const SizedBox(width: 12),
+                _buildMetricTile(
+                  _t('الفترة الحالية', 'Current range'),
+                  '$dateFrom → $dateTo',
+                  Icons.calendar_today,
+                  Colors.deepPurple,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClosingCard(Map<String, dynamic>? net) {
+    if (net == null) return const SizedBox.shrink();
+
+    final cash = _toDouble(net['cash']);
+    final goldMain = _goldToMain(net);
+
+  Color valueColor(double value) => value >= 0 ? Colors.green : Colors.red;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -336,31 +424,31 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _t('الرصيد الختامي', 'Closing Balance'),
+              _t('صافي المركز', 'Net Position'),
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 16),
             Row(
               children: [
                 _buildMetricTile(
-                  _t('رصيد نقدي', 'Cash'),
+                  _t('رصيد نقدي', 'Cash balance'),
                   _formatCash(cash),
                   Icons.payments,
-                  Colors.blue,
+                  valueColor(cash),
                 ),
                 const SizedBox(width: 12),
                 _buildMetricTile(
                   _t('ذهب مكافئ 21', 'Gold (21k eq.)'),
                   '${_formatGold(goldMain)} ${_t('جم', 'g')}',
                   Icons.workspace_premium,
-                  Colors.amber,
+                  valueColor(goldMain),
                 ),
               ],
             ),
-            if (_hasGoldBalances(closing)) ...[
+            if (_hasGoldBalances(net)) ...[
               const SizedBox(height: 16),
               Text(
-                _t('تفاصيل الأعيرة', 'By Karat'),
+                _t('تفاصيل صافى الأعيرة', 'Net by karat'),
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -371,24 +459,24 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  if (_toDouble(closing['gold_18k']).abs() > 0.0001)
+                  if (_toDouble(net['gold_18k']).abs() > 0.0001)
                     _buildInfoPill(
-                      '${_t('ذهب 18', 'Gold 18k')}: ${_formatGold(_toDouble(closing['gold_18k']))} ${_t('جم', 'g')}',
+                      '${_t('ذهب 18', 'Gold 18k')}: ${_formatGold(_toDouble(net['gold_18k']))} ${_t('جم', 'g')}',
                       Colors.orange,
                     ),
-                  if (_toDouble(closing['gold_21k']).abs() > 0.0001)
+                  if (_toDouble(net['gold_21k']).abs() > 0.0001)
                     _buildInfoPill(
-                      '${_t('ذهب 21', 'Gold 21k')}: ${_formatGold(_toDouble(closing['gold_21k']))} ${_t('جم', 'g')}',
+                      '${_t('ذهب 21', 'Gold 21k')}: ${_formatGold(_toDouble(net['gold_21k']))} ${_t('جم', 'g')}',
                       Colors.amber.shade800,
                     ),
-                  if (_toDouble(closing['gold_22k']).abs() > 0.0001)
+                  if (_toDouble(net['gold_22k']).abs() > 0.0001)
                     _buildInfoPill(
-                      '${_t('ذهب 22', 'Gold 22k')}: ${_formatGold(_toDouble(closing['gold_22k']))} ${_t('جم', 'g')}',
+                      '${_t('ذهب 22', 'Gold 22k')}: ${_formatGold(_toDouble(net['gold_22k']))} ${_t('جم', 'g')}',
                       Colors.deepOrange,
                     ),
-                  if (_toDouble(closing['gold_24k']).abs() > 0.0001)
+                  if (_toDouble(net['gold_24k']).abs() > 0.0001)
                     _buildInfoPill(
-                      '${_t('ذهب 24', 'Gold 24k')}: ${_formatGold(_toDouble(closing['gold_24k']))} ${_t('جم', 'g')}',
+                      '${_t('ذهب 24', 'Gold 24k')}: ${_formatGold(_toDouble(net['gold_24k']))} ${_t('جم', 'g')}',
                       Colors.brown,
                     ),
                 ],
@@ -717,7 +805,7 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
 
   Widget _buildContent() {
     final summary = _mapFrom(_ledgerData?['summary']);
-    final closing = _mapFrom(summary?['closing_balance']);
+    final net = _mapFrom(summary?['net']);
     final pagination = _mapFrom(_ledgerData?['pagination']);
     final movements = _listOfMaps(_ledgerData?['movements']);
 
@@ -727,8 +815,9 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
         padding: const EdgeInsets.all(16),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
+          _buildSummaryHeader(summary),
           _buildFilterBanner(),
-          _buildClosingCard(closing),
+          _buildClosingCard(net),
           _buildTotalsCard(summary),
           const SizedBox(height: 8),
           Text(

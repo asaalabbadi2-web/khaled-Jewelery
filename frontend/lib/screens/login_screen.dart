@@ -15,12 +15,27 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _usernameFocusNode = FocusNode();
+  final _passwordFocusNode = FocusNode();
   bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // On desktop (especially macOS) it's common to need an explicit focus
+    // request after the first frame so keyboard input starts working.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _usernameFocusNode.requestFocus();
+    });
+  }
 
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _usernameFocusNode.dispose();
+    _passwordFocusNode.dispose();
     super.dispose();
   }
 
@@ -88,7 +103,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'ياسار للذهب والمجوهرات',
+                          'مجوهرات خالد',
                           style: theme.textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: colorScheme.primary,
@@ -106,7 +121,13 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 32),
                         TextFormField(
                           controller: _usernameController,
+                          focusNode: _usernameFocusNode,
                           textInputAction: TextInputAction.next,
+                          keyboardType: TextInputType.text,
+                          autofillHints: const [AutofillHints.username],
+                          onFieldSubmitted: (_) {
+                            _passwordFocusNode.requestFocus();
+                          },
                           decoration: InputDecoration(
                             labelText: 'اسم المستخدم',
                             prefixIcon: const Icon(Icons.person_outline),
@@ -124,9 +145,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _passwordController,
+                          focusNode: _passwordFocusNode,
                           obscureText: _obscurePassword,
                           textInputAction: TextInputAction.done,
                           onFieldSubmitted: (_) => _attemptLogin(),
+                          keyboardType: TextInputType.visiblePassword,
+                          autofillHints: const [AutofillHints.password],
                           decoration: InputDecoration(
                             labelText: 'كلمة المرور',
                             prefixIcon: const Icon(Icons.lock_outline),

@@ -8,6 +8,7 @@ import '../models/app_user_model.dart';
 
 class AuthProvider extends ChangeNotifier {
   static const _storageKey = 'auth_current_user';
+  static const _refreshTokenKey = 'refresh_token';
 
   AppUserModel? _currentUser;
   bool _loading = false;
@@ -18,12 +19,37 @@ class AuthProvider extends ChangeNotifier {
 
   String get username => _currentUser?.username ?? '';
   String get role => _currentUser?.role ?? '';
+  String get roleDisplayName {
+    switch (role) {
+      case 'system_admin':
+        return 'مسؤول نظام';
+      case 'manager':
+        return 'مدير';
+      case 'accountant':
+        return 'محاسب';
+      case 'employee':
+        return 'موظف';
+      default:
+        return role;
+    }
+  }
+
+  /// التحقق من كون المستخدم مسؤول نظام
+  bool get isSystemAdmin => role == 'system_admin';
+
+  /// التحقق من كون المستخدم مدير أو أعلى
+  bool get isManager => ['system_admin', 'manager'].contains(role);
+
+  /// التحقق من كون المستخدم محاسب أو أعلى
+  bool get isAccountant =>
+      ['system_admin', 'manager', 'accountant'].contains(role);
 
   Future<void> init() async {
     _loading = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      await _ensureJwtToken(prefs);
       final raw = prefs.getString(_storageKey);
 
       if (raw != null && raw.isNotEmpty) {
@@ -47,6 +73,16 @@ class AuthProvider extends ChangeNotifier {
     } finally {
       _loading = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _ensureJwtToken(SharedPreferences prefs) async {
+    final jwtToken = prefs.getString('jwt_token');
+    if (jwtToken == null || jwtToken.isEmpty) {
+      final legacy = prefs.getString('auth_token');
+      if (legacy != null && legacy.isNotEmpty) {
+        await prefs.setString('jwt_token', legacy);
+      }
     }
   }
 
@@ -90,46 +126,60 @@ class AuthProvider extends ChangeNotifier {
 
     try {
       final api = ApiService();
-      
+
       // محاولة تسجيل الدخول بـ JWT أولاً
       try {
         final response = await api.loginWithToken(username, password);
-        
+
         if (response['success'] == true) {
           final token = response['token'] as String;
+          final refreshToken = response['refresh_token'] as String?;
           final userData = response['user'] as Map<String, dynamic>;
-          
+
           // حفظ Token وبيانات المستخدم
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('jwt_token', token); // استخدام jwt_token بدلاً من auth_token
+          await prefs.setString(
+            'jwt_token',
+            token,
+          ); // استخدام jwt_token بدلاً من auth_token
           await prefs.setString('auth_token', token); // للتوافق مع الكود القديم
+          if (refreshToken != null && refreshToken.isNotEmpty) {
+            await prefs.setString(_refreshTokenKey, refreshToken);
+          }
           await prefs.setString('username', userData['username']);
           await prefs.setString('full_name', userData['full_name']);
           await prefs.setBool('is_admin', userData['is_admin'] ?? false);
-          
-          // تحويل لـ AppUserModel
-          _currentUser = AppUserModel(
-            id: userData['id'] ?? 0,
-            username: userData['username'],
-            role: userData['is_admin'] == true ? 'admin' : 'user',
-            permissions: {}, // سيتم تحميل الصلاحيات لاحقاً
-            employeeId: null,
-            isActive: userData['is_active'] ?? true,
-            lastLoginAt: DateTime.now(),
-            createdAt: DateTime.now(),
-            updatedAt: DateTime.now(),
-            employee: null,
+
+          // ✅ استخدم الدور + الصلاحيات كما تأتي من السيرفر
+          // هذا مهم لتجنّب 403 عند تبديل المستخدمين ولإظهار/إخفاء الميزات بشكل صحيح.
+          var parsedUser = AppUserModel.fromJson(userData);
+          final isAdmin = userData['is_admin'] == true;
+          if (isAdmin && parsedUser.role.isEmpty) {
+            parsedUser = parsedUser.copyWith(role: 'system_admin');
+          }
+          // بعض استجابات السيرفر قد لا تضع role بشكل متسق، فنعطي أولوية للحقول المتاحة.
+          final serverRole = (userData['role'] ?? userData['role_code'])
+              ?.toString();
+          if (serverRole != null && serverRole.isNotEmpty) {
+            parsedUser = parsedUser.copyWith(role: serverRole);
+          } else if (isAdmin) {
+            parsedUser = parsedUser.copyWith(role: 'system_admin');
+          }
+
+          _currentUser = parsedUser;
+
+          await prefs.setString(
+            _storageKey,
+            json.encode(_currentUser!.toStorageMap()),
           );
-          
-          await prefs.setString(_storageKey, json.encode(_currentUser!.toStorageMap()));
-          
+
           return true;
         }
       } catch (jwtError) {
         if (kDebugMode) {
           debugPrint('JWT login failed, trying old method: $jwtError');
         }
-        
+
         // Fallback to old login method
         final user = await api.login(username, password);
         _currentUser = user;
@@ -139,7 +189,7 @@ class AuthProvider extends ChangeNotifier {
 
         return true;
       }
-      
+
       return false;
     } catch (error) {
       if (kDebugMode) {
@@ -153,11 +203,20 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // Best-effort server-side logout (blacklist/revoke). Ignore failures.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final refreshToken = prefs.getString(_refreshTokenKey);
+      final api = ApiService();
+      await api.logoutServerSide(refreshToken: refreshToken);
+    } catch (_) {}
+
     _currentUser = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_storageKey);
     await prefs.remove('jwt_token');
     await prefs.remove('auth_token');
+    await prefs.remove(_refreshTokenKey);
     await prefs.remove('username');
     await prefs.remove('full_name');
     await prefs.remove('is_admin');
@@ -169,7 +228,8 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
 
-    if (_currentUser!.role == 'admin') {
+    // مسؤول النظام لديه كل الصلاحيات
+    if (_currentUser!.role == 'system_admin') {
       return true;
     }
 
@@ -178,10 +238,28 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
 
-    final value = permissions[permissionKey];
-    if (value is bool) {
-      return value;
+    // يدعم شكلين: قائمة أكواد أو dict {code: true}
+    if (permissions is List) {
+      return permissions.contains(permissionKey);
     }
+
+    if (permissions is Map) {
+      final value = permissions[permissionKey];
+      if (value is bool) {
+        return value;
+      }
+    }
+
     return false;
+  }
+
+  /// التحقق من امتلاك أي صلاحية من قائمة
+  bool hasAnyPermission(List<String> permissionKeys) {
+    return permissionKeys.any((key) => hasPermission(key));
+  }
+
+  /// التحقق من امتلاك جميع الصلاحيات من قائمة
+  bool hasAllPermissions(List<String> permissionKeys) {
+    return permissionKeys.every((key) => hasPermission(key));
   }
 }

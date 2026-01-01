@@ -69,6 +69,7 @@ curl -X DELETE http://localhost:8001/api/accounting-mappings/1
 - `profit_loss` - الأرباح والخسائر (افتراضي: 3)
 - `sales_returns` - مردودات المبيعات (افتراضي: 401)
 - `purchase_returns` - مردودات المشتريات (افتراضي: 501)
+- `scrap_purchase_bridge` - جسر مشتريات الكسر (افتراضي: 1290)
 
 ---
 

@@ -5,7 +5,8 @@
 يتبع نفس نهج العملاء والموردين
 """
 
-from backend.models import Account, db
+# استخدم نفس الوحدة التي يهيئها app.py لتفادي إنشاء نسخة SQLAlchemy ثانية
+from models import Account, db
 
 def get_next_employee_account_number(department_code='1300'):
     """

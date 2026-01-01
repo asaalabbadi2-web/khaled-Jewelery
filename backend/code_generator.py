@@ -8,7 +8,7 @@ Customer and Supplier Code Generator
 - الأصناف: I-000001, I-000002, I-000003, ...
 """
 
-from backend.models import Customer, Supplier, Item, db
+from models import Customer, Supplier, Item, db
 
 
 def generate_customer_code() -> str:
@@ -71,6 +71,57 @@ def generate_supplier_code() -> str:
     
     # أنشئ الكود بالتنسيق S-000001 (6 خانات)
     return f"S-{next_number:06d}"
+
+
+def generate_office_code() -> str:
+    """
+    توليد كود مكتب فريد بالشكل OFF-000001
+    
+    Returns:
+        str: كود المكتب الجديد (مثل: OFF-000001)
+        
+    Example:
+        >>> code = generate_office_code()
+        >>> print(code)
+        'OFF-000001'
+    """
+    from models import Office
+    
+    # احصل على آخر مكتب
+    last_office = Office.query.order_by(Office.id.desc()).first()
+    
+    if last_office and last_office.office_code:
+        try:
+            # استخرج الرقم من OFF-000001
+            last_number = int(last_office.office_code.split('-')[1])
+            next_number = last_number + 1
+        except (IndexError, ValueError):
+            # إذا كان التنسيق غير صحيح، ابدأ من 1
+            next_number = 1
+    else:
+        # أول مكتب
+        next_number = 1
+    
+    # أنشئ الكود بالتنسيق OFF-000001 (6 خانات)
+    return f"OFF-{next_number:06d}"
+
+
+def generate_branch_code() -> str:
+    """توليد كود فرع فريد بالشكل B-000001."""
+    from models import Branch
+
+    last_branch = Branch.query.order_by(Branch.id.desc()).first()
+
+    if last_branch and last_branch.branch_code:
+        try:
+            last_number = int(last_branch.branch_code.split('-')[1])
+            next_number = last_number + 1
+        except (IndexError, ValueError):
+            next_number = 1
+    else:
+        next_number = 1
+
+    return f"B-{next_number:06d}"
 
 
 def generate_item_code() -> str:

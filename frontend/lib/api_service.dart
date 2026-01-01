@@ -1,4 +1,7 @@
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode, kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,12 +11,246 @@ import 'models/employee_model.dart';
 import 'models/payroll_model.dart';
 import 'models/safe_box_model.dart';
 
+const String _envApiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: '',
+);
+
+String _resolveApiBaseUrl() {
+  if (_envApiBaseUrl.isNotEmpty) {
+    return _envApiBaseUrl;
+  }
+
+  if (kIsWeb) {
+    return 'http://127.0.0.1:8001/api';
+  }
+
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    // عندما نعمل من داخل محاكي أندرويد نحتاج 10.0.2.2 للإشارة إلى جهاز التطوير
+    return 'http://10.0.2.2:8001/api';
+  }
+
+  return 'http://127.0.0.1:8001/api';
+}
+
+class ApiException implements Exception {
+  final int statusCode;
+  final String code;
+  final String message;
+  final Map<String, dynamic> details;
+
+  const ApiException({
+    required this.statusCode,
+    required this.code,
+    required this.message,
+    this.details = const {},
+  });
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
-  final String _baseUrl = 'http://127.0.0.1:8001/api'; // For local development
+  final String _baseUrl;
+
+  Future<String>? _refreshInFlight;
+
+  ApiService({String? baseUrl}) : _baseUrl = baseUrl ?? _resolveApiBaseUrl();
+
+  int? _decodeJwtExpSeconds(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length < 2) return null;
+      final normalized = base64Url.normalize(parts[1]);
+      final payload = json.decode(utf8.decode(base64Url.decode(normalized)));
+      if (payload is Map<String, dynamic>) {
+        final exp = payload['exp'];
+        if (exp is int) return exp;
+        if (exp is num) return exp.toInt();
+      }
+    } catch (_) {
+      // ignore
+    }
+    return null;
+  }
+
+  bool _isJwtExpiringSoon(
+    String token, {
+    Duration leeway = const Duration(seconds: 60),
+  }) {
+    final exp = _decodeJwtExpSeconds(token);
+    if (exp == null) return false;
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return exp <= (nowSeconds + leeway.inSeconds);
+  }
+
+  Future<String> _refreshAccessTokenFromStorage() async {
+    // Coalesce concurrent refreshes to a single in-flight Future.
+    final existing = _refreshInFlight;
+    if (existing != null) return existing;
+
+    final future = () async {
+      final prefs = await SharedPreferences.getInstance();
+      final refreshToken = prefs.getString('refresh_token');
+      if (refreshToken == null || refreshToken.isEmpty) {
+        throw Exception('لا توجد جلسة صالحة. الرجاء تسجيل الدخول مرة أخرى');
+      }
+
+      final refreshed = await refreshAccessToken(refreshToken);
+      final newAccess = refreshed['token']?.toString();
+      final newRefresh = refreshed['refresh_token']?.toString();
+
+      if (newAccess == null || newAccess.isEmpty) {
+        throw Exception('فشل تحديث الجلسة');
+      }
+
+      await prefs.setString('jwt_token', newAccess);
+      if (newRefresh != null && newRefresh.isNotEmpty) {
+        await prefs.setString('refresh_token', newRefresh);
+      }
+      return newAccess;
+    }();
+
+    _refreshInFlight = future;
+    try {
+      return await future;
+    } finally {
+      _refreshInFlight = null;
+    }
+  }
+
+  Future<http.Response> _authedGet(
+    Uri uri, {
+    Map<String, String>? headers,
+  }) async {
+    var token = await _requireAuthToken();
+    var response = await http.get(
+      uri,
+      headers: {
+        ..._jsonHeaders(token: token),
+        ...?headers,
+      },
+    );
+    if (response.statusCode == 401) {
+      token = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          ..._jsonHeaders(token: token),
+          ...?headers,
+        },
+      );
+    }
+    return response;
+  }
+
+  Future<http.Response> _authedDelete(
+    Uri uri, {
+    Map<String, String>? headers,
+  }) async {
+    var token = await _requireAuthToken();
+    var response = await http.delete(
+      uri,
+      headers: {
+        ..._jsonHeaders(token: token),
+        ...?headers,
+      },
+    );
+    if (response.statusCode == 401) {
+      token = await _refreshAccessTokenFromStorage();
+      response = await http.delete(
+        uri,
+        headers: {
+          ..._jsonHeaders(token: token),
+          ...?headers,
+        },
+      );
+    }
+    return response;
+  }
+
+  Future<http.Response> _authedPost(
+    Uri uri, {
+    Map<String, String>? headers,
+    Object? body,
+  }) async {
+    var token = await _requireAuthToken();
+    var response = await http.post(
+      uri,
+      headers: {
+        ..._jsonHeaders(token: token),
+        ...?headers,
+      },
+      body: body,
+    );
+    if (response.statusCode == 401) {
+      token = await _refreshAccessTokenFromStorage();
+      response = await http.post(
+        uri,
+        headers: {
+          ..._jsonHeaders(token: token),
+          ...?headers,
+        },
+        body: body,
+      );
+    }
+    return response;
+  }
+
+  Future<http.Response> _authedPut(
+    Uri uri, {
+    Map<String, String>? headers,
+    Object? body,
+  }) async {
+    var token = await _requireAuthToken();
+    var response = await http.put(
+      uri,
+      headers: {
+        ..._jsonHeaders(token: token),
+        ...?headers,
+      },
+      body: body,
+    );
+    if (response.statusCode == 401) {
+      token = await _refreshAccessTokenFromStorage();
+      response = await http.put(
+        uri,
+        headers: {
+          ..._jsonHeaders(token: token),
+          ...?headers,
+        },
+        body: body,
+      );
+    }
+    return response;
+  }
+
+  String _errorMessageFromResponse(http.Response response) {
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        final msg = decoded['message']?.toString();
+        if (msg != null && msg.isNotEmpty) return msg;
+        final err = decoded['error']?.toString();
+        if (err != null && err.isNotEmpty) return err;
+      }
+    } catch (_) {
+      // ignore
+    }
+    try {
+      return utf8.decode(response.bodyBytes);
+    } catch (_) {
+      return response.body;
+    }
+  }
 
   // Customer Methods
   Future<List<dynamic>> getCustomers() async {
-    final response = await http.get(Uri.parse('$_baseUrl/customers'));
+    final token = await _requireAuthToken();
+    final response = await http.get(
+      Uri.parse('$_baseUrl/customers'),
+      headers: _jsonHeaders(token: token),
+    );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -57,7 +294,11 @@ class ApiService {
 
   // Supplier Methods
   Future<List<dynamic>> getSuppliers() async {
-    final response = await http.get(Uri.parse('$_baseUrl/suppliers'));
+    final token = await _requireAuthToken();
+    final response = await http.get(
+      Uri.parse('$_baseUrl/suppliers'),
+      headers: _jsonHeaders(token: token),
+    );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -98,13 +339,17 @@ class ApiService {
     }
   }
 
-  // Office Methods (مكاتب بيع وشراء الذهب الخام)
+  // Office Methods (مكاتب تسكير الذهب)
   Future<List<dynamic>> getOffices({bool? activeOnly}) async {
+    final token = await _requireAuthToken();
     String url = '$_baseUrl/offices';
     if (activeOnly != null) {
       url += '?active=$activeOnly';
     }
-    final response = await http.get(Uri.parse(url));
+    final response = await http.get(
+      Uri.parse(url),
+      headers: _jsonHeaders(token: token),
+    );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -163,10 +408,98 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getOfficeBalance(int id) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/offices/$id/balance'),
+  // Branch Methods (فروع المعرض/المحل)
+  Future<List<Map<String, dynamic>>> getBranches({bool activeOnly = false}) async {
+    final queryParams = <String, String>{};
+    if (activeOnly) queryParams['active'] = 'true';
+
+    final uri = Uri.parse('$_baseUrl/branches').replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+    final response = await _authedGet(uri);
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is List) {
+        return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      return [];
+    } else {
+      throw Exception('Failed to load branches');
+    }
+  }
+
+  Future<Map<String, dynamic>> createBranch({
+    required String name,
+    String? branchCode,
+    bool active = true,
+  }) async {
+    final payload = <String, dynamic>{
+      'name': name,
+      'active': active,
+      if (branchCode != null && branchCode.trim().isNotEmpty)
+        'branch_code': branchCode.trim(),
+    };
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/branches'),
+      body: json.encode(payload),
     );
+
+    if (response.statusCode == 201) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      return decoded is Map<String, dynamic>
+          ? decoded
+          : Map<String, dynamic>.from(decoded as Map);
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> updateBranch(
+    int id, {
+    String? name,
+    String? branchCode,
+    bool? active,
+  }) async {
+    final payload = <String, dynamic>{};
+    if (name != null) payload['name'] = name;
+    if (branchCode != null) payload['branch_code'] = branchCode;
+    if (active != null) payload['active'] = active;
+
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/branches/$id'),
+      body: json.encode(payload),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      return decoded is Map<String, dynamic>
+          ? decoded
+          : Map<String, dynamic>.from(decoded as Map);
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<void> deactivateBranch(int id) async {
+    final response = await _authedDelete(Uri.parse('$_baseUrl/branches/$id'));
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessageFromResponse(response));
+    }
+  }
+
+  Future<Map<String, dynamic>> activateBranch(int id) async {
+    final response = await _authedPost(Uri.parse('$_baseUrl/branches/$id/activate'));
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      return decoded is Map<String, dynamic>
+          ? decoded
+          : Map<String, dynamic>.from(decoded as Map);
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> getOfficeBalance(int id) async {
+    final response = await http.get(Uri.parse('$_baseUrl/offices/$id/balance'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -175,9 +508,7 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getOfficesStatistics() async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/offices/statistics'),
-    );
+    final response = await http.get(Uri.parse('$_baseUrl/offices/statistics'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -185,9 +516,98 @@ class ApiService {
     }
   }
 
+  // Office Reservations (حجوزات الذهب للمكاتب)
+  Future<Map<String, dynamic>> getOfficeReservations({
+    int? officeId,
+    String? status,
+    String? paymentStatus,
+    String? dateFrom,
+    String? dateTo,
+    int? limit,
+    int? page,
+    int? perPage,
+    String? orderBy,
+    String? orderDirection,
+  }) async {
+    final queryParams = <String, String>{};
+    if (officeId != null) queryParams['office_id'] = officeId.toString();
+    if (status != null && status.isNotEmpty) queryParams['status'] = status;
+    if (paymentStatus != null && paymentStatus.isNotEmpty) {
+      queryParams['payment_status'] = paymentStatus;
+    }
+    if (limit != null) queryParams['limit'] = limit.toString();
+    if (dateFrom != null && dateFrom.isNotEmpty)
+      queryParams['date_from'] = dateFrom;
+    if (dateTo != null && dateTo.isNotEmpty) queryParams['date_to'] = dateTo;
+    if (page != null) queryParams['page'] = page.toString();
+    if (perPage != null) queryParams['per_page'] = perPage.toString();
+    if (orderBy != null && orderBy.isNotEmpty)
+      queryParams['order_by'] = orderBy;
+    if (orderDirection != null && orderDirection.isNotEmpty) {
+      queryParams['order_direction'] = orderDirection;
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/office-reservations',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load office reservations');
+    }
+  }
+
+  Future<Map<String, dynamic>> getOfficeReservation(int id) async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/office-reservations/$id'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load office reservation');
+    }
+  }
+
+  Future<Map<String, dynamic>> createOfficeReservation(
+    Map<String, dynamic> reservationData,
+  ) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/office-reservations'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(reservationData),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to create office reservation: ${response.body}');
+    }
+  }
+
   // Item Methods
-  Future<List<dynamic>> getItems() async {
-    final response = await http.get(Uri.parse('$_baseUrl/items'));
+  Future<List<dynamic>> getItems({
+    bool? inStockOnly,
+    int? categoryId,
+    int? excludeCategoryId,
+  }) async {
+    Uri uri = Uri.parse('$_baseUrl/items');
+
+    final queryParameters = <String, String>{};
+    if (inStockOnly != null) {
+      queryParameters['in_stock_only'] = inStockOnly ? 'true' : 'false';
+    }
+    if (categoryId != null) {
+      queryParameters['category_id'] = categoryId.toString();
+    }
+    if (excludeCategoryId != null) {
+      queryParameters['exclude_category_id'] = excludeCategoryId.toString();
+    }
+    if (queryParameters.isNotEmpty) {
+      uri = uri.replace(queryParameters: queryParameters);
+    }
+
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -196,10 +616,24 @@ class ApiService {
   }
 
   /// 🆕 البحث عن صنف بالباركود
-  Future<Map<String, dynamic>> searchItemByBarcode(String barcode) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/items/search/barcode/$barcode'),
-    );
+  Future<Map<String, dynamic>> searchItemByBarcode(
+    String barcode, {
+    int? categoryId,
+    int? excludeCategoryId,
+  }) async {
+    var uri = Uri.parse('$_baseUrl/items/search/barcode/$barcode');
+    final queryParameters = <String, String>{};
+    if (categoryId != null) {
+      queryParameters['category_id'] = categoryId.toString();
+    }
+    if (excludeCategoryId != null) {
+      queryParameters['exclude_category_id'] = excludeCategoryId.toString();
+    }
+    if (queryParameters.isNotEmpty) {
+      uri = uri.replace(queryParameters: queryParameters);
+    }
+
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else if (response.statusCode == 404) {
@@ -219,6 +653,54 @@ class ApiService {
       return json.decode(response.body);
     } else {
       throw Exception('Failed to add item');
+    }
+  }
+
+  /// 🚀 إضافة سريعة لعدة أصناف
+  Future<Map<String, dynamic>> quickAddItems(Map<String, dynamic> data) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/items/quick-add'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(data),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(response.body);
+    } else {
+      final errorBody = json.decode(response.body);
+      throw Exception(errorBody['error'] ?? 'Failed to quick add items');
+    }
+  }
+
+  /// ♻️ إعادة مزامنة حالة توافر الأصناف
+  Future<Map<String, dynamic>> rebuildItemStockStatus() async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/items/rebuild-stock'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final errorBody = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(
+        errorBody['error'] ?? 'Failed to rebuild item stock status',
+      );
+    }
+  }
+
+  /// 🔄 استنساخ صنف موجود
+  Future<Map<String, dynamic>> cloneItem(
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/items/$id/clone'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(data),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(response.body);
+    } else {
+      final errorBody = json.decode(response.body);
+      throw Exception(errorBody['error'] ?? 'Failed to clone item');
     }
   }
 
@@ -243,6 +725,119 @@ class ApiService {
     if (response.statusCode != 200) {
       // Changed from 204 to 200
       throw Exception('Failed to delete item');
+    }
+  }
+
+  // ============================================
+  // 📁 Category Methods - تصنيفات الأصناف
+  // ============================================
+
+  /// جلب جميع التصنيفات
+  Future<List<dynamic>> getCategories() async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/categories'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load categories');
+    }
+  }
+
+  /// جلب تصنيف واحد
+  Future<Map<String, dynamic>> getCategory(int id) async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/categories/$id'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load category');
+    }
+  }
+
+  /// إضافة تصنيف جديد
+  Future<Map<String, dynamic>> addCategory(
+    Map<String, dynamic> categoryData,
+  ) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/categories'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(categoryData),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to add category');
+    }
+  }
+
+  /// تعديل تصنيف
+  Future<Map<String, dynamic>> updateCategory(
+    int id,
+    Map<String, dynamic> categoryData,
+  ) async {
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/categories/$id'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(categoryData),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to update category');
+    }
+  }
+
+  /// حذف تصنيف
+  Future<void> deleteCategory(int id) async {
+    final response = await _authedDelete(Uri.parse('$_baseUrl/categories/$id'));
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to delete category');
+    }
+  }
+
+  // ============================================
+  // 🧾 Purchase Items - قائمة أصناف الشراء المبسطة
+  // ============================================
+
+  Future<List<dynamic>> getPurchaseItems() async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/purchase-items'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load purchase items');
+    }
+  }
+
+  Future<Map<String, dynamic>> createPurchaseItem({
+    required String name,
+    required String karat,
+    String? description,
+  }) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/purchase-items'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({
+        'name': name,
+        'karat': karat,
+        if (description != null) 'description': description,
+      }),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to create purchase item');
+    }
+  }
+
+  Future<void> deletePurchaseItem(int id) async {
+    final response = await _authedDelete(
+      Uri.parse('$_baseUrl/purchase-items/$id'),
+    );
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'Failed to delete purchase item');
     }
   }
 
@@ -280,7 +875,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/invoices',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -291,7 +886,7 @@ class ApiService {
 
   /// Get invoice details by ID (includes items and payments)
   Future<Map<String, dynamic>> getInvoiceById(int invoiceId) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/invoices/$invoiceId'),
     );
 
@@ -305,45 +900,161 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> addInvoice(Map<String, dynamic> invoice) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/invoices'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(invoice),
     );
+
     if (response.statusCode == 201) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        parsed = decoded;
+      }
+    } catch (_) {
+      parsed = null;
+    }
+
+    final errorCode = parsed?['error']?.toString().trim();
+    if (errorCode == 'tax_policy_mismatch') {
+      final lineIndex = parsed?['line_index'];
+      final karat = parsed?['karat'];
+
+      String expectedPart = '';
+      if (parsed?.containsKey('expected_gold_tax') == true) {
+        expectedPart =
+            'المتوقع (ذهب): ${parsed?['expected_gold_tax']} | المرسل: ${parsed?['received_gold_tax']}';
+      } else if (parsed?.containsKey('expected_wage_tax') == true) {
+        expectedPart =
+            'المتوقع (أجور): ${parsed?['expected_wage_tax']} | المرسل: ${parsed?['received_wage_tax']}';
+      }
+
+      final parts = <String>[
+        'تعذر حفظ الفاتورة بسبب عدم توافق الضريبة مع سياسة النظام الحالية.',
+        if (lineIndex != null || karat != null)
+          'السطر: ${lineIndex ?? '-'} | العيار: ${karat ?? '-'}',
+        if (expectedPart.isNotEmpty) expectedPart,
+        'حدّث إعدادات الضريبة/الإعفاءات ثم أعد المحاولة.',
+      ];
+
+      throw ApiException(
+        statusCode: response.statusCode,
+        code: errorCode!,
+        message: parts.join('\n'),
+        details: parsed ?? const {},
+      );
+    }
+
+    throw ApiException(
+      statusCode: response.statusCode,
+      code: (errorCode == null || errorCode.isEmpty) ? 'http_error' : errorCode,
+      message: _errorMessageFromResponse(response),
+      details: parsed ?? const {},
+    );
+  }
+
+  Future<void> deleteInvoice(int invoiceId) async {
+    final response = await http.delete(
+      Uri.parse('$_baseUrl/invoices/$invoiceId'),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete invoice: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> updateInvoiceStatus(
+    int invoiceId,
+    String status,
+  ) async {
+    final response = await http.patch(
+      Uri.parse('$_baseUrl/invoices/$invoiceId/status'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'status': status}),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception(
-        'Failed to create invoice. Status: ${response.statusCode}, Body: ${response.body}',
+        'Failed to update invoice status: ${response.statusCode} ${response.body}',
       );
     }
   }
 
   // Gold Price Methods
   Future<Map<String, dynamic>> getGoldPrice() async {
-    final response = await http.get(Uri.parse('$_baseUrl/gold_price'));
+    final response = await _authedGet(Uri.parse('$_baseUrl/gold_price'));
     if (response.statusCode == 200) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to load gold price');
     }
   }
 
-  Future<Map<String, dynamic>> updateGoldPrice() async {
-    final response = await http.post(
+  Future<Map<String, dynamic>> updateGoldPrice({double? priceUsdPerOz}) async {
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/gold_price/update'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: priceUsdPerOz != null
+          ? json.encode({'price': priceUsdPerOz})
+          : null,
     );
     if (response.statusCode == 200) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to update gold price');
     }
   }
 
+  // Gold Costing (Moving Average)
+  Future<Map<String, dynamic>> getGoldCostingSnapshot() async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/gold-costing'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load gold costing snapshot: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> calculateGoldCostingCogs(
+    double weightGrams,
+  ) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/gold-costing/cogs'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'weight_grams': weightGrams}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(
+        'Failed to calculate gold costing COGS: ${response.body}',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> recomputeGoldCosting({int? limit}) async {
+    Uri uri = Uri.parse('$_baseUrl/gold-costing/recompute');
+    if (limit != null) {
+      uri = uri.replace(queryParameters: {'limit': limit.toString()});
+    }
+
+    final response = await _authedPost(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to recompute gold costing: ${response.body}');
+    }
+  }
+
   // Statement Methods
   Future<Map<String, dynamic>> getAccountStatement(int accountId) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/accounts/$accountId/statement'),
     );
     if (response.statusCode == 200) {
@@ -354,13 +1065,24 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getCustomerStatement(int customerId) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/customers/$customerId/statement'),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to load customer statement: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> getSupplierStatement(int supplierId) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/suppliers/$supplierId/statement'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load supplier statement: ${response.body}');
     }
   }
 
@@ -386,7 +1108,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/suppliers/$supplierId/ledger',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -395,7 +1117,7 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getSupplierBalance(int supplierId) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/suppliers/$supplierId/balance'),
     );
     if (response.statusCode == 200) {
@@ -408,8 +1130,7 @@ class ApiService {
   // Account Methods
   Future<List<dynamic>> getAccounts() async {
     try {
-      final response = await http
-          .get(Uri.parse('$_baseUrl/accounts'))
+      final response = await _authedGet(Uri.parse('$_baseUrl/accounts'))
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () {
@@ -429,9 +1150,8 @@ class ApiService {
 
   Future<Map<String, dynamic>> getAccountsBalances() async {
     try {
-      final response = await http
-          .get(Uri.parse('$_baseUrl/accounts/balances'))
-          .timeout(
+      final response =
+          await _authedGet(Uri.parse('$_baseUrl/accounts/balances')).timeout(
             const Duration(seconds: 10),
             onTimeout: () {
               throw Exception('Connection timeout - تأكد من تشغيل Backend');
@@ -459,8 +1179,49 @@ class ApiService {
     if (response.statusCode == 201) {
       return json.decode(response.body);
     } else {
-      throw Exception('Failed to add account');
+      throw Exception(
+        'Failed to add account: ${utf8.decode(response.bodyBytes)}',
+      );
     }
+  }
+
+  Future<Map<String, dynamic>> getNextAccountNumber(String parentNumber) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/accounts/next-number/$parentNumber'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(
+        'Failed to get next account number: ${utf8.decode(response.bodyBytes)}',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> validateAccountNumber({
+    required String accountNumber,
+    required String parentAccountNumber,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/accounts/validate-number'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({
+        'account_number': accountNumber,
+        'parent_account_number': parentAccountNumber,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    // The backend returns useful error payloads even on 400
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (decoded is Map<String, dynamic>) {
+      return decoded;
+    }
+    throw Exception('Failed to validate account number');
   }
 
   Future<void> updateAccount(int id, Map<String, dynamic> accountData) async {
@@ -484,7 +1245,7 @@ class ApiService {
 
   // Journal Entry Methods
   Future<List<dynamic>> getJournalEntries() async {
-    final response = await http.get(Uri.parse('$_baseUrl/journal_entries'));
+    final response = await _authedGet(Uri.parse('$_baseUrl/journal_entries'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -561,7 +1322,7 @@ class ApiService {
   }
 
   Future<List<dynamic>> getDeletedJournalEntries() async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/journal_entries/deleted'),
     );
     if (response.statusCode == 200) {
@@ -650,7 +1411,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/trial_balance',
     ).replace(queryParameters: queryParams);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -666,9 +1427,7 @@ class ApiService {
     bool includeUnposted = false,
     String? goldType,
   }) async {
-    final queryParams = <String, String>{
-      'group_by': groupBy,
-    };
+    final queryParams = <String, String>{'group_by': groupBy};
 
     if (startDate != null) {
       queryParams['start_date'] = startDate.toIso8601String().split('T').first;
@@ -686,15 +1445,129 @@ class ApiService {
       queryParams['gold_type'] = goldType;
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/sales_overview')
-        .replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/sales_overview',
+    ).replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to load sales overview report: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> getAnalyticsSummary({
+    required String groupBy,
+    DateTime? startDate,
+    DateTime? endDate,
+    bool postedOnly = true,
+  }) async {
+    final queryParams = <String, String>{
+      'group_by': groupBy,
+      'posted_only': postedOnly ? 'true' : 'false',
+    };
+
+    if (startDate != null) {
+      queryParams['start_date'] = startDate.toIso8601String().split('T').first;
+    }
+
+    if (endDate != null) {
+      queryParams['end_date'] = endDate.toIso8601String().split('T').first;
+    }
+
+    final uri = Uri.parse('$_baseUrl/analytics/summary')
+        .replace(queryParameters: queryParams);
+
+    final response = await _authedGet(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    } else {
+      throw Exception(
+        'Failed to load analytics summary: ${response.body}',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> getIncomeStatementReport({
+    DateTime? startDate,
+    DateTime? endDate,
+    String groupBy = 'month',
+    bool includeUnposted = false,
+  }) async {
+    final queryParams = <String, String>{'group_by': groupBy};
+
+    if (startDate != null) {
+      queryParams['start_date'] = startDate.toIso8601String().split('T').first;
+    }
+
+    if (endDate != null) {
+      queryParams['end_date'] = endDate.toIso8601String().split('T').first;
+    }
+
+    if (includeUnposted) {
+      queryParams['include_unposted'] = 'true';
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/reports/income_statement',
+    ).replace(queryParameters: queryParams);
+
+    Map<String, dynamic> ensureWeightExpenseFields(
+      Map<String, dynamic> payload,
+    ) {
+      payload.putIfAbsent(
+        'weight_expenses_posted',
+        () => payload['weight_expenses'] ?? 0.0,
+      );
+      payload.putIfAbsent('weight_expenses_pending', () => 0.0);
+      payload.putIfAbsent('weight_expenses_pending_cash', () => 0.0);
+      payload.putIfAbsent(
+        'weight_expenses',
+        () => payload['weight_expenses_posted'] ?? 0.0,
+      );
+      payload.putIfAbsent('manufacturing_wage_expense', () => 0.0);
+      payload.putIfAbsent(
+        'operating_expenses_excl_wage',
+        () => payload['operating_expenses'] ?? 0.0,
+      );
+      payload.putIfAbsent(
+        'operating_expenses',
+        () => payload['operating_expenses_excl_wage'] ?? 0.0,
+      );
+      payload.putIfAbsent('weight_net_profit', () => 0.0);
+      return payload;
+    }
+
+    final response = await _authedGet(uri);
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        final summary = Map<String, dynamic>.from(decoded['summary'] ?? {});
+        decoded['summary'] = ensureWeightExpenseFields(summary);
+
+        final dynamic rawSeries = decoded['series'];
+        if (rawSeries is List) {
+          decoded['series'] = rawSeries
+              .map(
+                (entry) => ensureWeightExpenseFields(
+                  Map<String, dynamic>.from(entry ?? {}),
+                ),
+              )
+              .toList();
+        }
+
+        return decoded;
+      }
+      return {'summary': {}, 'series': []};
+    } else {
+      throw Exception(
+        'Failed to load income statement report: ${response.body}',
+      );
     }
   }
 
@@ -724,10 +1597,11 @@ class ApiService {
       queryParams['include_unposted'] = 'true';
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/sales_by_customer')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/sales_by_customer',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -764,10 +1638,11 @@ class ApiService {
       queryParams['include_unposted'] = 'true';
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/sales_by_item')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/sales_by_item',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -807,10 +1682,11 @@ class ApiService {
       queryParams['include_unposted'] = 'true';
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/inventory_status')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/inventory_status',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -862,10 +1738,11 @@ class ApiService {
       queryParams['threshold_weight'] = thresholdWeight.toString();
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/low_stock')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/low_stock',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -910,13 +1787,16 @@ class ApiService {
     }
 
     if (officeIds != null && officeIds.isNotEmpty) {
-      queryParams['office_ids'] = officeIds.map((id) => id.toString()).join(',');
+      queryParams['office_ids'] = officeIds
+          .map((id) => id.toString())
+          .join(',');
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/inventory_movement')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/inventory_movement',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -934,9 +1814,7 @@ class ApiService {
     bool includeUnposted = false,
     String? goldType,
   }) async {
-    final queryParams = <String, String>{
-      'group_interval': groupInterval,
-    };
+    final queryParams = <String, String>{'group_interval': groupInterval};
 
     if (startDate != null) {
       queryParams['start_date'] = startDate.toIso8601String().split('T').first;
@@ -951,15 +1829,18 @@ class ApiService {
       queryParams['gold_type'] = goldType;
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/sales_vs_purchases_trend')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/sales_vs_purchases_trend',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load sales vs purchases trend: ${response.body}');
+      throw Exception(
+        'Failed to load sales vs purchases trend: ${response.body}',
+      );
     }
   }
 
@@ -970,12 +1851,13 @@ class ApiService {
     int? customerGroupId,
     int topLimit = 5,
   }) async {
-    final queryParams = <String, String>{
-      'top_limit': topLimit.toString(),
-    };
+    final queryParams = <String, String>{'top_limit': topLimit.toString()};
 
     if (cutoffDate != null) {
-      queryParams['cutoff_date'] = cutoffDate.toIso8601String().split('T').first;
+      queryParams['cutoff_date'] = cutoffDate
+          .toIso8601String()
+          .split('T')
+          .first;
     }
 
     if (includeZeroBalances) {
@@ -990,10 +1872,11 @@ class ApiService {
       queryParams['customer_group_id'] = customerGroupId.toString();
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/customer_balances_aging')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/customer_balances_aging',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -1022,10 +1905,11 @@ class ApiService {
       queryParams['end_date'] = endDate.toIso8601String().split('T').first;
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/gold_price_history')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/gold_price_history',
+    ).replace(queryParameters: queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -1058,17 +1942,20 @@ class ApiService {
     }
 
     if (officeIds != null && officeIds.isNotEmpty) {
-      queryParams['office_ids'] = officeIds.map((id) => id.toString()).join(',');
+      queryParams['office_ids'] = officeIds
+          .map((id) => id.toString())
+          .join(',');
     }
 
     if (karats != null && karats.isNotEmpty) {
       queryParams['karats'] = karats.map((k) => k.toString()).join(',');
     }
 
-    final uri = Uri.parse('$_baseUrl/reports/gold_position')
-        .replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/reports/gold_position',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -1101,22 +1988,49 @@ class ApiService {
 
   // Settings Methods
   Future<Map<String, dynamic>> getSettings() async {
-    final response = await http.get(Uri.parse('$_baseUrl/settings'));
+    final response = await _authedGet(Uri.parse('$_baseUrl/settings'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load settings');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<void> updateSettings(Map<String, dynamic> settingsData) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/settings'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(settingsData),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to update settings: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
+    }
+  }
+
+  /// إعدادات التسكير الوزني (auto-close)
+  Future<Map<String, dynamic>> getWeightClosingSettings() async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/weight-closing/settings'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(_errorMessageFromResponse(response));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateWeightClosingSettings(
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/weight-closing/settings'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1126,7 +2040,7 @@ class ApiService {
   Future<Map<String, dynamic>> resetSystem({String? resetType}) async {
     final body = resetType != null ? {'reset_type': resetType} : {};
 
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/system/reset'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(body),
@@ -1135,18 +2049,41 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to reset system: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   /// الحصول على معلومات النظام قبل إعادة التهيئة
   Future<Map<String, dynamic>> getSystemResetInfo() async {
-    final response = await http.get(Uri.parse('$_baseUrl/system/reset/info'));
+    final response = await _authedGet(Uri.parse('$_baseUrl/system/reset/info'));
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to get system info: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
+    }
+  }
+
+  /// تصفير أو إعادة بناء متوسط التكلفة المتحرك
+  Future<Map<String, dynamic>> resetGoldCosting({
+    required String mode,
+    int? limit,
+  }) async {
+    final Map<String, dynamic> payload = {'mode': mode};
+    if (limit != null) {
+      payload['limit'] = limit;
+    }
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/gold-costing/reset'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1237,7 +2174,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/vouchers',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -1248,7 +2185,9 @@ class ApiService {
 
   /// Get single voucher by ID
   Future<Map<String, dynamic>> getVoucher(int voucherId) async {
-    final response = await http.get(Uri.parse('$_baseUrl/vouchers/$voucherId'));
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/vouchers/$voucherId'),
+    );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -1260,7 +2199,7 @@ class ApiService {
   Future<Map<String, dynamic>> createVoucher(
     Map<String, dynamic> voucherData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/vouchers'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(voucherData),
@@ -1277,7 +2216,7 @@ class ApiService {
     int voucherId, {
     String? approvedBy,
   }) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/vouchers/$voucherId/approve'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode({'approved_by': approvedBy ?? 'user'}),
@@ -1294,7 +2233,7 @@ class ApiService {
     int voucherId,
     Map<String, dynamic> voucherData,
   ) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/vouchers/$voucherId'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(voucherData),
@@ -1308,7 +2247,7 @@ class ApiService {
 
   /// Delete voucher
   Future<void> deleteVoucher(int voucherId) async {
-    final response = await http.delete(
+    final response = await _authedDelete(
       Uri.parse('$_baseUrl/vouchers/$voucherId'),
     );
     if (response.statusCode != 200) {
@@ -1321,7 +2260,7 @@ class ApiService {
     int voucherId,
     String reason,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/vouchers/$voucherId/cancel'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode({'reason': reason}),
@@ -1335,7 +2274,7 @@ class ApiService {
 
   /// Get vouchers statistics
   Future<Map<String, dynamic>> getVouchersStats() async {
-    final response = await http.get(Uri.parse('$_baseUrl/vouchers/stats'));
+    final response = await _authedGet(Uri.parse('$_baseUrl/vouchers/stats'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -1647,7 +2586,9 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/employees',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+
+    final token = await _requireAuthToken();
+    final response = await http.get(uri, headers: _jsonHeaders(token: token));
 
     if (response.statusCode == 200) {
       final raw =
@@ -1670,8 +2611,10 @@ class ApiService {
   }
 
   Future<EmployeeModel> getEmployee(int employeeId) async {
+    final token = await _requireAuthToken();
     final response = await http.get(
       Uri.parse('$_baseUrl/employees/$employeeId'),
+      headers: _jsonHeaders(token: token),
     );
 
     if (response.statusCode == 200) {
@@ -1684,9 +2627,10 @@ class ApiService {
   }
 
   Future<EmployeeModel> createEmployee(Map<String, dynamic> payload) async {
+    final token = await _requireAuthToken();
     final response = await http.post(
       Uri.parse('$_baseUrl/employees'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      headers: _jsonHeaders(token: token),
       body: json.encode(_normalizePayload(payload)),
     );
 
@@ -1703,9 +2647,10 @@ class ApiService {
     int employeeId,
     Map<String, dynamic> payload,
   ) async {
+    final token = await _requireAuthToken();
     final response = await http.put(
       Uri.parse('$_baseUrl/employees/$employeeId'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      headers: _jsonHeaders(token: token),
       body: json.encode(_normalizePayload(payload)),
     );
 
@@ -1719,8 +2664,10 @@ class ApiService {
   }
 
   Future<void> deleteEmployee(int employeeId) async {
+    final token = await _requireAuthToken();
     final response = await http.delete(
       Uri.parse('$_baseUrl/employees/$employeeId'),
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode != 200) {
       throw Exception('Failed to delete employee: ${response.body}');
@@ -1728,8 +2675,10 @@ class ApiService {
   }
 
   Future<bool> toggleEmployeeActive(int employeeId) async {
+    final token = await _requireAuthToken();
     final response = await http.post(
       Uri.parse('$_baseUrl/employees/$employeeId/toggle-active'),
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       final raw =
@@ -1740,9 +2689,42 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> createUserFromEmployee({
+    required int employeeId,
+    required String username,
+    required String password,
+    String role = 'staff',
+  }) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/app-users/from-employee'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode({
+        'employee_id': employeeId,
+        'username': username,
+        'password': password,
+        'role': role,
+      }),
+    );
+
+    if (response.statusCode == 201) {
+      final data =
+          json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      return data['app_user'] as Map<String, dynamic>;
+    } else {
+      final error =
+          json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      throw Exception(
+        error['message'] ?? 'Failed to create user from employee',
+      );
+    }
+  }
+
   Future<List<PayrollModel>> getEmployeePayroll(int employeeId) async {
+    final token = await _requireAuthToken();
     final response = await http.get(
       Uri.parse('$_baseUrl/employees/$employeeId/payroll'),
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       final raw = json.decode(utf8.decode(response.bodyBytes)) as List<dynamic>;
@@ -1773,7 +2755,8 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/employees/$employeeId/attendance',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+    final token = await _requireAuthToken();
+    final response = await http.get(uri, headers: _jsonHeaders(token: token));
 
     if (response.statusCode == 200) {
       final raw = json.decode(utf8.decode(response.bodyBytes)) as List<dynamic>;
@@ -1806,13 +2789,37 @@ class ApiService {
     }
 
     final uri = Uri.parse(
-      '$_baseUrl/users',
+      '$_baseUrl/app-users',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+
+    final token = await _requireAuthToken();
+    final response = await http.get(uri, headers: _jsonHeaders(token: token));
 
     if (response.statusCode == 200) {
-      final raw = json.decode(utf8.decode(response.bodyBytes)) as List<dynamic>;
-      return raw
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+
+      // بعض النسخ تعيد قائمة مباشرة، ونسخ أخرى تعيد خريطة تحتوي على app_users/users/data
+      List<dynamic> rawList;
+      if (decoded is List) {
+        rawList = decoded;
+      } else if (decoded is Map) {
+        rawList =
+            (decoded['app_users'] ??
+                    decoded['users'] ??
+                    decoded['data'] ??
+                    decoded['results'] ??
+                    decoded['items'] ??
+                    decoded['rows'] ??
+                    decoded.values.firstWhere(
+                      (v) => v is List,
+                      orElse: () => <dynamic>[],
+                    ))
+                as List<dynamic>;
+      } else {
+        throw Exception('Unexpected users response format');
+      }
+
+      return rawList
           .map((e) => AppUserModel.fromJson(e as Map<String, dynamic>))
           .toList();
     } else {
@@ -1821,69 +2828,94 @@ class ApiService {
   }
 
   Future<AppUserModel> createUser(Map<String, dynamic> payload) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/users'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/app-users'),
       body: json.encode(_normalizePayload(payload)),
     );
 
     if (response.statusCode == 201) {
-      return AppUserModel.fromJson(
-        json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
-      );
-    } else {
-      throw Exception('Failed to create user: ${response.body}');
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        final raw =
+            (decoded['app_user'] ?? decoded['user'] ?? decoded) as Object?;
+        if (raw is Map<String, dynamic>) {
+          return AppUserModel.fromJson(raw);
+        }
+      }
+      throw Exception('Unexpected create user response format');
     }
+
+    throw Exception(_readApiErrorMessage(response, 'فشل في إنشاء المستخدم'));
   }
 
   Future<AppUserModel> updateUser(
     int userId,
     Map<String, dynamic> payload,
   ) async {
-    final response = await http.put(
-      Uri.parse('$_baseUrl/users/$userId'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/app-users/$userId'),
       body: json.encode(_normalizePayload(payload)),
     );
 
     if (response.statusCode == 200) {
-      return AppUserModel.fromJson(
-        json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
-      );
-    } else {
-      throw Exception('Failed to update user: ${response.body}');
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        final raw =
+            (decoded['app_user'] ?? decoded['user'] ?? decoded) as Object?;
+        if (raw is Map<String, dynamic>) {
+          return AppUserModel.fromJson(raw);
+        }
+      }
+      throw Exception('Unexpected update user response format');
     }
+
+    throw Exception(_readApiErrorMessage(response, 'فشل في تحديث المستخدم'));
   }
 
   Future<void> deleteUser(int userId) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/users/$userId'));
+    final response = await _authedDelete(
+      Uri.parse('$_baseUrl/app-users/$userId'),
+    );
     if (response.statusCode != 200) {
-      throw Exception('Failed to delete user: ${response.body}');
+      throw Exception(_readApiErrorMessage(response, 'فشل في حذف المستخدم'));
     }
   }
 
   Future<bool> toggleUserActive(int userId) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/users/$userId/toggle-active'),
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/app-users/$userId/toggle-active'),
     );
     if (response.statusCode == 200) {
-      final raw =
+      final decoded =
           json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
-      return raw['is_active'] as bool? ?? false;
-    } else {
-      throw Exception('Failed to toggle user status: ${response.body}');
+
+      // supported shapes:
+      // { success: true, is_active: bool, ... }
+      // { is_active: bool }
+      final isActive =
+          (decoded['is_active'] as bool?) ??
+          ((decoded['app_user'] is Map)
+              ? (decoded['app_user'] as Map)['is_active'] as bool?
+              : null);
+
+      return isActive ?? false;
     }
+
+    throw Exception(
+      _readApiErrorMessage(response, 'فشل في تغيير حالة المستخدم'),
+    );
   }
 
   Future<void> resetUserPassword(int userId, String newPassword) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/users/$userId/reset-password'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/app-users/$userId/reset-password'),
       body: json.encode({'new_password': newPassword}),
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to reset password: ${response.body}');
+      throw Exception(
+        _readApiErrorMessage(response, 'فشل في إعادة تعيين كلمة المرور'),
+      );
     }
   }
 
@@ -2105,9 +3137,10 @@ class ApiService {
     int attendanceId,
     Map<String, dynamic> payload,
   ) async {
+    final token = await _requireAuthToken();
     final response = await http.put(
       Uri.parse('$_baseUrl/attendance/$attendanceId'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      headers: _jsonHeaders(token: token),
       body: json.encode(_normalizePayload(payload)),
     );
 
@@ -2121,8 +3154,10 @@ class ApiService {
   }
 
   Future<void> deleteAttendance(int attendanceId) async {
+    final token = await _requireAuthToken();
     final response = await http.delete(
       Uri.parse('$_baseUrl/attendance/$attendanceId'),
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode != 200) {
       throw Exception('Failed to delete attendance record: ${response.body}');
@@ -2132,7 +3167,6 @@ class ApiService {
   // ---------------------------------------------------------------------------
   // SafeBox API (إدارة الخزائن)
   // ---------------------------------------------------------------------------
-
   /// الحصول على جميع الخزائن أو حسب النوع
   Future<List<SafeBoxModel>> getSafeBoxes({
     String? safeType,
@@ -2147,11 +3181,10 @@ class ApiService {
     if (karat != null) queryParams['karat'] = karat.toString();
     if (includeAccount) queryParams['include_account'] = 'true';
     if (includeBalance) queryParams['include_balance'] = 'true';
-
     final uri = Uri.parse(
       '$_baseUrl/safe-boxes',
     ).replace(queryParameters: queryParams);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
@@ -2172,7 +3205,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/safe-boxes/$id',
     ).replace(queryParameters: queryParams);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return SafeBoxModel.fromJson(
@@ -2185,7 +3218,7 @@ class ApiService {
 
   /// إنشاء خزينة جديدة
   Future<SafeBoxModel> createSafeBox(SafeBoxModel safeBox) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/safe-boxes'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(safeBox.toJson()),
@@ -2202,7 +3235,7 @@ class ApiService {
 
   /// تحديث خزينة
   Future<SafeBoxModel> updateSafeBox(int id, SafeBoxModel safeBox) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/safe-boxes/$id'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(safeBox.toJson()),
@@ -2219,7 +3252,7 @@ class ApiService {
 
   /// حذف خزينة
   Future<void> deleteSafeBox(int id) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/safe-boxes/$id'));
+    final response = await _authedDelete(Uri.parse('$_baseUrl/safe-boxes/$id'));
     if (response.statusCode != 200) {
       throw Exception('Failed to delete safe box: ${response.body}');
     }
@@ -2227,7 +3260,7 @@ class ApiService {
 
   /// الحصول على الخزينة الافتراضية حسب النوع
   Future<SafeBoxModel> getDefaultSafeBox(String safeType) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse(
         '$_baseUrl/safe-boxes/default/$safeType?include_balance=true&include_account=true',
       ),
@@ -2244,7 +3277,7 @@ class ApiService {
 
   /// الحصول على خزينة الذهب حسب العيار
   Future<SafeBoxModel> getGoldSafeBox(int karat) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse(
         '$_baseUrl/safe-boxes/gold/$karat?include_balance=true&include_account=true',
       ),
@@ -2350,21 +3383,13 @@ class ApiService {
 
   /// Get unposted invoices
   Future<Map<String, dynamic>> getUnpostedInvoices() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
-    
+    final token = await _requireAuthToken();
+
     final response = await http.get(
       Uri.parse('$_baseUrl/invoices/unposted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
-    
+
     if (response.statusCode == 401) {
       throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
     } else if (response.statusCode == 403) {
@@ -2379,21 +3404,13 @@ class ApiService {
 
   /// Get posted invoices
   Future<Map<String, dynamic>> getPostedInvoices() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
-    
+    final token = await _requireAuthToken();
+
     final response = await http.get(
       Uri.parse('$_baseUrl/invoices/posted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
-    
+
     if (response.statusCode == 401) {
       throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
     } else if (response.statusCode == 403) {
@@ -2408,21 +3425,13 @@ class ApiService {
 
   /// Get unposted journal entries
   Future<Map<String, dynamic>> getUnpostedJournalEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
-    
+    final token = await _requireAuthToken();
+
     final response = await http.get(
       Uri.parse('$_baseUrl/journal-entries/unposted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
-    
+
     if (response.statusCode == 401) {
       throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
     } else if (response.statusCode == 403) {
@@ -2437,21 +3446,13 @@ class ApiService {
 
   /// Get posted journal entries
   Future<Map<String, dynamic>> getPostedJournalEntries() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    if (token == null) {
-      throw Exception('يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى');
-    }
-    
+    final token = await _requireAuthToken();
+
     final response = await http.get(
       Uri.parse('$_baseUrl/journal-entries/posted'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
-    
+
     if (response.statusCode == 401) {
       throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
     } else if (response.statusCode == 403) {
@@ -2465,16 +3466,15 @@ class ApiService {
   }
 
   /// Post a single invoice
-  Future<Map<String, dynamic>> postInvoice(int invoiceId, String postedBy) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+  Future<Map<String, dynamic>> postInvoice(
+    int invoiceId,
+    String postedBy,
+  ) async {
+    final token = await _requireAuthToken();
+
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/post/$invoiceId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
       body: json.encode({'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -2489,19 +3489,12 @@ class ApiService {
     List<int> invoiceIds,
     String postedBy,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/post-batch'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-      body: json.encode({
-        'invoice_ids': invoiceIds,
-        'posted_by': postedBy,
-      }),
+      headers: _jsonHeaders(token: token),
+      body: json.encode({'invoice_ids': invoiceIds, 'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2512,15 +3505,11 @@ class ApiService {
 
   /// Unpost an invoice
   Future<Map<String, dynamic>> unpostInvoice(int invoiceId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/unpost/$invoiceId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2534,15 +3523,11 @@ class ApiService {
     int entryId,
     String postedBy,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.post(
       Uri.parse('$_baseUrl/journal-entries/post/$entryId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
       body: json.encode({'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -2557,19 +3542,12 @@ class ApiService {
     List<int> entryIds,
     String postedBy,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.post(
       Uri.parse('$_baseUrl/journal-entries/post-batch'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-      body: json.encode({
-        'entry_ids': entryIds,
-        'posted_by': postedBy,
-      }),
+      headers: _jsonHeaders(token: token),
+      body: json.encode({'entry_ids': entryIds, 'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2580,15 +3558,11 @@ class ApiService {
 
   /// Unpost a journal entry
   Future<Map<String, dynamic>> unpostJournalEntry(int entryId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.post(
       Uri.parse('$_baseUrl/journal-entries/unpost/$entryId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2612,10 +3586,8 @@ class ApiService {
     String? fromDate,
     String? toDate,
   }) async {
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-    };
-    
+    final queryParams = <String, String>{'limit': limit.toString()};
+
     if (userName != null) queryParams['user_name'] = userName;
     if (action != null) queryParams['action'] = action;
     if (entityType != null) queryParams['entity_type'] = entityType;
@@ -2623,19 +3595,13 @@ class ApiService {
     if (success != null) queryParams['success'] = success.toString();
     if (fromDate != null) queryParams['from_date'] = fromDate;
     if (toDate != null) queryParams['to_date'] = toDate;
-    
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    final uri = Uri.parse('$_baseUrl/audit-logs').replace(queryParameters: queryParams);
-    final response = await http.get(
-      uri,
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-    );
-    
+
+    final token = await _requireAuthToken();
+    final uri = Uri.parse(
+      '$_baseUrl/audit-logs',
+    ).replace(queryParameters: queryParams);
+    final response = await http.get(uri, headers: _jsonHeaders(token: token));
+
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -2645,15 +3611,11 @@ class ApiService {
 
   /// Get audit log detail
   Future<Map<String, dynamic>> getAuditLogDetail(int logId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.get(
       Uri.parse('$_baseUrl/audit-logs/$logId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2667,15 +3629,11 @@ class ApiService {
     String entityType,
     int entityId,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
+    final token = await _requireAuthToken();
+
     final response = await http.get(
       Uri.parse('$_baseUrl/audit-logs/entity/$entityType/$entityId'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -2689,19 +3647,11 @@ class ApiService {
     String userName, {
     int limit = 100,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    final uri = Uri.parse('$_baseUrl/audit-logs/user/$userName')
-        .replace(queryParameters: {'limit': limit.toString()});
-    final response = await http.get(
-      uri,
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-    );
-    
+    final uri = Uri.parse(
+      '$_baseUrl/audit-logs/user/$userName',
+    ).replace(queryParameters: {'limit': limit.toString()});
+    final response = await _authedGet(uri);
+
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -2711,19 +3661,11 @@ class ApiService {
 
   /// Get failed audit logs
   Future<Map<String, dynamic>> getFailedAuditLogs({int limit = 50}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    final uri = Uri.parse('$_baseUrl/audit-logs/failed')
-        .replace(queryParameters: {'limit': limit.toString()});
-    final response = await http.get(
-      uri,
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-    );
-    
+    final uri = Uri.parse(
+      '$_baseUrl/audit-logs/failed',
+    ).replace(queryParameters: {'limit': limit.toString()});
+    final response = await _authedGet(uri);
+
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -2733,16 +3675,7 @@ class ApiService {
 
   /// Get audit log statistics
   Future<Map<String, dynamic>> getAuditStats() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    
-    final response = await http.get(
-      Uri.parse('$_baseUrl/audit-logs/stats'),
-      headers: {
-        'Content-Type': 'application/json; charset=UTF-8',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-    );
+    final response = await _authedGet(Uri.parse('$_baseUrl/audit-logs/stats'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -2755,14 +3688,14 @@ class ApiService {
   // ==========================================
 
   /// Login user with JWT authentication and get token
-  Future<Map<String, dynamic>> loginWithToken(String username, String password) async {
+  Future<Map<String, dynamic>> loginWithToken(
+    String username,
+    String password,
+  ) async {
     final response = await http.post(
       Uri.parse('$_baseUrl/auth/login'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
-      body: json.encode({
-        'username': username,
-        'password': password,
-      }),
+      body: json.encode({'username': username, 'password': password}),
     );
 
     if (response.statusCode == 200) {
@@ -2770,6 +3703,40 @@ class ApiService {
     } else {
       final error = json.decode(utf8.decode(response.bodyBytes));
       throw Exception(error['message'] ?? 'فشل تسجيل الدخول');
+    }
+  }
+
+  /// Refresh access token using refresh token (rotating).
+  Future<Map<String, dynamic>> refreshAccessToken(String refreshToken) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/refresh'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'refresh_token': refreshToken}),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    final error = json.decode(utf8.decode(response.bodyBytes));
+    throw Exception(error['message'] ?? 'فشل تحديث الجلسة');
+  }
+
+  /// Logout server-side (blacklist access token + revoke refresh token).
+  Future<void> logoutServerSide({String? refreshToken}) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/auth/logout'),
+      body: json.encode({
+        if (refreshToken != null && refreshToken.isNotEmpty)
+          'refresh_token': refreshToken,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      // Keep logout best-effort from the client perspective.
+      if (kDebugMode) {
+        debugPrint('logoutServerSide failed: ${response.body}');
+      }
     }
   }
 
@@ -2817,11 +3784,14 @@ class ApiService {
   }
 
   /// Get all roles
-  Future<Map<String, dynamic>> getRoles(String token, {bool includeUsers = false}) async {
-    final uri = Uri.parse('$_baseUrl/roles').replace(
-      queryParameters: {'include_users': includeUsers.toString()},
-    );
-    
+  Future<Map<String, dynamic>> getRoles(
+    String token, {
+    bool includeUsers = false,
+  }) async {
+    final uri = Uri.parse(
+      '$_baseUrl/roles',
+    ).replace(queryParameters: {'include_users': includeUsers.toString()});
+
     final response = await http.get(
       uri,
       headers: {
@@ -2926,11 +3896,14 @@ class ApiService {
   }
 
   /// Get all permissions
-  Future<Map<String, dynamic>> getPermissions(String token, {String? category}) async {
+  Future<Map<String, dynamic>> getPermissions(
+    String token, {
+    String? category,
+  }) async {
     final uri = category != null
-        ? Uri.parse('$_baseUrl/permissions').replace(
-            queryParameters: {'category': category},
-          )
+        ? Uri.parse(
+            '$_baseUrl/permissions',
+          ).replace(queryParameters: {'category': category})
         : Uri.parse('$_baseUrl/permissions');
 
     final response = await http.get(
@@ -2961,10 +3934,7 @@ class ApiService {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
-      body: json.encode({
-        'action': action,
-        'role_ids': roleIds,
-      }),
+      body: json.encode({'action': action, 'role_ids': roleIds}),
     );
 
     if (response.statusCode == 200) {
@@ -2975,8 +3945,15 @@ class ApiService {
     }
   }
 
-  /// Get user permissions
-  Future<Map<String, dynamic>> getUserPermissions(String token, int userId) async {
+  /// Get user permissions (legacy token-based endpoint)
+  ///
+  /// Note: The newer permissions system uses JWT auto-refresh + in-flight
+  /// token handling. Prefer the newer `getUserPermissions(int userId)` method
+  /// near the bottom of this file.
+  Future<Map<String, dynamic>> getUserPermissionsWithToken(
+    String token,
+    int userId,
+  ) async {
     final response = await http.get(
       Uri.parse('$_baseUrl/users/$userId/permissions'),
       headers: {
@@ -3020,7 +3997,9 @@ class ApiService {
       queryParams['role'] = role;
     }
 
-    final uri = Uri.parse('$_baseUrl/users').replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/users',
+    ).replace(queryParameters: queryParams);
 
     final response = await http.get(
       uri,
@@ -3123,7 +4102,10 @@ class ApiService {
   }
 
   /// Delete user with JWT
-  Future<Map<String, dynamic>> deleteUserWithAuth(String token, int userId) async {
+  Future<Map<String, dynamic>> deleteUserWithAuth(
+    String token,
+    int userId,
+  ) async {
     final response = await http.delete(
       Uri.parse('$_baseUrl/users/$userId'),
       headers: {
@@ -3158,6 +4140,597 @@ class ApiService {
     } else {
       final error = json.decode(utf8.decode(response.bodyBytes));
       throw Exception(error['message'] ?? 'فشل تغيير حالة المستخدم');
+    }
+  }
+
+  // ==========================================
+  // 🔐 Helpers: Token Handling
+  // ==========================================
+
+  Future<String> _requireAuthToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jwtToken = prefs.getString('jwt_token');
+
+    if (jwtToken != null && jwtToken.isNotEmpty) {
+      // Proactively refresh if token is expired/near-expiry to avoid 401s.
+      if (_isJwtExpiringSoon(jwtToken)) {
+        try {
+          return await _refreshAccessTokenFromStorage();
+        } catch (_) {
+          // Fall back to existing token; request wrapper may retry or caller may handle 401.
+          return jwtToken;
+        }
+      }
+      return jwtToken;
+    }
+
+    final legacyToken = prefs.getString('auth_token');
+    if (legacyToken != null && legacyToken.isNotEmpty) {
+      // مهاجرة التوكن القديم إلى المفتاح الجديد لضمان التوافق
+      await prefs.setString('jwt_token', legacyToken);
+      return legacyToken;
+    }
+
+    throw Exception(
+      'يجب تسجيل الدخول أولاً. الرجاء تسجيل الخروج والدخول مرة أخرى',
+    );
+  }
+
+  Future<String?> getStoredRefreshToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('refresh_token');
+    if (token != null && token.isNotEmpty) {
+      return token;
+    }
+    return null;
+  }
+
+  Map<String, String> _jsonHeaders({String? token}) {
+    return {
+      'Content-Type': 'application/json; charset=UTF-8',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
+
+  // ==========================================
+  // 🎁 Bonus System APIs
+  // ==========================================
+
+  Future<List<dynamic>> getBonusRules({bool? isActive}) async {
+    final token = await _requireAuthToken();
+    final queryParams = isActive != null ? '?is_active=$isActive' : '';
+    final response = await http.get(
+      Uri.parse('$_baseUrl/bonus-rules$queryParams'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode == 200) {
+      final parsed = json.decode(utf8.decode(response.bodyBytes));
+      // API يعيد {'success': true, 'rules': [...], 'count': n}
+      if (parsed is Map<String, dynamic> && parsed['rules'] is List) {
+        return parsed['rules'] as List<dynamic>;
+      }
+      if (parsed is List) return parsed; // توافق مع استجابة قديمة
+      throw Exception('تنسيق غير متوقع لقواعد المكافآت');
+    } else {
+      throw Exception('فشل في تحميل قواعد المكافآت');
+    }
+  }
+
+  Future<Map<String, dynamic>> createBonusRule(
+    Map<String, dynamic> data,
+  ) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonus-rules'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(data),
+    );
+    if (response.statusCode == 201) {
+      final parsed = json.decode(utf8.decode(response.bodyBytes));
+      // API يعيد {'success': true, 'rule': {...}}
+      if (parsed is Map<String, dynamic> && parsed['rule'] is Map) {
+        return parsed['rule'] as Map<String, dynamic>;
+      }
+      return parsed as Map<String, dynamic>;
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(
+        error is Map<String, dynamic>
+            ? (error['error'] ??
+                  error['message'] ??
+                  'فشل في إنشاء قاعدة المكافأة')
+            : 'فشل في إنشاء قاعدة المكافأة',
+      );
+    }
+  }
+
+  Future<void> updateBonusRule(int id, Map<String, dynamic> data) async {
+    final token = await _requireAuthToken();
+    final response = await http.put(
+      Uri.parse('$_baseUrl/bonus-rules/$id'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(data),
+    );
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(
+        error is Map<String, dynamic>
+            ? (error['error'] ??
+                  error['message'] ??
+                  'فشل في تحديث قاعدة المكافأة')
+            : 'فشل في تحديث قاعدة المكافأة',
+      );
+    }
+  }
+
+  Future<void> deleteBonusRule(int id) async {
+    final token = await _requireAuthToken();
+    final response = await http.delete(
+      Uri.parse('$_baseUrl/bonus-rules/$id'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('فشل في حذف قاعدة المكافأة');
+    }
+  }
+
+  Future<List<dynamic>> getInvoiceTypes() async {
+    // ✅ Prefer backend list (includes 'شراء من عميل'/'شراء من مورد')
+    // Fallback to a safe static list for older servers.
+    try {
+      final token = await _requireAuthToken();
+      final response = await http.get(
+        Uri.parse('$_baseUrl/invoice-types'),
+        headers: _jsonHeaders(token: token),
+      );
+
+      if (response.statusCode == 200) {
+        final parsed = json.decode(utf8.decode(response.bodyBytes));
+        if (parsed is Map<String, dynamic> && parsed['invoice_types'] is List) {
+          return parsed['invoice_types'] as List<dynamic>;
+        }
+        if (parsed is List) return parsed;
+      }
+    } catch (_) {
+      // ignore and fallback
+    }
+
+    return [
+      'بيع',
+      'شراء من عميل',
+      'مرتجع بيع',
+      'مرتجع شراء',
+      'شراء من مورد',
+      'مرتجع شراء من مورد',
+    ];
+  }
+
+  Future<List<dynamic>> getBonuses({
+    int? employeeId,
+    String? status,
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final token = await _requireAuthToken();
+    final queryParams = <String>[];
+    if (employeeId != null) queryParams.add('employee_id=$employeeId');
+    if (status != null) queryParams.add('status=$status');
+    if (dateFrom != null) queryParams.add('date_from=$dateFrom');
+    if (dateTo != null) queryParams.add('date_to=$dateTo');
+
+    final query = queryParams.isNotEmpty ? '?${queryParams.join('&')}' : '';
+    final response = await http.get(
+      Uri.parse('$_baseUrl/bonuses$query'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode == 200) {
+      final parsed = json.decode(utf8.decode(response.bodyBytes));
+      if (parsed is Map<String, dynamic> && parsed['bonuses'] is List) {
+        return parsed['bonuses'] as List<dynamic>;
+      }
+      if (parsed is List) return parsed;
+      throw Exception('تنسيق غير متوقع للمكافآت');
+    } else {
+      throw Exception('فشل في تحميل المكافآت');
+    }
+  }
+
+  Future<Map<String, dynamic>> calculateBonuses({
+    String? dateFrom,
+    String? dateTo,
+    int? employeeId,
+  }) async {
+    final token = await _requireAuthToken();
+    final data = <String, dynamic>{};
+    // ✅ استخدم مفاتيح backend الحالية (period_start/period_end) مع الحفاظ على التوافق
+    if (dateFrom != null) {
+      data['period_start'] = dateFrom;
+      data['date_from'] = dateFrom; // توافق عكسي إذا كان الخادم قديماً
+    }
+    if (dateTo != null) {
+      data['period_end'] = dateTo;
+      data['date_to'] = dateTo;
+    }
+    if (employeeId != null) data['employee_id'] = employeeId;
+
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonuses/calculate'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(data),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في حساب المكافآت');
+    }
+  }
+
+  Future<void> approveBonus(int id) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonuses/$id/approve'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode != 200) {
+      final bodyText = utf8.decode(response.bodyBytes);
+      try {
+        final decoded = json.decode(bodyText);
+        if (decoded is Map) {
+          final message = decoded['message'] ?? decoded['error'];
+          if (message != null) throw Exception(message.toString());
+        }
+      } catch (_) {
+        // ignore JSON parsing errors and fall back to raw text
+      }
+      throw Exception(
+        bodyText.isNotEmpty ? bodyText : 'فشل في الموافقة على المكافأة',
+      );
+    }
+  }
+
+  Future<void> rejectBonus(int id) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonuses/$id/reject'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode != 200) {
+      final bodyText = utf8.decode(response.bodyBytes);
+      try {
+        final decoded = json.decode(bodyText);
+        if (decoded is Map) {
+          final message = decoded['message'] ?? decoded['error'];
+          if (message != null) throw Exception(message.toString());
+        }
+      } catch (_) {
+        // ignore JSON parsing errors and fall back to raw text
+      }
+      throw Exception(bodyText.isNotEmpty ? bodyText : 'فشل في رفض المكافأة');
+    }
+  }
+
+  Future<void> payBonus(
+    int id, {
+    required int safeBoxId,
+    String paymentMethod = 'cash',
+  }) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonuses/$id/pay'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode({
+        'safe_box_id': safeBoxId,
+        'payment_method': paymentMethod,
+        'created_by': 'admin', // You may want to use actual username from auth
+      }),
+    );
+    if (response.statusCode != 200) {
+      final bodyText = utf8.decode(response.bodyBytes);
+      try {
+        final decoded = json.decode(bodyText);
+        if (decoded is Map) {
+          final message = decoded['message'] ?? decoded['error'];
+          if (message != null) throw Exception(message.toString());
+        }
+      } catch (_) {
+        // ignore JSON parsing errors and fall back to raw text
+      }
+      throw Exception(bodyText.isNotEmpty ? bodyText : 'فشل في صرف المكافأة');
+    }
+  }
+
+  Future<void> updateBonus(int id, Map<String, dynamic> data) async {
+    final token = await _requireAuthToken();
+    final response = await http.put(
+      Uri.parse('$_baseUrl/bonuses/$id'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(data),
+    );
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في تحديث المكافأة');
+    }
+  }
+
+  Future<Map<String, dynamic>> bulkApproveBonuses(List<int> ids) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonuses/bulk-approve'),
+      headers: _jsonHeaders(token: token),
+      // يدعم مفاتيح backend الحالية (ids) مع الحفاظ على توافق الاسم السابق (bonus_ids)
+      body: json.encode({'ids': ids, 'bonus_ids': ids}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final bodyText = utf8.decode(response.bodyBytes);
+      try {
+        final decoded = json.decode(bodyText);
+        if (decoded is Map) {
+          final message = decoded['message'] ?? decoded['error'];
+          if (message != null) throw Exception(message.toString());
+        }
+      } catch (_) {
+        // ignore JSON parsing errors and fall back to raw text
+      }
+      throw Exception(
+        bodyText.isNotEmpty ? bodyText : 'فشل في الموافقة الجماعية',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> bulkRejectBonuses(
+    List<int> ids, {
+    String? reason,
+  }) async {
+    // يدعم مفاتيح backend الحالية (ids) مع الحفاظ على توافق الاسم السابق (bonus_ids)
+    final data = <String, dynamic>{'ids': ids, 'bonus_ids': ids};
+    if (reason != null) data['reason'] = reason;
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/bonuses/bulk-reject'),
+      body: json.encode(data),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final bodyText = utf8.decode(response.bodyBytes);
+      try {
+        final decoded = json.decode(bodyText);
+        if (decoded is Map) {
+          final message = decoded['message'] ?? decoded['error'];
+          if (message != null) throw Exception(message.toString());
+        }
+      } catch (_) {
+        // ignore JSON parsing errors and fall back to raw text
+      }
+      throw Exception(bodyText.isNotEmpty ? bodyText : 'فشل في الرفض الجماعي');
+    }
+  }
+
+  Future<Map<String, dynamic>> getBonusesPayablesReport() async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/reports/bonuses-payables'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('فشل في تحميل تقرير المكافآت المستحقة');
+    }
+  }
+
+  // ==========================================
+  // 🔐 Security & Authentication APIs
+  // ==========================================
+
+  Future<Map<String, dynamic>> setup2FA() async {
+    final response = await _authedPost(Uri.parse('$_baseUrl/auth/2fa/setup'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في إعداد المصادقة الثنائية');
+    }
+  }
+
+  Future<Map<String, dynamic>> verify2FA(String code) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/auth/2fa/verify'),
+      body: json.encode({'code': code}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'رمز التحقق غير صحيح');
+    }
+  }
+
+  Future<void> disable2FA() async {
+    final response = await _authedPost(Uri.parse('$_baseUrl/auth/2fa/disable'));
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في تعطيل المصادقة الثنائية');
+    }
+  }
+
+  Future<Map<String, dynamic>> getPasswordPolicy() async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/auth/password-policy'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('فشل في تحميل سياسة كلمات المرور');
+    }
+  }
+
+  Future<void> updatePasswordPolicy(Map<String, dynamic> data) async {
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/auth/password-policy'),
+      body: json.encode(data),
+    );
+    if (response.statusCode != 200) {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في تحديث سياسة كلمات المرور');
+    }
+  }
+
+  Future<List<dynamic>> getSessions({bool includeAll = false}) async {
+    final query = includeAll ? '?include_all=true' : '';
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/auth/sessions$query'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('فشل في تحميل الجلسات');
+    }
+  }
+
+  Future<void> terminateSession(String sessionId) async {
+    final response = await _authedDelete(
+      Uri.parse('$_baseUrl/auth/sessions/$sessionId'),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('فشل في إنهاء الجلسة');
+    }
+  }
+
+  Future<void> terminateAllSessions() async {
+    final response = await _authedDelete(
+      Uri.parse('$_baseUrl/auth/sessions/all'),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('فشل في إنهاء جميع الجلسات');
+    }
+  }
+
+  // ==========================================
+  // 📊 Advanced Reports APIs
+  // ==========================================
+
+  Future<Map<String, dynamic>> getJson(
+    String endpoint, {
+    Map<String, String>? queryParameters,
+  }) async {
+    var uri = Uri.parse('$_baseUrl/$endpoint');
+    if (queryParameters != null && queryParameters.isNotEmpty) {
+      uri = uri.replace(queryParameters: queryParameters);
+    }
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('فشل في تحميل البيانات من $endpoint');
+    }
+  }
+
+  // ==========================================
+  // 🔐 Permissions APIs
+  // ==========================================
+
+  String _readApiErrorMessage(http.Response response, String fallback) {
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        final message = decoded['message'] ?? decoded['error'];
+        if (message is String && message.trim().isNotEmpty) {
+          return message;
+        }
+      }
+    } catch (_) {
+      // ignore
+    }
+    return fallback;
+  }
+
+  /// احصل على قائمة الأدوار المتاحة
+  Future<List<dynamic>> getPermissionRoles() async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/permissions/roles'));
+    if (response.statusCode == 200) {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      return data['roles'] as List<dynamic>;
+    } else {
+      throw Exception(_readApiErrorMessage(response, 'فشل في تحميل الأدوار'));
+    }
+  }
+
+  /// احصل على جميع الصلاحيات مصنفة
+  Future<List<dynamic>> getAllPermissions() async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/permissions/all'));
+    if (response.statusCode == 200) {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      return data['categories'] as List<dynamic>;
+    } else {
+      throw Exception(_readApiErrorMessage(response, 'فشل في تحميل الصلاحيات'));
+    }
+  }
+
+  /// احصل على الصلاحيات الافتراضية لدور معين
+  Future<Map<String, dynamic>> getRoleDefaultPermissions(
+    String roleCode,
+  ) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/permissions/role/$roleCode'),
+    );
+    if (response.statusCode == 200) {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      return data['role'] as Map<String, dynamic>;
+    } else {
+      throw Exception(
+        _readApiErrorMessage(response, 'فشل في تحميل صلاحيات الدور'),
+      );
+    }
+  }
+
+  /// احصل على صلاحيات مستخدم معين
+  Future<Map<String, dynamic>> getUserPermissions(int userId) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/users/$userId/permissions'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception(
+        _readApiErrorMessage(response, 'فشل في تحميل صلاحيات المستخدم'),
+      );
+    }
+  }
+
+  /// تحديث صلاحيات مستخدم
+  Future<Map<String, dynamic>> updateUserPermissions(
+    int userId,
+    Map<String, dynamic> data,
+  ) async {
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/users/$userId/permissions'),
+      body: json.encode(data),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في تحديث الصلاحيات');
+    }
+  }
+
+  /// تحديث دور مستخدم
+  Future<Map<String, dynamic>> updateUserRole(
+    int userId,
+    String role, {
+    bool resetPermissions = false,
+  }) async {
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/users/$userId/role'),
+      body: json.encode({'role': role, 'reset_permissions': resetPermissions}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? 'فشل في تحديث الدور');
     }
   }
 }

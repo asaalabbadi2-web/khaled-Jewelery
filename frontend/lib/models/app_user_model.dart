@@ -3,7 +3,7 @@ class AppUserModel {
   final String username;
   final int? employeeId;
   final String role;
-  final Map<String, dynamic>? permissions;
+  final Object? permissions;
   final bool isActive;
   final DateTime? lastLoginAt;
   final DateTime? createdAt;
@@ -24,14 +24,20 @@ class AppUserModel {
   });
 
   factory AppUserModel.fromJson(Map<String, dynamic> json) {
+    final rawPermissions = json['permissions'];
+    Object? parsedPermissions;
+    if (rawPermissions is Map) {
+      parsedPermissions = rawPermissions.cast<String, dynamic>();
+    } else if (rawPermissions is List) {
+      parsedPermissions = List<dynamic>.from(rawPermissions);
+    }
+
     return AppUserModel(
       id: json['id'] as int?,
       username: json['username'] as String? ?? '',
       employeeId: json['employee_id'] as int?,
       role: json['role'] as String? ?? 'staff',
-      permissions: (json['permissions'] as Map<String, dynamic>?)?.map(
-        (key, value) => MapEntry(key, value),
-      ),
+      permissions: parsedPermissions,
       isActive: json['is_active'] as bool? ?? true,
       lastLoginAt: _parseDateTime(json['last_login_at']),
       createdAt: _parseDateTime(json['created_at']),
@@ -78,12 +84,20 @@ class AppUserModel {
   }
 
   factory AppUserModel.fromStorageMap(Map<String, dynamic> json) {
+    final rawPermissions = json['permissions'];
+    Object? parsedPermissions;
+    if (rawPermissions is Map) {
+      parsedPermissions = rawPermissions.cast<String, dynamic>();
+    } else if (rawPermissions is List) {
+      parsedPermissions = List<dynamic>.from(rawPermissions);
+    }
+
     return AppUserModel(
       id: json['id'] as int?,
       username: json['username'] as String? ?? '',
       employeeId: json['employee_id'] as int?,
       role: json['role'] as String? ?? 'staff',
-      permissions: (json['permissions'] as Map?)?.cast<String, dynamic>(),
+      permissions: parsedPermissions,
       isActive: json['is_active'] as bool? ?? true,
       lastLoginAt: _parseDateTime(json['last_login_at']),
       createdAt: _parseDateTime(json['created_at']),
@@ -99,7 +113,7 @@ class AppUserModel {
     String? username,
     int? employeeId,
     String? role,
-    Map<String, dynamic>? permissions,
+    Object? permissions,
     bool? isActive,
     DateTime? lastLoginAt,
     DateTime? createdAt,

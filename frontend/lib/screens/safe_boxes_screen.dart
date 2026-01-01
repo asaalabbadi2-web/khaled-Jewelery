@@ -17,6 +17,9 @@ class SafeBoxesScreen extends StatefulWidget {
 class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   List<SafeBoxModel> _safeBoxes = [];
   String _filterType = 'all'; // all, cash, bank, gold, check
+  String _searchQuery = '';
+  bool _activeOnly = false;
+  bool _defaultOnly = false;
   bool _isLoading = false;
 
   @override
@@ -83,6 +86,26 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
       _showSnack('فشل تحميل الحسابات', isError: true);
       return;
     }
+
+    String accountLabelFor(Map<String, dynamic> acc) {
+      final name = (acc['name'] ?? '').toString();
+      final number = (acc['account_number'] ?? '').toString();
+      return '$name ($number)';
+    }
+
+    String initialAccountLabel = '';
+    if (selectedAccountId != null) {
+      final match = accounts
+          .where((a) => a['id'] == selectedAccountId)
+          .cast<Map<String, dynamic>>()
+          .toList();
+      if (match.isNotEmpty) {
+        initialAccountLabel = accountLabelFor(match.first);
+      }
+    }
+    final linkedAccountController = TextEditingController(
+      text: initialAccountLabel,
+    );
 
     await showDialog(
       context: context,
@@ -153,24 +176,70 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                   const SizedBox(height: 12),
 
                   // الحساب المرتبط
-                  DropdownButtonFormField<int>(
-                    value: selectedAccountId,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'الحساب المرتبط *' : 'Linked Account *',
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: accounts.map((acc) {
-                      return DropdownMenuItem<int>(
-                        value: acc['id'],
-                        child: Text(
-                          '${acc['name']} (${acc['account_number']})',
+                  Autocomplete<Map<String, dynamic>>(
+                    initialValue: TextEditingValue(text: initialAccountLabel),
+                    optionsBuilder: (TextEditingValue textEditingValue) {
+                      final query = textEditingValue.text.trim().toLowerCase();
+                      if (query.isEmpty) {
+                        return const Iterable<Map<String, dynamic>>.empty();
+                      }
+                      return accounts.where((acc) {
+                        final label = accountLabelFor(acc).toLowerCase();
+                        return label.contains(query);
+                      });
+                    },
+                    displayStringForOption: (opt) => accountLabelFor(opt),
+                    fieldViewBuilder:
+                        (
+                          context,
+                          textEditingController,
+                          focusNode,
+                          onFieldSubmitted,
+                        ) {
+                          // Keep controller in sync for edit mode display.
+                          if (linkedAccountController.text.isNotEmpty &&
+                              textEditingController.text.isEmpty) {
+                            textEditingController.text =
+                                linkedAccountController.text;
+                          }
+                          return TextField(
+                            controller: textEditingController,
+                            focusNode: focusNode,
+                            decoration: InputDecoration(
+                              labelText: isAr
+                                  ? 'الحساب المرتبط * (ابحث بالاسم/الرقم)'
+                                  : 'Linked Account * (search by name/number)',
+                              border: const OutlineInputBorder(),
+                            ),
+                          );
+                        },
+                    onSelected: (selection) {
+                      setDialogState(() {
+                        selectedAccountId = selection['id'] as int?;
+                      });
+                    },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 320),
+                            child: ListView.builder(
+                              padding: EdgeInsets.zero,
+                              itemCount: options.length,
+                              itemBuilder: (context, index) {
+                                final opt = options.elementAt(index);
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(accountLabelFor(opt)),
+                                  onTap: () => onSelected(opt),
+                                );
+                              },
+                            ),
+                          ),
                         ),
                       );
-                    }).toList(),
-                    onChanged: (value) {
-                      setDialogState(() {
-                        selectedAccountId = value;
-                      });
                     },
                   ),
                   const SizedBox(height: 12),
@@ -226,7 +295,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                     TextField(
                       controller: branchController,
                       decoration: InputDecoration(
-                        labelText: isAr ? 'الفرع' : 'Branch',
+                        labelText: isAr ? 'فرع البنك' : 'Bank Branch',
                         border: const OutlineInputBorder(),
                       ),
                     ),
@@ -404,6 +473,26 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   Widget build(BuildContext context) {
     final isAr = widget.isArabic;
 
+    final filteredSafeBoxes = _safeBoxes.where((sb) {
+      if (_activeOnly && !sb.isActive) return false;
+      if (_defaultOnly && !sb.isDefault) return false;
+
+      final q = _searchQuery.trim().toLowerCase();
+      if (q.isEmpty) return true;
+
+      final name = (sb.name).toLowerCase();
+      final nameEn = (sb.nameEn ?? '').toLowerCase();
+      final bankName = (sb.bankName ?? '').toLowerCase();
+      final accountName = (sb.account?.name ?? '').toLowerCase();
+      final accountNo = (sb.account?.accountNumber ?? '').toLowerCase();
+
+      return name.contains(q) ||
+          nameEn.contains(q) ||
+          bankName.contains(q) ||
+          accountName.contains(q) ||
+          accountNo.contains(q);
+    }).toList();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(isAr ? 'إدارة الخزائن' : 'Safe Boxes Management'),
@@ -420,12 +509,46 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
       ),
       body: Column(
         children: [
+          // البحث
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+            child: TextField(
+              onChanged: (v) => setState(() => _searchQuery = v),
+              decoration: InputDecoration(
+                hintText: isAr
+                    ? 'بحث بالاسم / الحساب / البنك...'
+                    : 'Search by name / account / bank...',
+                prefixIcon: const Icon(Icons.search),
+                border: const OutlineInputBorder(),
+              ),
+              textAlign: isAr ? TextAlign.right : TextAlign.left,
+            ),
+          ),
+
           // الفلترة
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: Wrap(
               spacing: 8,
               children: [
+                FilterChip(
+                  label: Text(isAr ? 'نشط فقط' : 'Active only'),
+                  selected: _activeOnly,
+                  onSelected: (selected) {
+                    setState(() {
+                      _activeOnly = selected;
+                    });
+                  },
+                ),
+                FilterChip(
+                  label: Text(isAr ? 'افتراضي فقط' : 'Default only'),
+                  selected: _defaultOnly,
+                  onSelected: (selected) {
+                    setState(() {
+                      _defaultOnly = selected;
+                    });
+                  },
+                ),
                 FilterChip(
                   label: Text(isAr ? 'الكل' : 'All'),
                   selected: _filterType == 'all',
@@ -488,7 +611,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _safeBoxes.isEmpty
+                : filteredSafeBoxes.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -500,7 +623,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                         ),
                         const SizedBox(height: 16),
                         Text(
-                          isAr ? 'لا توجد خزائن' : 'No safe boxes',
+                          isAr ? 'لا توجد خزائن مطابقة' : 'No safe boxes match',
                           style: TextStyle(
                             fontSize: 18,
                             color: Colors.grey[600],
@@ -516,15 +639,17 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                     ),
                   )
                 : ListView.builder(
-                    itemCount: _safeBoxes.length,
+                    itemCount: filteredSafeBoxes.length,
                     padding: const EdgeInsets.all(8),
                     itemBuilder: (context, index) {
-                      final safeBox = _safeBoxes[index];
+                      final safeBox = filteredSafeBoxes[index];
                       return Card(
                         margin: const EdgeInsets.only(bottom: 8),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: safeBox.typeColor.withValues(alpha: 0.2),
+                            backgroundColor: safeBox.typeColor.withValues(
+                              alpha: 0.2,
+                            ),
                             child: Icon(safeBox.icon, color: safeBox.typeColor),
                           ),
                           title: Row(

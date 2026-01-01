@@ -17,6 +17,8 @@ import 'sales_overview_report_screen.dart';
 import 'customer_balances_aging_report_screen.dart';
 import 'gold_price_history_report_screen.dart';
 import 'gold_position_report_screen.dart';
+import 'income_statement_report_screen.dart';
+import 'analytics_dashboard_screen.dart';
 
 /// مركز التقارير الموحد - قاعدة البناء لجميع تقارير النظام
 class ReportsMainScreen extends StatefulWidget {
@@ -300,8 +302,20 @@ class _ReportsMainScreenState extends State<ReportsMainScreen> {
     Widget? destination;
 
     switch (report.route) {
+      case 'analytics_dashboard':
+        destination = AnalyticsDashboardScreen(
+          api: widget.api,
+          isArabic: widget.isArabic,
+        );
+        break;
       case 'sales_overview':
         destination = SalesOverviewReportScreen(
+          api: widget.api,
+          isArabic: widget.isArabic,
+        );
+        break;
+      case 'income_statement':
+        destination = IncomeStatementReportScreen(
           api: widget.api,
           isArabic: widget.isArabic,
         );
@@ -367,7 +381,7 @@ class _ReportsMainScreenState extends State<ReportsMainScreen> {
         destination = const GeneralLedgerScreenV2();
         break;
       case 'account_statement':
-        destination = const AccountsScreen();
+        destination = const AccountsScreen(initialOnlyDetailAccounts: true);
         break;
       case 'payroll_report':
         destination = PayrollReportScreen(

@@ -13,6 +13,20 @@ class ReportCatalog {
         nameEn: 'Financial Reports',
         reports: const [
           ReportDescriptor(
+            id: 'analytics_dashboard',
+            icon: Icons.insights,
+            titleAr: 'لوحة التحليل الوزني',
+            titleEn: 'Weighted Analytics Dashboard',
+            descriptionAr:
+              'تحليل تفاعلي للوزن المكافئ 24k والتدفقات النقدية حسب الفروع أو نوع العملية أو الموظف.',
+            descriptionEn:
+                'Interactive analysis of 24k-equivalent weight and cash flows by office, transaction type, or employee.',
+            route: 'analytics_dashboard',
+            type: ReportType.financial,
+            available: true,
+            requiresFilters: true,
+          ),
+          ReportDescriptor(
             id: 'income_statement',
             icon: Icons.trending_up,
             titleAr: 'قائمة الدخل',
@@ -21,6 +35,7 @@ class ReportCatalog {
             descriptionEn: 'Analyze revenues, expenses, and net profit by period.',
             route: 'income_statement',
             type: ReportType.financial,
+            available: true,
             requiresFilters: true,
           ),
           ReportDescriptor(

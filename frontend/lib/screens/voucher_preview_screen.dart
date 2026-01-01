@@ -194,7 +194,7 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
                     ),
                   ),
                   Text(
-                    'نظام ياسار للذهب',
+                    'نظام مجوهرات خالد',
                     style: TextStyle(fontSize: 14, color: AppColors.deepGold),
                   ),
                 ],
@@ -662,7 +662,7 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
                           ),
                         ),
                         pw.Text(
-                          'نظام ياسار للذهب',
+                          'نظام مجوهرات خالد',
                           style: const pw.TextStyle(fontSize: 12),
                         ),
                       ],

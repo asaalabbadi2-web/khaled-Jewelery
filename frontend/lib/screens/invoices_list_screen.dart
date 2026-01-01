@@ -1,7 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+
 import '../api_service.dart';
+import '../services/data_sync_bus.dart';
+import 'add_return_invoice_screen.dart';
+import 'invoice_print_screen.dart';
+import 'purchase_invoice_screen.dart';
+import 'sales_invoice_screen_v2.dart';
+import 'scrap_purchase_invoice_screen.dart';
+import 'scrap_sales_invoice_screen.dart';
 // import 'add_invoice_screen.dart'; // TODO: Uncomment when implementing add invoice
+
+enum _InvoiceCreationTarget {
+  sales,
+  scrapSale,
+  scrapPurchase,
+  supplierPurchase,
+  salesReturn,
+  scrapReturn,
+  supplierReturn,
+}
 
 class InvoicesListScreen extends StatefulWidget {
   final bool isArabic;
@@ -17,6 +35,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   List<dynamic> _invoices = [];
   List<dynamic> _filteredInvoices = [];
   bool _isLoading = false;
+  List<Map<String, dynamic>>? _cachedCustomers;
+  List<Map<String, dynamic>>? _cachedItems;
+  int _itemsRevisionSnapshot = 0;
+  VoidCallback? _itemsRevisionListener;
 
   // Filters
   String _searchQuery = '';
@@ -27,7 +49,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   bool _sortAscending = false;
 
   // Statistics
-  Map<String, dynamic> _statistics = {
+  final Map<String, dynamic> _statistics = {
     'total_invoices': 0,
     'total_amount': 0.0,
     'paid_amount': 0.0,
@@ -55,7 +77,21 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   @override
   void initState() {
     super.initState();
+    _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
+    _itemsRevisionListener = () {
+      _cachedItems = null;
+      _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
+    };
+    DataSyncBus.itemsRevision.addListener(_itemsRevisionListener!);
     _loadInvoices();
+  }
+
+  @override
+  void dispose() {
+    if (_itemsRevisionListener != null) {
+      DataSyncBus.itemsRevision.removeListener(_itemsRevisionListener!);
+    }
+    super.dispose();
   }
 
   Future<void> _loadInvoices() async {
@@ -87,6 +123,116 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  Future<List<Map<String, dynamic>>> _getCachedCustomers() async {
+    if (_cachedCustomers != null) {
+      return _cachedCustomers!;
+    }
+
+    final customers = await _apiService.getCustomers();
+    _cachedCustomers = _normalizeDynamicList(customers);
+    return _cachedCustomers!;
+  }
+
+  Future<List<Map<String, dynamic>>> _getCachedItems() async {
+    if (_itemsRevisionSnapshot != DataSyncBus.itemsRevision.value) {
+      _cachedItems = null;
+      _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
+    }
+    if (_cachedItems != null) {
+      return _cachedItems!;
+    }
+
+    final items = await _apiService.getItems();
+    _cachedItems = _normalizeDynamicList(items);
+    return _cachedItems!;
+  }
+
+  List<Map<String, dynamic>> _normalizeDynamicList(List<dynamic> source) {
+    final normalized = <Map<String, dynamic>>[];
+    for (final entry in source) {
+      if (entry is Map<String, dynamic>) {
+        normalized.add(Map<String, dynamic>.from(entry));
+      } else if (entry is Map) {
+        normalized.add(
+          entry.map((key, value) => MapEntry(key.toString(), value)),
+        );
+      }
+    }
+    return normalized;
+  }
+
+  List<Map<String, dynamic>> _cloneDataList(
+    List<Map<String, dynamic>> source,
+  ) {
+    return source.map((entry) => Map<String, dynamic>.from(entry)).toList();
+  }
+
+  double _parseStock(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      return double.tryParse(value) ?? 0.0;
+    }
+    return 0.0;
+  }
+
+  List<Map<String, dynamic>> _filterSaleReadyItems(
+    List<Map<String, dynamic>> source,
+  ) {
+    // 🔥 في تجارة الذهب: stock >= 1 تعني القطعة متاحة
+    return source
+        .where((item) => _parseStock(item['stock']) >= 1)
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+  }
+
+  Future<String?> _showStatusUpdateSheet(String currentStatus) async {
+    final isAr = widget.isArabic;
+    final options = [
+      {'value': 'paid', 'label': isAr ? 'مدفوعة' : 'Paid'},
+      {'value': 'partially_paid', 'label': isAr ? 'مدفوعة جزئياً' : 'Partially Paid'},
+      {'value': 'unpaid', 'label': isAr ? 'غير مدفوعة' : 'Unpaid'},
+    ];
+
+    return showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Text(
+                isAr ? 'تحديث حالة الفاتورة' : 'Update Invoice Status',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+              const Divider(),
+              for (final option in options)
+                Card(
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  child: ListTile(
+                    leading: Icon(
+                      currentStatus == option['value']
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      color: currentStatus == option['value']
+                          ? Colors.green
+                          : Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
+                    title: Text(option['label']!),
+                    onTap: () => Navigator.pop(ctx, option['value']),
+                  ),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   void _applyFilters() {
@@ -278,13 +424,21 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     return lower;
   }
 
+  int? _tryParseInt(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is int) {
+      return value;
+    }
+    return int.tryParse(value.toString());
+  }
+
   String _getInvoiceDisplayNumber(Map<String, dynamic> invoice) {
-    final rawNumberValue = invoice['invoice_number'];
-    if (rawNumberValue != null) {
-      final trimmed = rawNumberValue.toString().trim();
-      if (trimmed.isNotEmpty) {
-        return trimmed;
-      }
+    final String? trimmedNumber =
+        invoice['invoice_number']?.toString().trim();
+    if (trimmedNumber?.isNotEmpty ?? false) {
+      return trimmedNumber!;
     }
 
     final fallback = _buildFallbackInvoiceNumber(invoice);
@@ -303,21 +457,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         return null;
       }
 
-      final sequenceValue = invoice['invoice_type_id'];
-      int? sequence;
-      if (sequenceValue is int) {
-        sequence = sequenceValue;
-      } else if (sequenceValue != null) {
-        sequence = int.tryParse(sequenceValue.toString());
-      }
+      final int? sequence = _tryParseInt(invoice['invoice_type_id']);
       if (sequence == null || sequence <= 0) {
         return null;
       }
 
       final prefix = _resolveInvoicePrefix(invoiceType);
-      final rawDateValue = invoice['date'];
-      final rawDate = rawDateValue != null ? rawDateValue.toString() : null;
-      final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
+  final String? rawDate = invoice['date']?.toString();
+  final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
       final year = parsedDate?.year ?? DateTime.now().year;
 
       final digits = sequence >= 1000 ? 4 : 3;
@@ -348,11 +495,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   }
 
   String _extractInvoicePrefix(Map<String, dynamic> invoice) {
-    final rawNumberValue = invoice['invoice_number'];
-    final rawNumber = rawNumberValue != null ? rawNumberValue.toString() : null;
+    final String? rawNumber = invoice['invoice_number']?.toString();
     if (rawNumber != null) {
       final parts = rawNumber.split('-');
-      if (parts.length >= 1 && parts.first.trim().isNotEmpty) {
+      if (parts.isNotEmpty && parts.first.trim().isNotEmpty) {
         return parts.first.trim();
       }
     }
@@ -361,8 +507,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   }
 
   int _extractInvoiceYear(Map<String, dynamic> invoice) {
-    final rawNumberValue = invoice['invoice_number'];
-    final rawNumber = rawNumberValue != null ? rawNumberValue.toString() : null;
+    final String? rawNumber = invoice['invoice_number']?.toString();
     if (rawNumber != null) {
       final parts = rawNumber.split('-');
       if (parts.length >= 2) {
@@ -373,15 +518,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       }
     }
 
-    final rawDateValue = invoice['date'];
-    final rawDate = rawDateValue != null ? rawDateValue.toString() : null;
-    final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
+  final String? rawDate = invoice['date']?.toString();
+  final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
     return parsedDate?.year ?? DateTime.now().year;
   }
 
   int _extractInvoiceSequence(Map<String, dynamic> invoice) {
-    final rawNumberValue = invoice['invoice_number'];
-    final rawNumber = rawNumberValue != null ? rawNumberValue.toString() : null;
+    final String? rawNumber = invoice['invoice_number']?.toString();
     if (rawNumber != null) {
       final parts = rawNumber.split('-');
       if (parts.isNotEmpty) {
@@ -392,22 +535,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       }
     }
 
-    final sequenceValue = invoice['invoice_type_id'];
-    if (sequenceValue is int) {
-      return sequenceValue;
-    }
-
-    final parsed = sequenceValue != null ? int.tryParse(sequenceValue.toString()) : null;
+    final int? parsed = _tryParseInt(invoice['invoice_type_id']);
     if (parsed != null) {
       return parsed;
     }
 
-    final legacyId = invoice['id'];
-    if (legacyId is int) {
-      return legacyId;
+    final int? legacyIdValue = _tryParseInt(invoice['id']);
+    if (legacyIdValue != null) {
+      return legacyIdValue;
     }
 
-    return int.tryParse(legacyId?.toString() ?? '') ?? 0;
+    return int.tryParse(invoice['id']?.toString() ?? '') ?? 0;
   }
 
   String _translateStatus(String? status, bool isArabic) {
@@ -519,8 +657,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
     final bool isDark = theme.brightness == Brightness.dark;
-    final statsBackground = colorScheme.surfaceVariant.withValues(alpha: 
-      isDark ? 0.35 : 0.2,
+    final statsBackground = colorScheme.surfaceContainerHighest.withValues(
+      alpha: isDark ? 0.35 : 0.2,
     );
 
     return Container(
@@ -661,8 +799,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
     final bool isDark = theme.brightness == Brightness.dark;
-    final filterBackground = colorScheme.surfaceVariant.withValues(alpha: 
-      isDark ? 0.4 : 0.7,
+    final filterBackground = colorScheme.surfaceContainerHighest.withValues(
+      alpha: isDark ? 0.4 : 0.7,
     );
 
     return Container(
@@ -1122,8 +1260,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: colorScheme.surfaceVariant.withValues(alpha: 
-                      theme.brightness == Brightness.dark ? 0.35 : 0.8,
+                    color: colorScheme.surfaceContainerHighest.withValues(
+                      alpha: theme.brightness == Brightness.dark ? 0.35 : 0.8,
                     ),
                     borderRadius: BorderRadius.circular(8),
                   ),
@@ -1250,19 +1388,100 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     );
   }
 
-  void _viewInvoiceDetails(Map<String, dynamic> invoice) {
-    // TODO: Navigate to invoice details screen
-    final invoiceDisplayNumber = _getInvoiceDisplayNumber(invoice);
-    _showSnackBar(
-      'عرض تفاصيل الفاتورة: $invoiceDisplayNumber',
-      isError: false,
-    );
+  Future<void> _viewInvoiceDetails(Map<String, dynamic> invoice) async {
+    final invoiceIdValue = invoice['id'];
+    final invoiceId = invoiceIdValue is int
+        ? invoiceIdValue
+        : int.tryParse(invoiceIdValue?.toString() ?? '');
+
+    if (invoiceId == null) {
+      _showSnackBar(
+        widget.isArabic ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+        isError: true,
+      );
+      return;
+    }
+
+    var loaderVisible = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    ).then((_) => loaderVisible = false);
+
+    try {
+      final details = await _apiService.getInvoiceById(invoiceId);
+      if (!mounted) return;
+      if (loaderVisible) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+
+      final mergedInvoice = {...invoice, ...details};
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => InvoicePrintScreen(
+            invoice: mergedInvoice,
+            isArabic: widget.isArabic,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (loaderVisible && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+      if (mounted) {
+        _showSnackBar(
+          widget.isArabic
+              ? 'فشل تحميل تفاصيل الفاتورة: $e'
+              : 'Failed to load invoice details: $e',
+          isError: true,
+        );
+      }
+    }
   }
 
-  void _editInvoice(Map<String, dynamic> invoice) {
-    // TODO: Navigate to edit invoice screen
-    final invoiceDisplayNumber = _getInvoiceDisplayNumber(invoice);
-    _showSnackBar('تعديل الفاتورة: $invoiceDisplayNumber', isError: false);
+  Future<void> _editInvoice(Map<String, dynamic> invoice) async {
+    final invoiceIdValue = invoice['id'];
+    final invoiceId = invoiceIdValue is int
+        ? invoiceIdValue
+        : int.tryParse(invoiceIdValue?.toString() ?? '');
+
+    if (invoiceId == null) {
+      _showSnackBar(
+        widget.isArabic ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+        isError: true,
+      );
+      return;
+    }
+
+    final currentStatus = _normalizeStatus((invoice['status'] ?? '').toString());
+    final selectedStatus = await _showStatusUpdateSheet(currentStatus);
+
+    if (selectedStatus == null || selectedStatus == currentStatus) {
+      return;
+    }
+
+    try {
+      await _apiService.updateInvoiceStatus(invoiceId, selectedStatus);
+      if (!mounted) return;
+      _showSnackBar(
+        widget.isArabic ? 'تم تحديث حالة الفاتورة' : 'Invoice status updated',
+        isError: false,
+      );
+      await _loadInvoices();
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar(
+          widget.isArabic
+              ? 'فشل تحديث الحالة: $e'
+              : 'Failed to update status: $e',
+          isError: true,
+        );
+      }
+    }
   }
 
   Future<void> _deleteInvoice(Map<String, dynamic> invoice) async {
@@ -1314,13 +1533,25 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
 
     if (confirmed == true) {
       try {
-        // TODO: Call API to delete invoice
-        // await _apiService.deleteInvoice(invoice['id']);
+        final invoiceIdValue = invoice['id'];
+        final invoiceId = invoiceIdValue is int
+            ? invoiceIdValue
+            : int.tryParse(invoiceIdValue?.toString() ?? '');
+
+        if (invoiceId == null) {
+          _showSnackBar(
+            isAr ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+            isError: true,
+          );
+          return;
+        }
+
+        await _apiService.deleteInvoice(invoiceId);
         _showSnackBar(
           isAr ? 'تم حذف الفاتورة بنجاح' : 'Invoice deleted successfully',
           isError: false,
         );
-        _loadInvoices();
+        await _loadInvoices();
       } catch (e) {
         _showSnackBar(
           isAr
@@ -1332,14 +1563,202 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     }
   }
 
-  void _navigateToAddInvoice() async {
-    // TODO: Navigate to add invoice screen with proper parameters
-    _showSnackBar('إضافة فاتورة جديدة قريباً', isError: false);
-    // Navigator.push(
-    //   context,
-    //   MaterialPageRoute(
-    //     builder: (context) => AddInvoiceScreen(...),
-    //   ),
-    // ).then((_) => _loadInvoices());
+  Future<void> _navigateToAddInvoice() async {
+    final isAr = widget.isArabic;
+    final selection = await showModalBottomSheet<_InvoiceCreationTarget>(
+      context: context,
+      builder: (sheetContext) {
+        final options = [
+          {
+            'target': _InvoiceCreationTarget.sales,
+            'icon': Icons.point_of_sale,
+            'color': Colors.green,
+            'title': isAr ? 'فاتورة بيع' : 'Sales Invoice',
+            'subtitle':
+                isAr ? 'بيع ذهب جديد أو مستعمل' : 'Sell new or used gold',
+          },
+          {
+            'target': _InvoiceCreationTarget.scrapSale,
+            'icon': Icons.recycling,
+            'color': Colors.orange,
+            'title': isAr ? 'بيع ذهب كسر' : 'Scrap Gold Sale',
+            'subtitle':
+                isAr ? 'تصفية الذهب المستعمل' : 'Liquidate scrap inventory',
+          },
+          {
+            'target': _InvoiceCreationTarget.scrapPurchase,
+            'icon': Icons.shopping_basket,
+            'color': Colors.blue,
+            'title': isAr ? 'شراء كسر من عميل' : 'Buy Scrap from Customer',
+            'subtitle':
+                isAr ? 'استلام ذهب من عملاء' : 'Accept client scrap gold',
+          },
+          {
+            'target': _InvoiceCreationTarget.supplierPurchase,
+            'icon': Icons.business_center,
+            'color': Colors.purple,
+            'title': isAr ? 'شراء من مورد' : 'Supplier Purchase',
+            'subtitle':
+                isAr ? 'توريدات من التجار' : 'Bulk supplier orders',
+          },
+          {
+            'target': _InvoiceCreationTarget.salesReturn,
+            'icon': Icons.keyboard_return,
+            'color': Colors.red.shade300,
+            'title': isAr ? 'مرتجع بيع' : 'Sales Return',
+            'subtitle':
+                isAr ? 'استرجاع مبيعات' : 'Return sold items',
+          },
+          {
+            'target': _InvoiceCreationTarget.scrapReturn,
+            'icon': Icons.undo,
+            'color': Colors.deepOrange.shade300,
+            'title': isAr ? 'مرتجع شراء كسر' : 'Scrap Purchase Return',
+            'subtitle':
+                isAr ? 'إرجاع مشتريات الكسر' : 'Return scrap purchases',
+          },
+          {
+            'target': _InvoiceCreationTarget.supplierReturn,
+            'icon': Icons.assignment_return,
+            'color': Colors.teal,
+            'title': isAr ? 'مرتجع شراء من مورد' : 'Supplier Purchase Return',
+            'subtitle': isAr ? 'إرجاع مورد' : 'Supplier returns',
+          },
+        ];
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isAr ? 'اختر نوع الفاتورة' : 'Choose invoice type',
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                for (final option in options)
+                  Card(
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor:
+                            (option['color'] as Color).withValues(alpha: 0.15),
+                        child: Icon(option['icon'] as IconData,
+                            color: option['color'] as Color),
+                      ),
+                      title: Text(option['title'] as String),
+                      subtitle: Text(option['subtitle'] as String),
+                      onTap: () => Navigator.pop(
+                        sheetContext,
+                        option['target'] as _InvoiceCreationTarget,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selection != null) {
+      await _openInvoiceCreation(selection);
+    }
+  }
+
+  Future<void> _openInvoiceCreation(_InvoiceCreationTarget target) async {
+    switch (target) {
+      case _InvoiceCreationTarget.sales:
+        final items = _cloneDataList(await _getCachedItems());
+        final saleItems = _filterSaleReadyItems(items);
+        final customers = _cloneDataList(await _getCachedCustomers());
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => SalesInvoiceScreenV2(
+              items: saleItems,
+              customers: customers,
+            ),
+          ),
+        );
+        break;
+      case _InvoiceCreationTarget.scrapSale:
+        final customers = _cloneDataList(await _getCachedCustomers());
+        final items = _cloneDataList(await _getCachedItems());
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ScrapSalesInvoiceScreen(
+              customers: customers,
+              items: items,
+            ),
+          ),
+        );
+        break;
+      case _InvoiceCreationTarget.scrapPurchase:
+        final customers = _cloneDataList(await _getCachedCustomers());
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ScrapPurchaseInvoiceScreen(
+              customers: customers,
+            ),
+          ),
+        );
+        break;
+      case _InvoiceCreationTarget.supplierPurchase:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const PurchaseInvoiceScreen(),
+          ),
+        );
+        break;
+      case _InvoiceCreationTarget.salesReturn:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AddReturnInvoiceScreen(
+              api: _apiService,
+              returnType: 'مرتجع بيع',
+            ),
+          ),
+        );
+        break;
+      case _InvoiceCreationTarget.scrapReturn:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AddReturnInvoiceScreen(
+              api: _apiService,
+              returnType: 'مرتجع شراء',
+            ),
+          ),
+        );
+        break;
+      case _InvoiceCreationTarget.supplierReturn:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AddReturnInvoiceScreen(
+              api: _apiService,
+              returnType: 'مرتجع شراء من مورد',
+            ),
+          ),
+        );
+        break;
+    }
+
+    if (mounted) {
+      await _loadInvoices();
+    }
   }
 }

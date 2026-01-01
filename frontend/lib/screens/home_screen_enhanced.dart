@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import '../api_service.dart';
@@ -26,6 +27,8 @@ import 'general_ledger_screen_v2.dart';
 import 'trial_balance_screen_v2.dart';
 import 'chart_of_accounts_screen.dart';
 import 'settings_screen_enhanced.dart';
+import 'branches_management_screen.dart';
+import 'gold_price_manual_screen_enhanced.dart';
 import 'customize_quick_actions_screen.dart';
 import 'scrap_sales_invoice_screen.dart';
 import 'scrap_purchase_invoice_screen.dart'; // 🆕 فاتورة شراء الكسر المحسّنة
@@ -34,6 +37,7 @@ import 'users_screen.dart';
 import 'payroll_screen.dart';
 import 'attendance_screen.dart';
 import 'payroll_report_screen.dart';
+import 'bonus_management_screen.dart';
 import 'safe_boxes_screen.dart';
 import 'melting_renewal_screen.dart';
 import 'gold_reservation_screen.dart';
@@ -77,6 +81,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   // Gold price card expansion state
   bool _isGoldPriceExpanded = false;
 
+  bool _isGoldPriceUpdatingNow = false;
+
+  Timer? _goldPriceAutoRefreshTimer;
+  String _goldPriceAutoRefreshFingerprint = '';
+
   // Summary data
   Map<String, dynamic> salesSummary = {};
   Map<String, dynamic> purchaseSummary = {};
@@ -115,6 +124,44 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         mainKarat = newMainKarat;
       });
     }
+
+    _syncGoldPriceAutoRefresh(settings);
+  }
+
+  @override
+  void dispose() {
+    _goldPriceAutoRefreshTimer?.cancel();
+    _goldPriceAutoRefreshTimer = null;
+    super.dispose();
+  }
+
+  void _syncGoldPriceAutoRefresh(SettingsProvider settings) {
+    final enabled = settings.settings['gold_price_auto_update_enabled'] == true;
+    final minutesRaw = settings.settings['gold_price_auto_update_interval_minutes'];
+    final minutes = (minutesRaw is num)
+        ? minutesRaw.toInt()
+        : int.tryParse(minutesRaw?.toString() ?? '') ?? 60;
+
+    final safeMinutes = minutes < 1 ? 1 : minutes;
+    final fingerprint = '$enabled:$safeMinutes';
+    if (_goldPriceAutoRefreshFingerprint == fingerprint) return;
+    _goldPriceAutoRefreshFingerprint = fingerprint;
+
+    _goldPriceAutoRefreshTimer?.cancel();
+    _goldPriceAutoRefreshTimer = null;
+
+    if (!enabled) return;
+
+    _goldPriceAutoRefreshTimer = Timer.periodic(
+      Duration(minutes: safeMinutes),
+      (_) async {
+        if (!mounted) return;
+        final auth = context.read<AuthProvider>();
+        if (!auth.isAuthenticated) return;
+        if (!auth.hasPermission('gold_price.view')) return;
+        await _loadGoldPrice();
+      },
+    );
   }
 
   double _parseDouble(dynamic value, {double fallback = 0}) {
@@ -182,17 +229,28 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   }
 
   Future<void> _loadAllData() async {
-    setState(() => isLoading = true);
-
     try {
+      final auth = context.read<AuthProvider>();
+
+      setState(() {
+        isLoading = true;
+
+        // Prevent showing data from a previous session when switching users.
+        if (!auth.hasPermission('customers.view')) customers = [];
+        if (!auth.hasPermission('items.view')) items = [];
+        if (!auth.hasPermission('invoices.view')) invoices = [];
+        if (!auth.hasPermission('suppliers.view')) suppliers = [];
+      });
+
       debugPrint('🔄 بدء تحميل البيانات...');
-      await Future.wait([
-        _loadGoldPrice(),
-        _loadCustomers(),
-        _loadItems(),
-        _loadInvoices(),
-        _loadSuppliers(),
-      ]);
+      final futures = <Future<void>>[];
+      if (auth.hasPermission('gold_price.view')) futures.add(_loadGoldPrice());
+      if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
+      if (auth.hasPermission('items.view')) futures.add(_loadItems());
+      if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
+      if (auth.hasPermission('suppliers.view')) futures.add(_loadSuppliers());
+
+      await Future.wait(futures);
 
       debugPrint(
         '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
@@ -224,6 +282,44 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       }
     } catch (e) {
       debugPrint('⚠️ خطأ في تحميل سعر الذهب: $e');
+    }
+  }
+
+  Future<void> _updateGoldPriceNow() async {
+    if (_isGoldPriceUpdatingNow) return;
+
+    final auth = context.read<AuthProvider>();
+    if (!auth.isAuthenticated) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يلزم تسجيل الدخول لتحديث السعر')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isGoldPriceUpdatingNow = true;
+    });
+
+    try {
+      await api.updateGoldPrice();
+      await _loadGoldPrice();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تحديث سعر الأونصة بنجاح')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('فشل تحديث السعر: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGoldPriceUpdatingNow = false;
+        });
+      }
     }
   }
 
@@ -433,6 +529,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Drawer Builder
   Widget _buildDrawer(bool isAr, Color gold) {
+    final auth = context.read<AuthProvider>();
     final theme = Theme.of(context);
     final TextStyle baseLabelStyle =
         theme.textTheme.bodyMedium?.copyWith(
@@ -473,7 +570,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             ),
             const SizedBox(height: 16),
             Text(
-              isAr ? 'ياسار للذهب' : 'Yasar Gold',
+              isAr ? 'مجوهرات خالد' : 'Khaled Jewelry',
               style: TextStyle(
                 fontFamily: 'Cairo',
                 fontSize: 22,
@@ -591,7 +688,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           MaterialPageRoute(
             builder: (_) => ScrapPurchaseInvoiceScreen(
               customers: customers.cast<Map<String, dynamic>>(),
-              items: items.cast<Map<String, dynamic>>(),
             ),
           ),
         );
@@ -751,11 +847,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    addDivider();
-    addSection(isAr ? 'التسكير' : 'Gold Reservation', AppColors.deepGold);
+    // مكاتب التسكير تصنّف ضمن الموردين (كيان مستقل عن الفروع)
     addDestination(
       icon: Icons.business,
-      title: isAr ? 'قائمة المكاتب' : 'Offices List',
+      title: isAr ? 'قائمة مكاتب التسكير' : 'Closing Offices',
       color: AppColors.darkGold,
       onSelected: () async {
         await Navigator.push(
@@ -797,6 +892,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         );
       },
     );
+    if (auth.hasPermission('employees.bonuses')) {
+      addDestination(
+        icon: Icons.card_giftcard,
+        title: isAr ? 'المكافآت' : 'Bonuses',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BonusManagementScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
     addDestination(
       icon: Icons.manage_accounts,
       title: isAr ? 'المستخدمين' : 'Users',
@@ -976,18 +1086,40 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
     addDestination(
-      icon: Icons.monetization_on,
-      title: isAr ? 'تحديث سعر الذهب' : 'Update Gold Price',
-      color: gold,
+      icon: Icons.account_tree,
+      title: isAr ? 'إدارة المكاتب والفروع' : 'Branches Management',
+      color: Colors.amber.shade600,
       onSelected: () async {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => SettingsScreenEnhanced(
-              initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-              focusEntry: SettingsEntry.goldPrice,
-            ),
+            builder: (_) => BranchesManagementScreen(isArabic: isAr),
           ),
+        );
+      },
+    );
+    addDestination(
+      icon: Icons.monetization_on,
+      title: isAr ? 'تحديث سعر الذهب' : 'Update Gold Price',
+      color: gold,
+      onSelected: () async {
+        if (!auth.hasPermission('gold_price.update')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                isAr
+                    ? 'ليس لديك صلاحية تحديث سعر الذهب'
+                    : 'You do not have permission to update gold price',
+              ),
+              backgroundColor: AppColors.warning,
+            ),
+          );
+          return;
+        }
+
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const GoldPriceManualScreenEnhanced()),
         );
         await _loadAllData();
       },
@@ -1074,7 +1206,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             children: [
               Icon(Icons.workspace_premium, size: 28),
               const SizedBox(width: 10),
-              Expanded(child: Text('ياسار للذهب')),
+              Expanded(
+                child: Text(isAr ? 'مجوهرات خالد' : 'Khaled Jewelry'),
+              ),
             ],
           ),
           actions: [
@@ -1400,13 +1534,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             });
           },
           onLongPress: () async {
+            final auth = context.read<AuthProvider>();
+            if (!auth.hasPermission('gold_price.update')) return;
+
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => SettingsScreenEnhanced(
-                  initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-                  focusEntry: SettingsEntry.goldPrice,
-                ),
+                builder: (_) => const GoldPriceManualScreenEnhanced(),
               ),
             );
             await _loadAllData();
@@ -1448,18 +1582,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                                   fontFamily: 'Cairo',
                                 ),
                               ),
-                              SizedBox(width: 8),
-                              if (goldPriceDate != null)
-                                Text(
-                                  '(${DateFormat('dd/MM').format(goldPriceDate!)})',
-                                  style: TextStyle(
-                                    color: colorScheme.onPrimary.withValues(alpha: 
-                                      0.75,
-                                    ),
-                                    fontSize: 9,
-                                    fontFamily: 'Cairo',
-                                  ),
-                                ),
                             ],
                           ),
                           SizedBox(height: 2),
@@ -1474,9 +1596,42 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               fontFamily: 'Cairo',
                             ),
                           ),
+                          if (goldPriceDate != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              'آخر تحديث: ${DateFormat('dd/MM/yyyy HH:mm').format(goldPriceDate!)}',
+                              style: TextStyle(
+                                color: colorScheme.onPrimary.withValues(
+                                  alpha: 0.75,
+                                ),
+                                fontSize: 9,
+                                fontFamily: 'Cairo',
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
+                    _isGoldPriceUpdatingNow
+                        ? SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                colorScheme.onPrimary,
+                              ),
+                            ),
+                          )
+                        : IconButton(
+                            tooltip: 'تحديث السعر الآن',
+                            onPressed: _updateGoldPriceNow,
+                            icon: Icon(
+                              Icons.refresh,
+                              color: colorScheme.onPrimary,
+                              size: 20,
+                            ),
+                          ),
                     if (goldPrice != null)
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
@@ -1842,7 +1997,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           MaterialPageRoute(
             builder: (_) => ScrapPurchaseInvoiceScreen(
               customers: customers.cast<Map<String, dynamic>>(),
-              items: items.cast<Map<String, dynamic>>(),
             ),
           ),
         );
@@ -2021,16 +2175,31 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         );
         break;
       case 'gold_price':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SettingsScreenEnhanced(
-              initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-              focusEntry: SettingsEntry.goldPrice,
+        {
+          final auth = context.read<AuthProvider>();
+          if (!auth.hasPermission('gold_price.update')) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  widget.isArabic
+                      ? 'ليس لديك صلاحية تحديث سعر الذهب'
+                      : 'You do not have permission to update gold price',
+                ),
+                backgroundColor: AppColors.warning,
+              ),
+            );
+            result = false;
+            break;
+          }
+
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const GoldPriceManualScreenEnhanced(),
             ),
-          ),
-        );
-        result = true;
+          );
+          result = true;
+        }
         break;
       default:
         ScaffoldMessenger.of(context).showSnackBar(

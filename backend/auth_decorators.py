@@ -12,37 +12,114 @@ from functools import wraps
 from flask import request, jsonify, g
 import jwt
 from datetime import datetime, timedelta
-from models import User, db
+import os
+import uuid
 
-# مفتاح JWT (يجب نقله إلى config.py في الإنتاج)
-JWT_SECRET_KEY = 'yasar-gold-secret-key-2025'  # ⚠️ تغيير هذا في الإنتاج!
-JWT_ALGORITHM = 'HS256'
-JWT_EXPIRATION_HOURS = 24
+from typing import Optional, Dict
+
+from config import (
+    JWT_SECRET_KEY,
+    JWT_DEV_FALLBACK_SECRET,
+    JWT_ALGORITHM,
+    JWT_ACCESS_TOKEN_EXP_MINUTES,
+)
+
+from models import User, AppUser, db
+
+from config import ENABLE_REDIS_CACHE
+from redis_client import get_redis
+
+try:
+    # نموذج اختياري (سيتوفر بعد إضافة الموديل في models.py)
+    from models import TokenBlacklist
+except Exception:  # pragma: no cover
+    TokenBlacklist = None
+
+def _get_jwt_secret() -> str:
+    # في الإنتاج يجب ضبط JWT_SECRET_KEY. في التطوير نسمح بـ fallback لتجنب كسر التشغيل.
+    secret = (JWT_SECRET_KEY or '').strip()
+    if secret:
+        return secret
+    # fallback dev-only
+    return (os.getenv('JWT_DEV_FALLBACK_SECRET') or JWT_DEV_FALLBACK_SECRET).strip()
 
 
-def generate_token(user):
+def get_bearer_token() -> Optional[str]:
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return None
+    return auth_header.split('Bearer ', 1)[1].strip() or None
+
+
+def _is_blacklisted(jti: str) -> bool:
+    if not jti or not TokenBlacklist:
+        return False
+
+    if ENABLE_REDIS_CACHE:
+        r = get_redis()
+        if r is not None:
+            try:
+                if r.get(f'bl:jti:{jti}'):
+                    return True
+            except Exception:
+                # ignore redis failures and fall back to DB
+                pass
+    try:
+        entry = TokenBlacklist.query.filter_by(jti=jti).first()
+        if not entry:
+            return False
+
+        if ENABLE_REDIS_CACHE:
+            r = get_redis()
+            if r is not None:
+                try:
+                    ttl = None
+                    if getattr(entry, 'expires_at', None):
+                        ttl = int((entry.expires_at - datetime.utcnow()).total_seconds())
+                    if ttl and ttl > 0:
+                        r.setex(f'bl:jti:{jti}', ttl, '1')
+                    else:
+                        r.set(f'bl:jti:{jti}', '1')
+                except Exception:
+                    pass
+        return True
+    except Exception:
+        # Fail closed: إذا تعذر التحقق، اعتبره محظور لحماية النظام
+        return True
+
+
+def generate_token(user, expires_in_minutes: Optional[int] = None):
+    """إنشاء JWT access token للمستخدم.
+
+    يدعم نوعين من الحسابات:
+    - User (legacy)
+    - AppUser (مرتبط بالموظفين)
     """
-    إنشاء JWT token للمستخدم
-    
-    Parameters:
-    -----------
-    user : User
-        كائن المستخدم
-    
-    Returns:
-    --------
-    str
-        JWT token
-    """
-    payload = {
-        'user_id': user.id,
-        'username': user.username,
-        'is_admin': user.is_admin,
-        'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
-        'iat': datetime.utcnow()
+    now = datetime.utcnow()
+    exp_minutes = expires_in_minutes if expires_in_minutes is not None else int(JWT_ACCESS_TOKEN_EXP_MINUTES)
+
+    base_payload = {
+        'username': getattr(user, 'username', None),
+        'is_admin': getattr(user, 'is_admin', False),
+        'exp': now + timedelta(minutes=exp_minutes),
+        'iat': now,
+        'jti': str(uuid.uuid4()),
     }
-    
-    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+    if isinstance(user, AppUser):
+        payload = {
+            **base_payload,
+            'app_user_id': user.id,
+            'user_type': 'app_user',
+        }
+    else:
+        payload = {
+            **base_payload,
+            'user_id': user.id,
+            'user_type': 'user',
+        }
+
+    return jwt.encode(payload, _get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def decode_token(token):
@@ -60,7 +137,10 @@ def decode_token(token):
         البيانات المُفككة أو None في حالة الفشل
     """
     try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, _get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+        jti = payload.get('jti')
+        if jti and _is_blacklisted(jti):
+            return None
         return payload
     except jwt.ExpiredSignatureError:
         return None  # Token منتهي الصلاحية
@@ -68,32 +148,37 @@ def decode_token(token):
         return None  # Token غير صالح
 
 
-def get_current_user():
-    """
-    الحصول على المستخدم الحالي من token
-    
-    Returns:
-    --------
-    User or None
-        كائن المستخدم أو None
-    """
-    # التحقق من وجود token في header
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
+def decode_token_raw(token: str) -> Optional[Dict]:
+    """Decode token بدون فحص blacklist (لاستخدامه في logout)."""
+    try:
+        return jwt.decode(token, _get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+    except Exception:
         return None
-    
-    token = auth_header.split('Bearer ')[1]
+
+
+def get_current_user():
+    """الحصول على المستخدم الحالي من token (يدعم User و AppUser)"""
+    token = get_bearer_token()
+    if not token:
+        return None
     payload = decode_token(token)
     
     if not payload:
         return None
     
-    # الحصول على المستخدم من قاعدة البيانات
-    user = User.query.get(payload['user_id'])
+    # أولوية: app_user
+    app_user_id = payload.get('app_user_id')
+    if app_user_id:
+        app_user = AppUser.query.get(app_user_id)
+        if app_user and app_user.is_active:
+            return app_user
     
-    # التحقق من أن المستخدم نشط
-    if user and user.is_active:
-        return user
+    # ثانياً: user القديم
+    user_id = payload.get('user_id')
+    if user_id:
+        user = User.query.get(user_id)
+        if user and user.is_active:
+            return user
     
     return None
 
@@ -112,6 +197,11 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # 🔓 تعطيل مؤقت للـ auth في التطوير
+        # التحقق من وجود current_user في g (من app.before_request)
+        if hasattr(g, 'current_user') and g.current_user:
+            return f(*args, **kwargs)
+        
         user = get_current_user()
         
         if not user:
@@ -124,10 +214,22 @@ def require_auth(f):
         # حفظ المستخدم في g للوصول إليه في الدالة
         g.current_user = user
         
-        # تحديث آخر تسجيل دخول
-        if not user.last_login or (datetime.utcnow() - user.last_login).seconds > 3600:
-            user.last_login = datetime.utcnow()
-            db.session.commit()
+        # تحديث آخر تسجيل دخول (User.last_login / AppUser.last_login_at)
+        now = datetime.utcnow()
+        try:
+            if hasattr(user, 'last_login_at'):
+                last_login = user.last_login_at
+                if not last_login or (now - last_login).seconds > 3600:
+                    user.last_login_at = now
+                    db.session.commit()
+            elif hasattr(user, 'last_login'):
+                last_login = user.last_login
+                if not last_login or (now - last_login).seconds > 3600:
+                    user.last_login = now
+                    db.session.commit()
+        except Exception:
+            # لا نفشل الطلب بسبب تحديث last_login
+            db.session.rollback()
         
         return f(*args, **kwargs)
     

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 
+import '../models/app_user_model.dart';
+import 'permissions_management_screen.dart';
+
 /// شاشة إدارة المستخدمين (مع JWT)
 class UsersManagementScreen extends StatefulWidget {
   final ApiService api;
@@ -39,7 +42,14 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
 
   Future<void> _loadToken() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('auth_token');
+    _token = prefs.getString('jwt_token');
+    if ((_token == null || _token!.isEmpty)) {
+      final legacy = prefs.getString('auth_token');
+      if (legacy != null && legacy.isNotEmpty) {
+        _token = legacy;
+        await prefs.setString('jwt_token', legacy);
+      }
+    }
     if (_token != null) {
       _loadUsers();
       _loadRoles();
@@ -286,6 +296,9 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                   case 'toggle':
                     _toggleUserStatus(user);
                     break;
+                  case 'permissions':
+                    _openPermissions(user);
+                    break;
                   case 'roles':
                     _showRolesDialog(user);
                     break;
@@ -334,6 +347,16 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                     ],
                   ),
                 ),
+                PopupMenuItem(
+                  value: 'permissions',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.security_outlined, size: 20),
+                      const SizedBox(width: 12),
+                      Text(widget.isArabic ? 'الصلاحيات' : 'Permissions'),
+                    ],
+                  ),
+                ),
                 const PopupMenuDivider(),
                 PopupMenuItem(
                   value: 'delete',
@@ -354,6 +377,20 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openPermissions(Map<String, dynamic> user) async {
+    final raw = Map<String, dynamic>.from(user);
+    final userModel = AppUserModel.fromJson(raw);
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PermissionsManagementScreen(user: userModel),
+      ),
+    );
+
+    if (changed == true) {
+      _loadUsers();
+    }
   }
 
   Future<void> _toggleUserStatus(Map<String, dynamic> user) async {
@@ -490,6 +527,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
             ),
             FilledButton(
               onPressed: () async {
+                final navigator = Navigator.of(context);
                 final username = usernameController.text.trim();
                 final fullName = fullNameController.text.trim();
                 final password = passwordController.text.trim();
@@ -537,7 +575,8 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                     );
                   }
 
-                  Navigator.of(context).pop(true);
+                  if (!mounted) return;
+                  navigator.pop(true);
                 } catch (e) {
                   _showSnack(e.toString(), isError: true);
                 }

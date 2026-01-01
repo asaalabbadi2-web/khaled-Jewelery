@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils.dart';
 
 /// شاشة إضافة أو تعديل مكتب
 class AddOfficeScreen extends StatefulWidget {
@@ -275,6 +276,7 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                               border: const OutlineInputBorder(),
                             ),
                             keyboardType: TextInputType.number,
+                            inputFormatters: [NormalizeNumberFormatter()],
                           ),
                         ),
                         const SizedBox(width: 16),

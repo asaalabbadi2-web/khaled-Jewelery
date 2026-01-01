@@ -31,7 +31,14 @@ class _RolesManagementScreenState extends State<RolesManagementScreen> {
 
   Future<void> _loadToken() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('auth_token');
+    _token = prefs.getString('jwt_token');
+    if (_token == null || _token!.isEmpty) {
+      final legacy = prefs.getString('auth_token');
+      if (legacy != null && legacy.isNotEmpty) {
+        _token = legacy;
+        await prefs.setString('jwt_token', legacy);
+      }
+    }
     if (_token != null) {
       _loadRoles();
       _loadPermissions();
@@ -112,7 +119,7 @@ class _RolesManagementScreenState extends State<RolesManagementScreen> {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: color.withValues(alpha: 0.15),
+                  backgroundColor: color.withOpacity(0.15),
                   child: Icon(icon, color: color, size: 22),
                 ),
                 const SizedBox(width: 12),
@@ -190,7 +197,7 @@ class _RolesManagementScreenState extends State<RolesManagementScreen> {
         leading: CircleAvatar(
           backgroundColor: isSystem
               ? Colors.blue.shade100
-              : const Color(0xFFFFD700).withValues(alpha: 0.3),
+              : const Color(0xFFFFD700).withOpacity(0.3),
           child: Icon(
             isSystem ? Icons.shield_outlined : Icons.person_pin_outlined,
             color: isSystem ? Colors.blue.shade700 : const Color(0xFFB8860B),
@@ -323,7 +330,7 @@ class _RolesManagementScreenState extends State<RolesManagementScreen> {
                           style: const TextStyle(fontSize: 11),
                         ),
                         backgroundColor:
-                            const Color(0xFFFFD700).withValues(alpha: 0.15),
+                            const Color(0xFFFFD700).withOpacity(0.15),
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       );
                     }).toList(),

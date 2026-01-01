@@ -3,7 +3,7 @@ import '../api_service.dart';
 import '../theme/app_theme.dart';
 import 'add_office_screen.dart';
 
-/// شاشة قائمة المكاتب (مكاتب بيع وشراء الذهب الخام)
+/// شاشة قائمة مكاتب التسكير (تسكير الذهب)
 class OfficesScreen extends StatefulWidget {
   final ApiService api;
   final bool isArabic;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_service.dart';
 import '../models/attendance_model.dart';
+import '../utils.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final ApiService api;
@@ -213,6 +214,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       ),
                     ),
                     keyboardType: TextInputType.number,
+                    inputFormatters: [NormalizeNumberFormatter()],
                     onSubmitted: (_) {
                       setState(() {
                         _employeeIdFilter =
@@ -448,6 +450,7 @@ class _AttendanceFormDialogState extends State<AttendanceFormDialog> {
                     labelText: isAr ? 'معرّف الموظف' : 'Employee ID',
                   ),
                   keyboardType: TextInputType.number,
+                  inputFormatters: [NormalizeNumberFormatter()],
                   validator: (value) {
                     if (value == null || value.trim().isEmpty) {
                       return isAr ? 'المعرف مطلوب' : 'Employee ID required';

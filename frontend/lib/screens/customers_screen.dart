@@ -235,6 +235,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                                           AccountStatementScreen(
                                             accountId: customerId,
                                             accountName: c['name'],
+                                            entityType: 'customer',
                                           ),
                                     ),
                                   );

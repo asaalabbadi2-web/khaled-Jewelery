@@ -63,6 +63,13 @@ Future<Map<String, dynamic>> getGeneralLedgerAll({
 Future<Map<String, dynamic>> getAccountLedger(int accountId, {...})
 ```
 
+#### فلاتر متقدمة جديدة
+- `posted_only=true` ➜ يعرض القيود المرحلة فقط.
+- `reference_types=invoice,voucher` ➜ يقيد النتائج بأنواع مراجع محددة (يدعم قائمة مفصولة بفواصل أو معاملًا مفردًا `reference_type`).
+- `created_by=` و`posted_by=` ➜ تصفية حسب المستخدم الذي أنشأ القيد أو قام بترحيله.
+- `user=` ➜ يطابق أيًّا من الحقلين السابقين في خطوة واحدة.
+- `branch=` ➜ يقيّد النتائج على حسابات الخزائن المرتبطة بفرع SafeBox محدد (مع تجاهل حالة الأحرف).
+
 #### `home_screen.dart`
 ```dart
 import 'general_ledger_screen_v2.dart'; // استخدام النسخة المطورة

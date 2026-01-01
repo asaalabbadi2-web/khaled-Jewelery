@@ -1,24 +1,51 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:frontend/screens/home_screen_enhanced.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:frontend/screens/template_designer_screen.dart';
+import 'package:frontend/widgets/invoice_type_banner.dart';
 
 void main() {
-  testWidgets('HomeScreen shows app title and Add Customer button', (
-    WidgetTester tester,
-  ) async {
-    await tester.pumpWidget(MaterialApp(home: HomeScreenEnhanced()));
+  testWidgets('InvoiceTypeBanner renders content', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: InvoiceTypeBanner(
+            title: 'فاتورة بيع',
+            subtitle: 'نص توضيحي',
+            color: Colors.amber,
+            icon: Icons.receipt_long,
+          ),
+        ),
+      ),
+    );
 
-    // تحقق من وجود عنوان التطبيق
-    expect(find.text('Yasar POS'), findsOneWidget);
+    expect(find.text('فاتورة بيع'), findsOneWidget);
+    expect(find.text('نص توضيحي'), findsOneWidget);
+    expect(find.byIcon(Icons.receipt_long), findsOneWidget);
+  });
 
-    // تحقق من وجود زر إضافة عميل
-    expect(find.widgetWithText(ElevatedButton, 'Add Customer'), findsOneWidget);
+  testWidgets('TemplateDesignerScreen builds (smoke)', (tester) async {
+    // shared_preferences يستخدم platform channel، نستخدم mock لتجنب مشاكل الاختبار.
+    SharedPreferences.setMockInitialValues({});
+
+    // TemplateDesignerScreen يحتوي على أعمدة/لوحات جانبية، نحتاج مساحة أكبر لتجنب overflow.
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(2400, 1600);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: TemplateDesignerScreen(),
+      ),
+    );
+
+    // دع initState/post-frame callbacks تنفّذ بدون انتظار لا نهائي.
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.byType(TemplateDesignerScreen), findsOneWidget);
   });
 }

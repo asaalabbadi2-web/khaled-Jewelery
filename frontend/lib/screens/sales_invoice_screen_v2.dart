@@ -1,12 +1,16 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../models/safe_box_model.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/auth_provider.dart';
+import 'add_customer_screen.dart';
+import '../widgets/invoice_type_banner.dart';
+import 'settings_screen_enhanced.dart';
+import '../utils/arabic_number_formatter.dart';
+import 'invoice_print_screen.dart';
 
 /// شاشة فاتورة البيع - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
@@ -15,10 +19,10 @@ class SalesInvoiceScreenV2 extends StatefulWidget {
   final List<Map<String, dynamic>> customers;
 
   const SalesInvoiceScreenV2({
-    Key? key,
+    super.key,
     required this.items,
     required this.customers,
-  }) : super(key: key);
+  });
 
   @override
   State<SalesInvoiceScreenV2> createState() => _SalesInvoiceScreenV2State();
@@ -32,6 +36,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
   // Customer
   int? _selectedCustomerId;
+
+  // Office / Branch (Dimensions)
+  List<Map<String, dynamic>> _branches = [];
+  bool _isLoadingBranches = false;
+  String? _branchesLoadingError;
+  int? _selectedBranchId;
 
   // Items List
   final List<InvoiceItem> _items = [];
@@ -47,13 +57,29 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
   // Payment - 🆕 وسائل دفع متعددة
   List<Map<String, dynamic>> _paymentMethods = [];
-  List<PaymentEntry> _payments = []; // 🆕 قائمة الدفعات المضافة
+  final List<PaymentEntry> _payments = []; // 🆕 قائمة الدفعات المadded
   int? _selectedPaymentMethodId; // للـ Dropdown
 
   // Safe Boxes - 🆕 الخزائن المتاحة للدفع
   List<SafeBoxModel> _safeBoxes = [];
   int? _selectedSafeBoxId; // الخزينة المختارة للدفعة الحالية
   bool _showAdvancedPaymentOptions = false; // 🎯 للتحكم في إظهار الخزائن
+
+  // Gold Costing Snapshot (Moving Average)
+  bool _didBootstrapCosting = false;
+  bool _isLoadingCosting = false;
+  String? _costingError;
+  double _avgGoldCostPerMainGram = 0.0;
+  double _avgManufacturingCostPerMainGram = 0.0;
+  double _avgTotalCostPerMainGram = 0.0;
+  double _inventoryWeightMain = 0.0;
+  String? _costingMethod;
+  DateTime? _costingLastUpdated;
+
+  double _invoiceWeightMain = 0.0;
+  double _invoiceCostGoldComponent = 0.0;
+  double _invoiceCostManufacturingComponent = 0.0;
+  double _invoiceCostTotal = 0.0;
 
   @override
   void initState() {
@@ -65,6 +91,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       _loadAvailableItems();
     }
     _loadSettings();
+    _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
     _smartInputFocus.requestFocus();
   }
@@ -85,7 +112,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _settingsProvider = Provider.of<SettingsProvider>(context);
+    _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+    if (!_didBootstrapCosting) {
+      _didBootstrapCosting = true;
+      _loadGoldCostingSnapshot();
+    }
   }
 
   @override
@@ -107,6 +138,42 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       });
     } catch (e) {
       _showError('فشل تحميل سعر الذهب: $e');
+    }
+  }
+
+  Future<void> _loadBranches() async {
+    if (_isLoadingBranches) return;
+    setState(() {
+      _isLoadingBranches = true;
+      _branchesLoadingError = null;
+    });
+
+    try {
+      final apiService = ApiService();
+      final raw = await apiService.getBranches(activeOnly: true);
+      if (!mounted) return;
+
+      final branches = raw
+          .whereType<Map>()
+          .map((b) => Map<String, dynamic>.from(b))
+          .toList();
+
+      setState(() {
+        _branches = branches;
+        if (_selectedBranchId == null && _branches.length == 1) {
+          _selectedBranchId = _parseInt(_branches.first['id']);
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _branchesLoadingError = e.toString();
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingBranches = false;
+      });
     }
   }
 
@@ -132,8 +199,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     });
 
     try {
-      final apiService = ApiService();
-      final fetched = await apiService.getItems();
+  final apiService = ApiService();
+  final fetched = await apiService.getItems(inStockOnly: true);
       final normalized = fetched
           .whereType<Map<String, dynamic>>()
           .map((item) => Map<String, dynamic>.from(item))
@@ -229,22 +296,35 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       final paymentType = method['payment_type'] as String?;
       if (paymentType == null) return;
 
+      final defaultSafeBoxId = method['default_safe_box_id'];
+
       final apiService = ApiService();
       final allBoxes = await apiService.getSafeBoxes();
       List<SafeBoxModel> boxes;
+
+      // ✅ قواعد التوافق (الأفضل والمعمول به غالباً):
+      // - cash => خزائن نقدية فقط
+      // - باقي الأنواع (بطاقات/BNPL/محافظ/تحويل) => خزائن بنكية (وأحياناً شيكات)
+      final isCash = paymentType == 'cash';
+      final isCheck = paymentType == 'check';
+      final isBankLike = !isCash;
 
       switch (paymentType) {
         case 'cash':
           boxes = allBoxes.where((box) => box.safeType == 'cash').toList();
           break;
-        case 'bank_transfer':
-        case 'check':
-          boxes = allBoxes.where((box) => box.safeType == 'bank').toList();
-          break;
         default:
-          boxes = allBoxes
-              .where((box) => box.safeType == 'cash' || box.safeType == 'bank')
-              .toList();
+          if (isCheck) {
+            boxes = allBoxes
+                .where((box) => box.safeType == 'bank' || box.safeType == 'check')
+                .toList();
+          } else if (isBankLike) {
+            boxes = allBoxes.where((box) => box.safeType == 'bank').toList();
+          } else {
+            boxes = allBoxes
+                .where((box) => box.safeType == 'cash' || box.safeType == 'bank')
+                .toList();
+          }
       }
 
       if (!mounted) return;
@@ -253,11 +333,25 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         _safeBoxes = boxes;
         // اختيار الخزينة الافتراضية
         if (_safeBoxes.isNotEmpty) {
-          final defaultBox = _safeBoxes.firstWhere(
-            (box) => box.isDefault == true,
-            orElse: () => _safeBoxes.first,
-          );
-          _selectedSafeBoxId = defaultBox.id;
+          SafeBoxModel? picked;
+
+          final defId = defaultSafeBoxId is int
+              ? defaultSafeBoxId
+              : int.tryParse(defaultSafeBoxId?.toString() ?? '');
+
+          if (defId != null) {
+            picked = _safeBoxes.firstWhere(
+              (box) => box.id == defId,
+              orElse: () => _safeBoxes.first,
+            );
+          } else {
+            picked = _safeBoxes.firstWhere(
+              (box) => box.isDefault == true,
+              orElse: () => _safeBoxes.first,
+            );
+          }
+
+          _selectedSafeBoxId = picked.id;
         } else {
           _selectedSafeBoxId = null;
         }
@@ -265,6 +359,378 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     } catch (e) {
       _showError('فشل تحميل الخزائن: $e');
     }
+  }
+
+  // ==================== Gold Costing Snapshot ====================
+  Future<void> _loadGoldCostingSnapshot({bool showFeedback = false}) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingCosting = true;
+      if (!showFeedback) {
+        _costingError = null;
+      }
+    });
+
+    try {
+      final apiService = ApiService();
+      final response = await apiService.getGoldCostingSnapshot();
+      final snapshot = Map<String, dynamic>.from(response['snapshot'] ?? {});
+      final config = Map<String, dynamic>.from(response['config'] ?? {});
+
+      final avgGold = _parseDouble(snapshot['avg_gold']);
+      final avgManufacturing = _parseDouble(snapshot['avg_manufacturing']);
+      final avgTotal = _parseDouble(snapshot['avg_total']);
+      final inventoryWeight = _parseDouble(config['total_inventory_weight']);
+      final costingMethod = config['costing_method']?.toString();
+      final updatedAt = _parseDateTime(config['last_updated']);
+
+      if (!mounted) return;
+      setState(() {
+        _avgGoldCostPerMainGram = avgGold;
+        _avgManufacturingCostPerMainGram = avgManufacturing;
+        _avgTotalCostPerMainGram = avgTotal;
+        _inventoryWeightMain = inventoryWeight;
+        _costingMethod = costingMethod;
+        _costingLastUpdated = updatedAt;
+        _costingError = null;
+      });
+
+      _applySnapshotToItems();
+
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('✅ تم تحديث متوسط التكلفة المتحرك'),
+            backgroundColor: AppColors.success,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _costingError = 'تعذر تحميل متوسط التكلفة: $e';
+      });
+      if (showFeedback) {
+        _showError('فشل تحديث متوسط التكلفة: $e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingCosting = false;
+        });
+      }
+    }
+  }
+
+  // ignore: unused_element
+  Future<void> _recomputeGoldCosting() async {
+    final confirm = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: const Text('إعادة بناء متوسط التكلفة'),
+              content: const Text(
+                'سيتم إعادة احتساب متوسط التكلفة المتحرك بناءً على فواتير الشراء المسجلة. '
+                'قد يستغرق ذلك بعض الوقت حسب حجم البيانات. هل تريد المتابعة؟',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  style: FilledButton.styleFrom(backgroundColor: AppColors.warning),
+                  child: const Text('متابعة'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!confirm) return;
+
+    try {
+      if (mounted) {
+        setState(() {
+          _isLoadingCosting = true;
+        });
+      }
+      final apiService = ApiService();
+      await apiService.recomputeGoldCosting();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('تمت إعادة بناء متوسط التكلفة بنجاح'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+      await _loadGoldCostingSnapshot();
+    } catch (e) {
+      _showError('فشل إعادة بناء المتوسط: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingCosting = false;
+        });
+      }
+    }
+  }
+
+  void _applySnapshotToItems() {
+    if (_items.isEmpty) {
+      _recomputeCostingPreview();
+      return;
+    }
+    for (final item in _items) {
+      item.updateCostingSnapshot(
+        avgGoldPerMainGram: _avgGoldCostPerMainGram,
+        avgManufacturingPerMainGram: _avgManufacturingCostPerMainGram,
+      );
+    }
+    _recomputeCostingPreview();
+  }
+
+  void _recomputeCostingPreview() {
+    final totalWeightMain = _items.fold<double>(
+      0.0,
+      (sum, item) => sum + item.weightInMainKarat,
+    );
+    final goldComponent = totalWeightMain * _avgGoldCostPerMainGram;
+    final manufacturingComponent =
+        totalWeightMain * _avgManufacturingCostPerMainGram;
+    final totalCost = goldComponent + manufacturingComponent;
+
+    if (!mounted) return;
+    setState(() {
+      _invoiceWeightMain = totalWeightMain;
+      _invoiceCostGoldComponent = goldComponent;
+      _invoiceCostManufacturingComponent = manufacturingComponent;
+      _invoiceCostTotal = totalCost;
+    });
+  }
+
+  DateTime? _parseDateTime(dynamic value) {
+    if (value == null) return null;
+    try {
+      return DateTime.parse(value.toString()).toLocal();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _formatTimestamp(DateTime? value) {
+    if (value == null) return 'لم يتم التحديث بعد';
+    final date = value;
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    final hh = date.hour.toString().padLeft(2, '0');
+    final mm = date.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $hh:$mm';
+  }
+
+  String _formatWeight(double grams) {
+    if (grams.abs() >= 1000) {
+      return '${(grams / 1000).toStringAsFixed(3)} كجم';
+    }
+    return '${grams.toStringAsFixed(3)} جم';
+  }
+
+  String _formatCurrency(double amount) {
+    return '${amount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}';
+  }
+
+  String get _costingMethodLabel {
+    final method = (_costingMethod ?? 'moving_average').toLowerCase();
+    switch (method) {
+      case 'moving_average':
+        return 'متوسط متحرك';
+      case 'fifo':
+        return 'الوارد أولاً (FIFO)';
+      default:
+        return method.isEmpty ? 'غير محدد' : method;
+    }
+  }
+
+  // ignore: unused_element
+  Widget _buildCostingMetricTile(
+    ThemeData theme, {
+    required IconData icon,
+    required String title,
+    required String value,
+    String? subtitle,
+    Color? accentColor,
+  }) {
+    final colorScheme = theme.colorScheme;
+    final accent = accentColor ?? colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+        color: accent.withValues(alpha: theme.brightness == Brightness.dark ? 0.15 : 0.1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: theme.brightness == Brightness.dark ? 0.08 : 0.85),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: accent, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: accent,
+            ),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactMetric(
+    ThemeData theme,
+    String label,
+    String value,
+    IconData icon,
+    Color accentColor,
+  ) {
+    final isDark = theme.brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: accentColor.withValues(alpha: isDark ? 0.15 : 0.08),
+        border: Border.all(color: accentColor.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: isDark ? 0.08 : 0.9),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: accentColor, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: accentColor.withValues(alpha: 0.8),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: accentColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCostingInfoChip(
+    ThemeData theme, {
+    required IconData icon,
+    required String label,
+  }) {
+    final colorScheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(
+          alpha: theme.brightness == Brightness.dark ? 0.25 : 0.7,
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: colorScheme.primary),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCostingDetailRow(
+    ThemeData theme, {
+    required IconData icon,
+    required String title,
+    required String value,
+  }) {
+    final colorScheme = theme.colorScheme;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 18, color: colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              title,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        Text(
+          value,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
   }
 
   // 🆕 إضافة دفعة جديدة
@@ -470,10 +936,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     if (!mounted) return;
 
+    final itemId = _parseInt(itemData['id']);
+
     setState(() {
       _items.add(
         InvoiceItem(
-          id: itemData['id'],
+          id: itemId,
           name: itemData['name'] ?? '',
           barcode: itemData['barcode'] ?? '',
           karat: karat,
@@ -481,10 +949,301 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           wage: wage,
           goldPrice24k: _goldPrice24k,
           mainKarat: settings.mainKarat,
-          taxRate: settings.taxRate,
+          taxRate: settings.taxRateForKarat(karat),
+          avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
+          avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
         ),
       );
     });
+
+    _recomputeCostingPreview();
+  }
+
+  Future<void> _showManualItemDialog() async {
+    if (!_settingsProvider.allowManualInvoiceItems) {
+      _showError('هذه الميزة معطلة من الإعدادات. فعّل خيار "السماح بإضافة صنف يدوي" أولاً.');
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController();
+    final barcodeController = TextEditingController();
+    final weightController = TextEditingController(text: '1.0');
+    final wageController = TextEditingController(text: '0');
+    final totalController = TextEditingController();
+
+    weightController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: weightController.text.length,
+    );
+    wageController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: wageController.text.length,
+    );
+    int selectedKarat = _settingsProvider.mainKarat;
+
+    double? tryParseOptionalDouble(String value) {
+      final normalized = value.trim().replaceAll(',', '.');
+      if (normalized.isEmpty) return null;
+      return double.tryParse(normalized);
+    }
+
+    Map<String, dynamic>? manualData;
+
+    if (!mounted) {
+      nameController.dispose();
+      barcodeController.dispose();
+      weightController.dispose();
+      wageController.dispose();
+      totalController.dispose();
+      return;
+    }
+
+    manualData = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('إضافة صنف يدوي'),
+              content: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: nameController,
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(
+                          labelText: 'اسم الصنف',
+                          prefixIcon: Icon(Icons.label_outline),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'يرجى إدخال اسم الصنف';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: barcodeController,
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(
+                          labelText: 'الباركود / رقم الصنف (اختياري)',
+                          prefixIcon: Icon(Icons.qr_code_2),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedKarat,
+                        decoration: const InputDecoration(
+                          labelText: 'العيار',
+                          prefixIcon: Icon(Icons.diamond_outlined),
+                        ),
+                        items: const [18, 21, 22, 24]
+                            .map(
+                              (karat) => DropdownMenuItem<int>(
+                                value: karat,
+                                child: Text('عيار $karat'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() => selectedKarat = value);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: weightController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [
+                          ArabicNumberTextInputFormatter(
+                            allowDecimal: true,
+                            allowNegative: false,
+                          ),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'الوزن بالجرام',
+                          prefixIcon: Icon(Icons.scale),
+                        ),
+                        validator: (value) {
+                          final parsed = tryParseOptionalDouble(value ?? '');
+                          if (parsed == null || parsed <= 0) {
+                            return 'أدخل وزناً صحيحاً أكبر من صفر';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: wageController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [
+                          ArabicNumberTextInputFormatter(
+                            allowDecimal: true,
+                            allowNegative: false,
+                          ),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'أجرة المصنعية للجرام (اختياري)',
+                          prefixIcon: Icon(Icons.handyman_outlined),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: totalController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [
+                          ArabicNumberTextInputFormatter(
+                            allowDecimal: true,
+                            allowNegative: false,
+                          ),
+                        ],
+                        decoration: InputDecoration(
+                          labelText: 'الإجمالي مع الضريبة (اختياري)',
+                          prefixIcon: const Icon(Icons.attach_money),
+                          helperText: 'اترك الحقل فارغاً ليتم احتساب السعر تلقائياً',
+                          suffixText: _settingsProvider.currencySymbol,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('إضافة'),
+                  onPressed: () {
+                    if (!(formKey.currentState?.validate() ?? false)) {
+                      return;
+                    }
+
+                    final weight = tryParseOptionalDouble(weightController.text) ?? 0;
+                    final wage = tryParseOptionalDouble(wageController.text) ?? 0;
+                    final manualTotal = tryParseOptionalDouble(totalController.text);
+
+                    Navigator.pop(dialogContext, {
+                      'name': nameController.text.trim(),
+                      'barcode': barcodeController.text.trim(),
+                      'karat': selectedKarat.toDouble(),
+                      'weight': weight,
+                      'wage': wage,
+                      'total_with_tax': manualTotal,
+                    });
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    // نتجنب التخلص المباشر من المتحكمات لأن عناصر الحوار قد تستدعي إطاراً إضافياً
+    // بعد الإغلاق. تركها لجمع القمامة آمن للاستخدام المؤقت هنا.
+
+
+    if (manualData == null) return;
+
+    final manualItem = InvoiceItem(
+      id: null,
+      name: manualData['name'] as String? ?? 'صنف يدوي',
+      barcode: manualData['barcode'] as String? ?? '',
+      karat: _parseDouble(manualData['karat']),
+      weight: _parseDouble(manualData['weight']),
+      wage: _parseDouble(manualData['wage']),
+      goldPrice24k: _goldPrice24k,
+      mainKarat: _settingsProvider.mainKarat,
+      taxRate: _settingsProvider.taxRateForKarat(_parseDouble(manualData['karat'])),
+      avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
+      avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
+    );
+
+    final manualTotal = manualData['total_with_tax'];
+    if (manualTotal is num && manualTotal > 0) {
+      manualItem.setManualTotal(manualTotal.toDouble());
+    }
+
+    setState(() {
+      _items.add(manualItem);
+    });
+
+    _recomputeCostingPreview();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('✅ تمت إضافة صنف يدوي إلى الفاتورة'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showManualItemFeatureGuide() async {
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final shouldOpenSettings = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.info_outline, color: colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'تفعيل الصنف اليدوي',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text('لإضافة صنف يدوي يجب تفعيل الخيار من شاشة الإعدادات > الشركة والفواتير.'),
+                  SizedBox(height: 8),
+                  Text('بعد التفعيل سيظهر زر "صنف يدوي" دائماً داخل شاشة الفاتورة.'),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('لاحقاً'),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.settings),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  label: const Text('فتح الإعدادات'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!shouldOpenSettings || !mounted) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const SettingsScreenEnhanced(initialTabIndex: 1),
+      ),
+    );
   }
 
   // ==================== Item Actions ====================
@@ -496,6 +1255,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       switch (field) {
         case 'karat':
           item.karat = value;
+          item.taxRate = _settingsProvider.taxRateForKarat(value);
           requiresManualTargetRecalculation = true;
           break;
         case 'weight':
@@ -515,6 +1275,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         _recalculateManualTargetIfNeeded(item);
       }
     });
+
+    _recomputeCostingPreview();
   }
 
   void _recalculateManualTargetIfNeeded(InvoiceItem item) {
@@ -537,6 +1299,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     setState(() {
       _items.removeAt(index);
     });
+
+    _recomputeCostingPreview();
   }
 
   // ==================== Auto Distribution ====================
@@ -638,22 +1402,62 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       return;
     }
 
-    // 🆕 التحقق من وجود دفعات
-    if (_payments.isEmpty) {
-      _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
+    if (_selectedBranchId == null) {
+      _showError('يرجى اختيار الفرع لإكمال الفاتورة.');
       return;
     }
 
-    // 🆕 التحقق من اكتمال الدفع مع tolerance للفروقات العشرية
-    final total = _calculateGrandTotal();
-    final remaining = (total - _totalPayments).abs();
+    final allowPartialPayments = _settingsProvider.allowPartialInvoicePayments;
 
-    if (remaining > 0.01) {
-      // tolerance = 1 قرش
-      _showError(
-        'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+    // 🆕 التحقق من الدفع (مع دعم البيع الآجل عند تفعيل الإعداد)
+    final total = _calculateGrandTotal();
+    final totalPaid = _totalPayments;
+    final remaining = total - totalPaid;
+
+    final totalCost = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
+    final paidBelowCost = totalPaid + 0.01 < totalCost;
+    final saleBelowCost = total + 0.01 < totalCost;
+
+    if (_payments.isEmpty) {
+      if (!allowPartialPayments) {
+        _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
+        return;
+      }
+
+      final proceed = await _confirmDeferredInvoiceSave(
+        total: total,
+        totalPaid: totalPaid,
+        remaining: total,
+        totalCost: totalCost,
+        paidBelowCost: paidBelowCost,
+        saleBelowCost: saleBelowCost,
       );
-      return;
+      if (!proceed) return;
+    } else {
+      // منع الدفع الزائد
+      if (remaining < -0.01) {
+        _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
+        return;
+      }
+
+      if (remaining > 0.01) {
+        if (!allowPartialPayments) {
+          _showError(
+            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+          );
+          return;
+        }
+
+        final proceed = await _confirmDeferredInvoiceSave(
+          total: total,
+          totalPaid: totalPaid,
+          remaining: remaining,
+          totalCost: totalCost,
+          paidBelowCost: paidBelowCost,
+          saleBelowCost: saleBelowCost,
+        );
+        if (!proceed) return;
+      }
     }
 
     try {
@@ -662,15 +1466,27 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       // إذا لم يتم اختيار عميل، استخدم عميل "نقدي" (ID = 1)
       int customerId = _selectedCustomerId ?? 1;
 
-      // تحقق من وجود عميل "نقدي" في القائمة، إذا لم يكن موجوداً استخدم أول عميل
-      final cashCustomer = widget.customers.firstWhere(
-        (c) => c['name']?.toString().toLowerCase() == 'نقدي' || c['id'] == 1,
-        orElse: () =>
-            widget.customers.isNotEmpty ? widget.customers.first : {'id': 1},
-      );
+      Map<String, dynamic>? cashCustomer = _findCashCustomer();
 
       if (_selectedCustomerId == null) {
-        customerId = cashCustomer['id'] ?? 1;
+        final proceedWithCash = await _confirmUseCashCustomer();
+        if (!proceedWithCash) {
+          _showError('يرجى اختيار عميل لإكمال الفاتورة أو الاستمرار مع العميل النقدي.');
+          return;
+        }
+
+  cashCustomer ??= await _getOrCreateCashCustomer(promptIfMissing: false);
+        if (cashCustomer == null || cashCustomer['id'] == null) {
+          _showError('لا يوجد عميل نقدي متاح. يرجى إنشاء عميل نقدي أو اختيار عميل محدد للمتابعة.');
+          return;
+        }
+
+        customerId = cashCustomer['id'];
+        if (mounted) {
+          setState(() {
+            _selectedCustomerId = customerId;
+          });
+        }
       }
 
       // حساب الإجماليات
@@ -687,7 +1503,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       final invoiceData = {
         'customer_id': customerId,
+        'branch_id': _selectedBranchId,
+        'invoice_type': 'بيع',
         'transaction_type': 'sell',
+        if (Provider.of<AuthProvider>(context, listen: false).username.isNotEmpty)
+          'posted_by': Provider.of<AuthProvider>(context, listen: false).username,
         'date': DateTime.now().toIso8601String(),
         'total': totalAmount,
         'total_weight': totalWeight,
@@ -702,18 +1522,151 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       final response = await apiService.addInvoice(invoiceData);
 
-      if (context.mounted) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ تم حفظ الفاتورة #${response['id']}'),
-            backgroundColor: AppColors.success,
+      if (!mounted) return;
+
+      final invoiceForPrint = Map<String, dynamic>.from(response);
+      // Best-effort enrichment for print header.
+      try {
+        final match = widget.customers.firstWhere(
+          (c) => c['id'].toString() == customerId.toString(),
+        );
+        invoiceForPrint['customer_name'] ??= match['name'] ?? match['customer_name'];
+        invoiceForPrint['customer_phone'] ??= match['phone'] ?? match['customer_phone'];
+      } catch (_) {
+        // ignore
+      }
+
+      final shouldPrint = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('تم حفظ الفاتورة'),
+            content: Text('✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('تم'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.print),
+                label: const Text('طباعة'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted) return;
+      if (shouldPrint == true) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => InvoicePrintScreen(
+              invoice: invoiceForPrint,
+              isArabic: true,
+            ),
           ),
         );
       }
+
+      if (!mounted) return;
+      Navigator.pop(context, true);
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }
+  }
+
+  Future<bool> _confirmDeferredInvoiceSave({
+    required double total,
+    required double totalPaid,
+    required double remaining,
+    required double totalCost,
+    required bool paidBelowCost,
+    required bool saleBelowCost,
+  }) async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final lines = <String>[
+      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+    ];
+
+    if (paidBelowCost || saleBelowCost) {
+      lines.add('');
+      lines.add('⚠️ تحذير:');
+      if (saleBelowCost) {
+        lines.add(
+          'سعر البيع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        );
+      } else if (paidBelowCost) {
+        lines.add(
+          'المدفوع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        );
+      }
+    }
+
+    final content = lines.join('\n');
+
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              backgroundColor: colorScheme.surface,
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.warning_amber,
+                      color: AppColors.warning,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'حفظ كفاتورة آجل؟',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Text(content, style: theme.textTheme.bodyMedium),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: Text(
+                    'إلغاء',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.secondary,
+                    ),
+                  ),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colorScheme.primary,
+                    foregroundColor: colorScheme.onPrimary,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 12,
+                    ),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('حفظ'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
   }
 
   // ==================== Calculations ====================
@@ -732,6 +1685,169 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: AppColors.error),
     );
+  }
+
+  Map<String, dynamic>? _findCashCustomer() {
+    for (final customer in widget.customers) {
+      final rawId = customer['id'];
+      final id = rawId is int ? rawId : int.tryParse(rawId.toString());
+      if (id == null) continue;
+
+      if (_isCashCustomerEntry(customer)) {
+        return {
+          ...customer,
+          'id': id,
+        };
+      }
+    }
+    return null;
+  }
+
+  bool _isCashCustomerEntry(Map<String, dynamic>? customer) {
+    if (customer == null) return false;
+    final name = customer['name']?.toString().toLowerCase() ?? '';
+    final code = customer['customer_code']?.toString().toLowerCase() ?? '';
+    return _containsCashKeyword(name) || _containsCashKeyword(code);
+  }
+
+  bool _containsCashKeyword(String value) {
+    if (value.isEmpty) return false;
+    return value.contains('نقد') || value.contains('كاش') || value.contains('cash');
+  }
+
+  Future<Map<String, dynamic>?> _getOrCreateCashCustomer({bool promptIfMissing = true}) async {
+    final existing = _findCashCustomer();
+    if (existing != null) return existing;
+
+    if (!promptIfMissing) {
+      return _createCashCustomerRecord();
+    }
+
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final shouldCreate = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              backgroundColor: colorScheme.surface,
+              title: Text(
+                'لا يوجد عميل نقدي',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              content: Text(
+                'لا يوجد عميل نقدي في قائمة العملاء الحالية. هل ترغب في إنشاء عميل نقدي افتراضي الآن؟',
+                style: theme.textTheme.bodyMedium,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: Text('إلغاء', style: theme.textTheme.bodyMedium),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('إنشاء عميل نقدي'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!shouldCreate) {
+      return null;
+    }
+
+    return _createCashCustomerRecord();
+  }
+
+  Future<Map<String, dynamic>?> _createCashCustomerRecord() async {
+    try {
+      final api = ApiService();
+      final payload = {
+        'name': 'عميل نقدي',
+        'phone': '',
+        'address_line_1': 'إنشاء تلقائي',
+        'notes': 'تم إنشاؤه تلقائياً للاستخدام كعميل نقدي',
+        'active': true,
+      };
+
+      final response = await api.addCustomer(payload);
+      if (!mounted) return response;
+      setState(() {
+        widget.customers.add(response);
+      });
+      return response;
+    } catch (e) {
+      _showError('فشل إنشاء عميل نقدي: $e');
+      return null;
+    }
+  }
+
+  Future<bool> _confirmUseCashCustomer() async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              backgroundColor: colorScheme.surface,
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.warning_amber, color: AppColors.warning),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'لم يتم اختيار عميل',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Text(
+                'لم يتم اختيار عميل لهذه الفاتورة. يمكنك العودة لاختيار العميل الصحيح أو الاستمرار وتقييد الفاتورة باسم العميل النقدي.',
+                style: theme.textTheme.bodyMedium,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: Text(
+                    'تراجع',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.secondary,
+                    ),
+                  ),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('استمرار مع عميل نقدي'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
   }
 
   // 🆕 Helper methods لأيقونات وألوان طرق الدفع
@@ -773,157 +1889,29 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
   }
 
-  // إضافة عميل جديد
+  // Open AddCustomerScreen for adding a new customer (no identity enforcement for standard sales)
   Future<void> _addNewCustomer() async {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final nameController = TextEditingController();
-    final phoneController = TextEditingController();
-    final addressController = TextEditingController();
-
-    await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: colorScheme.surface,
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.person_add, color: AppColors.success),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'إضافة عميل جديد',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم العميل *',
-                    prefixIcon: Icon(Icons.person),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: phoneController,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'رقم الجوال',
-                    prefixIcon: Icon(Icons.phone),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: addressController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'العنوان',
-                    prefixIcon: Icon(Icons.location_on),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actionsPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 12,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: Text(
-                'إلغاء',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.secondary,
-                ),
-              ),
-            ),
-            FilledButton.icon(
-              onPressed: () async {
-                if (nameController.text.trim().isEmpty) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('⚠️ يرجى إدخال اسم العميل'),
-                      backgroundColor: AppColors.warning.withValues(alpha: 0.9),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                try {
-                  final apiService = ApiService();
-                  final customerData = {
-                    'name': nameController.text.trim(),
-                    'phone': phoneController.text.trim(),
-                    'address_line_1': addressController.text.trim(),
-                    'active': true,
-                  };
-
-                  final response = await apiService.addCustomer(customerData);
-
-                  if (!mounted) return;
-
-                  setState(() {
-                    widget.customers.add(response);
-                    _selectedCustomerId = response['id'];
-                  });
-
-                  Navigator.pop(dialogContext, true);
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('✅ تم إضافة العميل: ${response['name']}'),
-                      backgroundColor: AppColors.success,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                } catch (e) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('❌ فشل إضافة العميل: $e'),
-                      backgroundColor: AppColors.error,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.save),
-              label: const Text('حفظ'),
-              style: FilledButton.styleFrom(
-                backgroundColor: colorScheme.primary,
-                foregroundColor: colorScheme.onPrimary,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+    final result = await Navigator.push<bool?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddCustomerScreen(
+          api: ApiService(),
+          enforceIdentityFields: false,
+          onCustomerSaved: (saved) {
+            if (!mounted) return;
+            setState(() {
+              widget.customers.add(saved);
+              final rawId = saved['id'];
+              _selectedCustomerId = rawId is int ? rawId : int.tryParse(rawId.toString());
+            });
+          },
+        ),
+      ),
     );
+
+    if (result == true) {
+      debugPrint('Customer added via AddCustomerScreen (sales)');
+    }
   }
 
   Future<void> _openCameraScanner() async {
@@ -961,44 +1949,255 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
+    String searchQuery = '';
+    String? karatFilter;
+    String sortMode = 'weight_desc';
+
+    String? normalizeKarat(dynamic value) {
+      if (value == null) return null;
+      if (value is num) {
+        return value.round().toString();
+      }
+      final parsed = double.tryParse(value.toString());
+      if (parsed == null) return null;
+      return parsed.round().toString();
+    }
+
+    bool matchesSearch(Map<String, dynamic> item, String query) {
+      if (query.isEmpty) return true;
+      final normalized = query.toLowerCase();
+      final fields = [
+        item['name'],
+        item['barcode'],
+        item['item_code'],
+        item['category_name'],
+      ];
+      for (final field in fields) {
+        final text = field?.toString().toLowerCase();
+        if (text != null && text.contains(normalized)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    List<Map<String, dynamic>> buildFilteredItems() {
+      final filtered = _availableItems.where((item) {
+        final matches = matchesSearch(item, searchQuery);
+        final itemKarat = normalizeKarat(item['karat']);
+        final karatMatches = karatFilter == null || karatFilter == itemKarat;
+        return matches && karatMatches;
+      }).toList();
+
+      int compareByWeight(Map<String, dynamic> a, Map<String, dynamic> b) {
+        final weightA = _parseDouble(a['weight']);
+        final weightB = _parseDouble(b['weight']);
+        return weightA.compareTo(weightB);
+      }
+
+      int compareByName(Map<String, dynamic> a, Map<String, dynamic> b) {
+        final nameA = (a['name'] ?? '').toString();
+        final nameB = (b['name'] ?? '').toString();
+        return nameA.compareTo(nameB);
+      }
+
+      switch (sortMode) {
+        case 'weight_asc':
+          filtered.sort(compareByWeight);
+          break;
+        case 'name':
+          filtered.sort(compareByName);
+          break;
+        case 'weight_desc':
+        default:
+          filtered.sort((a, b) => compareByWeight(b, a));
+          break;
+      }
+
+      return filtered;
+    }
+
+    final availableKarats = _availableItems
+        .map((item) => normalizeKarat(item['karat']))
+        .where((value) => value != null)
+        .cast<String>()
+        .toSet()
+      ..removeWhere((element) => element.trim().isEmpty);
+    final sortedKarats = availableKarats.toList()
+      ..sort((a, b) => int.parse(a).compareTo(int.parse(b)));
+
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          'اختر صنف',
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: 400,
-          child: ListView.builder(
-            itemCount: _availableItems.length,
-            itemBuilder: (context, index) {
-              final item = _availableItems[index];
-              return ListTile(
-                leading: Icon(Icons.inventory_2, color: colorScheme.primary),
-                title: Text(item['name'] ?? ''),
-                subtitle: Text(
-                  'عيار: ${item['karat']} • ${item['barcode'] ?? ''}',
-                  style: theme.textTheme.bodySmall,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final filteredItems = buildFilteredItems();
+            return AlertDialog(
+              title: Text(
+                'اختر صنف',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
                 ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _addItemFromData(item);
-                },
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
-          ),
-        ],
-      ),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 460,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      decoration: InputDecoration(
+                        labelText: 'بحث بالاسم، الكود أو الباركود',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: searchQuery.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  setDialogState(() => searchQuery = '');
+                                },
+                              )
+                            : null,
+                      ),
+                      onChanged: (value) => setDialogState(() => searchQuery = value.trim()),
+                    ),
+                    const SizedBox(height: 12),
+                    if (availableKarats.isNotEmpty) ...[
+                      Text(
+                        'تصفية حسب العيار',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            FilterChip(
+                              label: const Text('الكل'),
+                              selected: karatFilter == null,
+                              onSelected: (_) => setDialogState(() => karatFilter = null),
+                            ),
+                            const SizedBox(width: 8),
+                            ...sortedKarats.map(
+                              (karat) => Padding(
+                                padding: const EdgeInsetsDirectional.only(end: 8),
+                                child: FilterChip(
+                                  label: Text('عيار $karat'),
+                                  selected: karatFilter == karat,
+                                  onSelected: (_) => setDialogState(() => karatFilter = karat),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Text(
+                      'ترتيب النتائج',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('وزن أعلى'),
+                          selected: sortMode == 'weight_desc',
+                          onSelected: (_) => setDialogState(() => sortMode = 'weight_desc'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('وزن أقل'),
+                          selected: sortMode == 'weight_asc',
+                          onSelected: (_) => setDialogState(() => sortMode = 'weight_asc'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('أبجدي'),
+                          selected: sortMode == 'name',
+                          onSelected: (_) => setDialogState(() => sortMode = 'name'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: filteredItems.isEmpty
+                          ? Center(
+                              child: Text(
+                                'لا توجد أصناف مطابقة لخيارات البحث الحالية',
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: filteredItems.length,
+                              itemBuilder: (context, index) {
+                                final item = filteredItems[index];
+                                final weight = _parseDouble(item['weight']);
+                                final karatLabel = item['karat']?.toString() ?? '-';
+                                final barcode = item['barcode']?.toString() ?? '';
+                                final code = item['item_code']?.toString() ?? '';
+
+                                return Card(
+                                  elevation: 0,
+                                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                                  child: ListTile(
+                                    leading: CircleAvatar(
+                                      backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
+                                      child: Text(
+                                        karatLabel,
+                                        style: theme.textTheme.bodyMedium?.copyWith(
+                                          color: colorScheme.primary,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    title: Text(item['name']?.toString() ?? 'بدون اسم'),
+                                    subtitle: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        if (code.isNotEmpty)
+                                          Text('الكود: $code', style: theme.textTheme.bodySmall),
+                                        if (barcode.isNotEmpty)
+                                          Text('الباركود: $barcode', style: theme.textTheme.bodySmall),
+                                      ],
+                                    ),
+                                    trailing: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          '${weight.toStringAsFixed(3)} جم',
+                                          style: theme.textTheme.titleSmall?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _addItemFromData(item);
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('إلغاء'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1015,6 +2214,18 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         final bodyContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            InvoiceTypeBanner(
+              title: 'فاتورة بيع ذهب جديدة',
+              subtitle:
+                  'لبيع الذهب الجديد مع ضريبة القيمة المضافة ووسائل الدفع المتعددة',
+              color: AppColors.invoiceSaleNew,
+              icon: Icons.point_of_sale_rounded,
+              trailing: Text(
+                'نوع الفاتورة',
+                style: theme.textTheme.labelLarge,
+              ),
+            ),
+            const SizedBox(height: 16),
             _buildCustomerSection(theme),
             const SizedBox(height: 24),
             if (isWideLayout)
@@ -1087,12 +2298,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 ),
               ),
             ),
+            const SizedBox(height: 32),
+            _buildCostingInsightCard(theme),
           ],
         );
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('فاتورة البيع (الهجينة)'),
+            backgroundColor: AppColors.invoiceSaleNew,
+            foregroundColor: Colors.white,
+            iconTheme: const IconThemeData(color: Colors.white),
+            title: const Text('فاتورة البيع '),
             actions: [
               IconButton(
                 tooltip: 'تحديث سعر الذهب',
@@ -1109,6 +2325,301 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildCostingInsightCard(ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+    final hasSnapshot = _avgTotalCostPerMainGram > 0 || _inventoryWeightMain > 0;
+    final invoiceRawWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: AppColors.lightGold.withValues(alpha: 0.4)),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          maintainState: true,
+          initiallyExpanded: false,
+          leading: Icon(Icons.insights, color: AppColors.invoiceSaleNew, size: 28),
+          title: Text(
+            'معلومات التكلفة والتسعير',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+              color: AppColors.deepGold,
+            ),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              hasSnapshot
+                  ? 'متوسط: ${_formatCurrency(_avgTotalCostPerMainGram)}/جم${_invoiceCostTotal > 0 ? ' • تكلفة الفاتورة: ${_formatCurrency(_invoiceCostTotal)}' : ''}'
+                  : 'اضغط لعرض تفاصيل التكلفة والمتوسط المتحرك',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodySmall?.color,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          iconColor: AppColors.primaryGold,
+          collapsedIconColor: AppColors.primaryGold,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header with Title and Main Cost
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'متوسط التكلفة',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                hasSnapshot ? _formatCurrency(_avgTotalCostPerMainGram) : '--',
+                                style: theme.textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.invoiceSaleNew,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                '/ جم',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: AppColors.invoiceSaleNew,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (_invoiceCostTotal > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                    color: AppColors.invoiceSaleNew.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.invoiceSaleNew.withValues(alpha: 0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        'تكلفة الفاتورة',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.invoiceSaleNew,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        _formatCurrency(_invoiceCostTotal),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.invoiceSaleNew,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+
+          if (_isLoadingCosting) ...[
+            const SizedBox(height: 16),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+
+          if (_costingError != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: colorScheme.error.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, size: 20, color: colorScheme.error),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _costingError!,
+                      style: TextStyle(color: colorScheme.error),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 20),
+          const Divider(height: 1),
+          const SizedBox(height: 16),
+
+          // Details Grid
+          Row(
+            children: [
+              Expanded(
+                child: _buildCompactMetric(
+                  theme,
+                  'ذهب / جم',
+                  hasSnapshot ? _formatCurrency(_avgGoldCostPerMainGram) : '--',
+                  Icons.grid_goldenratio,
+                  AppColors.invoiceSaleNew,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildCompactMetric(
+                  theme,
+                  'مصنعية / جم',
+                  hasSnapshot ? _formatCurrency(_avgManufacturingCostPerMainGram) : '--',
+                  Icons.handyman,
+                  AppColors.warning,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // Footer Info
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              _buildCostingInfoChip(
+                theme,
+                icon: Icons.style,
+                label: 'المنهجية: $_costingMethodLabel',
+              ),
+              _buildCostingInfoChip(
+                theme,
+                icon: Icons.inventory_2,
+                label: 'المخزون: ${_formatWeight(_inventoryWeightMain)}',
+              ),
+              _buildCostingInfoChip(
+                theme,
+                icon: Icons.schedule,
+                label: 'تحديث: ${_formatTimestamp(_costingLastUpdated)}',
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              color: AppColors.invoiceSaleNew.withValues(alpha: 0.08),
+              border: Border.all(
+                color: AppColors.invoiceSaleNew.withValues(alpha: 0.4),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.assignment, color: AppColors.invoiceSaleNew),
+                    const SizedBox(width: 8),
+                    Text(
+                      'التكلفة التقديرية للفاتورة الحالية',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (_items.isEmpty)
+                  Text(
+                    'أضف أصنافاً لرؤية التكلفة بناءً على المتوسط المتحرك.',
+                    style: theme.textTheme.bodyMedium,
+                  )
+                else ...[
+                  _buildCostingDetailRow(
+                    theme,
+                    icon: Icons.scale,
+                    title: 'إجمالي الوزن الفعلي',
+                    value: _formatWeight(invoiceRawWeight),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildCostingDetailRow(
+                    theme,
+                    icon: Icons.compass_calibration,
+                    title: 'الوزن المكافئ (${_settingsProvider.mainKarat}K)',
+                    value: _formatWeight(_invoiceWeightMain),
+                  ),
+                  const Divider(height: 24, thickness: 1.2),
+                  _buildCostingDetailRow(
+                    theme,
+                    icon: Icons.local_fire_department,
+                    title: 'تكلفة الذهب المتوقع',
+                    value: _formatCurrency(_invoiceCostGoldComponent),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildCostingDetailRow(
+                    theme,
+                    icon: Icons.handyman,
+                    title: 'تكلفة المصنعية المتراكمة',
+                    value: _formatCurrency(_invoiceCostManufacturingComponent),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(
+                        alpha: theme.brightness == Brightness.dark ? 0.05 : 0.7,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'التكلفة الإجمالية المتوقعة',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          _formatCurrency(_invoiceCostTotal),
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.invoiceSaleNew,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1194,8 +2705,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceVariant.withValues(alpha: 
-                    isDark ? 0.25 : 0.5,
+                  color: colorScheme.surfaceContainerHighest.withValues(
+                    alpha: isDark ? 0.25 : 0.5,
                   ),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1206,7 +2717,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               )
             else
               DropdownButtonFormField<int>(
-                value: _selectedCustomerId,
+                initialValue: _selectedCustomerId,
                 items: widget.customers
                     .map((customer) {
                       final rawId = customer['id'];
@@ -1265,6 +2776,81 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 decoration: InputDecoration(
                   labelText: 'اختر العميل',
                   prefixIcon: Icon(Icons.people, color: colorScheme.primary),
+                ),
+                dropdownColor: theme.cardColor,
+                icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
+              ),
+
+            const SizedBox(height: 14),
+            if (_isLoadingBranches)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (_branchesLoadingError != null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colorScheme.error.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colorScheme.error.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.error_outline, color: colorScheme.error),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'فشل تحميل الفروع: $_branchesLoadingError',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: _loadBranches,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('إعادة'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              DropdownButtonFormField<int>(
+                initialValue: _selectedBranchId,
+                items: _branches
+                    .map((branch) {
+                      final id = _parseInt(branch['id']);
+                      if (id == null) return null;
+                      final name = (branch['name'] ?? 'فرع').toString();
+                      return DropdownMenuItem<int>(
+                        value: id,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.account_tree, color: colorScheme.primary, size: 20),
+                            const SizedBox(width: 10),
+                            Flexible(
+                              child: Text(
+                                name,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    })
+                    .whereType<DropdownMenuItem<int>>()
+                    .toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedBranchId = value;
+                  });
+                },
+                decoration: InputDecoration(
+                  labelText: 'اختر الفرع',
+                  prefixIcon: Icon(Icons.account_tree, color: colorScheme.primary),
                 ),
                 dropdownColor: theme.cardColor,
                 icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
@@ -1383,6 +2969,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   Widget _buildSmartInputSection() {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+  final allowManualItems = _settingsProvider.allowManualInvoiceItems;
 
     return Container(
       decoration: BoxDecoration(
@@ -1451,6 +3038,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 AppColors.success,
                 'قائمة',
                 _showItemSelectionDialog,
+              ),
+              const SizedBox(width: 8),
+              _buildQuickButton(
+                Icons.edit_note,
+                allowManualItems ? AppColors.warning : theme.disabledColor,
+                allowManualItems
+                    ? 'إضافة صنف يدوي'
+                    : 'فعّل من الإعدادات لإضافة صنف يدوي',
+                allowManualItems
+                    ? _showManualItemDialog
+                    : _showManualItemFeatureGuide,
               ),
             ],
           ),
@@ -1637,7 +3235,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: theme.brightness == Brightness.dark
-              ? [colorScheme.surfaceVariant, theme.scaffoldBackgroundColor]
+              ? [
+                  colorScheme.surfaceContainerHighest,
+                  theme.scaffoldBackgroundColor,
+                ]
               : [colorScheme.surface, theme.scaffoldBackgroundColor],
         ),
         borderRadius: BorderRadius.circular(12),
@@ -1694,7 +3295,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           colorScheme.primary.withValues(alpha: 0.15),
         ),
         dataRowColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(MaterialState.selected)) {
+          if (states.contains(WidgetState.selected)) {
             return colorScheme.primary.withValues(alpha: 0.1);
           }
           return theme.cardColor;
@@ -1724,10 +3325,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 InkWell(
                   onTap: () => _showEditDialog(index, 'karat', item.karat),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: AppColors.info.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
@@ -1736,7 +3334,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       ),
                     ),
                     child: Text(
-                      '${item.karat.toStringAsFixed(0)}',
+                      item.karat.toStringAsFixed(0),
                       style: cellStyle,
                     ),
                   ),
@@ -1746,10 +3344,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 InkWell(
                   onTap: () => _showEditDialog(index, 'weight', item.weight),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: AppColors.success.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
@@ -1758,7 +3353,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       ),
                     ),
                     child: Text(
-                      '${item.weight.toStringAsFixed(2)}',
+                      item.weight.toStringAsFixed(2),
                       style: cellStyle,
                     ),
                   ),
@@ -1768,10 +3363,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 InkWell(
                   onTap: () => _showEditDialog(index, 'wage', item.wage),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: AppColors.warning.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
@@ -1780,7 +3372,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       ),
                     ),
                     child: Text(
-                      '${item.wage.toStringAsFixed(2)}',
+                      item.wage.toStringAsFixed(2),
                       style: cellStyle,
                     ),
                   ),
@@ -1788,28 +3380,18 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               ),
               DataCell(
                 Text(
-                  '${item.calculateSellingPricePerGram().toStringAsFixed(2)}',
+                  item.calculateSellingPricePerGram().toStringAsFixed(2),
                   style: cellStyle,
                 ),
               ),
-              DataCell(
-                Text('${item.cost.toStringAsFixed(2)}', style: cellStyle),
-              ),
-              DataCell(
-                Text('${item.net.toStringAsFixed(2)}', style: cellStyle),
-              ),
-              DataCell(
-                Text('${item.tax.toStringAsFixed(2)}', style: cellStyle),
-              ),
+              DataCell(Text(item.cost.toStringAsFixed(2), style: cellStyle)),
+              DataCell(Text(item.net.toStringAsFixed(2), style: cellStyle)),
+              DataCell(Text(item.tax.toStringAsFixed(2), style: cellStyle)),
               DataCell(
                 InkWell(
-                  onTap: () =>
-                      _showEditDialog(index, 'total', item.totalWithTax),
+                  onTap: () => _showEditDialog(index, 'total', item.totalWithTax),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: AppColors.karat24.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
@@ -1825,14 +3407,18 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 ),
               ),
               DataCell(
-                IconButton(
-                  icon: const Icon(
-                    Icons.delete,
-                    size: 22,
-                    color: AppColors.error,
-                  ),
-                  onPressed: () => _removeItem(index),
-                  tooltip: 'حذف',
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.delete,
+                        size: 22,
+                        color: AppColors.error,
+                      ),
+                      onPressed: () => _removeItem(index),
+                      tooltip: 'حذف',
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1848,6 +3434,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     double currentValue,
   ) async {
     final controller = TextEditingController(text: currentValue.toString());
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -1899,11 +3489,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 Navigator.pop(context);
               }
             },
-            child: const Text('حفظ'),
             style: ElevatedButton.styleFrom(
               backgroundColor: colorScheme.primary,
               foregroundColor: colorScheme.onPrimary,
             ),
+            child: const Text('حفظ'),
           ),
         ],
       ),
@@ -1917,11 +3507,20 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
+    final totalWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
+    final totalWeight24kEq = _items.fold<double>(
+      0.0,
+      (sum, item) => sum + (item.weight * (item.karat / 24.0)),
+    );
+
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: isDark
-              ? [colorScheme.surfaceVariant, theme.scaffoldBackgroundColor]
+              ? [
+                  colorScheme.surfaceContainerHighest,
+                  theme.scaffoldBackgroundColor,
+                ]
               : [colorScheme.surface, theme.scaffoldBackgroundColor],
         ),
         borderRadius: BorderRadius.circular(12),
@@ -1944,8 +3543,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               ),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(0, 56),
-                backgroundColor: AppColors.karat24,
-                foregroundColor: Colors.white,
+                backgroundColor:
+                    isDark ? AppColors.karat24 : AppColors.primaryGold,
+                foregroundColor: isDark ? Colors.white : Colors.black,
                 disabledBackgroundColor: theme.disabledColor.withValues(alpha: 0.2),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -2002,6 +3602,22 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             blurRadius: 2,
                           ),
                         ] : null,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'الوزن: ${totalWeight.toStringAsFixed(3)} جم • معادل 24: ${totalWeight24kEq.toStringAsFixed(3)} جم',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: isDark ? Colors.white.withValues(alpha: 0.9) : Colors.black87,
+                        fontWeight: FontWeight.w600,
+                        shadows: !isDark
+                            ? [
+                                Shadow(
+                                  color: Colors.white.withValues(alpha: 0.8),
+                                  blurRadius: 2,
+                                ),
+                              ]
+                            : null,
                       ),
                     ),
                   ],
@@ -2210,11 +3826,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       return Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: index % 2 == 0
-                              ? theme.colorScheme.surface
-                              : theme.colorScheme.surfaceVariant.withValues(alpha: 
-                                  isDark ? 0.3 : 0.5,
-                                ),
+              color: index % 2 == 0
+                ? theme.colorScheme.surface
+                : theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: isDark ? 0.3 : 0.5),
                           border: Border(
                             bottom: BorderSide(color: dividerColor, width: 1),
                           ),
@@ -2649,7 +4264,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       _showAdvancedPaymentOptions)
                     const SizedBox(height: 8),
 
-                  // Row 3: المبلغ وزر الإضافة
+                  // Row 2: المبلغ وزر الإضافة (في صف واحد)
                   Row(
                     children: [
                       // حقل المبلغ مع أيقونة ملء باقي المبلغ
@@ -2746,11 +4361,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         ),
                       ),
                       const SizedBox(width: 8),
-
                       // زر الإضافة
                       ElevatedButton.icon(
                         onPressed: () {
-                          // 🆕 التحقق من اختيار الخزينة إذا كانت القائمة غير فارغة
                           if (_safeBoxes.isNotEmpty &&
                               _selectedSafeBoxId == null) {
                             _showError('اختر الخزينة أولاً');
@@ -2777,7 +4390,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           backgroundColor: colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
                           elevation: 3,
-                          shadowColor: colorScheme.primary.withValues(alpha: 0.4),
+                          shadowColor:
+                              colorScheme.primary.withValues(alpha: 0.4),
                         ),
                       ),
                     ],
@@ -3081,11 +4695,13 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       ),
     );
   }
+
 }
+
 
 // ==================== Invoice Item Model ====================
 class InvoiceItem {
-  final int id;
+  final int? id;
   final String name;
   final String barcode;
   double karat;
@@ -3093,7 +4709,9 @@ class InvoiceItem {
   double wage; // أجور المصنعية للجرام الواحد
   final double goldPrice24k;
   final int mainKarat;
-  final double taxRate;
+  double taxRate;
+  double _avgGoldCostPerMainGram;
+  double _avgManufacturingCostPerMainGram;
 
   // الربح الموزع (يتم حسابه في _distributeAmount)
   double profit = 0.0;
@@ -3106,7 +4724,7 @@ class InvoiceItem {
   double? get manualTargetTotal => _targetTotal;
 
   InvoiceItem({
-    required this.id,
+    this.id,
     required this.name,
     required this.barcode,
     required this.karat,
@@ -3115,15 +4733,27 @@ class InvoiceItem {
     required this.goldPrice24k,
     required this.mainKarat,
     required this.taxRate,
-  });
+    required double avgGoldCostPerMainGram,
+    required double avgManufacturingCostPerMainGram,
+  })  : _avgGoldCostPerMainGram = avgGoldCostPerMainGram,
+        _avgManufacturingCostPerMainGram = avgManufacturingCostPerMainGram;
 
   // حساب سعر الجرام الخام (سعر الذهب فقط حسب العيار)
   double calculatePricePerGram() {
     return goldPrice24k * (karat / 24.0);
   }
 
+  double get weightInMainKarat {
+    if (mainKarat <= 0) return weight;
+    return weight * (karat / mainKarat);
+  }
+
   // التكلفة = الوزن × (سعر الذهب للجرام + المصنعية للجرام)
   double get cost {
+    final totalAvg = _avgGoldCostPerMainGram + _avgManufacturingCostPerMainGram;
+    if (totalAvg > 0) {
+      return weightInMainKarat * totalAvg;
+    }
     return weight * (calculatePricePerGram() + wage);
   }
 
@@ -3170,9 +4800,17 @@ class InvoiceItem {
     _targetTotal = null;
   }
 
+  void updateCostingSnapshot({
+    required double avgGoldPerMainGram,
+    required double avgManufacturingPerMainGram,
+  }) {
+    _avgGoldCostPerMainGram = avgGoldPerMainGram;
+    _avgManufacturingCostPerMainGram = avgManufacturingPerMainGram;
+  }
+
   Map<String, dynamic> toJson() {
     return {
-      'item_id': id,
+      if (id != null) 'item_id': id,
       'name': name,
       'karat': karat,
       'weight': weight,

@@ -2,9 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_service.dart';
+import '../providers/auth_provider.dart';
 import 'accounts_screen.dart';
 import 'barcode_print_screen.dart';
 import 'customers_screen.dart';
@@ -12,10 +14,9 @@ import 'invoice_print_screen.dart';
 import 'voucher_print_screen.dart';
 import 'journal_entry_print_screen.dart';
 import 'general_ledger_screen_v2.dart';
-import 'print_template_designer_screen.dart';
 import 'reports/inventory_status_report_screen.dart';
 import 'reports/sales_overview_report_screen.dart';
-import 'template_positioning_screen.dart';
+import 'template_studio_screen.dart';
 import 'trial_balance_screen_v2.dart';
 
 class PrintingCenterScreen extends StatefulWidget {
@@ -124,20 +125,12 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
 
   final List<Map<String, dynamic>> _templateShortcuts = [
     {
-      'titleAr': 'قالب فاتورة ذهب كلاسيكي',
-      'titleEn': 'Classic gold invoice',
-      'descriptionAr': 'خلفية ذهبية وخط ديواني للأسماء',
-      'descriptionEn': 'Gold background with elegant typography',
-      'icon': Icons.layers_outlined,
-      'route': 'designer',
-    },
-    {
-      'titleAr': 'محاذاة العناصر المتقدمة',
-      'titleEn': 'Advanced element positioning',
-      'descriptionAr': 'اضبط مواقع الحقول بدقة على القالب',
-      'descriptionEn': 'Fine tune element positioning with snapping',
-      'icon': Icons.grid_4x4,
-      'route': 'positioning',
+      'titleAr': 'استديو القوالب',
+      'titleEn': 'Template studio',
+      'descriptionAr': 'قوالب جاهزة بمقاسات طباعة + تصميم قالب جديد',
+      'descriptionEn': 'Ready presets + design new templates',
+      'icon': Icons.auto_awesome_mosaic_outlined,
+      'route': 'studio',
     },
     {
       'titleAr': 'نسخ تلقائي بالبريد الإلكتروني',
@@ -301,6 +294,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     _initializeSettings();
   }
 
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -377,14 +371,9 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           title: Text(isArabic ? 'مركز الطباعة' : 'Printing Center'),
           actions: [
             IconButton(
-              tooltip: isArabic ? 'القوالب المتقدمة' : 'Template center',
+              tooltip: isArabic ? 'استديو القوالب' : 'Template studio',
               icon: const Icon(Icons.view_carousel_outlined),
-              onPressed: () => _openTemplateDesigner(isArabic: isArabic),
-            ),
-            IconButton(
-              tooltip: isArabic ? 'تخطيط العناصر' : 'Element positioning',
-              icon: const Icon(Icons.grid_view_outlined),
-              onPressed: () => _openTemplatePositioning(isArabic: isArabic),
+              onPressed: () => _openTemplateStudio(isArabic: isArabic),
             ),
             IconButton(
               tooltip: isArabic ? 'إعدادات الطباعة' : 'Print settings',
@@ -407,7 +396,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               const SizedBox(height: 16),
               _buildKpiSection(theme, isArabic),
               const SizedBox(height: 16),
-              _buildCategoryFilters(theme, isArabic),
+              // Category filters removed at user's request
               const SizedBox(height: 16),
               _buildQuickActions(theme, isArabic),
               const SizedBox(height: 16),
@@ -571,8 +560,8 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
-        color: color.withValues(alpha: 0.08),
+        border: Border.all(color: color.withOpacity(0.35)),
+        color: color.withOpacity(0.08),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -580,7 +569,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           Row(
             children: [
               CircleAvatar(
-                backgroundColor: color.withValues(alpha: 0.15),
+                backgroundColor: color.withOpacity(0.15),
                 child: Icon(step['icon'] as IconData, color: color),
               ),
               const SizedBox(width: 12),
@@ -588,7 +577,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
+                  color: color.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
@@ -735,7 +724,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           Row(
             children: [
               CircleAvatar(
-                backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.12),
+                backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
                 child: Icon(_getCategoryIcon(job['category'] as String)),
               ),
               const SizedBox(width: 12),
@@ -835,7 +824,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                     height: 220,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(16),
-                      color: Colors.black.withValues(alpha: 0.04),
+                      color: Colors.black.withOpacity(0.04),
                     ),
                     child: const Center(
                       child: Icon(Icons.picture_as_pdf, size: 84),
@@ -948,7 +937,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        color: Colors.black.withValues(alpha: 0.03),
+        color: Colors.black.withOpacity(0.03),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1287,7 +1276,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: Colors.black.withOpacity(0.05),
                   blurRadius: 10,
                   offset: const Offset(0, 8),
                 ),
@@ -1298,7 +1287,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               children: [
                 CircleAvatar(
                   backgroundColor:
-                      theme.colorScheme.primary.withValues(alpha: 0.12),
+                      theme.colorScheme.primary.withOpacity(0.12),
                   child: Icon(_getKpiIcon(kpi['icon']!),
                       color: theme.colorScheme.primary),
                 ),
@@ -1342,40 +1331,9 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     }
   }
 
-  Widget _buildCategoryFilters(ThemeData theme, bool isArabic) {
-    final categories = [
-      {'id': 'all', 'labelAr': 'الكل', 'labelEn': 'All'},
-      {'id': 'invoices', 'labelAr': 'الفواتير', 'labelEn': 'Invoices'},
-      {'id': 'vouchers', 'labelAr': 'السندات', 'labelEn': 'Vouchers'},
-      {'id': 'reports', 'labelAr': 'التقارير', 'labelEn': 'Reports'},
-      {'id': 'barcodes', 'labelAr': 'الباركود', 'labelEn': 'Barcodes'},
-      {'id': 'statements', 'labelAr': 'الكشوف', 'labelEn': 'Statements'},
-    ];
+  // Category filters were removed per user request.
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 8,
-      children: categories.map((category) {
-        final categoryId = category['id']!;
-        final isSelected = _selectedCategory == null
-            ? categoryId == 'all'
-            : _selectedCategory == categoryId;
-        return ChoiceChip(
-          label: Text(isArabic ? category['labelAr']! : category['labelEn']!),
-          selected: isSelected,
-          onSelected: (value) {
-            setState(() {
-              if (categoryId == 'all') {
-                _selectedCategory = null;
-              } else {
-                _selectedCategory = value ? categoryId : null;
-              }
-            });
-          },
-        );
-      }).toList(),
-    );
-  }
+  // removed _scrollToCategory helper - no longer used
 
   Widget _buildQuickActions(ThemeData theme, bool isArabic) {
     return Card(
@@ -1395,22 +1353,68 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               spacing: 12,
               runSpacing: 12,
               children: _quickActions.map((action) {
-                return ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        theme.colorScheme.primary.withValues(alpha: 0.08),
-                    foregroundColor: theme.colorScheme.primary,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
+                final label = isArabic ? action['titleAr'] as String : action['titleEn'] as String;
+                final icon = action['icon'] as IconData;
+
+                return Tooltip(
+                  message: label,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.02),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Material(
+                        color: theme.cardColor,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: theme.dividerColor),
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () => _handleQuickAction(action['action'] as String),
+                          overlayColor: MaterialStateProperty.resolveWith((states) {
+                            if (states.contains(MaterialState.pressed)) {
+                              return theme.colorScheme.primary.withOpacity(0.12);
+                            } else if (states.contains(MaterialState.hovered)) {
+                              return theme.colorScheme.primary.withOpacity(0.06);
+                            }
+                            return null;
+                          }),
+                          child: Container(
+                            constraints: const BoxConstraints(minHeight: 48),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: theme.colorScheme.primary.withOpacity(0.12),
+                                  ),
+                                  child: Icon(icon, color: theme.colorScheme.primary, size: 18),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  label,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                  onPressed: () =>
-                      _handleQuickAction(action['action'] as String),
-                  icon: Icon(action['icon'] as IconData),
-                  label: Text(
-                    isArabic ? action['titleAr']! : action['titleEn']!,
                   ),
                 );
               }).toList(),
@@ -1736,7 +1740,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: CircleAvatar(
                   backgroundColor:
-                      theme.colorScheme.primary.withValues(alpha: 0.12),
+                      theme.colorScheme.primary.withOpacity(0.12),
                   child: const Icon(Icons.print_outlined),
                 ),
                 title: Text(isArabic
@@ -1835,7 +1839,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                           children: [
                             CircleAvatar(
                               backgroundColor: theme.colorScheme.primary
-                                  .withValues(alpha: 0.15),
+                                  .withOpacity(0.15),
                               child: Icon(
                                 template['icon'] as IconData,
                                 color: theme.colorScheme.primary,
@@ -1920,7 +1924,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                     Container(
                       decoration: BoxDecoration(
                         color: (option['color'] as Color)
-                            .withValues(alpha: 0.12),
+                            .withOpacity(0.12),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     padding: const EdgeInsets.all(10),
@@ -1967,7 +1971,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           label:
             Text(_getCategoryLabel(option['category'], isArabic)),
           backgroundColor: (option['color'] as Color)
-            .withValues(alpha: 0.15),
+            .withOpacity(0.15),
                   ),
                   if (!available)
                     const Chip(
@@ -2147,7 +2151,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
 
   Future<void> _handleQuickAction(String action) async {
     if (action == 'design_template') {
-      _openTemplateDesigner(isArabic: widget.isArabic);
+      _openTemplateStudio(isArabic: widget.isArabic);
       return;
     }
     await _handleAction(action);
@@ -2156,11 +2160,8 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
   void _handleTemplateShortcut(
       Map<String, dynamic> shortcut, bool isArabic) {
     switch (shortcut['route']) {
-      case 'designer':
-        _openTemplateDesigner(isArabic: isArabic);
-        break;
-      case 'positioning':
-        _openTemplatePositioning(isArabic: isArabic);
+      case 'studio':
+        _openTemplateStudio(isArabic: isArabic);
         break;
       default:
         _showSnack(isArabic
@@ -2169,18 +2170,10 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     }
   }
 
-  void _openTemplateDesigner({required bool isArabic}) {
+  void _openTemplateStudio({required bool isArabic}) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => PrintTemplateDesignerScreen(isArabic: isArabic),
-      ),
-    );
-  }
-
-  void _openTemplatePositioning({required bool isArabic}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TemplatePositioningScreen(isArabic: isArabic),
+        builder: (_) => TemplateStudioScreen(isArabic: isArabic),
       ),
     );
   }
@@ -2318,7 +2311,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           jobId: _generateJobId('RPT-INV'),
           titleAr: titles['ar']!,
           titleEn: titles['en']!,
-          etaAr: 'جارٍ تحميل مخزون الفروع',
+          etaAr: 'جارٍ تحميل مخزون مكاتب التسكير',
           etaEn: 'Loading inventory workspace',
           metaAr: {
             'التفاصيل': 'اضبط الأعيرة والفرز داخل الشاشة',
@@ -2414,7 +2407,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
             'Note': 'Use the statement button then export PDF',
             'Hint': 'Filter by date & karat before printing',
           },
-          builder: (_) => const AccountsScreen(),
+          builder: (_) => const AccountsScreen(initialOnlyDetailAccounts: true),
         );
         break;
       }
@@ -2626,7 +2619,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                   return ListTile(
                     leading: CircleAvatar(
                       backgroundColor:
-                          const Color(0xFFD4AF37).withValues(alpha: 0.15),
+                          const Color(0xFFD4AF37).withOpacity(0.15),
                       child: Text(
                         '#${invoice['invoice_type_id']}',
                         style: const TextStyle(
@@ -2651,7 +2644,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                             ),
                             side: BorderSide.none,
                             color: WidgetStatePropertyAll(
-                              Colors.green.withValues(alpha: 0.15),
+                              Colors.green.withOpacity(0.15),
                             ),
                           )
                         : null,
@@ -2667,6 +2660,14 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
   }
 
   Future<void> _showVoucherPickerAndPrint(String action) async {
+    final auth = context.read<AuthProvider>();
+    if (!auth.hasPermission('vouchers.view')) {
+      _showSnack(widget.isArabic
+          ? 'ليس لديك صلاحية لعرض السندات'
+          : 'You do not have permission to view vouchers');
+      return;
+    }
+
     try {
       final response = await _apiService.getVouchers(page: 1, perPage: 50);
       if (!mounted) return;
@@ -2830,7 +2831,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                       backgroundColor: (isReceipt
                               ? Colors.green
                               : Colors.orange)
-                          .withValues(alpha: 0.15),
+                          .withOpacity(0.15),
                       child: Icon(
                         isReceipt ? Icons.arrow_downward : Icons.arrow_upward,
                         color: isReceipt ? Colors.green : Colors.orange,
@@ -2852,7 +2853,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                             ),
                             side: BorderSide.none,
                             color: WidgetStatePropertyAll(
-                              Colors.green.withValues(alpha: 0.15),
+                              Colors.green.withOpacity(0.15),
                             ),
                           )
                         : null,
@@ -2985,7 +2986,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                   return ListTile(
                     leading: CircleAvatar(
                       backgroundColor:
-                          Colors.teal.withValues(alpha: 0.15),
+                          Colors.teal.withOpacity(0.15),
                       child: const Icon(Icons.swap_horiz, color: Colors.teal),
                     ),
                     title: Text(
@@ -3004,7 +3005,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                             ),
                             side: BorderSide.none,
                             color: WidgetStatePropertyAll(
-                              Colors.green.withValues(alpha: 0.15),
+                              Colors.green.withOpacity(0.15),
                             ),
                           )
                         : null,
@@ -3114,7 +3115,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
             final item = items[index] as Map<String, dynamic>;
             return ListTile(
               leading: CircleAvatar(
-                backgroundColor: Colors.blue.withValues(alpha: 0.1),
+                backgroundColor: Colors.blue.withOpacity(0.1),
                 child: Text(item['karat']?.toString() ?? '21K'),
               ),
               title: Text(item['name']?.toString() ?? ''),
@@ -3639,7 +3640,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: (option['color'] as Color).withValues(alpha: 0.1),
+                  color: (option['color'] as Color).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
@@ -4081,7 +4082,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                     margin: const EdgeInsets.symmetric(vertical: 4),
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+                        backgroundColor: const Color(0xFFD4AF37).withOpacity(0.2),
                         child: Text(
                           '#${invoice['invoice_type_id']}',
                           style: const TextStyle(

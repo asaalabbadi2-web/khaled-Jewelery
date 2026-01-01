@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16
+    container_name: yasargold-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yasargold}
+      POSTGRES_USER: ${POSTGRES_USER:-yasargold}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: yasargold-backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://yasargold:change_me@db:5432/yasargold}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      BYPASS_AUTH_FOR_DEVELOPMENT: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nginx:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        API_BASE_URL: /api
+    container_name: yasargold-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

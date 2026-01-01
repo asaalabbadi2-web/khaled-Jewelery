@@ -354,7 +354,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
                         ),
                         child: pw.Center(
                           child: pw.Text(
-                            widget.isArabic ? 'يسر' : 'YASAR',
+                            widget.isArabic ? 'خالد' : 'KHALED',
                             style: pw.TextStyle(
                               color: PdfColors.white,
                               fontWeight: pw.FontWeight.bold,

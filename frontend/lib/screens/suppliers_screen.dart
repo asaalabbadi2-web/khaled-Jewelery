@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart';
 import 'add_supplier_screen.dart';
-import 'supplier_ledger_screen.dart';
+import 'account_statement_screen.dart';
 
 class SuppliersScreen extends StatefulWidget {
   final ApiService api;
@@ -128,11 +128,10 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => SupplierLedgerScreen(
-                                api: widget.api,
-                                supplierId: supplierId,
-                                supplierName: supplierName,
-                                isArabic: isAr,
+                              builder: (context) => AccountStatementScreen(
+                                accountId: supplierId,
+                                accountName: supplierName,
+                                entityType: 'supplier',
                               ),
                             ),
                           );

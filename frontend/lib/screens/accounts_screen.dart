@@ -4,7 +4,9 @@ import 'account_statement_screen.dart';
 import 'account_ledger_screen.dart';
 
 class AccountsScreen extends StatefulWidget {
-  const AccountsScreen({super.key});
+  final bool initialOnlyDetailAccounts;
+
+  const AccountsScreen({super.key, this.initialOnlyDetailAccounts = false});
 
   @override
   State<AccountsScreen> createState() => _AccountsScreenState();
@@ -15,12 +17,13 @@ class _AccountsScreenState extends State<AccountsScreen> {
   List<dynamic> _filteredAccounts = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
-  bool _onlyDetailAccounts = false;
+  late bool _onlyDetailAccounts;
   bool _onlyWithBalance = false;
 
   @override
   void initState() {
     super.initState();
+    _onlyDetailAccounts = widget.initialOnlyDetailAccounts;
     _fetchAccounts();
     _searchController.addListener(_filterAccounts);
   }
@@ -102,7 +105,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('حسابات العملاء'),
+        title: const Text('جميع الحسابات'),
         actions: [
           IconButton(
             icon: const Icon(Icons.filter_list),
@@ -226,21 +229,19 @@ class _AccountsScreenState extends State<AccountsScreen> {
       subtitle += '\nالتصنيف: ${account['type']}';
     }
 
-    String trailingText = '';
+    String? cashLine;
+    String? goldLine;
     if (balances != null) {
       final cashBalance = balances['cash'];
       if (cashBalance is num && cashBalance.abs() > 0.01) {
-        trailingText += 'نقد: ${cashBalance.toStringAsFixed(2)}';
+        cashLine = 'نقد: ${cashBalance.toStringAsFixed(2)}';
       }
 
       final weight = balances['weight'] as Map<String, dynamic>?;
       if (weight != null) {
         final weightTotal = weight['total'];
         if (weightTotal is num && weightTotal.abs() > 0.001) {
-          if (trailingText.isNotEmpty) {
-            trailingText += '\n';
-          }
-          trailingText += 'ذهب: ${weightTotal.toStringAsFixed(3)} جم';
+          goldLine = 'ذهب: ${weightTotal.toStringAsFixed(3)} جم';
         }
       }
     }
@@ -259,23 +260,36 @@ class _AccountsScreenState extends State<AccountsScreen> {
           account['name'] ?? 'N/A',
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text(subtitle),
+        subtitle: Text(subtitle, maxLines: 3, overflow: TextOverflow.ellipsis),
         trailing: Column(
+          mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            if (trailingText.isNotEmpty)
+            if (cashLine != null)
               Text(
-                trailingText,
+                cashLine,
                 textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 12),
               ),
-            const SizedBox(height: 4),
+            if (goldLine != null)
+              Text(
+                goldLine,
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            if (cashLine != null || goldLine != null) const SizedBox(height: 2),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
                   icon: const Icon(Icons.book, size: 18),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
                   tooltip: 'دفتر الأستاذ',
                   onPressed: () {
                     Navigator.push(
@@ -289,7 +303,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     );
                   },
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 const Icon(Icons.arrow_forward_ios, size: 14),
               ],
             ),
