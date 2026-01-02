@@ -836,22 +836,39 @@ def check_setup_status():
     """فحص ما إذا كان النظام بحاجة لإعداد مستخدم أولي"""
     try:
         active_users = User.query.filter_by(is_active=True).count()
+        active_app_users = AppUser.query.filter_by(is_active=True).count()
+        needs_setup = (active_users + active_app_users) == 0
 
-        if active_users == 0:
+        settings = Settings.query.first()
+        policy = None
+        if settings and getattr(settings, 'password_policy', None):
+            try:
+                import json as _json
+                policy = _json.loads(settings.password_policy)
+            except Exception:
+                policy = None
+
+        if needs_setup:
             return jsonify({
                 'success': True,
                 'needs_setup': True,
+                # Backward compatibility for older Flutter flows
                 'default_user': {
                     'username': 'admin',
                     'full_name': 'مدير النظام',
-                    'role': 'admin',
+                    'role': 'system_admin',
                     'is_active': True,
-                }
+                },
+                'company_name': (settings.company_name if settings else 'مجوهرات خالد'),
+                'password_policy': policy or {
+                    'min_length': 6,
+                    'require_numbers': False,
+                },
             }), 200
 
         return jsonify({
             'success': True,
-            'needs_setup': False
+            'needs_setup': False,
         }), 200
 
     except Exception as e:
@@ -859,6 +876,129 @@ def check_setup_status():
             'success': False,
             'message': str(e)
         }), 500
+
+
+@auth_bp.route('/auth/setup-initial', methods=['POST'])
+def setup_initial_admin():
+    """Initial bootstrap: create the first admin user and basic settings.
+
+    Allowed only when there are no active users (User/AppUser).
+
+    Body:
+    {
+      "username": "admin",           # optional, defaults to admin
+      "full_name": "مدير النظام",   # optional
+      "password": "...",            # required
+      "company_name": "..."         # optional
+    }
+    """
+    try:
+        # Guard: allow setup only on empty system
+        active_users = User.query.filter_by(is_active=True).count()
+        active_app_users = AppUser.query.filter_by(is_active=True).count()
+        if (active_users + active_app_users) > 0:
+            return jsonify({
+                'success': False,
+                'message': 'تم إعداد النظام مسبقاً',
+                'error': 'already_setup',
+            }), 409
+
+        data = request.get_json() or {}
+        username = (data.get('username') or 'admin')
+        full_name = (data.get('full_name') or 'مدير النظام')
+        password = (data.get('password') or '')
+        company_name = (data.get('company_name') or '').strip()
+
+        username = str(username).strip()
+        full_name = str(full_name).strip() if full_name is not None else 'مدير النظام'
+        password = str(password)
+
+        if not username:
+            return jsonify({'success': False, 'message': 'اسم المستخدم مطلوب', 'error': 'username_required'}), 400
+        if not password:
+            return jsonify({'success': False, 'message': 'كلمة المرور مطلوبة', 'error': 'password_required'}), 400
+
+        settings = Settings.query.first()
+        # Password policy
+        min_length = 6
+        require_numbers = False
+        if settings and getattr(settings, 'password_policy', None):
+            try:
+                import json as _json
+                decoded = _json.loads(settings.password_policy)
+                if isinstance(decoded, dict):
+                    min_length = int(decoded.get('min_length') or min_length)
+                    require_numbers = bool(decoded.get('require_numbers', require_numbers))
+            except Exception:
+                pass
+
+        if len(password) < max(4, min_length):
+            return jsonify({
+                'success': False,
+                'message': f'كلمة المرور يجب أن تكون {max(4, min_length)} أحرف على الأقل',
+                'error': 'weak_password',
+            }), 400
+        if require_numbers and not any(ch.isdigit() for ch in password):
+            return jsonify({
+                'success': False,
+                'message': 'كلمة المرور يجب أن تحتوي على رقم واحد على الأقل',
+                'error': 'weak_password',
+            }), 400
+
+        # Ensure Settings exists and update minimal identity info
+        if not settings:
+            settings = Settings()
+            db.session.add(settings)
+        if company_name:
+            settings.company_name = company_name
+
+        # Prevent collisions (even though system is empty, handle edge cases)
+        if User.query.filter(func.lower(func.trim(User.username)) == username.lower()).first() is not None:
+            return jsonify({'success': False, 'message': 'اسم المستخدم مستخدم بالفعل', 'error': 'username_taken'}), 409
+        if AppUser.query.filter(func.lower(func.trim(AppUser.username)) == username.lower()).first() is not None:
+            return jsonify({'success': False, 'message': 'اسم المستخدم مستخدم بالفعل', 'error': 'username_taken'}), 409
+
+        # Create legacy User (for older parts of the system)
+        user = User(
+            username=username,
+            full_name=(full_name or 'مدير النظام'),
+            is_active=True,
+            is_admin=True,
+            created_by='setup',
+        )
+        user.set_password(password)
+        db.session.add(user)
+
+        # Create AppUser (for Flutter / permissions)
+        app_user = AppUser(
+            username=username,
+            full_name=(full_name or 'مدير النظام'),
+            role='system_admin',
+            is_active=True,
+        )
+        app_user.set_password(password)
+        db.session.add(app_user)
+        db.session.commit()
+
+        # Issue tokens for the AppUser (Flutter expects this)
+        token = generate_token(app_user)
+        refresh_token = _issue_refresh_token_for_user(app_user, user_type='app_user', days=30)
+
+        return jsonify({
+            'success': True,
+            'message': 'تم إعداد النظام بنجاح',
+            'token': token,
+            'refresh_token': refresh_token,
+            'user': app_user.to_dict(include_employee=True),
+            'user_type': 'app_user',
+        }), 200
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'اسم المستخدم مستخدم بالفعل', 'error': 'username_taken'}), 409
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @auth_bp.route('/auth/me', methods=['GET'])

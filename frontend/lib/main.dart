@@ -12,6 +12,7 @@ import 'screens/add_item_screen_enhanced.dart';
 import 'screens/items_screen_enhanced.dart';
 import 'api_service.dart';
 import 'screens/login_screen.dart';
+import 'screens/initial_setup_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -192,6 +193,16 @@ class AuthGate extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
+        if (auth.isLoading) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (auth.needsSetup) {
+          return const InitialSetupScreen();
+        }
+
         if (auth.isAuthenticated) {
           return HomeScreenEnhanced(
             onToggleLocale: onToggleLocale,

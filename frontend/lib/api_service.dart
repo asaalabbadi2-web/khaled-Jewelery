@@ -2952,6 +2952,37 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> setupInitialSystem({
+    String username = 'admin',
+    required String password,
+    String? fullName,
+    String? companyName,
+  }) async {
+    final payload = <String, dynamic>{
+      'username': username,
+      'password': password,
+      if (fullName != null) 'full_name': fullName,
+      if (companyName != null) 'company_name': companyName,
+    };
+
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/setup-initial'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200) {
+      return decoded as Map<String, dynamic>;
+    }
+
+    if (decoded is Map && decoded['message'] is String) {
+      throw Exception(decoded['message']);
+    }
+
+    throw Exception('فشل تهيئة النظام');
+  }
+
   // ---------------------------------------------------------------------------
   // Payroll API
   // ---------------------------------------------------------------------------

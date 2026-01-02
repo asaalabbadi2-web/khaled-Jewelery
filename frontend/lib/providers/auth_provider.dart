@@ -12,10 +12,12 @@ class AuthProvider extends ChangeNotifier {
 
   AppUserModel? _currentUser;
   bool _loading = false;
+  bool _needsSetup = false;
 
   AppUserModel? get currentUser => _currentUser;
   bool get isAuthenticated => _currentUser != null;
   bool get isLoading => _loading;
+  bool get needsSetup => _needsSetup;
 
   String get username => _currentUser?.username ?? '';
   String get role => _currentUser?.role ?? '';
@@ -56,6 +58,7 @@ class AuthProvider extends ChangeNotifier {
         try {
           final decoded = json.decode(raw) as Map<String, dynamic>;
           _currentUser = AppUserModel.fromStorageMap(decoded);
+          _needsSetup = false;
           return;
         } catch (error) {
           if (kDebugMode) {
@@ -68,7 +71,7 @@ class AuthProvider extends ChangeNotifier {
       // لم يتم العثور على مستخدم محفوظ - تحقق من حالة الإعداد
       final needsSetup = await _checkSetup();
       if (needsSetup) {
-        return; // تم تسجيل الدخول التلقائي في _checkSetup
+        return;
       }
     } finally {
       _loading = false;
@@ -92,27 +95,90 @@ class AuthProvider extends ChangeNotifier {
       final response = await api.checkSetup();
 
       if (response['needs_setup'] == true) {
-        // تسجيل دخول تلقائي بالمستخدم الافتراضي
-        final defaultUserData =
-            response['default_user'] as Map<String, dynamic>;
-        _currentUser = AppUserModel.fromJson(defaultUserData);
-
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(
-          _storageKey,
-          json.encode(_currentUser!.toStorageMap()),
-        );
-
-        notifyListeners();
+        // النظام يحتاج تهيئة أولية (لا نقوم بتسجيل دخول وهمي)
+        _needsSetup = true;
         return true;
       }
 
+      _needsSetup = false;
       return false;
     } catch (error) {
       if (kDebugMode) {
         debugPrint('AuthProvider._checkSetup error: $error');
       }
       return false;
+    }
+  }
+
+  Future<bool> completeInitialSetup({
+    required String companyName,
+    required String adminFullName,
+    required String adminPassword,
+  }) async {
+    if (_loading) {
+      return false;
+    }
+
+    _loading = true;
+    notifyListeners();
+
+    try {
+      final api = ApiService();
+      final response = await api.setupInitialSystem(
+        username: 'admin',
+        password: adminPassword,
+        fullName: adminFullName,
+        companyName: companyName,
+      );
+
+      if (response['success'] == true) {
+        final token = response['token'] as String?;
+        final refreshToken = response['refresh_token'] as String?;
+        final userData = response['user'] as Map<String, dynamic>?;
+
+        if (token == null || token.isEmpty || userData == null) {
+          return false;
+        }
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('jwt_token', token);
+        await prefs.setString('auth_token', token);
+        if (refreshToken != null && refreshToken.isNotEmpty) {
+          await prefs.setString(_refreshTokenKey, refreshToken);
+        }
+
+        var parsedUser = AppUserModel.fromJson(userData);
+        final isAdmin = userData['is_admin'] == true;
+        if (isAdmin && parsedUser.role.isEmpty) {
+          parsedUser = parsedUser.copyWith(role: 'system_admin');
+        }
+        final serverRole = (userData['role'] ?? userData['role_code'])?.toString();
+        if (serverRole != null && serverRole.isNotEmpty) {
+          parsedUser = parsedUser.copyWith(role: serverRole);
+        } else if (isAdmin) {
+          parsedUser = parsedUser.copyWith(role: 'system_admin');
+        }
+
+        _currentUser = parsedUser;
+        _needsSetup = false;
+
+        await prefs.setString(
+          _storageKey,
+          json.encode(_currentUser!.toStorageMap()),
+        );
+
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('AuthProvider.completeInitialSetup error: $error');
+      }
+      return false;
+    } finally {
+      _loading = false;
+      notifyListeners();
     }
   }
 
@@ -212,6 +278,7 @@ class AuthProvider extends ChangeNotifier {
     } catch (_) {}
 
     _currentUser = null;
+    _needsSetup = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_storageKey);
     await prefs.remove('jwt_token');
