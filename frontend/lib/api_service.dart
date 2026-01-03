@@ -22,7 +22,11 @@ String _resolveApiBaseUrl() {
   }
 
   if (kIsWeb) {
-    return 'http://127.0.0.1:8001/api';
+    // Use the current page host so the web app works from other machines
+    // (LAN/IP) without hardcoding localhost.
+    final host = Uri.base.host.isNotEmpty ? Uri.base.host : '127.0.0.1';
+    final scheme = Uri.base.scheme.isNotEmpty ? Uri.base.scheme : 'http';
+    return '$scheme://$host:8001/api';
   }
 
   if (defaultTargetPlatform == TargetPlatform.android) {

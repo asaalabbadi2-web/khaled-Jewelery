@@ -14,7 +14,7 @@
 		{
 			"label": "Run Flutter Web",
 			"type": "shell",
-			"command": "cd frontend && flutter run -d chrome --web-port=8080",
+			"command": "cd frontend && flutter run -d chrome --web-hostname 0.0.0.0 --web-port=8080",
 			"isBackground": true,
 			"problemMatcher": []
 		},
