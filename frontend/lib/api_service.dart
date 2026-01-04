@@ -250,49 +250,45 @@ class ApiService {
 
   // Customer Methods
   Future<List<dynamic>> getCustomers() async {
-    final token = await _requireAuthToken();
-    final response = await http.get(
-      Uri.parse('$_baseUrl/customers'),
-      headers: _jsonHeaders(token: token),
-    );
+    final response = await _authedGet(Uri.parse('$_baseUrl/customers'));
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load customers');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<Map<String, dynamic>> addCustomer(
     Map<String, dynamic> customerData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/customers'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(customerData),
     );
     if (response.statusCode == 201) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to add customer: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<void> deleteCustomer(int id) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/customers/$id'));
+    final response = await _authedDelete(
+      Uri.parse('$_baseUrl/customers/$id'),
+    );
     if (response.statusCode != 200) {
       // Changed from 204 to 200
-      throw Exception('Failed to delete customer');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<void> updateCustomer(int id, Map<String, dynamic> customerData) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/customers/$id'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(customerData),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to update customer');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -648,45 +644,39 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> addItem(Map<String, dynamic> itemData) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/items'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(itemData),
     );
     if (response.statusCode == 201) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to add item');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   /// 🚀 إضافة سريعة لعدة أصناف
   Future<Map<String, dynamic>> quickAddItems(Map<String, dynamic> data) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/items/quick-add'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(data),
     );
     if (response.statusCode == 201) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      final errorBody = json.decode(response.body);
-      throw Exception(errorBody['error'] ?? 'Failed to quick add items');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   /// ♻️ إعادة مزامنة حالة توافر الأصناف
   Future<Map<String, dynamic>> rebuildItemStockStatus() async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/items/rebuild-stock'),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      final errorBody = json.decode(utf8.decode(response.bodyBytes));
-      throw Exception(
-        errorBody['error'] ?? 'Failed to rebuild item stock status',
-      );
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -695,16 +685,14 @@ class ApiService {
     int id,
     Map<String, dynamic> data,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/items/$id/clone'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(data),
     );
     if (response.statusCode == 201) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      final errorBody = json.decode(response.body);
-      throw Exception(errorBody['error'] ?? 'Failed to clone item');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -712,23 +700,22 @@ class ApiService {
     int id,
     Map<String, dynamic> itemData,
   ) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/items/$id'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(itemData),
     );
     if (response.statusCode == 200) {
-      return json.decode(response.body);
+      return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to update item');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<void> deleteItem(int id) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/items/$id'));
+    final response = await _authedDelete(Uri.parse('$_baseUrl/items/$id'));
     if (response.statusCode != 200) {
       // Changed from 204 to 200
-      throw Exception('Failed to delete item');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
