@@ -597,7 +597,7 @@ def _generate_journal_entry_number(prefix='JE'):
     year = today.year
     yearly_count = (
         db.session.query(func.count(JournalEntry.id))
-        .filter(db.func.strftime('%Y', JournalEntry.date) == str(year))
+        .filter(db.extract('year', JournalEntry.date) == year)
         .scalar()
         or 0
     ) + 1
@@ -3768,7 +3768,7 @@ def add_invoice():
         # 🔧 توليد رقم القيد
         year = new_invoice.date.year
         entry_count = JournalEntry.query.filter(
-            db.func.strftime('%Y', JournalEntry.date) == str(year)
+            db.extract('year', JournalEntry.date) == year
         ).count() + 1
         entry_number_str = f'JE-{year}-{entry_count:05d}'
         
@@ -5307,7 +5307,7 @@ def add_invoice():
         print(f"Error adding invoice: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': 'Failed to create invoice', 'detail': str(e)}), 500
+        return jsonify({'error': 'Failed to create invoice', 'detail': str(e)}), 400
     except Exception as e:
         db.session.rollback()
         print(f"An unexpected error occurred: {str(e)}")
@@ -10592,7 +10592,7 @@ def create_journal_entry_from_voucher(voucher):
         # توليد رقم القيد
         year = voucher.date.year
         entry_number = JournalEntry.query.filter(
-            db.func.strftime('%Y', JournalEntry.date) == str(year)
+            db.extract('year', JournalEntry.date) == year
         ).count() + 1
         entry_number_str = f'JE-{year}-{entry_number:05d}'
         
