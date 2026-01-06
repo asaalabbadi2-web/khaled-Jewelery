@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:ui';
-import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+import 'src/url_strategy_stub.dart'
+  if (dart.library.html) 'src/url_strategy_web.dart' as url_strategy;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'providers/settings_provider.dart';
@@ -19,9 +20,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Make Flutter web use clean paths like /setup instead of /#/setup.
-  if (kIsWeb) {
-    usePathUrlStrategy();
-  }
+  // Set web URL strategy only when running on web.
+  url_strategy.setPathUrlStrategy();
 
   final authProvider = AuthProvider();
   await authProvider.init();

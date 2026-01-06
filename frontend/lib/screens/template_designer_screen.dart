@@ -1744,7 +1744,12 @@ class _TemplateDesignerScreenState extends State<TemplateDesignerScreen> {
                                 final jsonString = const JsonEncoder.withIndent('  ').convert(template.toJson());
                                 await Clipboard.setData(ClipboardData(text: jsonString));
                                 try {
-                                  await Share.share(jsonString, subject: 'قالب ${template.name}');
+                                  await SharePlus.instance.share(
+                                    ShareParams(
+                                      text: jsonString,
+                                      title: 'قالب ${template.name}',
+                                    ),
+                                  );
                                 } catch (_) {}
                                 if (mounted) {
                                   ScaffoldMessenger.of(this.context).showSnackBar(
@@ -1822,7 +1827,12 @@ class _TemplateDesignerScreenState extends State<TemplateDesignerScreen> {
 
       await Clipboard.setData(ClipboardData(text: jsonString));
       try {
-        await Share.share(jsonString, subject: 'قالب ${template.name}');
+        await SharePlus.instance.share(
+          ShareParams(
+            text: jsonString,
+            title: 'قالب ${template.name}',
+          ),
+        );
       } catch (_) {
         // مشاركة غير مدعومة في بعض المنصات، يكفي النسخ للحافظة
       }

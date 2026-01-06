@@ -16,6 +16,9 @@ dependencies:
   provider: ^6.1.5+1
   intl: ^0.20.2
   cupertino_icons: ^1.0.8
+  material_color_utilities: ^0.11.1
+  meta: ^1.16.0
+  mime: ^2.0.0
   shared_preferences: ^2.5.3
   flutter_fancy_tree_view: ^1.2.0
   shimmer: ^3.0.0
@@ -24,18 +27,20 @@ dependencies:
   open_file: ^3.5.10
   pdf: ^3.11.3
   excel: ^2.0.4
-  share_plus: ^7.2.1
+  share_plus: ^12.0.1
+  cross_file: ^0.3.4+2
   printing: ^5.14.2
-  mobile_scanner: ^5.2.3  # Barcode & QR Code scanner
+  mobile_scanner: ^7.1.4  # Barcode & QR Code scanner
   barcode_widget: ^2.0.4  # Barcode generation for printing
   image_picker: ^1.0.4  # Image picker for camera & gallery
-  fl_chart: ^0.68.0
-  file_picker: ^5.2.5
+  fl_chart: ^1.1.1
+  file_picker: ^10.3.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  matcher: ^0.12.17
 
 flutter:
   uses-material-design: true

@@ -794,9 +794,8 @@ class _TopItemsValueChart extends StatelessWidget {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 80,
-              getTitlesWidget: (value, meta) => SideTitleWidget(
-                axisSide: meta.axisSide,
-                space: 12,
+              getTitlesWidget: (value, meta) => Padding(
+                padding: const EdgeInsets.only(right: 12),
                 child: Text(
                   formatCurrency(value),
                   style: const TextStyle(fontSize: 11),
@@ -815,18 +814,19 @@ class _TopItemsValueChart extends StatelessWidget {
                   return const SizedBox.shrink();
                 }
                 final point = data[index];
-                return SideTitleWidget(
-                  axisSide: meta.axisSide,
-                  angle: isArabic ? 0.6 : -0.6,
-                  space: 12,
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
                   child: SizedBox(
                     width: 120,
-                    child: Text(
-                      point.label,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11),
-                      textAlign: TextAlign.center,
+                    child: Transform.rotate(
+                      angle: isArabic ? 0.6 : -0.6,
+                      child: Text(
+                        point.label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ),
                 );

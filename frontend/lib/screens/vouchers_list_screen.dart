@@ -131,9 +131,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
         _vouchers.clear();
         _currentPage = 1;
         _error = null;
-      });
-    } else {
-      setState(() {
         _isFetchingMore = true;
       });
     }
@@ -181,10 +178,21 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       if (!mounted) return;
       setState(() {
         _stats = stats;
+        _error = null;
       });
     } catch (e) {
-      // Handle error silently for stats
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
+ 
   }
 
   Future<void> _refresh() async {
@@ -1759,12 +1767,14 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       final output = await getTemporaryDirectory();
       final file = File('${output.path}/vouchers.pdf');
       await file.writeAsBytes(await pdf.save());
-      if (mounted) {
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: 'تقرير السندات',
-          subject:
-              'تقرير السندات بتاريخ ${DateFormat('yyyy-MM-dd').format(DateTime.now())}',
+        if (mounted) {
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(file.path)],
+            text: 'تقرير السندات',
+            title:
+                'تقرير السندات بتاريخ ${DateFormat('yyyy-MM-dd').format(DateTime.now())}',
+          ),
         );
       }
     } catch (e) {
@@ -1787,21 +1797,22 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     final excelFile = excel.Excel.createExcel();
     final sheet = excelFile['Vouchers'];
 
-    // Add header row
+    // Add header row and data rows (set cells individually to avoid API mismatch)
     final headers = ['الرقم', 'التاريخ', 'النوع', 'البيان', 'المبلغ'];
-    sheet.appendRow(headers);
-
+    int rowIndex = 0;
+    for (int c = 0; c < headers.length; c++) {
+      sheet.cell(excel.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: rowIndex)).value = headers[c];
+    }
     // Add data rows
     for (final voucher in _vouchers) {
+      rowIndex++;
       final type = voucher['voucher_type'] == 'receipt' ? 'قبض' : 'صرف';
       final amount = voucher['amount_cash'] ?? 0.0;
-      sheet.appendRow([
-        voucher['voucher_number'] ?? '',
-        voucher['date'] ?? '',
-        type,
-        voucher['description'] ?? '',
-        amount,
-      ]);
+      sheet.cell(excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex)).value = voucher['voucher_number'] ?? '';
+      sheet.cell(excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex)).value = voucher['date'] ?? '';
+      sheet.cell(excel.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex)).value = type;
+      sheet.cell(excel.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIndex)).value = voucher['description'] ?? '';
+      sheet.cell(excel.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex)).value = amount;
     }
 
     try {
@@ -1811,14 +1822,16 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       final file = File('${output.path}/$fileName');
 
       final bytes = excelFile.save();
-      if (bytes != null) {
+        if (bytes != null) {
         await file.writeAsBytes(bytes);
         if (!mounted) return;
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: 'تقرير السندات',
-          subject:
-              'تقرير السندات بتاريخ ${DateFormat('yyyy-MM-dd').format(DateTime.now())}',
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(file.path)],
+            text: 'تقرير السندات',
+            title:
+                'تقرير السندات بتاريخ ${DateFormat('yyyy-MM-dd').format(DateTime.now())}',
+          ),
         );
       }
     } catch (e) {

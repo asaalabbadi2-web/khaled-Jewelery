@@ -91,8 +91,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           MobileScanner(
             controller: _controller,
             onDetect: _handleBarcode,
-            errorBuilder: (context, error, child) {
-              return Center(
+              errorBuilder: (context, error) {
+                return Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -110,7 +110,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      error.errorDetails?.message ?? 'حدث خطأ غير معروف',
+                      (error.errorDetails?.message ?? error.toString())
+                          .toString(),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: Colors.white70,
                       ),

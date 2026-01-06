@@ -687,29 +687,26 @@ class _SalesTrendChart extends StatelessWidget {
       }
       final label = labels[index] ?? '';
       final angle = isArabic ? 0.6 : -0.6; // rotate labels slightly to avoid overlap
-      return SideTitleWidget(
-        axisSide: meta.axisSide,
-        space: 12,
-        angle: angle,
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 11),
-          textAlign: TextAlign.center,
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Transform.rotate(
+          angle: angle,
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 11),
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
 
     Widget buildLeftTitle(double value, TitleMeta meta) {
-      return SideTitleWidget(
-        axisSide: meta.axisSide,
-        space: 12,
-        child: Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: Text(
-            formatCurrency(value),
-            style: const TextStyle(fontSize: 11),
-            textAlign: TextAlign.right,
-          ),
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: Text(
+          formatCurrency(value),
+          style: const TextStyle(fontSize: 11),
+          textAlign: TextAlign.right,
         ),
       );
     }
