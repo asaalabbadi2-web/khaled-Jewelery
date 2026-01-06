@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../api_service.dart';
+import '../web_file_io.dart' as web_io;
 import '../utils.dart';
 import '../widgets/account_tree_view.dart';
 import 'account_statement_screen.dart';
@@ -461,6 +463,20 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
               },
               child: Text('نسخ'),
             ),
+            if (kIsWeb)
+              TextButton(
+                onPressed: () {
+                  try {
+                    web_io.downloadString('accounts.json', controller.text);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('تم تنزيل الملف')));
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('فشل التنزيل: $e')));
+                  }
+                },
+                child: Text('تحميل'),
+              ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: Text('إغلاق'),
@@ -502,7 +518,32 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
             ],
           ),
         ),
-        actions: [
+          actions: [
+          TextButton(
+            onPressed: () async {
+              // Web-only: open file picker and fill the text field
+              if (kIsWeb) {
+                try {
+                  final content = await web_io.pickJsonFile();
+                  if (content != null) {
+                    importController.text = content;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('تم تحميل الملف. يمكنك الآن الضغط على استيراد')));
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('لم يتم اختيار ملف')));
+                  }
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('فشل تحميل الملف: $e')));
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('اختر ملف مدعوم فقط على الويب')));
+              }
+            },
+            child: Text('اختر ملف'),
+          ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
             child: Text('إلغاء'),
