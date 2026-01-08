@@ -121,11 +121,57 @@ class QuickActionItem {
   ) {
     final iconCodePoint = map['iconCodePoint'];
     if (iconCodePoint is int) {
-      return IconData(iconCodePoint, fontFamily: 'MaterialIcons');
+      final mapped = _iconLookup[iconCodePoint];
+      if (mapped != null) return mapped;
     }
 
     return fallback?.icon ?? Icons.extension;
   }
+
+  // Map of common icon codePoints to their `Icons.*` constants.
+  // This avoids constructing `IconData(...)` at runtime which prevents
+  // the icon tree-shaker from working correctly.
+  static final Map<int, IconData> _iconLookup = {
+    Icons.point_of_sale.codePoint: Icons.point_of_sale,
+    Icons.recycling_outlined.codePoint: Icons.recycling_outlined,
+    Icons.shopping_cart.codePoint: Icons.shopping_cart,
+    Icons.shopping_basket.codePoint: Icons.shopping_basket,
+    Icons.receipt_long.codePoint: Icons.receipt_long,
+    Icons.keyboard_return.codePoint: Icons.keyboard_return,
+    Icons.undo.codePoint: Icons.undo,
+    Icons.assignment_return.codePoint: Icons.assignment_return,
+    Icons.assignment_return_outlined.codePoint: Icons.assignment_return_outlined,
+    Icons.person_add.codePoint: Icons.person_add,
+    Icons.people.codePoint: Icons.people,
+    Icons.store.codePoint: Icons.store,
+    Icons.add_box.codePoint: Icons.add_box,
+    Icons.inventory_2.codePoint: Icons.inventory_2,
+    Icons.south.codePoint: Icons.south,
+    Icons.north.codePoint: Icons.north,
+    Icons.edit_note.codePoint: Icons.edit_note,
+    Icons.book.codePoint: Icons.book,
+    Icons.assessment.codePoint: Icons.assessment,
+    Icons.repeat.codePoint: Icons.repeat,
+    Icons.menu_book.codePoint: Icons.menu_book,
+    Icons.account_balance_wallet.codePoint: Icons.account_balance_wallet,
+    Icons.account_tree.codePoint: Icons.account_tree,
+    Icons.badge.codePoint: Icons.badge,
+    Icons.manage_accounts.codePoint: Icons.manage_accounts,
+    Icons.payments_rounded.codePoint: Icons.payments_rounded,
+    Icons.event_available.codePoint: Icons.event_available,
+    Icons.autorenew.codePoint: Icons.autorenew,
+    Icons.analytics.codePoint: Icons.analytics,
+    Icons.insights.codePoint: Icons.insights,
+    Icons.auto_graph.codePoint: Icons.auto_graph,
+    Icons.scale.codePoint: Icons.scale,
+    Icons.print.codePoint: Icons.print,
+    Icons.trending_up.codePoint: Icons.trending_up,
+    Icons.savings.codePoint: Icons.savings,
+    Icons.restore.codePoint: Icons.restore,
+    Icons.info_outline.codePoint: Icons.info_outline,
+    Icons.check_circle_outline.codePoint: Icons.check_circle_outline,
+    Icons.extension.codePoint: Icons.extension,
+  };
 
   static String _resolveColorHex(
     dynamic colorHexValue,

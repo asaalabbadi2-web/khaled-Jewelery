@@ -20,6 +20,15 @@ class AuthProvider extends ChangeNotifier {
   bool get needsSetup => _needsSetup;
 
   String get username => _currentUser?.username ?? '';
+  String get fullName {
+    if (_currentUser?.fullName?.isNotEmpty ?? false) {
+      return _currentUser!.fullName!;
+    }
+    if (_currentUser?.employee?.name.isNotEmpty ?? false) {
+      return _currentUser!.employee!.name;
+    }
+    return _currentUser?.username ?? '';
+  }
   String get role => _currentUser?.role ?? '';
   String get roleDisplayName {
     switch (role) {
@@ -85,6 +94,7 @@ class AuthProvider extends ChangeNotifier {
       final legacy = prefs.getString('auth_token');
       if (legacy != null && legacy.isNotEmpty) {
         await prefs.setString('jwt_token', legacy);
+        await prefs.setString('flutter.jwt_token', legacy);
       }
     }
   }
@@ -143,10 +153,13 @@ class AuthProvider extends ChangeNotifier {
         }
 
         final prefs = await SharedPreferences.getInstance();
+        // Save tokens under canonical and legacy/prefixed keys for backward compatibility.
         await prefs.setString('jwt_token', token);
+        await prefs.setString('flutter.jwt_token', token);
         await prefs.setString('auth_token', token);
         if (refreshToken != null && refreshToken.isNotEmpty) {
           await prefs.setString(_refreshTokenKey, refreshToken);
+          await prefs.setString('flutter.refresh_token', refreshToken);
         }
 
         var parsedUser = AppUserModel.fromJson(userData);
@@ -259,6 +272,8 @@ class AuthProvider extends ChangeNotifier {
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_storageKey, json.encode(user.toStorageMap()));
+        // Also ensure tokens are saved under canonical keys if fallback login returned a token-like field
+        // (legacy flow may not provide tokens).
 
         return true;
       }
@@ -291,6 +306,8 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove('jwt_token');
     await prefs.remove('auth_token');
     await prefs.remove(_refreshTokenKey);
+    await prefs.remove('flutter.jwt_token');
+    await prefs.remove('flutter.refresh_token');
     await prefs.remove('username');
     await prefs.remove('full_name');
     await prefs.remove('is_admin');

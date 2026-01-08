@@ -81,7 +81,7 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
 
         // If this was a full reset, the system has no users anymore.
         // Clear local auth state and go straight to the setup wizard.
-        if (resetType == 'all') {
+        if (resetType == 'all' || resetType == 'all_with_accounts') {
           final auth = context.read<AuthProvider>();
           await auth.logout();
           await auth.init();
@@ -291,17 +291,18 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
     required int itemCount,
   }) {
     bool disabled = itemCount == 0;
+    final radius = BorderRadius.circular(16);
     return Card(
       elevation: 2,
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: radius),
       child: InkWell(
         onTap: disabled ? null : onPressed,
-        child: Opacity(
-          opacity: disabled ? 0.6 : 1.0,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+        borderRadius: radius,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Opacity(
+            opacity: disabled ? 0.6 : 1,
             child: Row(
               children: [
                 Container(
@@ -605,15 +606,27 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                         ),
                       ),
                       _buildResetCard(
-                        title: 'إعادة تهيئة كاملة',
-                        description: 'حذف جميع البيانات وإعادة النظام لحالته الأولى',
-                        icon: Icons.delete_forever,
+                        title: 'إعادة تهيئة كاملة (مع الحفاظ على شجرة الحسابات)',
+                        description: 'حذف جميع البيانات التشغيلية مع الحفاظ على شجرة الحسابات',
+                        icon: Icons.delete_sweep,
                         color: theme.colorScheme.error,
                         itemCount: 1,
                         onPressed: () => _performReset(
                           'all',
                           'إعادة تهيئة كاملة',
-                          'سيتم حذف كل شيء نهائياً من قاعدة البيانات (مع الحفاظ على شجرة الحسابات).',
+                          'سيتم حذف جميع البيانات نهائياً مع الحفاظ على شجرة الحسابات. سيؤدي ذلك إلى حذف المستخدمين والبيانات التشغيلية.',
+                        ),
+                      ),
+                      _buildResetCard(
+                        title: 'إعادة تهيئة كاملة (مع حذف شجرة الحسابات)',
+                        description: 'حذف جميع البيانات بما في ذلك شجرة الحسابات',
+                        icon: Icons.delete_forever,
+                        color: theme.colorScheme.error,
+                        itemCount: 1,
+                        onPressed: () => _performReset(
+                          'all_with_accounts',
+                          'إعادة تهيئة كاملة',
+                          'سيتم حذف كل شيء نهائياً من قاعدة البيانات (بما في ذلك شجرة الحسابات). لا يمكن التراجع عن هذه العملية.',
                         ),
                       ),
                     ],

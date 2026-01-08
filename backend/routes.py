@@ -973,7 +973,8 @@ def system_reset():
         * "transactions" - حذف العمليات فقط (القيود، الفواتير، السندات)
         * "customers_suppliers" - حذف بيانات العملاء والموردين فقط
         * "settings" - إعادة تعيين الإعدادات للقيم الافتراضية
-        * "all" - حذف كل شيء وإعادة تهيئة كاملة
+        * "all" - إعادة تهيئة كاملة مع الحفاظ على شجرة الحسابات (الافتراضي)
+        * "all_with_accounts" - إعادة تهيئة كاملة (بما في ذلك شجرة الحسابات)
     
     Returns:
     - success: رسالة نجاح
@@ -999,15 +1000,29 @@ def system_reset():
             message = 'تم إعادة تعيين الإعدادات للقيم الافتراضية'
             
         elif reset_type == 'all':
-            # حذف كل شيء
+            # إعادة تهيئة كاملة مع الحفاظ على شجرة الحسابات (السلوك الافتراضي)
             from backend.app import reset_database_preserve_accounts
             reset_database_preserve_accounts()
             message = 'تم إعادة تهيئة النظام بالكامل بنجاح مع الحفاظ على شجرة الحسابات.'
+
+        elif reset_type == 'all_with_accounts':
+            # إعادة تهيئة كاملة (بما في ذلك شجرة الحسابات)
+            from backend.app import reset_database
+            reset_database()
+
+            # إعادة إنشاء حسابات الدعم الأساسية (إن وجدت/مطلوبة) بعد إعادة تهيئة الجداول
+            try:
+                ensure_weight_closing_support_accounts()
+            except Exception:
+                # لا نكسر عملية إعادة التهيئة إذا فشل إنشاء حسابات الدعم
+                pass
+
+            message = 'تم إعادة تهيئة النظام بالكامل بنجاح (بما في ذلك شجرة الحسابات).'
             
         else:
             return jsonify({
                 'status': 'error', 
-                'message': f'نوع إعادة التهيئة غير صحيح: {reset_type}. الخيارات المتاحة: transactions, customers_suppliers, settings, all'
+                'message': f'نوع إعادة التهيئة غير صحيح: {reset_type}. الخيارات المتاحة: transactions, customers_suppliers, settings, all, all_with_accounts'
             }), 400
         
         return jsonify({
@@ -2634,6 +2649,146 @@ def get_invoices():
         'current_page': paginated_invoices.page,
         'per_page': paginated_invoices.per_page
     })
+
+
+@api.route('/invoices/<int:invoice_id>', methods=['GET'])
+def get_invoice_by_id(invoice_id: int):
+    """Fetch full invoice details by id.
+
+    Flutter expects this endpoint for print/share flows.
+    Returns Invoice.to_dict() plus customer/supplier display names.
+    """
+
+    invoice = Invoice.query.get_or_404(invoice_id)
+    invoice_dict = invoice.to_dict()
+
+    customer_name = (
+        invoice.customer.name
+        if invoice.customer
+        else (invoice.supplier.name if invoice.supplier else "N/A")
+    )
+    supplier_name = invoice.supplier.name if invoice.supplier else "N/A"
+
+    invoice_dict['customer_name'] = customer_name
+    invoice_dict['supplier_name'] = supplier_name
+
+    return jsonify(invoice_dict)
+
+
+@api.route('/invoices/<int:invoice_id>/payments', methods=['POST'])
+def add_invoice_payment(invoice_id: int):
+    """Add a payment entry to an existing invoice.
+
+    Body JSON:
+      - payment_method_id (int)
+      - amount (float)
+      - notes (optional)
+    """
+
+    invoice = Invoice.query.get_or_404(invoice_id)
+    data = request.get_json(silent=True) or {}
+
+    pm_id = data.get('payment_method_id')
+    amount = data.get('amount')
+    notes = data.get('notes')
+
+    try:
+        pm_id = int(pm_id)
+    except Exception:
+        return jsonify({'error': 'invalid_payment_method_id'}), 400
+
+    def _to_float(v, default=0.0):
+        try:
+            if v in (None, ''):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    amount = _to_float(amount, 0.0)
+    if amount <= 0:
+        return jsonify({'error': 'invalid_amount'}), 400
+
+    # Determine if partial payments are allowed.
+    allow_partial_payments = False
+    try:
+        env_flag = str(os.getenv('ALLOW_PARTIAL_INVOICE_PAYMENTS', '')).strip().lower()
+        if env_flag in ('1', 'true', 'yes', 'on'):
+            allow_partial_payments = True
+    except Exception:
+        allow_partial_payments = False
+
+    if not allow_partial_payments:
+        try:
+            settings_row = Settings.query.first()
+            allow_partial_payments = bool(getattr(settings_row, 'allow_partial_invoice_payments', False)) if settings_row else False
+        except Exception:
+            allow_partial_payments = False
+
+    # Compute already paid.
+    paid_amount = 0.0
+    try:
+        if invoice.amount_paid is not None:
+            paid_amount = float(invoice.amount_paid or 0.0)
+        elif invoice.payments:
+            paid_amount = float(sum(p.amount or 0.0 for p in invoice.payments))
+    except Exception:
+        paid_amount = 0.0
+
+    total_amount = float(invoice.total or 0.0)
+    remaining = max(total_amount - paid_amount, 0.0)
+    eps = 0.01
+
+    if remaining <= eps:
+        return jsonify({'error': 'invoice_already_paid'}), 400
+
+    if amount > remaining + eps:
+        return jsonify({'error': 'amount_exceeds_remaining', 'remaining': round(remaining, 2)}), 400
+
+    if not allow_partial_payments and abs(amount - remaining) > eps:
+        return jsonify({'error': 'partial_payments_not_allowed', 'remaining': round(remaining, 2)}), 400
+
+    pm_obj = PaymentMethod.query.get(pm_id)
+    if not pm_obj:
+        return jsonify({'error': 'payment_method_not_found'}), 404
+
+    commission_rate = _to_float(getattr(pm_obj, 'commission_rate', 0.0), 0.0)
+    commission_amount = amount * (commission_rate / 100.0) if commission_rate > 0 else 0.0
+    commission_vat = commission_amount * 0.15
+    net_amount = amount - commission_amount - commission_vat
+
+    payment = InvoicePayment(
+        invoice_id=invoice.id,
+        payment_method_id=pm_id,
+        amount=amount,
+        commission_rate=commission_rate,
+        commission_amount=commission_amount,
+        commission_vat=commission_vat,
+        net_amount=net_amount,
+        notes=notes,
+    )
+
+    db.session.add(payment)
+
+    new_paid = paid_amount + amount
+    invoice.amount_paid = round(new_paid, 2)
+    if invoice.amount_paid >= total_amount - eps:
+        invoice.status = 'paid'
+    else:
+        invoice.status = 'partially_paid'
+
+    db.session.commit()
+
+    invoice_dict = invoice.to_dict()
+    customer_name = (
+        invoice.customer.name
+        if invoice.customer
+        else (invoice.supplier.name if invoice.supplier else "N/A")
+    )
+    supplier_name = invoice.supplier.name if invoice.supplier else "N/A"
+    invoice_dict['customer_name'] = customer_name
+    invoice_dict['supplier_name'] = supplier_name
+    return jsonify(invoice_dict), 201
 
 
 @api.route('/invoices/<int:invoice_id>/print-template', methods=['PUT'])
@@ -4590,41 +4745,73 @@ def add_invoice():
             customers_acc_id = get_account_id_for_mapping('مرتجع بيع', 'customers')
             sales_returns_acc_id = get_account_id_for_mapping('مرتجع بيع', 'sales_returns')
             
-            # حسابات المخزون
-            inventory_acc_id = None
+            # حسابات المخزون حسب العيار (للتسجيل الصحيح نقداً ووزناً)
+            inventory_accounts = {}
             for karat in ['18', '21', '22', '24']:
                 inv_acc_id = get_account_id_for_mapping('مرتجع بيع', f'inventory_{karat}k')
                 if inv_acc_id:
-                    inventory_acc_id = inv_acc_id
-                    break
+                    inventory_accounts[karat] = inv_acc_id
             
             total_cost = data.get('total_cost', 0) or (total_cash * 0.8)
             
-            # Line 1: مدين المخزون (نقد فقط)
-            if inventory_acc_id:
+            # Line 1: مدين المخزون (نقد فقط) + قيد وزني للمذكرة (وزن فعلي)
+            total_weight_returned = sum(
+                weight for karat, weight in gold_by_karat.items()
+                if weight and weight > 0 and str(karat) in inventory_accounts
+            )
+
+            if total_weight_returned > 0 and inventory_accounts:
+                remaining_cost = float(total_cost or 0)
+                positive_karats = [k for k in ['18', '21', '22', '24'] if gold_by_karat.get(k, 0) > 0 and k in inventory_accounts]
+
+                for idx, k in enumerate(positive_karats):
+                    w = float(gold_by_karat.get(k, 0) or 0)
+                    if w <= 0:
+                        continue
+
+                    inv_acc_id = inventory_accounts.get(k)
+                    if not inv_acc_id:
+                        continue
+
+                    if idx < len(positive_karats) - 1:
+                        cash_share = round(float(total_cost or 0) * (w / total_weight_returned), 2)
+                        remaining_cost = round(remaining_cost - cash_share, 2)
+                    else:
+                        cash_share = round(max(remaining_cost, 0.0), 2)
+                        remaining_cost = 0.0
+
+                    if cash_share > 0:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=inv_acc_id,
+                            cash_debit=cash_share,
+                            apply_golden_rule=False,
+                            description=f"مرتجع للمخزون (قيمة) - عيار {k}"
+                        )
+
+                    # Weight memo: debit physical weight to inventory memo account
+                    inv_acc_obj = Account.query.get(inv_acc_id)
+                    memo_inv_id = inv_acc_obj.memo_account_id if inv_acc_obj else None
+                    if memo_inv_id:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=memo_inv_id,
+                            **_weight_kwargs_for_karat(k, round(w, 3), 'debit'),
+                            apply_golden_rule=False,
+                            description=f"مرتجع وزني للمخزون - عيار {k}"
+                        )
+                    else:
+                        print(f"⚠️ No memo account for inventory {k}k (account {inv_acc_id}).")
+            elif inventory_accounts and float(total_cost or 0) > 0:
+                # Fallback: post cash only to any inventory account (should be rare)
+                fallback_inv_id = next(iter(inventory_accounts.values()))
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
-                    account_id=inventory_acc_id,
-                    cash_debit=total_cost,
-                    description="مرتجع للمخزون"
+                    account_id=fallback_inv_id,
+                    cash_debit=float(total_cost or 0),
+                    apply_golden_rule=False,
+                    description="مرتجع للمخزون (قيمة)"
                 )
-                
-                # 🆕 قيد المذكرة الوزنية للمرتجع (وزن فقط)
-                weight_inventory_memo_acc_id = get_account_id_by_number('7521')
-                if weight_inventory_memo_acc_id:
-                    for k, v in gold_by_karat.items():
-                        if v > 0:
-                            create_dual_journal_entry(
-                                journal_entry_id=journal_entry.id,
-                                account_id=weight_inventory_memo_acc_id,
-                                debit_18k=v if k == '18' else 0,
-                                debit_21k=v if k == '21' else 0,
-                                debit_22k=v if k == '22' else 0,
-                                debit_24k=v if k == '24' else 0,
-                                description=f"مرتجع وزني - عيار {k}"
-                            )
-                else:
-                    print("⚠️ Memo inventory account 7521 not found. Skipping return weight entry.")
             
             # Line 2: مدين مردودات المبيعات
             if sales_returns_acc_id:
@@ -4632,19 +4819,34 @@ def add_invoice():
                     journal_entry_id=journal_entry.id,
                     account_id=sales_returns_acc_id,
                     cash_debit=total_cash - total_cost,
+                    apply_golden_rule=False,
                     description="مردودات المبيعات"
                 )
             
             # Line 3: دائن العميل/الصندوق
             acc_id = customers_acc_id or cash_acc_id or party_account.id
-            sale_return_weight_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=acc_id,
                 cash_credit=total_cash,
-                **sale_return_weight_credit,
+                apply_golden_rule=False,
                 description="استرداد نقدي للعميل"
             )
+
+            # Weight memo counterpart: credit physical weight to customer's memo weight account
+            customer_fin_acc_id = customers_acc_id or (party_account.id if party_account else None)
+            customer_fin_acc = Account.query.get(customer_fin_acc_id) if customer_fin_acc_id else None
+            memo_customer_id = customer_fin_acc.memo_account_id if customer_fin_acc else None
+            if memo_customer_id:
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=memo_customer_id,
+                    **_weight_kwargs_from_map(gold_by_karat, 'credit'),
+                    apply_golden_rule=False,
+                    description="مرتجع وزني - رصيد العميل"
+                )
+            else:
+                print("⚠️ No memo account for customer; skipping customer weight entry.")
         
         elif invoice_type == 'مرتجع شراء':
             # 4. مرتجع شراء كسر (عكس الشراء من عميل)
@@ -5211,7 +5413,7 @@ def add_invoice():
                 ]
 
                 # لا نُصحح إلا حالة بسيطة جداً: عيار واحد فقط وبفرق صغير
-                AUTO_WEIGHT_TOLERANCE = 0.1  # grams
+                AUTO_WEIGHT_TOLERANCE = 1.5  # grams (increased for return invoice rounding)
                 if (
                     abs(balance_check.get('cash_balance', 0.0)) <= 0.01
                     and len(imbalanced) == 1

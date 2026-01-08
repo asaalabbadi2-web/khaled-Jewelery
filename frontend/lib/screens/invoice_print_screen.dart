@@ -8,10 +8,12 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_service.dart';
 import '../providers/auth_provider.dart';
+import '../web_file_io.dart' as web_io;
 
 /// شاشة معاينة وطباعة الفواتير
 ///
@@ -24,12 +26,18 @@ class InvoicePrintScreen extends StatefulWidget {
   final Map<String, dynamic> invoice;
   final bool isArabic;
   final Map<String, dynamic>? printSettings;
+  final bool autoPrint;
+  final bool autoSharePdf;
+  final bool autoDownloadPdf;
 
   const InvoicePrintScreen({
     super.key,
     required this.invoice,
     this.isArabic = true,
     this.printSettings,
+    this.autoPrint = false,
+    this.autoSharePdf = false,
+    this.autoDownloadPdf = false,
   });
 
   @override
@@ -38,6 +46,7 @@ class InvoicePrintScreen extends StatefulWidget {
 
 class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   bool _isGenerating = false;
+  bool _autoActionTriggered = false;
   // Cache PDFs by format signature. Some preview/print flows request multiple
   // formats; returning a cached PDF for a different format can cause loops.
   final Map<String, Uint8List> _pdfCacheByFormat = {};
@@ -330,6 +339,165 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     _preloadPdfFonts();
     _preloadTemplateAssets();
     _loadCompanySettings();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _triggerInitialActionIfNeeded();
+    });
+  }
+
+  Future<void> _triggerInitialActionIfNeeded() async {
+    if (_autoActionTriggered) return;
+    if (!(widget.autoPrint || widget.autoSharePdf || widget.autoDownloadPdf)) {
+      return;
+    }
+    _autoActionTriggered = true;
+
+    if (widget.autoPrint) {
+      await _printPdf();
+      return;
+    }
+
+    if (widget.autoSharePdf) {
+      await _sharePdf();
+      return;
+    }
+
+    if (widget.autoDownloadPdf) {
+      await _downloadPdf();
+      return;
+    }
+  }
+
+
+  Future<void> _downloadPdf() async {
+    if (_isGenerating) {
+      return;
+    }
+
+    try {
+      setState(() => _isGenerating = true);
+
+      await _ensurePdfFontsLoaded();
+      await _ensureTemplateAssetsLoaded();
+
+      final format = PdfPageFormat.a4;
+      final pdfBytes = await _buildPdfForFormat(format).timeout(
+        const Duration(seconds: 30),
+      );
+
+      final rawNumber = (widget.invoice['invoice_number'] ?? '').toString();
+      final safeNumber = rawNumber.trim().isNotEmpty
+          ? rawNumber.trim().replaceAll('/', '-')
+          : DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+
+      final fileName = 'invoice_$safeNumber.pdf';
+
+      if (kIsWeb) {
+        web_io.downloadBytes(fileName, pdfBytes, 'application/pdf');
+        return;
+      }
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [
+            XFile.fromData(
+              pdfBytes,
+              mimeType: 'application/pdf',
+              name: fileName,
+            ),
+          ],
+          text: widget.isArabic ? 'فاتورة $safeNumber' : 'Invoice $safeNumber',
+        ),
+      );
+    } catch (e, s) {
+      debugPrint('[PrintDiag] ERROR in _downloadPdf: $e\n$s');
+      if (!mounted) return;
+
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(widget.isArabic ? 'خطأ في التنزيل' : 'Download Error'),
+          content: SingleChildScrollView(
+            child: Text(
+              '${widget.isArabic ? 'تعذر تنزيل ملف PDF:' : 'Failed to download the PDF:'}\n\n$e',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(widget.isArabic ? 'موافق' : 'OK'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isGenerating = false);
+      }
+    }
+  }
+  Future<void> _sharePdf() async {
+    if (_isGenerating) {
+      return;
+    }
+
+    try {
+      setState(() => _isGenerating = true);
+
+      // Ensure assets are loaded on the main isolate.
+      await _ensurePdfFontsLoaded();
+      await _ensureTemplateAssetsLoaded();
+
+      final format = PdfPageFormat.a4;
+      final pdfBytes = await _buildPdfForFormat(format).timeout(
+        const Duration(seconds: 30),
+      );
+
+      final rawNumber = (widget.invoice['invoice_number'] ?? '').toString();
+      final safeNumber = rawNumber.trim().isNotEmpty
+          ? rawNumber.trim().replaceAll('/', '-')
+          : DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+
+      final fileName = 'invoice_$safeNumber.pdf';
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [
+            XFile.fromData(
+              pdfBytes,
+              mimeType: 'application/pdf',
+              name: fileName,
+            ),
+          ],
+          text: widget.isArabic ? 'فاتورة $safeNumber' : 'Invoice $safeNumber',
+        ),
+      );
+    } catch (e, s) {
+      debugPrint('[PrintDiag] ERROR in _sharePdf: $e\n$s');
+      if (!mounted) return;
+
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(widget.isArabic ? 'خطأ في المشاركة' : 'Share Error'),
+          content: SingleChildScrollView(
+            child: Text(
+              '${widget.isArabic ? 'تعذر مشاركة ملف PDF:' : 'Failed to share the PDF:'}\n\n$e',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(widget.isArabic ? 'موافق' : 'OK'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isGenerating = false);
+      }
+    }
   }
 
   void _preloadPdfFonts() {
@@ -501,51 +669,6 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
                   'invoice_${widget.invoice['invoice_type_id']}_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
             ),
     );
-  }
-
-  Future<void> _downloadPdf() async {
-    try {
-      setState(() => _isGenerating = true);
-
-      final pdf = await _buildPdfForFormat(_getPdfPageFormat());
-      final fileName = 'invoice_${widget.invoice['invoice_type_id']}_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf';
-      
-      // Save and share the PDF
-      await Printing.sharePdf(
-        bytes: pdf,
-        filename: fileName,
-      );
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              widget.isArabic
-                  ? '✓ تم تحميل الفاتورة بنجاح'
-                  : '✓ Invoice downloaded successfully',
-            ),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              widget.isArabic
-                  ? 'خطأ في تحميل الفاتورة: $e'
-                  : 'Error downloading invoice: $e',
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isGenerating = false);
-      }
-    }
   }
 
   PdfPageFormat _getPdfPageFormat() {

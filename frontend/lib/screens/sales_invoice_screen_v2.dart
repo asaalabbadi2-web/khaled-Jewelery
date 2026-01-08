@@ -1501,16 +1501,20 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       );
       final totalTax = _items.fold<double>(0.0, (sum, item) => sum + item.tax);
 
-      final invoiceData = {
-        'customer_id': customerId,
-        'branch_id': _selectedBranchId,
-        'invoice_type': 'بيع',
-        'transaction_type': 'sell',
-        if (Provider.of<AuthProvider>(context, listen: false).username.isNotEmpty)
-          'posted_by': Provider.of<AuthProvider>(context, listen: false).username,
-        'date': DateTime.now().toIso8601String(),
-        'total': totalAmount,
-        'total_weight': totalWeight,
+            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            final sellerName = authProvider.fullName;
+            final sellerEmployeeId = authProvider.currentUser?.employeeId;
+
+            final invoiceData = {
+              'customer_id': customerId,
+              'branch_id': _selectedBranchId,
+              'invoice_type': 'بيع',
+              'transaction_type': 'sell',
+              if (sellerName.isNotEmpty) 'posted_by': sellerName,
+              if (sellerEmployeeId != null) 'employee_id': sellerEmployeeId,
+              'date': DateTime.now().toIso8601String(),
+              'total': totalAmount,
+              'total_weight': totalWeight,
         'total_cost': totalCost,
         'total_tax': totalTax,
         'payments': _payments

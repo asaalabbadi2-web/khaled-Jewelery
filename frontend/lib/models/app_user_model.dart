@@ -1,6 +1,7 @@
 class AppUserModel {
   final int? id;
   final String username;
+  final String? fullName;
   final int? employeeId;
   final String role;
   final Object? permissions;
@@ -13,6 +14,7 @@ class AppUserModel {
   const AppUserModel({
     required this.id,
     required this.username,
+    required this.fullName,
     required this.employeeId,
     required this.role,
     required this.permissions,
@@ -35,6 +37,7 @@ class AppUserModel {
     return AppUserModel(
       id: json['id'] as int?,
       username: json['username'] as String? ?? '',
+      fullName: json['full_name'] as String?,
       employeeId: json['employee_id'] as int?,
       role: json['role'] as String? ?? 'staff',
       permissions: parsedPermissions,
@@ -51,6 +54,7 @@ class AppUserModel {
   Map<String, dynamic> toJson({String? password}) {
     final Map<String, dynamic> data = {
       'username': username,
+      'full_name': fullName,
       'employee_id': employeeId,
       'role': role,
       'permissions': permissions,
@@ -69,6 +73,7 @@ class AppUserModel {
     final data = <String, dynamic>{
       'id': id,
       'username': username,
+      'full_name': fullName,
       'employee_id': employeeId,
       'role': role,
       'permissions': permissions,
@@ -95,6 +100,7 @@ class AppUserModel {
     return AppUserModel(
       id: json['id'] as int?,
       username: json['username'] as String? ?? '',
+      fullName: json['full_name'] as String?,
       employeeId: json['employee_id'] as int?,
       role: json['role'] as String? ?? 'staff',
       permissions: parsedPermissions,
@@ -111,6 +117,7 @@ class AppUserModel {
   AppUserModel copyWith({
     int? id,
     String? username,
+    String? fullName,
     int? employeeId,
     String? role,
     Object? permissions,
@@ -123,6 +130,7 @@ class AppUserModel {
     return AppUserModel(
       id: id ?? this.id,
       username: username ?? this.username,
+      fullName: fullName ?? this.fullName,
       employeeId: employeeId ?? this.employeeId,
       role: role ?? this.role,
       permissions: permissions ?? this.permissions,

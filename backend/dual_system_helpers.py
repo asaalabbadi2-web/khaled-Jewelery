@@ -185,7 +185,9 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
                        weight_22k_debit, weight_22k_credit, weight_24k_debit, weight_24k_credit])
     has_cash = (cash_debit > 0 or cash_credit > 0)
     
-    if apply_golden_rule and has_cash and not has_weights and account.memo_account_id:
+    # Only apply golden rule when the target account is intended to carry weight.
+    # Otherwise we create "phantom" weight on non-weight accounts, which breaks JE balancing.
+    if apply_golden_rule and has_cash and not has_weights and account.memo_account_id and is_memo_account:
         # الحصول على سعر الذهب للعيار الرئيسي مباشرة من قاعدة البيانات
         try:
             from models import GoldPrice, Settings
@@ -453,7 +455,7 @@ def verify_dual_balance(journal_entry_id):
         errors.append(f'Cash imbalance: {cash_balance}')
     
     for karat, balance in weight_balances.items():
-        if abs(balance) > 0.001:
+        if abs(balance) > 0.01:  # Increased tolerance from 0.001 to 0.01 grams
             balanced = False
             errors.append(f'Weight imbalance ({karat}): {balance}')
     

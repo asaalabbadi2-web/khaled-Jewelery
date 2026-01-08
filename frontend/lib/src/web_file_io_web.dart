@@ -42,3 +42,15 @@ void downloadString(String filename, String content) {
   anchor.remove();
   Url.revokeObjectUrl(url);
 }
+
+void downloadBytes(String filename, List<int> bytes, String mimeType) {
+  final blob = Blob([bytes], mimeType);
+  final url = Url.createObjectUrlFromBlob(blob);
+  final anchor = AnchorElement(href: url)
+    ..setAttribute('download', filename)
+    ..style.display = 'none';
+  document.body?.append(anchor);
+  anchor.click();
+  anchor.remove();
+  Url.revokeObjectUrl(url);
+}

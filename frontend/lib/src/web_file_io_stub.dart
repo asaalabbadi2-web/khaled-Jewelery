@@ -9,3 +9,7 @@ Future<String?> pickJsonFile() async {
 void downloadString(String filename, String content) {
   // No-op on non-web platforms.
 }
+
+void downloadBytes(String filename, List<int> bytes, String mimeType) {
+  // No-op on non-web platforms.
+}

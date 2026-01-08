@@ -13,11 +13,13 @@ import 'invoice_print_screen.dart';
 class AddReturnInvoiceScreen extends StatefulWidget {
   final ApiService api;
   final String returnType; // 'مرتجع بيع', 'مرتجع شراء', 'مرتجع شراء من مورد'
+  final Map<String, dynamic>? prefilledOriginalInvoice;
 
   const AddReturnInvoiceScreen({
     super.key,
     required this.api,
     required this.returnType,
+    this.prefilledOriginalInvoice,
   });
 
   @override
@@ -217,6 +219,20 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   void initState() {
     super.initState();
     _loadCurrencySettings();
+
+    // If the caller already knows the original invoice, prefill it and load its details.
+    final prefilled = widget.prefilledOriginalInvoice;
+    if (prefilled != null) {
+      selectedOriginalInvoice = Map<String, dynamic>.from(prefilled);
+      final invoiceId = _parseOptionalInt(prefilled['id']);
+      if (invoiceId != null) {
+        // Move to items selection step after details are loaded.
+        _currentStep = 1;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _loadOriginalInvoiceDetails(invoiceId);
+        });
+      }
+    }
   }
 
   @override
@@ -515,25 +531,183 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   }
 
   void _showSaveConfirmationDialog() {
+    final original = selectedOriginalInvoice;
+    final selected = _selectedItems;
+
+    double originalTotal = 0.0;
+    double originalTax = 0.0;
+    double originalWeight = 0.0;
+    String originalDate = '';
+    String originalNumber = '';
+    String originalParty = '';
+
+    if (original != null) {
+      originalTotal = _parseDouble(original['total'] ?? original['total_amount']);
+      originalTax = _parseDouble(original['total_tax']);
+      originalWeight = _parseDouble(original['total_weight']);
+      originalDate = (original['date'] ?? '').toString();
+      originalNumber = (original['invoice_number'] ?? original['id'] ?? '').toString();
+      originalParty = (original['customer_name'] ?? original['supplier_name'] ?? '').toString();
+    }
+
+    final returnTotal = grandTotal;
+    final returnTax = totalTax;
+    final returnWeight = totalWeight;
+
+    final deltaTotal = -returnTotal;
+    final deltaTax = -returnTax;
+    final deltaWeight = -returnWeight;
+
+    String fmt2(num v) => v.toStringAsFixed(2);
+    String fmt3(num v) => v.toStringAsFixed(3);
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('تأكيد الحفظ'),
-        content: Text('هل أنت متأكد من حفظ ${_getReturnTypeDisplayName()}؟'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('تأكيد الحفظ (قبل/بعد)'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _getReturnTypeDisplayName(),
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Original invoice summary
+                  if (original != null) ...[
+                    Text(
+                      'الفاتورة الأصلية',
+                      style: Theme.of(dialogContext)
+                          .textTheme
+                          .titleSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    _buildInfoRow('الرقم/المعرف', originalNumber.isEmpty ? '-' : originalNumber),
+                    if (originalDate.isNotEmpty) _buildInfoRow('التاريخ', originalDate),
+                    if (originalParty.isNotEmpty) _buildInfoRow('العميل/المورد', originalParty),
+                    _buildInfoRow('إجمالي الأصل', '${fmt2(originalTotal)} $currencySymbol'),
+                    _buildInfoRow('ضريبة الأصل', '${fmt2(originalTax)} $currencySymbol'),
+                    _buildInfoRow('وزن الأصل', '${fmt3(originalWeight)} جم'),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // Return summary
+                  Text(
+                    'المرتجع (سيتم حفظه)',
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildInfoRow('عدد الأصناف', selected.length.toString()),
+                  _buildInfoRow('إجمالي المرتجع', '${fmt2(returnTotal)} $currencySymbol'),
+                  _buildInfoRow('ضريبة المرتجع', '${fmt2(returnTax)} $currencySymbol'),
+                  _buildInfoRow('وزن المرتجع', '${fmt3(returnWeight)} جم'),
+
+                  const SizedBox(height: 12),
+
+                  // Deltas
+                  Text(
+                    'الأثر (Delta)',
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildInfoRow('تغيير الإجمالي', '${fmt2(deltaTotal)} $currencySymbol'),
+                  _buildInfoRow('تغيير الضريبة', '${fmt2(deltaTax)} $currencySymbol'),
+                  _buildInfoRow('تغيير الوزن', '${fmt3(deltaWeight)} جم'),
+
+                  const SizedBox(height: 12),
+
+                  // Per-item diff
+                  Text(
+                    'تفاصيل الأصناف (قبل → بعد)',
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  if (selected.isEmpty)
+                    const Text('لا توجد أصناف محددة')
+                  else
+                    ...selected.map((it) {
+                      final weightChanged = (it.weight - it.originalWeight).abs() > 0.0009;
+                      final qtyChanged = (it.quantity - it.originalQuantity).abs() > 0;
+                      final changed = weightChanged || qtyChanged;
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: changed ? Colors.orange.shade300 : Colors.grey.shade300,
+                            width: changed ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              it.itemName,
+                              style: Theme.of(dialogContext)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 6),
+                            Text('العيار: ${it.karat.toStringAsFixed(0)}'),
+                            const SizedBox(height: 4),
+                            Text('الوزن: ${fmt3(it.originalWeight)} → ${fmt3(it.weight)} جم'),
+                            Text('الكمية: ${it.originalQuantity} → ${it.quantity}'),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+
+                  const SizedBox(height: 4),
+                  Text(
+                    'ملاحظة: يوصى بالمرتجع بدلاً من تعديل الفاتورة الأصلية للحفاظ على دقة المخزون والحسابات.',
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _saveReturnInvoice();
-            },
-            child: const Text('حفظ'),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('رجوع'),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _saveReturnInvoice();
+              },
+              icon: const Icon(Icons.save),
+              label: const Text('اعتماد وحفظ'),
+            ),
+          ],
+        );
+      },
     );
   }
 

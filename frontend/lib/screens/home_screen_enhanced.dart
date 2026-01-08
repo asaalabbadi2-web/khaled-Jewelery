@@ -548,11 +548,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     );
 
     final List<Widget> drawerChildren = [];
-    final List<Future<void> Function()> actions = [];
 
     drawerChildren.add(
       Container(
-        padding: const EdgeInsets.fromLTRB(24, 48, 24, 32),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [gold.withValues(alpha: 0.85), gold.withValues(alpha: 0.45)],
@@ -560,56 +558,100 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             end: AlignmentDirectional.bottomEnd,
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CircleAvatar(
-              radius: 30,
-              backgroundColor: theme.colorScheme.surface,
-              child: Icon(Icons.workspace_premium, color: gold, size: 36),
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 20, 20, 16),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: theme.colorScheme.surface,
+                  child: Icon(Icons.workspace_premium, color: gold, size: 34),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isAr ? 'مجوهرات خالد' : 'Khaled Jewelry',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'Cairo',
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        isAr ? 'نظام إدارة متكامل' : 'Integrated POS Platform',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'Cairo',
+                          fontSize: 13,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(Icons.person, size: 16, color: theme.colorScheme.onSurface.withValues(alpha: 0.85)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              auth.username.isEmpty
+                                  ? (isAr ? 'حساب المستخدم' : 'Account')
+                                  : auth.username,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: 'Cairo',
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onSurface.withValues(alpha: 0.9),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        isAr ? 'الدور: ${auth.role}' : 'Role: ${auth.role}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'Cairo',
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              isAr ? 'مجوهرات خالد' : 'Khaled Jewelry',
-              style: TextStyle(
-                fontFamily: 'Cairo',
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.onSurface,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              isAr ? 'نظام إدارة متكامل' : 'Integrated POS Platform',
-              style: TextStyle(
-                fontFamily: 'Cairo',
-                fontSize: 14,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
 
+    // Sections collection: each section has a title, color and list of items
+    final List<_DrawerSection> sections = [];
+    _DrawerSection? currentSection;
+
     void addDivider() {
-      drawerChildren.add(
-        Divider(
-          indent: 24,
-          endIndent: 24,
-          height: 24,
-          color: theme.dividerColor,
-        ),
-      );
+      // keep for readability in the builder below; visual separation happens
+      // when rendering sections.
+      currentSection = null;
     }
 
     void addSection(String title, Color color) {
-      drawerChildren.add(
-        Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(24, 16, 24, 8),
-          child: Text(title, style: sectionStyle.copyWith(color: color)),
-        ),
-      );
+      currentSection = _DrawerSection(title: title, color: color);
+      sections.add(currentSection!);
     }
 
     void addDestination({
@@ -618,31 +660,68 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       required Future<void> Function() onSelected,
       Color? color,
     }) {
-      final iconColor = color ?? theme.iconTheme.color ?? Colors.white70;
-      drawerChildren.add(
-        NavigationDrawerDestination(
-          icon: Icon(icon, color: iconColor),
-          selectedIcon: Icon(
-            icon,
-            color: theme.colorScheme.onSecondaryContainer,
-          ),
-          label: Text(title, style: baseLabelStyle),
+      // Ensure every destination belongs to a titled section (collapsible).
+      currentSection ??= _DrawerSection(title: isAr ? 'القائمة' : 'Menu', color: gold);
+      if (!sections.contains(currentSection)) {
+        sections.add(currentSection!);
+      }
+
+      currentSection!.items.add(
+        _DrawerSectionItem(
+          icon: icon,
+          title: title,
+          onSelected: onSelected,
+          color: color,
         ),
       );
-      actions.add(onSelected);
     }
 
     drawerChildren.add(const SizedBox(height: 12));
-    addDestination(
-      icon: Icons.home_outlined,
-      title: isAr ? 'الرئيسية' : 'Home',
-      color: gold,
-      onSelected: () async {
-        setState(() => _selectedNavIndex = 0);
-      },
-    );
 
-    addDivider();
+    // Home as a fixed top action (not a collapsible section)
+    final bool isHomeSelected = _selectedNavIndex == 0;
+    drawerChildren.add(
+      Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 10),
+        child: Card(
+          elevation: 0,
+          color: isHomeSelected
+              ? gold.withValues(alpha: 0.12)
+              : theme.colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(
+              color: theme.dividerColor.withValues(alpha: 0.55),
+            ),
+          ),
+          child: ListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            contentPadding: const EdgeInsetsDirectional.fromSTEB(14, 4, 14, 4),
+            leading: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: gold.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.home_outlined, color: gold, size: 20),
+            ),
+            minLeadingWidth: 34,
+            title: Text(
+              isAr ? 'الرئيسية' : 'Home',
+              style: isHomeSelected
+                  ? baseLabelStyle.copyWith(fontWeight: FontWeight.bold)
+                  : baseLabelStyle,
+            ),
+            onTap: () async {
+              Navigator.of(context).pop();
+              setState(() => _selectedNavIndex = 0);
+            },
+          ),
+        ),
+      ),
+    );
     addSection(isAr ? 'الفواتير' : 'Invoices', gold);
     addDestination(
       icon: Icons.point_of_sale,
@@ -878,7 +957,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
     addDivider();
     addSection(
-      isAr ? '� الموارد البشرية' : '👔 Human Resources',
+      isAr ? ' الموارد البشرية' : ' Human Resources',
       Colors.blueGrey.shade400,
     );
     addDestination(
@@ -1070,7 +1149,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
     addDivider();
     addSection(
-      isAr ? '⚙️ الإعدادات والأدوات' : '⚙️ Settings & Tools',
+      isAr ? ' الإعدادات والأدوات' : ' Settings & Tools',
       theme.hintColor,
     );
     addDestination(
@@ -1174,22 +1253,97 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
-    drawerChildren.add(const SizedBox(height: 24));
+    // Build section widgets as collapsible ExpansionTiles (card style)
+    for (final sec in sections) {
+      if (sec.items.isEmpty) continue;
 
-    return NavigationDrawer(
-      backgroundColor:
-          theme.drawerTheme.backgroundColor ?? const Color(0xFF161616),
-      indicatorColor: gold.withValues(alpha: 0.18),
-      surfaceTintColor: Colors.transparent,
-      selectedIndex: null,
-      onDestinationSelected: (index) async {
-        if (index < 0 || index >= actions.length) {
-          return;
-        }
-        Navigator.of(context).pop();
-        await actions[index]();
-      },
-      children: drawerChildren,
+      drawerChildren.add(
+        Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 10),
+          child: Card(
+            elevation: 0,
+            color: theme.colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: BorderSide(
+                color: theme.dividerColor.withValues(alpha: 0.55),
+              ),
+            ),
+            child: Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: const EdgeInsetsDirectional.fromSTEB(14, 2, 14, 2),
+                childrenPadding:
+                    const EdgeInsetsDirectional.fromSTEB(10, 0, 10, 10),
+                collapsedIconColor: theme.iconTheme.color,
+                iconColor: theme.colorScheme.primary,
+                title: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: sec.color.withValues(alpha: 0.95),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        sec.title,
+                        style: sectionStyle.copyWith(color: sec.color),
+                      ),
+                    ),
+                  ],
+                ),
+                children: sec.items.map((it) {
+                  final iconColor = it.color ?? theme.iconTheme.color;
+                  return Padding(
+                    padding: const EdgeInsetsDirectional.only(top: 6),
+                    child: ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding:
+                          const EdgeInsetsDirectional.fromSTEB(8, 0, 8, 0),
+                      leading: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: iconColor?.withValues(alpha: 0.12) ??
+                              theme.colorScheme.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(it.icon, color: iconColor, size: 20),
+                      ),
+                      minLeadingWidth: 34,
+                      title: Text(it.title, style: baseLabelStyle),
+                      trailing: Icon(
+                        isAr ? Icons.chevron_left : Icons.chevron_right,
+                        color: theme.iconTheme.color?.withValues(alpha: 0.6),
+                      ),
+                      onTap: () async {
+                        Navigator.of(context).pop();
+                        await it.onSelected();
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Drawer(
+      width: 360,
+      child: Container(
+        color: theme.drawerTheme.backgroundColor ?? theme.colorScheme.surface,
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: drawerChildren,
+        ),
+      ),
     );
   }
 
@@ -2813,4 +2967,30 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final formatted = amount.toStringAsFixed(effectiveDecimals);
     return includeUnit ? '$formatted جم' : formatted;
   }
+}
+
+class _DrawerSection {
+  final String title;
+  final Color color;
+  final List<_DrawerSectionItem> items;
+
+  _DrawerSection({
+    required this.title,
+    required this.color,
+    List<_DrawerSectionItem>? items,
+  }) : items = items ?? <_DrawerSectionItem>[];
+}
+
+class _DrawerSectionItem {
+  final IconData icon;
+  final String title;
+  final Future<void> Function() onSelected;
+  final Color? color;
+
+  _DrawerSectionItem({
+    required this.icon,
+    required this.title,
+    required this.onSelected,
+    this.color,
+  });
 }

@@ -95,7 +95,10 @@ class ApiService {
 
     final future = () async {
       final prefs = await SharedPreferences.getInstance();
-      final refreshToken = prefs.getString('refresh_token');
+      // Support legacy / prefixed keys that may exist in production (e.g. "flutter.refresh_token").
+      final refreshToken = prefs.getString('refresh_token')
+          ?? prefs.getString('flutter.refresh_token')
+          ?? prefs.getString('refreshToken');
       if (refreshToken == null || refreshToken.isEmpty) {
         throw Exception('لا توجد جلسة صالحة. الرجاء تسجيل الدخول مرة أخرى');
       }
@@ -108,9 +111,12 @@ class ApiService {
         throw Exception('فشل تحديث الجلسة');
       }
 
+      // Persist under both canonical and prefixed keys to migrate older installs.
       await prefs.setString('jwt_token', newAccess);
+      await prefs.setString('flutter.jwt_token', newAccess);
       if (newRefresh != null && newRefresh.isNotEmpty) {
         await prefs.setString('refresh_token', newRefresh);
+        await prefs.setString('flutter.refresh_token', newRefresh);
       }
       return newAccess;
     }();
@@ -294,11 +300,8 @@ class ApiService {
 
   // Supplier Methods
   Future<List<dynamic>> getSuppliers() async {
-    final token = await _requireAuthToken();
-    final response = await http.get(
-      Uri.parse('$_baseUrl/suppliers'),
-      headers: _jsonHeaders(token: token),
-    );
+    final uri = Uri.parse('$_baseUrl/suppliers');
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -309,7 +312,7 @@ class ApiService {
   Future<Map<String, dynamic>> addSupplier(
     Map<String, dynamic> supplierData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/suppliers'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(supplierData),
@@ -322,7 +325,7 @@ class ApiService {
   }
 
   Future<void> updateSupplier(int id, Map<String, dynamic> supplierData) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/suppliers/$id'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(supplierData),
@@ -333,7 +336,7 @@ class ApiService {
   }
 
   Future<void> deleteSupplier(int id) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/suppliers/$id'));
+    final response = await _authedDelete(Uri.parse('$_baseUrl/suppliers/$id'));
     if (response.statusCode != 200) {
       throw Exception('Failed to delete supplier');
     }
@@ -358,7 +361,8 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getOffice(int id) async {
-    final response = await http.get(Uri.parse('$_baseUrl/offices/$id'));
+    final uri = Uri.parse('$_baseUrl/offices/$id');
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -369,7 +373,7 @@ class ApiService {
   Future<Map<String, dynamic>> addOffice(
     Map<String, dynamic> officeData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/offices'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(officeData),
@@ -382,7 +386,7 @@ class ApiService {
   }
 
   Future<void> updateOffice(int id, Map<String, dynamic> officeData) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/offices/$id'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(officeData),
@@ -393,16 +397,14 @@ class ApiService {
   }
 
   Future<void> deleteOffice(int id) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/offices/$id'));
+    final response = await _authedDelete(Uri.parse('$_baseUrl/offices/$id'));
     if (response.statusCode != 200) {
       throw Exception('Failed to delete office');
     }
   }
 
   Future<void> activateOffice(int id) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/offices/$id/activate'),
-    );
+    final response = await _authedPost(Uri.parse('$_baseUrl/offices/$id/activate'));
     if (response.statusCode != 200) {
       throw Exception('Failed to activate office');
     }
@@ -975,6 +977,37 @@ class ApiService {
         'Failed to update invoice status: ${response.statusCode} ${response.body}',
       );
     }
+  }
+
+  /// Add a payment to an existing invoice (used for settling remaining amounts)
+  Future<Map<String, dynamic>> addInvoicePayment({
+    required int invoiceId,
+    required int paymentMethodId,
+    required double amount,
+    String? notes,
+  }) async {
+    final payload = <String, dynamic>{
+      'payment_method_id': paymentMethodId,
+      'amount': amount,
+      if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+    };
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/invoices/$invoiceId/payments'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    throw ApiException(
+      statusCode: response.statusCode,
+      code: 'invoice_payment_failed',
+      message: _errorMessageFromResponse(response),
+      details: const {},
+    );
   }
 
   // Gold Price Methods
@@ -2124,35 +2157,35 @@ class ApiService {
       '$_baseUrl/invoices/returnable',
     ).replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load returnable invoices');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   /// Check if an invoice can be returned
   Future<Map<String, dynamic>> checkCanReturn(int invoiceId) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/invoices/$invoiceId/can-return'),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to check return status');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   /// Get all returns for a specific invoice
   Future<Map<String, dynamic>> getInvoiceReturns(int invoiceId) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/invoices/$invoiceId/returns'),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load invoice returns');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -2485,10 +2518,8 @@ class ApiService {
       url += '?operation_type=$operationType';
     }
 
-    final response = await http.get(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
-    );
+    final uri = Uri.parse(url);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes)) as List<dynamic>;
@@ -2506,7 +2537,7 @@ class ApiService {
     String? description,
     bool isActive = true,
   }) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/accounting-mappings'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode({
@@ -2530,7 +2561,7 @@ class ApiService {
   Future<Map<String, dynamic>> batchCreateAccountingMappings(
     List<Map<String, dynamic>> mappings,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/accounting-mappings/batch'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode({'mappings': mappings}),
@@ -2547,7 +2578,7 @@ class ApiService {
 
   /// حذف إعداد ربط محاسبي
   Future<void> deleteAccountingMapping(int mappingId) async {
-    final response = await http.delete(
+    final response = await _authedDelete(
       Uri.parse('$_baseUrl/accounting-mappings/$mappingId'),
     );
 
@@ -2561,7 +2592,7 @@ class ApiService {
     required String operationType,
     required String accountType,
   }) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/accounting-mappings/get-account'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode({
@@ -3129,7 +3160,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/payroll',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       final raw = json.decode(utf8.decode(response.bodyBytes)) as List<dynamic>;
@@ -3142,7 +3173,7 @@ class ApiService {
   }
 
   Future<PayrollModel> createPayroll(Map<String, dynamic> payload) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/payroll'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(_normalizePayload(payload)),
@@ -3161,7 +3192,7 @@ class ApiService {
     int payrollId,
     Map<String, dynamic> payload,
   ) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/payroll/$payrollId'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(_normalizePayload(payload)),
@@ -3177,7 +3208,7 @@ class ApiService {
   }
 
   Future<void> deletePayroll(int payrollId) async {
-    final response = await http.delete(
+    final response = await _authedDelete(
       Uri.parse('$_baseUrl/payroll/$payrollId'),
     );
     if (response.statusCode != 200) {
@@ -3204,7 +3235,7 @@ class ApiService {
     int? voucherId,
     int? paymentAccountId, // ✅ حساب الدفع (نقدية/بنك/شيك)
   }) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/payroll/$payrollId/mark-paid'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(
@@ -3255,7 +3286,7 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/attendance',
     ).replace(queryParameters: queryParameters);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       final raw = json.decode(utf8.decode(response.bodyBytes)) as List<dynamic>;
@@ -3268,7 +3299,7 @@ class ApiService {
   }
 
   Future<AttendanceModel> createAttendance(Map<String, dynamic> payload) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/attendance'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(_normalizePayload(payload)),
@@ -3473,45 +3504,90 @@ class ApiService {
 
   // Generic HTTP Methods
   Future<dynamic> get(String endpoint) async {
-    final response = await http.get(Uri.parse('$_baseUrl$endpoint'));
+    final uri = Uri.parse('$_baseUrl$endpoint');
+    // Try unauthenticated first (for public endpoints). If server rejects with 401,
+    // retry with authentication so protected endpoints work transparently.
+    var response = await http.get(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('GET request failed: ${response.body}');
     }
+
+    if (response.statusCode == 401) {
+      final authed = await _authedGet(uri);
+      if (authed.statusCode == 200) {
+        return json.decode(utf8.decode(authed.bodyBytes));
+      }
+      throw Exception('GET request failed: ${authed.body}');
+    }
+
+    throw Exception('GET request failed: ${response.body}');
   }
 
   Future<dynamic> post(String endpoint, Map<String, dynamic> data) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl$endpoint'),
+    final uri = Uri.parse('$_baseUrl$endpoint');
+    // Try unauthenticated first, then retry authenticated if server responds 401.
+    var response = await http.post(
+      uri,
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(data),
     );
     if (response.statusCode == 200 || response.statusCode == 201) {
       return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('POST request failed: ${response.body}');
     }
+
+    if (response.statusCode == 401) {
+      final authed = await _authedPost(
+        uri,
+        headers: {'Content-Type': 'application/json; charset=UTF-8'},
+        body: json.encode(data),
+      );
+      if (authed.statusCode == 200 || authed.statusCode == 201) {
+        return json.decode(utf8.decode(authed.bodyBytes));
+      }
+      throw Exception('POST request failed: ${authed.body}');
+    }
+
+    throw Exception('POST request failed: ${response.body}');
   }
 
   Future<dynamic> put(String endpoint, Map<String, dynamic> data) async {
-    final response = await http.put(
-      Uri.parse('$_baseUrl$endpoint'),
+    final uri = Uri.parse('$_baseUrl$endpoint');
+    var response = await http.put(
+      uri,
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(data),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('PUT request failed: ${response.body}');
     }
+
+    if (response.statusCode == 401) {
+      final authed = await _authedPut(
+        uri,
+        headers: {'Content-Type': 'application/json; charset=UTF-8'},
+        body: json.encode(data),
+      );
+      if (authed.statusCode == 200) {
+        return json.decode(utf8.decode(authed.bodyBytes));
+      }
+      throw Exception('PUT request failed: ${authed.body}');
+    }
+
+    throw Exception('PUT request failed: ${response.body}');
   }
 
   Future<void> delete(String endpoint) async {
-    final response = await http.delete(Uri.parse('$_baseUrl$endpoint'));
-    if (response.statusCode != 200 && response.statusCode != 204) {
-      throw Exception('DELETE request failed: ${response.body}');
+    final uri = Uri.parse('$_baseUrl$endpoint');
+    var response = await http.delete(uri);
+    if (response.statusCode == 200 || response.statusCode == 204) return;
+
+    if (response.statusCode == 401) {
+      final authed = await _authedDelete(uri);
+      if (authed.statusCode == 200 || authed.statusCode == 204) return;
+      throw Exception('DELETE request failed: ${authed.body}');
     }
+
+    throw Exception('DELETE request failed: ${response.body}');
   }
 
   // =========================================
@@ -3533,11 +3609,8 @@ class ApiService {
 
   /// Get unposted invoices
   Future<Map<String, dynamic>> getUnpostedInvoices() async {
-    final token = await _requireAuthToken();
-
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/invoices/unposted'),
-      headers: _jsonHeaders(token: token),
     );
 
     if (response.statusCode == 401) {
@@ -3554,11 +3627,8 @@ class ApiService {
 
   /// Get posted invoices
   Future<Map<String, dynamic>> getPostedInvoices() async {
-    final token = await _requireAuthToken();
-
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/invoices/posted'),
-      headers: _jsonHeaders(token: token),
     );
 
     if (response.statusCode == 401) {
@@ -3575,11 +3645,8 @@ class ApiService {
 
   /// Get unposted journal entries
   Future<Map<String, dynamic>> getUnpostedJournalEntries() async {
-    final token = await _requireAuthToken();
-
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/journal-entries/unposted'),
-      headers: _jsonHeaders(token: token),
     );
 
     if (response.statusCode == 401) {
@@ -3596,11 +3663,8 @@ class ApiService {
 
   /// Get posted journal entries
   Future<Map<String, dynamic>> getPostedJournalEntries() async {
-    final token = await _requireAuthToken();
-
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/journal-entries/posted'),
-      headers: _jsonHeaders(token: token),
     );
 
     if (response.statusCode == 401) {
@@ -3620,11 +3684,8 @@ class ApiService {
     int invoiceId,
     String postedBy,
   ) async {
-    final token = await _requireAuthToken();
-
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/invoices/post/$invoiceId'),
-      headers: _jsonHeaders(token: token),
       body: json.encode({'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -3639,11 +3700,8 @@ class ApiService {
     List<int> invoiceIds,
     String postedBy,
   ) async {
-    final token = await _requireAuthToken();
-
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/invoices/post-batch'),
-      headers: _jsonHeaders(token: token),
       body: json.encode({'invoice_ids': invoiceIds, 'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -3655,11 +3713,8 @@ class ApiService {
 
   /// Unpost an invoice
   Future<Map<String, dynamic>> unpostInvoice(int invoiceId) async {
-    final token = await _requireAuthToken();
-
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/invoices/unpost/$invoiceId'),
-      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -3673,11 +3728,8 @@ class ApiService {
     int entryId,
     String postedBy,
   ) async {
-    final token = await _requireAuthToken();
-
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/journal-entries/post/$entryId'),
-      headers: _jsonHeaders(token: token),
       body: json.encode({'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -3692,11 +3744,8 @@ class ApiService {
     List<int> entryIds,
     String postedBy,
   ) async {
-    final token = await _requireAuthToken();
-
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/journal-entries/post-batch'),
-      headers: _jsonHeaders(token: token),
       body: json.encode({'entry_ids': entryIds, 'posted_by': postedBy}),
     );
     if (response.statusCode == 200) {
@@ -3708,11 +3757,8 @@ class ApiService {
 
   /// Unpost a journal entry
   Future<Map<String, dynamic>> unpostJournalEntry(int entryId) async {
-    final token = await _requireAuthToken();
-
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/journal-entries/unpost/$entryId'),
-      headers: _jsonHeaders(token: token),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -3942,13 +3988,24 @@ class ApiService {
       '$_baseUrl/roles',
     ).replace(queryParameters: {'include_users': includeUsers.toString()});
 
-    final response = await http.get(
+    var response = await http.get(
       uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -3959,13 +4016,24 @@ class ApiService {
 
   /// Get role by ID
   Future<Map<String, dynamic>> getRole(String token, int roleId) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/roles/$roleId'),
+    final uri = Uri.parse('$_baseUrl/roles/$roleId');
+    var response = await http.get(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -3982,19 +4050,34 @@ class ApiService {
     String? description,
     List<int> permissionIds,
   ) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/roles'),
+    final uri = Uri.parse('$_baseUrl/roles');
+    final body = json.encode({
+      'name': name,
+      'name_ar': nameAr,
+      'description': description,
+      'permission_ids': permissionIds,
+    });
+
+    var response = await http.post(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
-      body: json.encode({
-        'name': name,
-        'name_ar': nameAr,
-        'description': description,
-        'permission_ids': permissionIds,
-      }),
+      body: body,
     );
+
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+        body: body,
+      );
+    }
 
     if (response.statusCode == 201) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4010,14 +4093,29 @@ class ApiService {
     int roleId,
     Map<String, dynamic> roleData,
   ) async {
-    final response = await http.put(
-      Uri.parse('$_baseUrl/roles/$roleId'),
+    final uri = Uri.parse('$_baseUrl/roles/$roleId');
+    final body = json.encode(roleData);
+
+    var response = await http.put(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
-      body: json.encode(roleData),
+      body: body,
     );
+
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.put(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+        body: body,
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4029,13 +4127,24 @@ class ApiService {
 
   /// Delete role
   Future<Map<String, dynamic>> deleteRole(String token, int roleId) async {
-    final response = await http.delete(
-      Uri.parse('$_baseUrl/roles/$roleId'),
+    final uri = Uri.parse('$_baseUrl/roles/$roleId');
+    var response = await http.delete(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.delete(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4056,13 +4165,23 @@ class ApiService {
           ).replace(queryParameters: {'category': category})
         : Uri.parse('$_baseUrl/permissions');
 
-    final response = await http.get(
+    var response = await http.get(
       uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4078,14 +4197,28 @@ class ApiService {
     String action, // 'add' or 'remove'
     List<int> roleIds,
   ) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/users/$userId/roles'),
+    final uri = Uri.parse('$_baseUrl/users/$userId/roles');
+    final body = json.encode({'action': action, 'role_ids': roleIds});
+
+    var response = await http.post(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
-      body: json.encode({'action': action, 'role_ids': roleIds}),
+      body: body,
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+        body: body,
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4104,13 +4237,24 @@ class ApiService {
     String token,
     int userId,
   ) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/users/$userId/permissions'),
+    final uri = Uri.parse('$_baseUrl/users/$userId/permissions');
+    var response = await http.get(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4151,13 +4295,23 @@ class ApiService {
       '$_baseUrl/users',
     ).replace(queryParameters: queryParams);
 
-    final response = await http.get(
+    var response = await http.get(
       uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4169,13 +4323,24 @@ class ApiService {
 
   /// Get single user by ID with JWT
   Future<Map<String, dynamic>> getUserById(String token, int userId) async {
-    final response = await http.get(
-      Uri.parse('$_baseUrl/users/$userId'),
+    final uri = Uri.parse('$_baseUrl/users/$userId');
+    var response = await http.get(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4195,21 +4360,35 @@ class ApiService {
     bool isActive = true,
     List<int>? roleIds,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/users'),
+    final uri = Uri.parse('$_baseUrl/users');
+    final body = json.encode({
+      'username': username,
+      'password': password,
+      'full_name': fullName,
+      'is_admin': isAdmin,
+      'is_active': isActive,
+      if (roleIds != null) 'role_ids': roleIds,
+    });
+
+    var response = await http.post(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
-      body: json.encode({
-        'username': username,
-        'password': password,
-        'full_name': fullName,
-        'is_admin': isAdmin,
-        'is_active': isActive,
-        if (roleIds != null) 'role_ids': roleIds,
-      }),
+      body: body,
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+        body: body,
+      );
+    }
 
     if (response.statusCode == 201) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4234,14 +4413,27 @@ class ApiService {
     if (isActive != null) body['is_active'] = isActive;
     if (password != null && password.isNotEmpty) body['password'] = password;
 
-    final response = await http.put(
-      Uri.parse('$_baseUrl/users/$userId'),
+    final uri = Uri.parse('$_baseUrl/users/$userId');
+    final encodedBody = json.encode(body);
+    var response = await http.put(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
-      body: json.encode(body),
+      body: encodedBody,
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.put(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+        body: encodedBody,
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4256,13 +4448,24 @@ class ApiService {
     String token,
     int userId,
   ) async {
-    final response = await http.delete(
-      Uri.parse('$_baseUrl/users/$userId'),
+    final uri = Uri.parse('$_baseUrl/users/$userId');
+    var response = await http.delete(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.delete(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4277,13 +4480,24 @@ class ApiService {
     String token,
     int userId,
   ) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/users/$userId/toggle-active'),
+    final uri = Uri.parse('$_baseUrl/users/$userId/toggle-active');
+    var response = await http.post(
+      uri,
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': 'Bearer $token',
       },
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _refreshAccessTokenFromStorage();
+      response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'Authorization': 'Bearer $refreshed',
+        },
+      );
+    }
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -4299,9 +4513,17 @@ class ApiService {
 
   Future<String> _requireAuthToken() async {
     final prefs = await SharedPreferences.getInstance();
-    final jwtToken = prefs.getString('jwt_token');
+    // Try canonical keys first, then fall back to older/prefixed keys.
+    final jwtToken = prefs.getString('jwt_token')
+        ?? prefs.getString('flutter.jwt_token')
+        ?? prefs.getString('auth_token')
+        ?? prefs.getString('flutter.auth_token');
 
     if (jwtToken != null && jwtToken.isNotEmpty) {
+      // If we found a prefixed/legacy token, migrate it to the canonical key(s).
+      await prefs.setString('jwt_token', jwtToken);
+      await prefs.setString('flutter.jwt_token', jwtToken);
+
       // Proactively refresh if token is expired/near-expiry to avoid 401s.
       if (_isJwtExpiringSoon(jwtToken)) {
         try {
@@ -4312,13 +4534,6 @@ class ApiService {
         }
       }
       return jwtToken;
-    }
-
-    final legacyToken = prefs.getString('auth_token');
-    if (legacyToken != null && legacyToken.isNotEmpty) {
-      // مهاجرة التوكن القديم إلى المفتاح الجديد لضمان التوافق
-      await prefs.setString('jwt_token', legacyToken);
-      return legacyToken;
     }
 
     throw Exception(
@@ -4337,7 +4552,10 @@ class ApiService {
 
   Future<String?> getStoredToken() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token') ?? prefs.getString('auth_token');
+    final token = prefs.getString('jwt_token') ??
+        prefs.getString('flutter.jwt_token') ??
+        prefs.getString('auth_token') ??
+        prefs.getString('flutter.auth_token');
     if (token != null && token.isNotEmpty) {
       return token;
     }

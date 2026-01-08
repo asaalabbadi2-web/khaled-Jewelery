@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../api_service.dart';
+import '../providers/auth_provider.dart';
 import '../services/data_sync_bus.dart';
 import 'add_return_invoice_screen.dart';
 import 'invoice_print_screen.dart';
@@ -54,6 +56,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     'total_amount': 0.0,
     'paid_amount': 0.0,
     'unpaid_amount': 0.0,
+    'vat_total': 0.0,
+    'sold_weight_total': 0.0,
   };
 
   static const Map<String, String> _invoicePrefixLookup = {
@@ -269,8 +273,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           final normalizedStatus = _normalizeStatus(
             (invoice['status'] ?? '').toString(),
           );
-          if (normalizedStatus != _selectedStatus) {
-            return false;
+          if (_selectedStatus == 'paid_full') {
+            if (normalizedStatus != 'paid') return false;
+          } else if (_selectedStatus == 'remaining') {
+            if (normalizedStatus != 'unpaid' &&
+                normalizedStatus != 'partially_paid') {
+              return false;
+            }
+          } else {
+            if (normalizedStatus != _selectedStatus) {
+              return false;
+            }
           }
         }
 
@@ -381,6 +394,32 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
 
       _statistics['unpaid_amount'] =
           _statistics['total_amount'] - _statistics['paid_amount'];
+
+      _statistics['vat_total'] = _filteredInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus((invoice['status'] ?? '').toString());
+          if (normalized == 'cancelled') return sum;
+          return sum + _tryParseDouble(invoice['total_tax']);
+        } catch (e) {
+          debugPrint('⚠️ خطأ في حساب الضريبة: $e');
+          return sum;
+        }
+      });
+
+      _statistics['sold_weight_total'] = _filteredInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus((invoice['status'] ?? '').toString());
+          if (normalized == 'cancelled') return sum;
+          final invoiceType = (invoice['invoice_type'] ?? '').toString();
+          if (!_isSaleInvoiceType(invoiceType) || _isReturnInvoiceType(invoiceType)) {
+            return sum;
+          }
+          return sum + _extractInvoiceTotalWeight(invoice);
+        } catch (e) {
+          debugPrint('⚠️ خطأ في حساب وزن المبيعات: $e');
+          return sum;
+        }
+      });
     } catch (e) {
       debugPrint('❌ خطأ في حساب الإحصائيات: $e');
       // قيم افتراضية في حالة الخطأ
@@ -388,6 +427,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       _statistics['total_amount'] = 0.0;
       _statistics['paid_amount'] = 0.0;
       _statistics['unpaid_amount'] = 0.0;
+      _statistics['vat_total'] = 0.0;
+      _statistics['sold_weight_total'] = 0.0;
     }
   }
 
@@ -432,6 +473,108 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       return value;
     }
     return int.tryParse(value.toString());
+  }
+
+  double _tryParseDouble(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? 0.0;
+  }
+
+  bool _isSaleInvoiceType(String invoiceType) {
+    final trimmed = invoiceType.trim();
+    if (trimmed == 'بيع') return true;
+    final lower = trimmed.toLowerCase();
+    return lower.contains('sell') || lower.contains('sale') || trimmed.contains('بيع');
+  }
+
+  bool _isReturnInvoiceType(String invoiceType) {
+    final trimmed = invoiceType.trim();
+    final lower = trimmed.toLowerCase();
+    return lower.contains('return') || trimmed.contains('مرتجع');
+  }
+
+  double _extractInvoiceTotalWeight(Map<String, dynamic> invoice) {
+    final direct = _tryParseDouble(invoice['total_weight']);
+    if (direct > 0) return direct;
+
+    final items = invoice['items'];
+    if (items is List) {
+      var sum = 0.0;
+      for (final entry in items) {
+        if (entry is Map) {
+          sum += _tryParseDouble(
+            entry['weight'] ??
+                entry['weight_grams'] ??
+                entry['gold_weight'] ??
+                entry['total_weight'],
+          );
+        }
+      }
+      return sum;
+    }
+
+    return 0.0;
+  }
+
+  String? _extractInvoiceKaratLabel(Map<String, dynamic> invoice) {
+    final direct = invoice['karat'] ?? invoice['gold_karat'] ?? invoice['karat_value'];
+    final directStr = direct?.toString().trim();
+    if (directStr != null && directStr.isNotEmpty) {
+      return directStr;
+    }
+
+    final items = invoice['items'];
+    if (items is List) {
+      final karats = <String>{};
+      for (final entry in items) {
+        if (entry is Map) {
+          final v = (entry['karat'] ?? entry['gold_karat'] ?? entry['karat_value'])
+              ?.toString()
+              .trim();
+          if (v != null && v.isNotEmpty) {
+            karats.add(v);
+          }
+        }
+      }
+      if (karats.isEmpty) return null;
+      final list = karats.toList()..sort();
+      return list.join('/');
+    }
+
+    return null;
+  }
+
+  String? _extractInvoiceGoldTypeLabel(Map<String, dynamic> invoice) {
+    final direct =
+        invoice['gold_type'] ?? invoice['goldType'] ?? invoice['gold_type_name'];
+    final directStr = direct?.toString().trim();
+    if (directStr != null && directStr.isNotEmpty) {
+      return directStr;
+    }
+
+    final items = invoice['items'];
+    if (items is List) {
+      final types = <String>{};
+      for (final entry in items) {
+        if (entry is Map) {
+          final v = (entry['gold_type'] ??
+                  entry['goldType'] ??
+                  entry['gold_type_name'] ??
+                  entry['type'])
+              ?.toString()
+              .trim();
+          if (v != null && v.isNotEmpty) {
+            types.add(v);
+          }
+        }
+      }
+      if (types.isEmpty) return null;
+      final list = types.toList()..sort();
+      return list.join('/');
+    }
+
+    return null;
   }
 
   String _getInvoiceDisplayNumber(Map<String, dynamic> invoice) {
@@ -730,6 +873,34 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
               ),
             ],
           ),
+          SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatCard(
+                  icon: Icons.receipt,
+                  title: isAr ? 'إجمالي الضريبة' : 'VAT Total',
+                  value: NumberFormat(
+                    '#,##0.00',
+                    isAr ? 'ar' : 'en',
+                  ).format(_statistics['vat_total']),
+                  highlightColor: colorScheme.tertiary,
+                ),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: _buildStatCard(
+                  icon: Icons.scale,
+                  title: isAr ? 'وزن المبيعات (جم)' : 'Sold Weight (g)',
+                  value: NumberFormat(
+                    '#,##0.###',
+                    isAr ? 'ar' : 'en',
+                  ).format(_statistics['sold_weight_total']),
+                  highlightColor: colorScheme.secondary,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -858,12 +1029,37 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              IconButton(
+              OutlinedButton.icon(
                 icon: Icon(
                   Icons.date_range,
                   color: _dateRange != null
                       ? colorScheme.primary
                       : colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+                label: Text(
+                  _dateRange == null
+                      ? (isAr ? 'التاريخ' : 'Date')
+                      : '${DateFormat('yyyy-MM-dd').format(_dateRange!.start)} - ${DateFormat('yyyy-MM-dd').format(_dateRange!.end)}',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: _dateRange != null
+                        ? colorScheme.primary
+                        : colorScheme.onSurface.withValues(alpha: 0.8),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(
+                    color: _dateRange != null
+                        ? colorScheme.primary.withValues(alpha: 0.4)
+                        : colorScheme.outline.withValues(alpha: 0.2),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 12,
+                  ),
                 ),
                 onPressed: () async {
                   final picked = await showDateRangePicker(
@@ -971,6 +1167,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   List<Map<String, String>> _buildStatusItems(bool isArabic) {
     return [
       {'value': 'all', 'label': isArabic ? 'الكل' : 'All'},
+      {
+        'value': 'paid_full',
+        'label': isArabic ? 'مدفوعة بالكامل' : 'Paid (Full)',
+      },
+      {
+        'value': 'remaining',
+        'label': isArabic ? 'المتبقي/الآجل' : 'Remaining',
+      },
       {'value': 'paid', 'label': isArabic ? 'مدفوعة' : 'Paid'},
       {
         'value': 'partially_paid',
@@ -1125,17 +1329,24 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   Widget _buildInvoiceCard(Map<String, dynamic> invoice) {
     try {
       final isAr = widget.isArabic;
-      final status = (invoice['status'] ?? '').toString().toLowerCase();
-      final bool isPaid = (status == 'paid' || status == 'مدفوعة');
+      final normalizedStatus = _normalizeStatus((invoice['status'] ?? '').toString());
+      final bool isPaid = normalizedStatus == 'paid';
+      final bool isCancelled = normalizedStatus == 'cancelled';
       final theme = Theme.of(context);
       final colorScheme = theme.colorScheme;
       final textTheme = theme.textTheme;
-      final statusColor = isPaid ? Colors.green : Colors.orange;
+      final statusColor = isCancelled
+        ? colorScheme.onSurfaceVariant.withValues(alpha: 0.8)
+        : (isPaid ? Colors.green : Colors.orange);
       final invoiceType = (invoice['invoice_type'] ?? '').toString();
       final bool isPurchase =
           invoiceType == 'شراء' || invoiceType.toLowerCase() == 'buy';
       final Color typeColor = isPurchase ? Colors.blue : colorScheme.primary;
       final invoiceDisplayNumber = _getInvoiceDisplayNumber(invoice);
+
+      final karatLabel = _extractInvoiceKaratLabel(invoice);
+      final goldTypeLabel = _extractInvoiceGoldTypeLabel(invoice);
+      final totalWeight = _extractInvoiceTotalWeight(invoice);
 
       return Card(
         margin: const EdgeInsets.only(bottom: 12),
@@ -1144,7 +1355,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
             theme.cardTheme.shape ??
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: InkWell(
-          onTap: () => _viewInvoiceDetails(invoice),
+          onTap: () => _openInvoicePreview(invoice),
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -1190,6 +1401,19 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                       ),
                     ),
                     const Spacer(),
+                    IconButton(
+                      tooltip: isAr ? 'طباعة' : 'Print',
+                      icon: Icon(Icons.print, color: colorScheme.primary),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _viewInvoiceDetails(invoice, autoPrint: true),
+                    ),
+                    IconButton(
+                      tooltip: isAr ? 'مشاركة PDF' : 'Share PDF',
+                      icon: Icon(Icons.share, color: colorScheme.primary),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () =>
+                          _viewInvoiceDetails(invoice, autoSharePdf: true),
+                    ),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
@@ -1209,7 +1433,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            _translateStatus(status, isAr),
+                            _translateStatus(normalizedStatus, isAr),
                             style: textTheme.bodySmall?.copyWith(
                               color: statusColor,
                             ),
@@ -1231,12 +1455,24 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        invoice['customer_name']?.toString() ??
-                            (isAr ? 'غير محدد' : 'N/A'),
-                        style: textTheme.titleMedium?.copyWith(
-                          color: colorScheme.onSurface,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            (invoice['customer_name'] ?? invoice['supplier_name'])?.toString() ??
+                                (isAr ? 'غير محدد' : 'N/A'),
+                            style: textTheme.titleMedium?.copyWith(
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            invoice['seller_name']?.toString() ?? '',
+                            style: textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurface.withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     Icon(
@@ -1254,6 +1490,41 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
+
+                // Gold tags (karat + total weight)
+                if (karatLabel != null || goldTypeLabel != null || totalWeight > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (goldTypeLabel != null)
+                          _buildInfoChip(
+                            label: isAr
+                                ? 'النوع: $goldTypeLabel'
+                                : 'Type: $goldTypeLabel',
+                            colorScheme: colorScheme,
+                          ),
+                        if (karatLabel != null)
+                          _buildInfoChip(
+                            label: isAr ? 'عيار: $karatLabel' : 'Karat: $karatLabel',
+                            colorScheme: colorScheme,
+                          ),
+                        if (totalWeight > 0)
+                          _buildInfoChip(
+                            label:
+                                isAr ? 'وزن: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(totalWeight)} جم' : 'Weight: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(totalWeight)} g',
+                            colorScheme: colorScheme,
+                          ),
+                        if (isCancelled)
+                          _buildInfoChip(
+                            label: isAr ? 'ملغاة' : 'Cancelled',
+                            colorScheme: colorScheme,
+                          ),
+                      ],
+                    ),
+                  ),
 
                 // Amount
                 Container(
@@ -1291,7 +1562,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _viewInvoiceDetails(invoice),
+                        onPressed: () => _openInvoicePreview(invoice),
                         icon: const Icon(Icons.visibility, size: 18),
                         label: Text(isAr ? 'عرض' : 'View'),
                         style: OutlinedButton.styleFrom(
@@ -1303,9 +1574,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _editInvoice(invoice),
-                        icon: const Icon(Icons.edit, size: 18),
-                        label: Text(isAr ? 'تعديل' : 'Edit'),
+                        onPressed: isCancelled ? null : () => _editInvoice(invoice),
+                        icon: const Icon(Icons.sync_alt, size: 18),
+                        label: Text(isAr ? 'تحديث الحالة' : 'Update Status'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.blue,
                           side: const BorderSide(color: Colors.blue),
@@ -1314,7 +1585,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     ),
                     const SizedBox(width: 8),
                     IconButton(
-                      onPressed: () => _deleteInvoice(invoice),
+                      onPressed: isCancelled ? null : () => _deleteInvoice(invoice),
                       icon: Icon(Icons.delete, color: colorScheme.error),
                     ),
                   ],
@@ -1355,6 +1626,33 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     }
   }
 
+  Widget _buildInfoChip({
+    required String label,
+    required ColorScheme colorScheme,
+  }) {
+    final theme = Theme.of(context);
+    final textTheme = theme.textTheme;
+    final bg = colorScheme.surfaceContainerHighest.withValues(
+      alpha: theme.brightness == Brightness.dark ? 0.35 : 0.7,
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.12)),
+      ),
+      child: Text(
+        label,
+        style: textTheme.bodySmall?.copyWith(
+          color: colorScheme.onSurface,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmptyState() {
     final isAr = widget.isArabic;
     final colorScheme = Theme.of(context).colorScheme;
@@ -1388,7 +1686,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     );
   }
 
-  Future<void> _viewInvoiceDetails(Map<String, dynamic> invoice) async {
+  Future<void> _viewInvoiceDetails(
+    Map<String, dynamic> invoice, {
+    bool autoPrint = false,
+    bool autoSharePdf = false,
+    bool autoDownloadPdf = false,
+  }) async {
     final invoiceIdValue = invoice['id'];
     final invoiceId = invoiceIdValue is int
         ? invoiceIdValue
@@ -1424,6 +1727,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           builder: (_) => InvoicePrintScreen(
             invoice: mergedInvoice,
             isArabic: widget.isArabic,
+            autoPrint: autoPrint,
+            autoSharePdf: autoSharePdf,
+            autoDownloadPdf: autoDownloadPdf,
           ),
         ),
       );
@@ -1441,6 +1747,746 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         );
       }
     }
+  }
+
+  Future<void> _openInvoicePreview(Map<String, dynamic> invoice) async {
+    final invoiceIdValue = invoice['id'];
+    final invoiceId = invoiceIdValue is int
+        ? invoiceIdValue
+        : int.tryParse(invoiceIdValue?.toString() ?? '');
+
+    if (invoiceId == null) {
+      _showSnackBar(
+        widget.isArabic ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+        isError: true,
+      );
+      return;
+    }
+
+    var loaderVisible = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    ).then((_) => loaderVisible = false);
+
+    try {
+      final details = await _apiService.getInvoiceById(invoiceId);
+      if (!mounted) return;
+      if (loaderVisible) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+
+      final mergedInvoice = {...invoice, ...details};
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) {
+          return _buildInvoicePreviewSheet(sheetContext, mergedInvoice);
+        },
+      );
+    } catch (e) {
+      if (loaderVisible && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+      if (mounted) {
+        _showSnackBar(
+          widget.isArabic
+              ? 'فشل تحميل تفاصيل الفاتورة: $e'
+              : 'Failed to load invoice details: $e',
+          isError: true,
+        );
+      }
+    }
+  }
+
+  Widget _buildInvoicePreviewSheet(
+    BuildContext sheetContext,
+    Map<String, dynamic> invoice,
+  ) {
+    final isAr = widget.isArabic;
+    final theme = Theme.of(sheetContext);
+    final colorScheme = theme.colorScheme;
+    final textTheme = theme.textTheme;
+
+    final normalizedStatus = _normalizeStatus((invoice['status'] ?? '').toString());
+    final isCancelled = normalizedStatus == 'cancelled';
+
+    final total = _tryParseDouble(invoice['total']);
+    final tax = _tryParseDouble(invoice['total_tax']);
+    final subtotal = (total - tax).clamp(0.0, double.infinity);
+
+    final paid = _tryParseDouble(
+      invoice['amount_paid'] ?? invoice['total_payments_amount'],
+    );
+    final remaining = (total - paid).clamp(0.0, double.infinity);
+    final canSettle = !isCancelled && remaining > 0.01;
+
+    final invoiceNumber = _getInvoiceDisplayNumber(invoice);
+    final customerName = invoice['customer_name']?.toString() ?? (isAr ? 'غير محدد' : 'N/A');
+    final invoiceType = (invoice['invoice_type'] ?? '').toString();
+
+    final items = (invoice['items'] is List) ? (invoice['items'] as List) : const [];
+
+    final auth = Provider.of<AuthProvider>(sheetContext, listen: false);
+    final canSeeLogs = auth.isManager;
+
+    final invoiceDate = _tryParseDateTime(invoice['date']);
+    final minutesSince = invoiceDate == null
+      ? null
+      : DateTime.now().difference(invoiceDate).inMinutes;
+    const editWindowMinutes = 15;
+    final withinEditWindow = minutesSince != null && minutesSince <= editWindowMinutes;
+    final canDirectEdit = auth.isManager || withinEditWindow;
+
+    final returnType = _returnTypeForInvoice(invoiceType);
+    final canReturn = returnType != null;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.92,
+      minChildSize: 0.5,
+      maxChildSize: 0.98,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: theme.scaffoldBackgroundColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colorScheme.onSurface.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            invoiceNumber,
+                            style: textTheme.titleLarge?.copyWith(
+                              color: colorScheme.primary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$invoiceType • $customerName',
+                            style: textTheme.bodyMedium?.copyWith(
+                              color: colorScheme.onSurface.withValues(alpha: 0.75),
+                              fontWeight: FontWeight.w600,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(Icons.close),
+                      tooltip: isAr ? 'إغلاق' : 'Close',
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              // Action bar
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          _viewInvoiceDetails(invoice, autoPrint: true);
+                        },
+                        icon: const Icon(Icons.print, size: 18),
+                        label: Text(isAr ? 'طباعة' : 'Print'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          _viewInvoiceDetails(invoice, autoDownloadPdf: true);
+                        },
+                        icon: const Icon(Icons.download, size: 18),
+                        label: Text(isAr ? 'تحميل PDF' : 'Download PDF'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          _viewInvoiceDetails(invoice, autoSharePdf: true);
+                        },
+                        icon: const Icon(Icons.share, size: 18),
+                        label: Text(isAr ? 'واتساب' : 'WhatsApp'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  children: [
+                    // Status + date
+                    Row(
+                      children: [
+                        _buildInfoChip(
+                          label: isAr
+                              ? 'الحالة: ${_translateStatus(normalizedStatus, isAr)}'
+                              : 'Status: ${_translateStatus(normalizedStatus, isAr)}',
+                          colorScheme: colorScheme,
+                        ),
+                        const SizedBox(width: 8),
+                        _buildInfoChip(
+                          label: isAr
+                              ? 'التاريخ: ${_formatDate(invoice['date'], isAr)}'
+                              : 'Date: ${_formatDate(invoice['date'], isAr)}',
+                          colorScheme: colorScheme,
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // Items table preview
+                    Text(
+                      isAr ? 'الأصناف' : 'Items',
+                      style: textTheme.titleMedium?.copyWith(
+                        color: colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    if (items.isEmpty)
+                      Text(
+                        isAr ? 'لا توجد أصناف' : 'No items',
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.7),
+                        ),
+                      )
+                    else
+                      ...items.map((raw) {
+                        final item = raw is Map
+                            ? raw.map((k, v) => MapEntry(k.toString(), v))
+                            : <String, dynamic>{};
+
+                        final name = (item['name'] ?? '').toString();
+                        final qty = _tryParseInt(item['quantity']) ?? 1;
+                        final weight = _tryParseDouble(item['weight']);
+                        final karat = item['karat']?.toString();
+                        final wage = _tryParseDouble(item['wage']);
+                        final itemTax = _tryParseDouble(item['tax']);
+                        final itemTotal = _tryParseDouble(item['price'] ?? item['total']);
+
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          elevation: 0,
+                          color: colorScheme.surfaceContainerHighest.withValues(
+                            alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name.isNotEmpty
+                                      ? name
+                                      : (isAr ? 'صنف' : 'Item'),
+                                  style: textTheme.bodyLarge?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    _buildInfoChip(
+                                      label: isAr ? 'الكمية: $qty' : 'Qty: $qty',
+                                      colorScheme: colorScheme,
+                                    ),
+                                    if (karat != null && karat.trim().isNotEmpty)
+                                      _buildInfoChip(
+                                        label: isAr ? 'عيار: $karat' : 'Karat: $karat',
+                                        colorScheme: colorScheme,
+                                      ),
+                                    if (weight > 0)
+                                      _buildInfoChip(
+                                        label: isAr
+                                            ? 'وزن: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(weight)} جم'
+                                            : 'Weight: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(weight)} g',
+                                        colorScheme: colorScheme,
+                                      ),
+                                    if (wage > 0)
+                                      _buildInfoChip(
+                                        label: isAr
+                                            ? 'أجور: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(wage)}'
+                                            : 'Wage: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(wage)}',
+                                        colorScheme: colorScheme,
+                                      ),
+                                    if (itemTax > 0)
+                                      _buildInfoChip(
+                                        label: isAr
+                                            ? 'ضريبة: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(itemTax)}'
+                                            : 'Tax: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(itemTax)}',
+                                        colorScheme: colorScheme,
+                                      ),
+                                    if (itemTotal > 0)
+                                      _buildInfoChip(
+                                        label: isAr
+                                            ? 'الإجمالي: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(itemTotal)}'
+                                            : 'Total: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(itemTotal)}',
+                                        colorScheme: colorScheme,
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+
+                    const SizedBox(height: 12),
+
+                    // Summary
+                    Text(
+                      isAr ? 'الملخص المالي' : 'Summary',
+                      style: textTheme.titleMedium?.copyWith(
+                        color: colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Card(
+                      elevation: 0,
+                      color: colorScheme.surfaceContainerHighest.withValues(
+                        alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          children: [
+                            _buildSummaryRow(
+                              label: isAr ? 'قبل الضريبة' : 'Subtotal',
+                              value: subtotal,
+                              isAr: isAr,
+                              colorScheme: colorScheme,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildSummaryRow(
+                              label: isAr ? 'الضريبة' : 'VAT',
+                              value: tax,
+                              isAr: isAr,
+                              colorScheme: colorScheme,
+                            ),
+                            const Divider(height: 18),
+                            _buildSummaryRow(
+                              label: isAr ? 'الإجمالي' : 'Total',
+                              value: total,
+                              isAr: isAr,
+                              colorScheme: colorScheme,
+                              emphasize: true,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildSummaryRow(
+                              label: isAr ? 'المدفوع' : 'Paid',
+                              value: paid,
+                              isAr: isAr,
+                              colorScheme: colorScheme,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildSummaryRow(
+                              label: isAr ? 'المتبقي' : 'Remaining',
+                              value: remaining,
+                              isAr: isAr,
+                              colorScheme: colorScheme,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    if (canSettle) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () async {
+                            final didPay = await _showSettleRemainingDialog(
+                              sheetContext: sheetContext,
+                              invoice: invoice,
+                              remaining: remaining,
+                            );
+                            if (didPay == true && mounted) {
+                              Navigator.of(sheetContext).pop();
+                              await _loadInvoices();
+                            }
+                          },
+                          icon: const Icon(Icons.payments),
+                          label: Text(isAr ? 'سداد متبقي' : 'Settle Remaining'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: colorScheme.primary,
+                            foregroundColor: colorScheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    if (canReturn) ...[
+                      const SizedBox(height: 12),
+                      Card(
+                        elevation: 0,
+                        color: colorScheme.surfaceContainerHighest.withValues(
+                          alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isAr ? 'التعديل الآمن' : 'Safe Editing',
+                                style: textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                canDirectEdit
+                                    ? (isAr
+                                        ? 'يفضل استخدام المرتجع بدلاً من تعديل الفاتورة الأصلية للحفاظ على دقة المخزون والحسابات.'
+                                        : 'Prefer using returns instead of editing the original invoice to preserve inventory/accounting integrity.')
+                                    : (isAr
+                                        ? 'انتهت مدة التعديل ($editWindowMinutes دقيقة). يلزم صلاحية مدير أو استخدم مرتجع.'
+                                        : 'Edit window expired ($editWindowMinutes min). Manager permission required or use a return.'),
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    Navigator.of(sheetContext).pop();
+                                    _openReturnForInvoice(invoice, returnType);
+                                  },
+                                  icon: const Icon(Icons.keyboard_return),
+                                  label: Text(
+                                    isAr ? 'إنشاء مرتجع' : 'Create Return',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    if (canSeeLogs) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        isAr ? 'سجل الأحداث' : 'Logs',
+                        style: textTheme.titleMedium?.copyWith(
+                          color: colorScheme.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Card(
+                        elevation: 0,
+                        color: colorScheme.surfaceContainerHighest.withValues(
+                          alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'ID: ${invoice['id'] ?? '-'}',
+                                style: textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                isAr
+                                    ? 'ترحيل: ${invoice['is_posted'] == true ? 'نعم' : 'لا'}'
+                                    : 'Posted: ${invoice['is_posted'] == true ? 'Yes' : 'No'}',
+                                style: textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 6),
+                              if ((invoice['posted_at'] ?? '').toString().isNotEmpty)
+                                Text(
+                                  isAr
+                                      ? 'تاريخ الترحيل: ${invoice['posted_at']}'
+                                      : 'Posted at: ${invoice['posted_at']}',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                                  ),
+                                ),
+                              if ((invoice['posted_by'] ?? '').toString().isNotEmpty)
+                                Text(
+                                  isAr
+                                      ? 'مرحل بواسطة: ${invoice['posted_by']}'
+                                      : 'Posted by: ${invoice['posted_by']}',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  DateTime? _tryParseDateTime(dynamic value) {
+    if (value == null) return null;
+    try {
+      return DateTime.parse(value.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _returnTypeForInvoice(String invoiceType) {
+    final t = invoiceType.trim();
+    if (t.isEmpty) return null;
+    if (t.contains('مرتجع')) return null;
+    if (t == 'بيع' || t.toLowerCase() == 'sell') return 'مرتجع بيع';
+    if (t == 'شراء من عميل') return 'مرتجع شراء';
+    if (t == 'شراء من مورد') return 'مرتجع شراء من مورد';
+    return null;
+  }
+
+  Future<void> _openReturnForInvoice(
+    Map<String, dynamic> invoice,
+    String returnType,
+  ) async {
+    if (!mounted) return;
+
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => AddReturnInvoiceScreen(
+          api: _apiService,
+          returnType: returnType,
+          prefilledOriginalInvoice: invoice,
+        ),
+      ),
+    );
+
+    if (result == true && mounted) {
+      await _loadInvoices();
+    }
+  }
+
+  Widget _buildSummaryRow({
+    required String label,
+    required double value,
+    required bool isAr,
+    required ColorScheme colorScheme,
+    bool emphasize = false,
+  }) {
+    final theme = Theme.of(context);
+    final textTheme = theme.textTheme;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onSurface.withValues(alpha: 0.75),
+            fontWeight: emphasize ? FontWeight.bold : FontWeight.w600,
+          ),
+        ),
+        Text(
+          NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(value),
+          style: textTheme.bodyLarge?.copyWith(
+            color: emphasize ? colorScheme.primary : colorScheme.onSurface,
+            fontWeight: emphasize ? FontWeight.bold : FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<bool?> _showSettleRemainingDialog({
+    required BuildContext sheetContext,
+    required Map<String, dynamic> invoice,
+    required double remaining,
+  }) async {
+    final isAr = widget.isArabic;
+    final theme = Theme.of(sheetContext);
+    final colorScheme = theme.colorScheme;
+
+    final invoiceIdValue = invoice['id'];
+    final invoiceId = invoiceIdValue is int
+        ? invoiceIdValue
+        : int.tryParse(invoiceIdValue?.toString() ?? '');
+    if (invoiceId == null) {
+      _showSnackBar(isAr ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id', isError: true);
+      return false;
+    }
+
+    final methodsRaw = await _apiService.getActivePaymentMethods();
+    final methods = methodsRaw
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList();
+
+    int? selectedMethodId;
+    if (methods.isNotEmpty) {
+      selectedMethodId = _tryParseInt(methods.first['id']);
+    }
+
+    final amountController = TextEditingController(
+      text: remaining.toStringAsFixed(2),
+    );
+    final notesController = TextEditingController();
+
+    return showDialog<bool>(
+      context: sheetContext,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text(isAr ? 'سداد متبقي' : 'Settle Remaining'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isAr
+                      ? 'المتبقي: ${remaining.toStringAsFixed(2)}'
+                      : 'Remaining: ${remaining.toStringAsFixed(2)}',
+                  style: Theme.of(ctx).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  value: selectedMethodId,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'وسيلة الدفع' : 'Payment Method',
+                  ),
+                  items: methods
+                      .map((m) {
+                        final id = _tryParseInt(m['id']);
+                        final name = (m['name'] ?? '').toString();
+                        if (id == null) return null;
+                        return DropdownMenuItem<int>(
+                          value: id,
+                          child: Text(name.isNotEmpty ? name : id.toString()),
+                        );
+                      })
+                      .whereType<DropdownMenuItem<int>>()
+                      .toList(),
+                  onChanged: (v) => selectedMethodId = v,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: amountController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'المبلغ' : 'Amount',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesController,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'ملاحظات (اختياري)' : 'Notes (optional)',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(isAr ? 'إلغاء' : 'Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: colorScheme.primary,
+                foregroundColor: colorScheme.onPrimary,
+              ),
+              onPressed: () async {
+                if (selectedMethodId == null) {
+                  Navigator.of(ctx).pop(false);
+                  _showSnackBar(isAr ? 'اختر وسيلة دفع' : 'Select a payment method', isError: true);
+                  return;
+                }
+                final amount = double.tryParse(amountController.text.trim()) ?? 0.0;
+                if (amount <= 0) {
+                  _showSnackBar(isAr ? 'أدخل مبلغاً صحيحاً' : 'Enter a valid amount', isError: true);
+                  return;
+                }
+                if (amount > remaining + 0.01) {
+                  _showSnackBar(
+                    isAr ? 'المبلغ أكبر من المتبقي' : 'Amount exceeds remaining',
+                    isError: true,
+                  );
+                  return;
+                }
+                try {
+                  await _apiService.addInvoicePayment(
+                    invoiceId: invoiceId,
+                    paymentMethodId: selectedMethodId!,
+                    amount: amount,
+                    notes: notesController.text,
+                  );
+                  if (!mounted) return;
+                  _showSnackBar(isAr ? 'تم تسجيل الدفعة' : 'Payment recorded', isError: false);
+                  Navigator.of(ctx).pop(true);
+                } catch (e) {
+                  _showSnackBar(
+                    isAr ? 'فشل تسجيل الدفعة: $e' : 'Failed to record payment: $e',
+                    isError: true,
+                  );
+                }
+              },
+              child: Text(isAr ? 'تأكيد' : 'Confirm'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _editInvoice(Map<String, dynamic> invoice) async {

@@ -909,7 +909,8 @@ class Invoice(db.Model):
             result['branch_name'] = self.branch.name if self.branch else None
         except Exception:
             result['branch_name'] = None
-        
+
+
         # 🆕 إضافة تفاصيل الخزينة
         if self.safe_box:
             result['safe_box_details'] = {
