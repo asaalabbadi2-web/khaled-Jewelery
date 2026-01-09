@@ -13,6 +13,18 @@ class ReportCatalog {
         nameEn: 'Financial Reports',
         reports: const [
           ReportDescriptor(
+            id: 'admin_dashboard',
+            icon: Icons.dashboard,
+            titleAr: 'لوحة تحكم المدير',
+            titleEn: 'Admin Dashboard',
+            descriptionAr: 'مؤشرات سريعة، مخططات، وتنبيهات من واقع دفتر الخزينة وإغلاق الورديات.',
+            descriptionEn: 'Quick KPIs, charts, and alerts from the ledger and shift closings.',
+            route: 'admin_dashboard',
+            type: ReportType.financial,
+            available: true,
+            requiresFilters: false,
+          ),
+          ReportDescriptor(
             id: 'analytics_dashboard',
             icon: Icons.insights,
             titleAr: 'لوحة التحليل الوزني',

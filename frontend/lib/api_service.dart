@@ -96,9 +96,10 @@ class ApiService {
     final future = () async {
       final prefs = await SharedPreferences.getInstance();
       // Support legacy / prefixed keys that may exist in production (e.g. "flutter.refresh_token").
-      final refreshToken = prefs.getString('refresh_token')
-          ?? prefs.getString('flutter.refresh_token')
-          ?? prefs.getString('refreshToken');
+      final refreshToken =
+          prefs.getString('refresh_token') ??
+          prefs.getString('flutter.refresh_token') ??
+          prefs.getString('refreshToken');
       if (refreshToken == null || refreshToken.isEmpty) {
         throw Exception('لا توجد جلسة صالحة. الرجاء تسجيل الدخول مرة أخرى');
       }
@@ -279,9 +280,7 @@ class ApiService {
   }
 
   Future<void> deleteCustomer(int id) async {
-    final response = await _authedDelete(
-      Uri.parse('$_baseUrl/customers/$id'),
-    );
+    final response = await _authedDelete(Uri.parse('$_baseUrl/customers/$id'));
     if (response.statusCode != 200) {
       // Changed from 204 to 200
       throw Exception(_errorMessageFromResponse(response));
@@ -404,18 +403,24 @@ class ApiService {
   }
 
   Future<void> activateOffice(int id) async {
-    final response = await _authedPost(Uri.parse('$_baseUrl/offices/$id/activate'));
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/offices/$id/activate'),
+    );
     if (response.statusCode != 200) {
       throw Exception('Failed to activate office');
     }
   }
 
   // Branch Methods (فروع المعرض/المحل)
-  Future<List<Map<String, dynamic>>> getBranches({bool activeOnly = false}) async {
+  Future<List<Map<String, dynamic>>> getBranches({
+    bool activeOnly = false,
+  }) async {
     final queryParams = <String, String>{};
     if (activeOnly) queryParams['active'] = 'true';
 
-    final uri = Uri.parse('$_baseUrl/branches').replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/branches',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
     final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
@@ -490,7 +495,9 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> activateBranch(int id) async {
-    final response = await _authedPost(Uri.parse('$_baseUrl/branches/$id/activate'));
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/branches/$id/activate'),
+    );
     if (response.statusCode == 200) {
       final decoded = json.decode(utf8.decode(response.bodyBytes));
       return decoded is Map<String, dynamic>
@@ -538,9 +545,12 @@ class ApiService {
       queryParams['payment_status'] = paymentStatus;
     }
     if (limit != null) queryParams['limit'] = limit.toString();
-    if (dateFrom != null && dateFrom.isNotEmpty)
+    if (dateFrom != null && dateFrom.isNotEmpty) {
       queryParams['date_from'] = dateFrom;
-    if (dateTo != null && dateTo.isNotEmpty) queryParams['date_to'] = dateTo;
+    }
+    if (dateTo != null && dateTo.isNotEmpty) {
+      queryParams['date_to'] = dateTo;
+    }
     if (page != null) queryParams['page'] = page.toString();
     if (perPage != null) queryParams['per_page'] = perPage.toString();
     if (orderBy != null && orderBy.isNotEmpty)
@@ -1198,12 +1208,16 @@ class ApiService {
     if (response.statusCode == 200) {
       return utf8.decode(response.bodyBytes);
     } else {
-      throw Exception('Failed to export accounts: ${response.statusCode} ${response.body}');
+      throw Exception(
+        'Failed to export accounts: ${response.statusCode} ${response.body}',
+      );
     }
   }
 
   /// Import chart of accounts from raw JSON string payload
-  Future<Map<String, dynamic>> importAccountsFromJsonString(String jsonPayload) async {
+  Future<Map<String, dynamic>> importAccountsFromJsonString(
+    String jsonPayload,
+  ) async {
     final response = await _authedPost(
       Uri.parse('$_baseUrl/accounts/import'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
@@ -1530,8 +1544,9 @@ class ApiService {
       queryParams['end_date'] = endDate.toIso8601String().split('T').first;
     }
 
-    final uri = Uri.parse('$_baseUrl/analytics/summary')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/analytics/summary',
+    ).replace(queryParameters: queryParams);
 
     final response = await _authedGet(uri);
 
@@ -1539,9 +1554,57 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes))
           as Map<String, dynamic>;
     } else {
-      throw Exception(
-        'Failed to load analytics summary: ${response.body}',
-      );
+      throw Exception('Failed to load analytics summary: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> getAdminDashboard() async {
+    final uri = Uri.parse('$_baseUrl/dashboard/admin');
+    final response = await _authedGet(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed to load admin dashboard: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> getSystemAlerts({
+    String? severity,
+    bool? reviewed,
+  }) async {
+    final queryParams = <String, String>{};
+    if (severity != null && severity.trim().isNotEmpty) {
+      queryParams['severity'] = severity.trim().toLowerCase();
+    }
+    if (reviewed != null) {
+      queryParams['reviewed'] = reviewed ? 'true' : 'false';
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/system-alerts',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
+    final response = await _authedGet(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed to load system alerts: ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> reviewSystemAlert(int alertId) async {
+    final uri = Uri.parse('$_baseUrl/system-alerts/$alertId/review');
+    final response = await _authedPut(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed to review alert: ${response.body}');
     }
   }
 
@@ -2281,6 +2344,28 @@ class ApiService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Shift Closing (Gold)
+  // ---------------------------------------------------------------------------
+  Future<Map<String, dynamic>> getShiftClosingGoldSummary({
+    String? from,
+    String? to,
+  }) async {
+    final queryParams = <String, String>{};
+    if (from != null && from.trim().isNotEmpty) queryParams['from'] = from;
+    if (to != null && to.trim().isNotEmpty) queryParams['to'] = to;
+
+    final uri = Uri.parse(
+      '$_baseUrl/shift-closing/summary-gold',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception('Failed to load gold shift summary: ${response.body}');
+  }
+
   /// Update existing voucher
   Future<Map<String, dynamic>> updateVoucher(
     int voucherId,
@@ -2744,6 +2829,8 @@ class ApiService {
     required int employeeId,
     required String username,
     required String password,
+    required String email,
+    required String phone,
     String role = 'staff',
   }) async {
     final token = await _requireAuthToken();
@@ -2754,6 +2841,8 @@ class ApiService {
         'employee_id': employeeId,
         'username': username,
         'password': password,
+        'email': email,
+        'phone': phone,
         'role': role,
       }),
     );
@@ -2876,6 +2965,23 @@ class ApiService {
     } else {
       throw Exception('Failed to load users: ${response.body}');
     }
+  }
+
+  Future<AppUserModel?> getUserByEmployeeId(int employeeId) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/app-users/by-employee/$employeeId'),
+    );
+    if (response.statusCode == 200) {
+      final decoded =
+          json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final raw = decoded['app_user'];
+      if (raw == null) return null;
+      if (raw is Map<String, dynamic>) {
+        return AppUserModel.fromJson(raw);
+      }
+      return AppUserModel.fromJson(Map<String, dynamic>.from(raw as Map));
+    }
+    throw Exception(_readApiErrorMessage(response, 'فشل في جلب حساب الموظف'));
   }
 
   Future<AppUserModel> createUser(Map<String, dynamic> payload) async {
@@ -3128,7 +3234,9 @@ class ApiService {
     if (decoded is Map<String, dynamic>) {
       if (response.statusCode == 200) return decoded;
       final msg = decoded['message']?.toString();
-      throw Exception(msg?.isNotEmpty == true ? msg : 'فشل إنشاء ملف الإعدادات');
+      throw Exception(
+        msg?.isNotEmpty == true ? msg : 'فشل إنشاء ملف الإعدادات',
+      );
     }
     throw Exception('فشل إنشاء ملف الإعدادات');
   }
@@ -3473,6 +3581,25 @@ class ApiService {
     }
   }
 
+  /// Ledger-based balance for a safe box (cash only)
+  Future<Map<String, dynamic>> getSafeBoxLedgerBalance(
+    int safeBoxId, {
+    String? from,
+    String? to,
+  }) async {
+    final queryParams = <String, String>{};
+    if (from != null && from.trim().isNotEmpty) queryParams['from'] = from;
+    if (to != null && to.trim().isNotEmpty) queryParams['to'] = to;
+    final uri = Uri.parse(
+      '$_baseUrl/safe-boxes/$safeBoxId/balance',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception('Failed to load safe balance: ${response.body}');
+  }
+
   /// الحصول على خزائن الدفع النشطة (نقدي + بنكي)
   Future<List<SafeBoxModel>> getPaymentSafeBoxes() async {
     final safeBoxes = await getSafeBoxes(
@@ -3609,9 +3736,7 @@ class ApiService {
 
   /// Get unposted invoices
   Future<Map<String, dynamic>> getUnpostedInvoices() async {
-    final response = await _authedGet(
-      Uri.parse('$_baseUrl/invoices/unposted'),
-    );
+    final response = await _authedGet(Uri.parse('$_baseUrl/invoices/unposted'));
 
     if (response.statusCode == 401) {
       throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
@@ -3627,9 +3752,7 @@ class ApiService {
 
   /// Get posted invoices
   Future<Map<String, dynamic>> getPostedInvoices() async {
-    final response = await _authedGet(
-      Uri.parse('$_baseUrl/invoices/posted'),
-    );
+    final response = await _authedGet(Uri.parse('$_baseUrl/invoices/posted'));
 
     if (response.statusCode == 401) {
       throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
@@ -3880,6 +4003,67 @@ class ApiService {
   }
 
   // ==========================================
+  // 🧾 Shift Closing APIs
+  // ==========================================
+
+  Future<Map<String, dynamic>> getShiftClosingSummary({
+    String? from,
+    String? to,
+  }) async {
+    final queryParams = <String, String>{};
+    if (from != null) queryParams['from'] = from;
+    if (to != null) queryParams['to'] = to;
+
+    final uri = Uri.parse(
+      '$_baseUrl/shift-closing/summary',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+    final response = await _authedGet(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception('Failed to load shift closing summary');
+  }
+
+  Future<Map<String, dynamic>> submitShiftClosingReport({
+    required List<Map<String, dynamic>> entries,
+    String? from,
+    String? to,
+    String? notes,
+    bool? settleCash,
+    double? openingCashAmount,
+    Map<String, double>? goldActuals,
+  }) async {
+    final payload = <String, dynamic>{'entries': entries};
+    if (from != null) payload['from'] = from;
+    if (to != null) payload['to'] = to;
+    if (notes != null && notes.trim().isNotEmpty) {
+      payload['notes'] = notes.trim();
+    }
+
+    if (settleCash == true) payload['settle_cash'] = true;
+    if (openingCashAmount != null && openingCashAmount > 0) {
+      payload['opening_cash_amount'] = openingCashAmount;
+    }
+
+    if (goldActuals != null && goldActuals.isNotEmpty) {
+      payload['gold_actuals'] = {
+        for (final e in goldActuals.entries) e.key: e.value,
+      };
+    }
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/shift-closing/close'),
+      body: json.encode(payload),
+    );
+
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception('Failed to submit shift closing report');
+  }
+
+  // ==========================================
   // 🔐 Authentication & Authorization Methods
   // ==========================================
 
@@ -3900,6 +4084,62 @@ class ApiService {
       final error = json.decode(utf8.decode(response.bodyBytes));
       throw Exception(error['message'] ?? 'فشل تسجيل الدخول');
     }
+  }
+
+  /// Username recovery (public). Returns a generic success message.
+  /// In development, backend may return `debug_username` when enabled.
+  Future<Map<String, dynamic>> forgotUsername({required String identifier}) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/forgot-username'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'identifier': identifier}),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'message': decoded.toString()};
+    }
+
+    throw Exception(_readApiErrorMessage(response, 'فشل استعادة اسم المستخدم'));
+  }
+
+  /// Password reset request (public). Returns a generic success message.
+  /// In development, backend may return `debug_otp` when enabled.
+  Future<Map<String, dynamic>> forgotPassword({required String identifier}) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/forgot-password'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'identifier': identifier}),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'message': decoded.toString()};
+    }
+
+    throw Exception(_readApiErrorMessage(response, 'فشل إرسال رمز إعادة التعيين'));
+  }
+
+  /// Confirm password reset with OTP/token (public).
+  Future<Map<String, dynamic>> confirmPasswordReset({
+    required String otpOrToken,
+    required String newPassword,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/password-reset/confirm'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({'otp': otpOrToken, 'new_password': newPassword}),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'message': decoded.toString()};
+    }
+
+    throw Exception(_readApiErrorMessage(response, 'فشل تأكيد إعادة التعيين'));
   }
 
   /// Refresh access token using refresh token (rotating).
@@ -4514,10 +4754,11 @@ class ApiService {
   Future<String> _requireAuthToken() async {
     final prefs = await SharedPreferences.getInstance();
     // Try canonical keys first, then fall back to older/prefixed keys.
-    final jwtToken = prefs.getString('jwt_token')
-        ?? prefs.getString('flutter.jwt_token')
-        ?? prefs.getString('auth_token')
-        ?? prefs.getString('flutter.auth_token');
+    final jwtToken =
+        prefs.getString('jwt_token') ??
+        prefs.getString('flutter.jwt_token') ??
+        prefs.getString('auth_token') ??
+        prefs.getString('flutter.auth_token');
 
     if (jwtToken != null && jwtToken.isNotEmpty) {
       // If we found a prefixed/legacy token, migrate it to the canonical key(s).
@@ -4552,7 +4793,8 @@ class ApiService {
 
   Future<String?> getStoredToken() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token') ??
+    final token =
+        prefs.getString('jwt_token') ??
         prefs.getString('flutter.jwt_token') ??
         prefs.getString('auth_token') ??
         prefs.getString('flutter.auth_token');

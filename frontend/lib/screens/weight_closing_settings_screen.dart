@@ -20,6 +20,12 @@ class _WeightClosingSettingsScreenState
   String _priceSource = 'live';
   bool _allowOverride = true;
 
+  double _cashDeficitThreshold = 50.0;
+  double _goldPureDeficitThresholdGrams = 0.10;
+
+  late final TextEditingController _cashThresholdController;
+  late final TextEditingController _goldThresholdController;
+
   static const Map<String, IconData> _priceSourceIcons = {
     'live': Icons.podcasts_outlined,
     'average': Icons.auto_graph_outlined,
@@ -41,8 +47,17 @@ class _WeightClosingSettingsScreenState
   @override
   void initState() {
     super.initState();
+    _cashThresholdController = TextEditingController();
+    _goldThresholdController = TextEditingController();
     _hydrateFromProvider();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadSettings());
+  }
+
+  @override
+  void dispose() {
+    _cashThresholdController.dispose();
+    _goldThresholdController.dispose();
+    super.dispose();
   }
 
   void _hydrateFromProvider() {
@@ -78,17 +93,39 @@ class _WeightClosingSettingsScreenState
         ? true
         : (config['allow_override'] == true);
 
+    final cashThreshold = _asDouble(
+      config['shift_close_cash_deficit_threshold'],
+      fallback: 50.0,
+    );
+    final goldThreshold = _asDouble(
+      config['shift_close_gold_pure_deficit_threshold_grams'],
+      fallback: 0.10,
+    );
+
     if (shouldSetState) {
       setState(() {
         _autoCloseEnabled = enabled;
         _priceSource = _normalizePriceSource(priceSource);
         _allowOverride = allowOverride;
+        _cashDeficitThreshold = cashThreshold < 0 ? 0.0 : cashThreshold;
+        _goldPureDeficitThresholdGrams = goldThreshold < 0 ? 0.0 : goldThreshold;
       });
     } else {
       _autoCloseEnabled = enabled;
       _priceSource = _normalizePriceSource(priceSource);
       _allowOverride = allowOverride;
+      _cashDeficitThreshold = cashThreshold < 0 ? 0.0 : cashThreshold;
+      _goldPureDeficitThresholdGrams = goldThreshold < 0 ? 0.0 : goldThreshold;
     }
+
+    _cashThresholdController.text = _cashDeficitThreshold.toStringAsFixed(2);
+    _goldThresholdController.text = _goldPureDeficitThresholdGrams.toStringAsFixed(3);
+  }
+
+  double _asDouble(dynamic value, {double fallback = 0.0}) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value.trim()) ?? fallback;
+    return fallback;
   }
 
   String _normalizePriceSource(String source) {
@@ -110,6 +147,8 @@ class _WeightClosingSettingsScreenState
       'enabled': _autoCloseEnabled,
       'price_source': _priceSource,
       'allow_override': _allowOverride,
+      'shift_close_cash_deficit_threshold': _cashDeficitThreshold,
+      'shift_close_gold_pure_deficit_threshold_grams': _goldPureDeficitThresholdGrams,
     };
 
     try {
@@ -173,6 +212,8 @@ class _WeightClosingSettingsScreenState
                   _buildPriceSourceCard(theme),
                   const SizedBox(height: 16),
                   _buildOverrideCard(theme),
+                  const SizedBox(height: 16),
+                  _buildSecurityThresholds(theme),
                   const SizedBox(height: 16),
                   _buildChecklist(theme),
                   const SizedBox(height: 24),
@@ -368,6 +409,58 @@ class _WeightClosingSettingsScreenState
               ? 'يمكن للمستخدم تغيير سعر الإغلاق قبل الاعتماد.'
               : 'لن يمكن لأي مستخدم تغيير السعر الذي يحدده النظام.',
           style: theme.textTheme.bodySmall,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSecurityThresholds(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'عتبات تنبيه العُهد (Shift Closing)',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'لن يتم إنشاء تنبيه إلا إذا تجاوز العجز هذه العتبات لتجنب الفروقات البسيطة.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _cashThresholdController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'عجز نقدي أكبر من (ر.س)',
+                hintText: 'مثال: 50',
+                prefixIcon: Icon(Icons.payments_outlined),
+              ),
+              onChanged: (v) {
+                final parsed = double.tryParse(v.trim());
+                if (parsed == null) return;
+                setState(() => _cashDeficitThreshold = parsed < 0 ? 0.0 : parsed);
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _goldThresholdController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'عجز ذهب صافي أكبر من (جم 24k)',
+                hintText: 'مثال: 0.10',
+                prefixIcon: Icon(Icons.scale_outlined),
+              ),
+              onChanged: (v) {
+                final parsed = double.tryParse(v.trim());
+                if (parsed == null) return;
+                setState(() => _goldPureDeficitThresholdGrams = parsed < 0 ? 0.0 : parsed);
+              },
+            ),
+          ],
         ),
       ),
     );

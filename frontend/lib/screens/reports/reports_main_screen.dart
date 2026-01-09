@@ -19,6 +19,7 @@ import 'gold_price_history_report_screen.dart';
 import 'gold_position_report_screen.dart';
 import 'income_statement_report_screen.dart';
 import 'analytics_dashboard_screen.dart';
+import 'admin_dashboard_screen.dart';
 
 /// مركز التقارير الموحد - قاعدة البناء لجميع تقارير النظام
 class ReportsMainScreen extends StatefulWidget {
@@ -302,6 +303,12 @@ class _ReportsMainScreenState extends State<ReportsMainScreen> {
     Widget? destination;
 
     switch (report.route) {
+      case 'admin_dashboard':
+        destination = AdminDashboardScreen(
+          api: widget.api,
+          isArabic: widget.isArabic,
+        );
+        break;
       case 'analytics_dashboard':
         destination = AnalyticsDashboardScreen(
           api: widget.api,

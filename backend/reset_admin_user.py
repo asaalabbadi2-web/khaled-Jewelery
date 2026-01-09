@@ -20,10 +20,44 @@ Docker Compose:
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime
 
 from app import app, db
 from models import AppUser, RefreshToken, TokenBlacklist, User
+
+
+def _is_production_env() -> bool:
+    value = (
+        os.getenv('APP_ENV')
+        or os.getenv('ENV')
+        or os.getenv('FLASK_ENV')
+        or os.getenv('PYTHON_ENV')
+        or ''
+    ).strip().lower()
+    return value in ('prod', 'production')
+
+
+def _require_production_reset_allowlist() -> None:
+    """Prevent accidental/unsafe use of this script in production.
+
+    In production-like environments, this script is only allowed when
+    `ALLOW_RESET_ADMIN_USER=1` (or 'true'/'yes') is explicitly set.
+    """
+    if not _is_production_env():
+        return
+
+    allowed = (os.getenv('ALLOW_RESET_ADMIN_USER') or '').strip().lower() in (
+        '1',
+        'true',
+        'yes',
+    )
+    if allowed:
+        return
+
+    raise SystemExit(
+        "Refusing to run in production. Set ALLOW_RESET_ADMIN_USER=1 to proceed."
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -91,6 +125,8 @@ def reset_admin(*, username: str, password: str, full_name: str) -> None:
 
 def main() -> None:
     args = _parse_args()
+
+    _require_production_reset_allowlist()
 
     if not args.yes:
         print('⚠️  This will deactivate ALL users and set admin credentials.')

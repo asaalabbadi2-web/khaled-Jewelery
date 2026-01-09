@@ -50,6 +50,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   String _sortBy = 'date';
   bool _sortAscending = false;
 
+  // Summary selector (stats only)
+  String _summaryInvoiceType = 'all';
+
   // Statistics
   final Map<String, dynamic> _statistics = {
     'total_invoices': 0,
@@ -167,9 +170,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     return normalized;
   }
 
-  List<Map<String, dynamic>> _cloneDataList(
-    List<Map<String, dynamic>> source,
-  ) {
+  List<Map<String, dynamic>> _cloneDataList(List<Map<String, dynamic>> source) {
     return source.map((entry) => Map<String, dynamic>.from(entry)).toList();
   }
 
@@ -195,7 +196,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final isAr = widget.isArabic;
     final options = [
       {'value': 'paid', 'label': isAr ? 'مدفوعة' : 'Paid'},
-      {'value': 'partially_paid', 'label': isAr ? 'مدفوعة جزئياً' : 'Partially Paid'},
+      {
+        'value': 'partially_paid',
+        'label': isAr ? 'مدفوعة جزئياً' : 'Partially Paid',
+      },
       {'value': 'unpaid', 'label': isAr ? 'غير مدفوعة' : 'Unpaid'},
     ];
 
@@ -253,8 +257,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           final customerName = (invoice['customer_name'] ?? '')
               .toString()
               .toLowerCase();
-          final invoiceNumber =
-              _getInvoiceDisplayNumber(invoice).toLowerCase();
+          final invoiceNumber = _getInvoiceDisplayNumber(invoice).toLowerCase();
           if (!customerName.contains(searchLower) &&
               !invoiceNumber.contains(searchLower)) {
             return false;
@@ -360,10 +363,22 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
 
   void _calculateStatistics() {
     try {
-      _statistics['total_invoices'] = _filteredInvoices.length;
+      final source = _filteredInvoices;
+      final summarySource = _summaryInvoiceType == 'all'
+          ? source
+          : source.where((inv) {
+              final invoiceType = (inv['invoice_type'] ?? '').toString().trim();
+              return invoiceType == _summaryInvoiceType;
+            }).toList();
 
-      _statistics['total_amount'] = _filteredInvoices.fold(0.0, (sum, invoice) {
+      _statistics['total_invoices'] = summarySource.length;
+
+      _statistics['total_amount'] = summarySource.fold(0.0, (sum, invoice) {
         try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
           return sum + ((invoice['total'] ?? 0) as num).toDouble();
         } catch (e) {
           debugPrint('⚠️ خطأ في حساب الإجمالي: $e');
@@ -371,33 +386,49 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         }
       });
 
-      _statistics['paid_amount'] = _filteredInvoices
-          .where((inv) {
-            try {
-              final normalized = _normalizeStatus(
-                (inv['status'] ?? '').toString(),
-              );
-              return normalized == 'paid';
-            } catch (e) {
-              debugPrint('⚠️ خطأ في فحص الحالة: $e');
-              return false;
-            }
-          })
-          .fold(0.0, (sum, invoice) {
-            try {
-              return sum + ((invoice['total'] ?? 0) as num).toDouble();
-            } catch (e) {
-              debugPrint('⚠️ خطأ في حساب المدفوع: $e');
-              return sum;
-            }
-          });
-
-      _statistics['unpaid_amount'] =
-          _statistics['total_amount'] - _statistics['paid_amount'];
-
-      _statistics['vat_total'] = _filteredInvoices.fold(0.0, (sum, invoice) {
+      _statistics['paid_amount'] = summarySource.fold(0.0, (sum, invoice) {
         try {
-          final normalized = _normalizeStatus((invoice['status'] ?? '').toString());
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+
+          final total = _tryParseDouble(invoice['total']);
+          final paid = _tryParseDouble(
+            invoice['amount_paid'] ?? invoice['total_payments_amount'],
+          );
+          final paidClamped = paid.clamp(0.0, total);
+          return sum + paidClamped;
+        } catch (e) {
+          debugPrint('⚠️ خطأ في حساب المدفوع: $e');
+          return sum;
+        }
+      });
+
+      _statistics['unpaid_amount'] = summarySource.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+
+          final total = _tryParseDouble(invoice['total']);
+          final paid = _tryParseDouble(
+            invoice['amount_paid'] ?? invoice['total_payments_amount'],
+          );
+          final remaining = (total - paid).clamp(0.0, double.infinity);
+          return sum + remaining;
+        } catch (e) {
+          debugPrint('⚠️ خطأ في حساب المتبقي: $e');
+          return sum;
+        }
+      });
+
+      _statistics['vat_total'] = summarySource.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
           if (normalized == 'cancelled') return sum;
           return sum + _tryParseDouble(invoice['total_tax']);
         } catch (e) {
@@ -406,14 +437,15 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         }
       });
 
-      _statistics['sold_weight_total'] = _filteredInvoices.fold(0.0, (sum, invoice) {
+      _statistics['sold_weight_total'] = summarySource.fold(0.0, (
+        sum,
+        invoice,
+      ) {
         try {
-          final normalized = _normalizeStatus((invoice['status'] ?? '').toString());
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
           if (normalized == 'cancelled') return sum;
-          final invoiceType = (invoice['invoice_type'] ?? '').toString();
-          if (!_isSaleInvoiceType(invoiceType) || _isReturnInvoiceType(invoiceType)) {
-            return sum;
-          }
           return sum + _extractInvoiceTotalWeight(invoice);
         } catch (e) {
           debugPrint('⚠️ خطأ في حساب وزن المبيعات: $e');
@@ -481,19 +513,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     return double.tryParse(value.toString()) ?? 0.0;
   }
 
-  bool _isSaleInvoiceType(String invoiceType) {
-    final trimmed = invoiceType.trim();
-    if (trimmed == 'بيع') return true;
-    final lower = trimmed.toLowerCase();
-    return lower.contains('sell') || lower.contains('sale') || trimmed.contains('بيع');
-  }
-
-  bool _isReturnInvoiceType(String invoiceType) {
-    final trimmed = invoiceType.trim();
-    final lower = trimmed.toLowerCase();
-    return lower.contains('return') || trimmed.contains('مرتجع');
-  }
-
   double _extractInvoiceTotalWeight(Map<String, dynamic> invoice) {
     final direct = _tryParseDouble(invoice['total_weight']);
     if (direct > 0) return direct;
@@ -518,7 +537,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   }
 
   String? _extractInvoiceKaratLabel(Map<String, dynamic> invoice) {
-    final direct = invoice['karat'] ?? invoice['gold_karat'] ?? invoice['karat_value'];
+    final direct =
+        invoice['karat'] ?? invoice['gold_karat'] ?? invoice['karat_value'];
     final directStr = direct?.toString().trim();
     if (directStr != null && directStr.isNotEmpty) {
       return directStr;
@@ -529,9 +549,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       final karats = <String>{};
       for (final entry in items) {
         if (entry is Map) {
-          final v = (entry['karat'] ?? entry['gold_karat'] ?? entry['karat_value'])
-              ?.toString()
-              .trim();
+          final v =
+              (entry['karat'] ?? entry['gold_karat'] ?? entry['karat_value'])
+                  ?.toString()
+                  .trim();
           if (v != null && v.isNotEmpty) {
             karats.add(v);
           }
@@ -547,7 +568,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
 
   String? _extractInvoiceGoldTypeLabel(Map<String, dynamic> invoice) {
     final direct =
-        invoice['gold_type'] ?? invoice['goldType'] ?? invoice['gold_type_name'];
+        invoice['gold_type'] ??
+        invoice['goldType'] ??
+        invoice['gold_type_name'];
     final directStr = direct?.toString().trim();
     if (directStr != null && directStr.isNotEmpty) {
       return directStr;
@@ -558,12 +581,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       final types = <String>{};
       for (final entry in items) {
         if (entry is Map) {
-          final v = (entry['gold_type'] ??
-                  entry['goldType'] ??
-                  entry['gold_type_name'] ??
-                  entry['type'])
-              ?.toString()
-              .trim();
+          final v =
+              (entry['gold_type'] ??
+                      entry['goldType'] ??
+                      entry['gold_type_name'] ??
+                      entry['type'])
+                  ?.toString()
+                  .trim();
           if (v != null && v.isNotEmpty) {
             types.add(v);
           }
@@ -577,9 +601,30 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     return null;
   }
 
+  String? _extractInvoiceEmployeeName(Map<String, dynamic> invoice) {
+    final candidates = [
+      invoice['employee_name'],
+      invoice['seller_name'],
+      invoice['created_by_name'],
+      invoice['created_by'],
+      invoice['posted_by_name'],
+      invoice['posted_by'],
+      invoice['user_name'],
+      invoice['cashier_name'],
+      invoice['cashier'],
+    ];
+
+    for (final v in candidates) {
+      final s = v?.toString().trim();
+      if (s != null && s.isNotEmpty) {
+        return s;
+      }
+    }
+    return null;
+  }
+
   String _getInvoiceDisplayNumber(Map<String, dynamic> invoice) {
-    final String? trimmedNumber =
-        invoice['invoice_number']?.toString().trim();
+    final String? trimmedNumber = invoice['invoice_number']?.toString().trim();
     if (trimmedNumber?.isNotEmpty ?? false) {
       return trimmedNumber!;
     }
@@ -606,8 +651,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       }
 
       final prefix = _resolveInvoicePrefix(invoiceType);
-  final String? rawDate = invoice['date']?.toString();
-  final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
+      final String? rawDate = invoice['date']?.toString();
+      final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
       final year = parsedDate?.year ?? DateTime.now().year;
 
       final digits = sequence >= 1000 ? 4 : 3;
@@ -661,8 +706,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       }
     }
 
-  final String? rawDate = invoice['date']?.toString();
-  final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
+    final String? rawDate = invoice['date']?.toString();
+    final parsedDate = rawDate != null ? DateTime.tryParse(rawDate) : null;
     return parsedDate?.year ?? DateTime.now().year;
   }
 
@@ -805,7 +850,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     );
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: statsBackground,
         borderRadius: BorderRadius.circular(16),
@@ -813,95 +858,152 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            isAr ? '📊 الإحصائيات' : '📊 Statistics',
-            style: textTheme.titleLarge?.copyWith(
-              color: colorScheme.primary,
-              fontWeight: FontWeight.bold,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  isAr ? 'الإحصائيات' : 'Statistics',
+                  style: textTheme.titleLarge?.copyWith(
+                    color: colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              _buildSummaryTypeDropdown(isAr),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 190,
+                  child: _buildStatCard(
+                    icon: Icons.receipt_long,
+                    title: isAr ? 'إجمالي الفواتير' : 'Total Invoices',
+                    value: _statistics['total_invoices'].toString(),
+                    highlightColor: Colors.blue,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: _buildStatCard(
+                    icon: Icons.attach_money,
+                    title: isAr ? 'المبلغ الكلي' : 'Total Amount',
+                    value: NumberFormat(
+                      '#,##0',
+                      isAr ? 'ar' : 'en',
+                    ).format(_statistics['total_amount']),
+                    highlightColor: colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: _buildStatCard(
+                    icon: Icons.check_circle,
+                    title: isAr ? 'المدفوع' : 'Paid',
+                    value: NumberFormat(
+                      '#,##0',
+                      isAr ? 'ar' : 'en',
+                    ).format(_statistics['paid_amount']),
+                    highlightColor: Colors.green,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: _buildStatCard(
+                    icon: Icons.pending,
+                    title: isAr ? 'المتبقي' : 'Unpaid',
+                    value: NumberFormat(
+                      '#,##0',
+                      isAr ? 'ar' : 'en',
+                    ).format(_statistics['unpaid_amount']),
+                    highlightColor: Colors.orange,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: _buildStatCard(
+                    icon: Icons.receipt,
+                    title: isAr ? 'إجمالي الضريبة' : 'VAT Total',
+                    value: NumberFormat(
+                      '#,##0.00',
+                      isAr ? 'ar' : 'en',
+                    ).format(_statistics['vat_total']),
+                    highlightColor: colorScheme.tertiary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: _buildStatCard(
+                    icon: Icons.scale,
+                    title: isAr ? 'الوزن (جم)' : 'Weight (g)',
+                    value: NumberFormat(
+                      '#,##0.###',
+                      isAr ? 'ar' : 'en',
+                    ).format(_statistics['sold_weight_total']),
+                    highlightColor: colorScheme.secondary,
+                  ),
+                ),
+              ],
             ),
           ),
-          SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatCard(
-                  icon: Icons.receipt_long,
-                  title: isAr ? 'إجمالي الفواتير' : 'Total Invoices',
-                  value: _statistics['total_invoices'].toString(),
-                  highlightColor: Colors.blue,
-                ),
-              ),
-              SizedBox(width: 8),
-              Expanded(
-                child: _buildStatCard(
-                  icon: Icons.attach_money,
-                  title: isAr ? 'المبلغ الكلي' : 'Total Amount',
-                  value: NumberFormat(
-                    '#,##0',
-                    isAr ? 'ar' : 'en',
-                  ).format(_statistics['total_amount']),
-                  highlightColor: colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatCard(
-                  icon: Icons.check_circle,
-                  title: isAr ? 'المدفوع' : 'Paid',
-                  value: NumberFormat(
-                    '#,##0',
-                    isAr ? 'ar' : 'en',
-                  ).format(_statistics['paid_amount']),
-                  highlightColor: Colors.green,
-                ),
-              ),
-              SizedBox(width: 8),
-              Expanded(
-                child: _buildStatCard(
-                  icon: Icons.pending,
-                  title: isAr ? 'المتبقي' : 'Unpaid',
-                  value: NumberFormat(
-                    '#,##0',
-                    isAr ? 'ar' : 'en',
-                  ).format(_statistics['unpaid_amount']),
-                  highlightColor: Colors.orange,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatCard(
-                  icon: Icons.receipt,
-                  title: isAr ? 'إجمالي الضريبة' : 'VAT Total',
-                  value: NumberFormat(
-                    '#,##0.00',
-                    isAr ? 'ar' : 'en',
-                  ).format(_statistics['vat_total']),
-                  highlightColor: colorScheme.tertiary,
-                ),
-              ),
-              SizedBox(width: 8),
-              Expanded(
-                child: _buildStatCard(
-                  icon: Icons.scale,
-                  title: isAr ? 'وزن المبيعات (جم)' : 'Sold Weight (g)',
-                  value: NumberFormat(
-                    '#,##0.###',
-                    isAr ? 'ar' : 'en',
-                  ).format(_statistics['sold_weight_total']),
-                  highlightColor: colorScheme.secondary,
-                ),
-              ),
-            ],
-          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryTypeDropdown(bool isArabic) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final textTheme = theme.textTheme;
+    final items = _buildInvoiceTypeItems(isArabic);
+
+    final hasMatch = items.any((item) => item['value'] == _summaryInvoiceType);
+    final fallbackValue = items.isNotEmpty
+        ? (items.first['value'] ?? _summaryInvoiceType)
+        : _summaryInvoiceType;
+    final effectiveValue = hasMatch ? _summaryInvoiceType : fallbackValue;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.15)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: effectiveValue,
+          isDense: true,
+          icon: Icon(
+            Icons.arrow_drop_down,
+            color: colorScheme.onSurface.withValues(alpha: 0.7),
+          ),
+          dropdownColor: theme.cardTheme.color ?? colorScheme.surface,
+          style: textTheme.bodySmall?.copyWith(color: colorScheme.onSurface),
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() {
+              _summaryInvoiceType = value;
+              _calculateStatistics();
+            });
+          },
+          items: items
+              .map(
+                (item) => DropdownMenuItem<String>(
+                  value: item['value']!,
+                  child: Text(item['label']!, overflow: TextOverflow.ellipsis),
+                ),
+              )
+              .toList(),
+        ),
       ),
     );
   }
@@ -923,7 +1025,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           theme.cardTheme.shape ??
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -935,7 +1037,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     color: highlightColor.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(icon, color: highlightColor, size: 20),
+                  child: Icon(icon, color: highlightColor, size: 18),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -950,10 +1052,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Text(
               value,
-              style: textTheme.headlineSmall?.copyWith(
+              style: textTheme.titleLarge?.copyWith(
                 color: highlightColor,
                 fontWeight: FontWeight.bold,
               ),
@@ -999,8 +1101,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                       color: colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
                     filled: true,
-                    fillColor: colorScheme.surface.withValues(alpha: 
-                      isDark ? 0.35 : 0.9,
+                    fillColor: colorScheme.surface.withValues(
+                      alpha: isDark ? 0.35 : 0.9,
                     ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -1171,10 +1273,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         'value': 'paid_full',
         'label': isArabic ? 'مدفوعة بالكامل' : 'Paid (Full)',
       },
-      {
-        'value': 'remaining',
-        'label': isArabic ? 'المتبقي/الآجل' : 'Remaining',
-      },
+      {'value': 'remaining', 'label': isArabic ? 'المتبقي/الآجل' : 'Remaining'},
       {'value': 'paid', 'label': isArabic ? 'مدفوعة' : 'Paid'},
       {
         'value': 'partially_paid',
@@ -1329,20 +1428,24 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   Widget _buildInvoiceCard(Map<String, dynamic> invoice) {
     try {
       final isAr = widget.isArabic;
-      final normalizedStatus = _normalizeStatus((invoice['status'] ?? '').toString());
+      final normalizedStatus = _normalizeStatus(
+        (invoice['status'] ?? '').toString(),
+      );
       final bool isPaid = normalizedStatus == 'paid';
       final bool isCancelled = normalizedStatus == 'cancelled';
       final theme = Theme.of(context);
       final colorScheme = theme.colorScheme;
       final textTheme = theme.textTheme;
       final statusColor = isCancelled
-        ? colorScheme.onSurfaceVariant.withValues(alpha: 0.8)
-        : (isPaid ? Colors.green : Colors.orange);
+          ? colorScheme.onSurfaceVariant.withValues(alpha: 0.8)
+          : (isPaid ? Colors.green : Colors.orange);
       final invoiceType = (invoice['invoice_type'] ?? '').toString();
       final bool isPurchase =
           invoiceType == 'شراء' || invoiceType.toLowerCase() == 'buy';
       final Color typeColor = isPurchase ? Colors.blue : colorScheme.primary;
       final invoiceDisplayNumber = _getInvoiceDisplayNumber(invoice);
+
+      final employeeName = _extractInvoiceEmployeeName(invoice);
 
       final karatLabel = _extractInvoiceKaratLabel(invoice);
       final goldTypeLabel = _extractInvoiceGoldTypeLabel(invoice);
@@ -1405,7 +1508,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                       tooltip: isAr ? 'طباعة' : 'Print',
                       icon: Icon(Icons.print, color: colorScheme.primary),
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => _viewInvoiceDetails(invoice, autoPrint: true),
+                      onPressed: () =>
+                          _viewInvoiceDetails(invoice, autoPrint: true),
                     ),
                     IconButton(
                       tooltip: isAr ? 'مشاركة PDF' : 'Share PDF',
@@ -1459,19 +1563,27 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            (invoice['customer_name'] ?? invoice['supplier_name'])?.toString() ??
+                            (invoice['customer_name'] ??
+                                        invoice['supplier_name'])
+                                    ?.toString() ??
                                 (isAr ? 'غير محدد' : 'N/A'),
                             style: textTheme.titleMedium?.copyWith(
                               color: colorScheme.onSurface,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            invoice['seller_name']?.toString() ?? '',
-                            style: textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withValues(alpha: 0.7),
+                          if (employeeName != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              isAr
+                                  ? 'الموظف: $employeeName'
+                                  : 'Employee: $employeeName',
+                              style: textTheme.bodySmall?.copyWith(
+                                color: colorScheme.onSurface.withValues(
+                                  alpha: 0.7,
+                                ),
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),
@@ -1492,7 +1604,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                 const SizedBox(height: 12),
 
                 // Gold tags (karat + total weight)
-                if (karatLabel != null || goldTypeLabel != null || totalWeight > 0)
+                if (karatLabel != null ||
+                    goldTypeLabel != null ||
+                    totalWeight > 0)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Wrap(
@@ -1508,13 +1622,16 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                           ),
                         if (karatLabel != null)
                           _buildInfoChip(
-                            label: isAr ? 'عيار: $karatLabel' : 'Karat: $karatLabel',
+                            label: isAr
+                                ? 'عيار: $karatLabel'
+                                : 'Karat: $karatLabel',
                             colorScheme: colorScheme,
                           ),
                         if (totalWeight > 0)
                           _buildInfoChip(
-                            label:
-                                isAr ? 'وزن: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(totalWeight)} جم' : 'Weight: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(totalWeight)} g',
+                            label: isAr
+                                ? 'وزن: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(totalWeight)} جم'
+                                : 'Weight: ${NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(totalWeight)} g',
                             colorScheme: colorScheme,
                           ),
                         if (isCancelled)
@@ -1574,7 +1691,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: isCancelled ? null : () => _editInvoice(invoice),
+                        onPressed: isCancelled
+                            ? null
+                            : () => _editInvoice(invoice),
                         icon: const Icon(Icons.sync_alt, size: 18),
                         label: Text(isAr ? 'تحديث الحالة' : 'Update Status'),
                         style: OutlinedButton.styleFrom(
@@ -1585,7 +1704,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     ),
                     const SizedBox(width: 8),
                     IconButton(
-                      onPressed: isCancelled ? null : () => _deleteInvoice(invoice),
+                      onPressed: isCancelled
+                          ? null
+                          : () => _deleteInvoice(invoice),
                       icon: Icon(Icons.delete, color: colorScheme.error),
                     ),
                   ],
@@ -1812,7 +1933,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
 
-    final normalizedStatus = _normalizeStatus((invoice['status'] ?? '').toString());
+    final normalizedStatus = _normalizeStatus(
+      (invoice['status'] ?? '').toString(),
+    );
     final isCancelled = normalizedStatus == 'cancelled';
 
     final total = _tryParseDouble(invoice['total']);
@@ -1826,20 +1949,24 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final canSettle = !isCancelled && remaining > 0.01;
 
     final invoiceNumber = _getInvoiceDisplayNumber(invoice);
-    final customerName = invoice['customer_name']?.toString() ?? (isAr ? 'غير محدد' : 'N/A');
+    final customerName =
+        invoice['customer_name']?.toString() ?? (isAr ? 'غير محدد' : 'N/A');
     final invoiceType = (invoice['invoice_type'] ?? '').toString();
 
-    final items = (invoice['items'] is List) ? (invoice['items'] as List) : const [];
+    final items = (invoice['items'] is List)
+        ? (invoice['items'] as List)
+        : const [];
 
     final auth = Provider.of<AuthProvider>(sheetContext, listen: false);
     final canSeeLogs = auth.isManager;
 
     final invoiceDate = _tryParseDateTime(invoice['date']);
     final minutesSince = invoiceDate == null
-      ? null
-      : DateTime.now().difference(invoiceDate).inMinutes;
+        ? null
+        : DateTime.now().difference(invoiceDate).inMinutes;
     const editWindowMinutes = 15;
-    final withinEditWindow = minutesSince != null && minutesSince <= editWindowMinutes;
+    final withinEditWindow =
+        minutesSince != null && minutesSince <= editWindowMinutes;
     final canDirectEdit = auth.isManager || withinEditWindow;
 
     final returnType = _returnTypeForInvoice(invoiceType);
@@ -1887,7 +2014,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                           Text(
                             '$invoiceType • $customerName',
                             style: textTheme.bodyMedium?.copyWith(
-                              color: colorScheme.onSurface.withValues(alpha: 0.75),
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.75,
+                              ),
                               fontWeight: FontWeight.w600,
                             ),
                             overflow: TextOverflow.ellipsis,
@@ -2004,13 +2133,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         final karat = item['karat']?.toString();
                         final wage = _tryParseDouble(item['wage']);
                         final itemTax = _tryParseDouble(item['tax']);
-                        final itemTotal = _tryParseDouble(item['price'] ?? item['total']);
+                        final itemTotal = _tryParseDouble(
+                          item['price'] ?? item['total'],
+                        );
 
                         return Card(
                           margin: const EdgeInsets.only(bottom: 8),
                           elevation: 0,
                           color: colorScheme.surfaceContainerHighest.withValues(
-                            alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                            alpha: theme.brightness == Brightness.dark
+                                ? 0.35
+                                : 0.6,
                           ),
                           child: Padding(
                             padding: const EdgeInsets.all(12),
@@ -2031,12 +2164,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                                   runSpacing: 8,
                                   children: [
                                     _buildInfoChip(
-                                      label: isAr ? 'الكمية: $qty' : 'Qty: $qty',
+                                      label: isAr
+                                          ? 'الكمية: $qty'
+                                          : 'Qty: $qty',
                                       colorScheme: colorScheme,
                                     ),
-                                    if (karat != null && karat.trim().isNotEmpty)
+                                    if (karat != null &&
+                                        karat.trim().isNotEmpty)
                                       _buildInfoChip(
-                                        label: isAr ? 'عيار: $karat' : 'Karat: $karat',
+                                        label: isAr
+                                            ? 'عيار: $karat'
+                                            : 'Karat: $karat',
                                         colorScheme: colorScheme,
                                       ),
                                     if (weight > 0)
@@ -2166,7 +2304,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                       Card(
                         elevation: 0,
                         color: colorScheme.surfaceContainerHighest.withValues(
-                          alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                          alpha: theme.brightness == Brightness.dark
+                              ? 0.35
+                              : 0.6,
                         ),
                         child: Padding(
                           padding: const EdgeInsets.all(12),
@@ -2184,13 +2324,15 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                               Text(
                                 canDirectEdit
                                     ? (isAr
-                                        ? 'يفضل استخدام المرتجع بدلاً من تعديل الفاتورة الأصلية للحفاظ على دقة المخزون والحسابات.'
-                                        : 'Prefer using returns instead of editing the original invoice to preserve inventory/accounting integrity.')
+                                          ? 'يفضل استخدام المرتجع بدلاً من تعديل الفاتورة الأصلية للحفاظ على دقة المخزون والحسابات.'
+                                          : 'Prefer using returns instead of editing the original invoice to preserve inventory/accounting integrity.')
                                     : (isAr
-                                        ? 'انتهت مدة التعديل ($editWindowMinutes دقيقة). يلزم صلاحية مدير أو استخدم مرتجع.'
-                                        : 'Edit window expired ($editWindowMinutes min). Manager permission required or use a return.'),
+                                          ? 'انتهت مدة التعديل ($editWindowMinutes دقيقة). يلزم صلاحية مدير أو استخدم مرتجع.'
+                                          : 'Edit window expired ($editWindowMinutes min). Manager permission required or use a return.'),
                                 style: textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                                  color: colorScheme.onSurface.withValues(
+                                    alpha: 0.75,
+                                  ),
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -2227,7 +2369,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                       Card(
                         elevation: 0,
                         color: colorScheme.surfaceContainerHighest.withValues(
-                          alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                          alpha: theme.brightness == Brightness.dark
+                              ? 0.35
+                              : 0.6,
                         ),
                         child: Padding(
                           padding: const EdgeInsets.all(12),
@@ -2246,22 +2390,30 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                                 style: textTheme.bodyMedium,
                               ),
                               const SizedBox(height: 6),
-                              if ((invoice['posted_at'] ?? '').toString().isNotEmpty)
+                              if ((invoice['posted_at'] ?? '')
+                                  .toString()
+                                  .isNotEmpty)
                                 Text(
                                   isAr
                                       ? 'تاريخ الترحيل: ${invoice['posted_at']}'
                                       : 'Posted at: ${invoice['posted_at']}',
                                   style: textTheme.bodySmall?.copyWith(
-                                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.75,
+                                    ),
                                   ),
                                 ),
-                              if ((invoice['posted_by'] ?? '').toString().isNotEmpty)
+                              if ((invoice['posted_by'] ?? '')
+                                  .toString()
+                                  .isNotEmpty)
                                 Text(
                                   isAr
                                       ? 'مرحل بواسطة: ${invoice['posted_by']}'
                                       : 'Posted by: ${invoice['posted_by']}',
                                   style: textTheme.bodySmall?.copyWith(
-                                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.75,
+                                    ),
                                   ),
                                 ),
                             ],
@@ -2363,7 +2515,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         ? invoiceIdValue
         : int.tryParse(invoiceIdValue?.toString() ?? '');
     if (invoiceId == null) {
-      _showSnackBar(isAr ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id', isError: true);
+      _showSnackBar(
+        isAr ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+        isError: true,
+      );
       return false;
     }
 
@@ -2421,7 +2576,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   decoration: InputDecoration(
                     labelText: isAr ? 'المبلغ' : 'Amount',
                   ),
@@ -2449,17 +2606,26 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
               onPressed: () async {
                 if (selectedMethodId == null) {
                   Navigator.of(ctx).pop(false);
-                  _showSnackBar(isAr ? 'اختر وسيلة دفع' : 'Select a payment method', isError: true);
+                  _showSnackBar(
+                    isAr ? 'اختر وسيلة دفع' : 'Select a payment method',
+                    isError: true,
+                  );
                   return;
                 }
-                final amount = double.tryParse(amountController.text.trim()) ?? 0.0;
+                final amount =
+                    double.tryParse(amountController.text.trim()) ?? 0.0;
                 if (amount <= 0) {
-                  _showSnackBar(isAr ? 'أدخل مبلغاً صحيحاً' : 'Enter a valid amount', isError: true);
+                  _showSnackBar(
+                    isAr ? 'أدخل مبلغاً صحيحاً' : 'Enter a valid amount',
+                    isError: true,
+                  );
                   return;
                 }
                 if (amount > remaining + 0.01) {
                   _showSnackBar(
-                    isAr ? 'المبلغ أكبر من المتبقي' : 'Amount exceeds remaining',
+                    isAr
+                        ? 'المبلغ أكبر من المتبقي'
+                        : 'Amount exceeds remaining',
                     isError: true,
                   );
                   return;
@@ -2472,11 +2638,16 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     notes: notesController.text,
                   );
                   if (!mounted) return;
-                  _showSnackBar(isAr ? 'تم تسجيل الدفعة' : 'Payment recorded', isError: false);
+                  _showSnackBar(
+                    isAr ? 'تم تسجيل الدفعة' : 'Payment recorded',
+                    isError: false,
+                  );
                   Navigator.of(ctx).pop(true);
                 } catch (e) {
                   _showSnackBar(
-                    isAr ? 'فشل تسجيل الدفعة: $e' : 'Failed to record payment: $e',
+                    isAr
+                        ? 'فشل تسجيل الدفعة: $e'
+                        : 'Failed to record payment: $e',
                     isError: true,
                   );
                 }
@@ -2503,7 +2674,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       return;
     }
 
-    final currentStatus = _normalizeStatus((invoice['status'] ?? '').toString());
+    final currentStatus = _normalizeStatus(
+      (invoice['status'] ?? '').toString(),
+    );
     final selectedStatus = await _showStatusUpdateSheet(currentStatus);
 
     if (selectedStatus == null || selectedStatus == currentStatus) {
@@ -2620,48 +2793,48 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
             'icon': Icons.point_of_sale,
             'color': Colors.green,
             'title': isAr ? 'فاتورة بيع' : 'Sales Invoice',
-            'subtitle':
-                isAr ? 'بيع ذهب جديد أو مستعمل' : 'Sell new or used gold',
+            'subtitle': isAr
+                ? 'بيع ذهب جديد أو مستعمل'
+                : 'Sell new or used gold',
           },
           {
             'target': _InvoiceCreationTarget.scrapSale,
             'icon': Icons.recycling,
             'color': Colors.orange,
             'title': isAr ? 'بيع ذهب كسر' : 'Scrap Gold Sale',
-            'subtitle':
-                isAr ? 'تصفية الذهب المستعمل' : 'Liquidate scrap inventory',
+            'subtitle': isAr
+                ? 'تصفية الذهب المستعمل'
+                : 'Liquidate scrap inventory',
           },
           {
             'target': _InvoiceCreationTarget.scrapPurchase,
             'icon': Icons.shopping_basket,
             'color': Colors.blue,
             'title': isAr ? 'شراء كسر من عميل' : 'Buy Scrap from Customer',
-            'subtitle':
-                isAr ? 'استلام ذهب من عملاء' : 'Accept client scrap gold',
+            'subtitle': isAr
+                ? 'استلام ذهب من عملاء'
+                : 'Accept client scrap gold',
           },
           {
             'target': _InvoiceCreationTarget.supplierPurchase,
             'icon': Icons.business_center,
             'color': Colors.purple,
             'title': isAr ? 'شراء من مورد' : 'Supplier Purchase',
-            'subtitle':
-                isAr ? 'توريدات من التجار' : 'Bulk supplier orders',
+            'subtitle': isAr ? 'توريدات من التجار' : 'Bulk supplier orders',
           },
           {
             'target': _InvoiceCreationTarget.salesReturn,
             'icon': Icons.keyboard_return,
             'color': Colors.red.shade300,
             'title': isAr ? 'مرتجع بيع' : 'Sales Return',
-            'subtitle':
-                isAr ? 'استرجاع مبيعات' : 'Return sold items',
+            'subtitle': isAr ? 'استرجاع مبيعات' : 'Return sold items',
           },
           {
             'target': _InvoiceCreationTarget.scrapReturn,
             'icon': Icons.undo,
             'color': Colors.deepOrange.shade300,
             'title': isAr ? 'مرتجع شراء كسر' : 'Scrap Purchase Return',
-            'subtitle':
-                isAr ? 'إرجاع مشتريات الكسر' : 'Return scrap purchases',
+            'subtitle': isAr ? 'إرجاع مشتريات الكسر' : 'Return scrap purchases',
           },
           {
             'target': _InvoiceCreationTarget.supplierReturn,
@@ -2688,10 +2861,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     margin: const EdgeInsets.symmetric(vertical: 6),
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor:
-                            (option['color'] as Color).withValues(alpha: 0.15),
-                        child: Icon(option['icon'] as IconData,
-                            color: option['color'] as Color),
+                        backgroundColor: (option['color'] as Color).withValues(
+                          alpha: 0.15,
+                        ),
+                        child: Icon(
+                          option['icon'] as IconData,
+                          color: option['color'] as Color,
+                        ),
                       ),
                       title: Text(option['title'] as String),
                       subtitle: Text(option['subtitle'] as String),
@@ -2723,10 +2899,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => SalesInvoiceScreenV2(
-              items: saleItems,
-              customers: customers,
-            ),
+            builder: (_) =>
+                SalesInvoiceScreenV2(items: saleItems, customers: customers),
           ),
         );
         break;
@@ -2737,10 +2911,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => ScrapSalesInvoiceScreen(
-              customers: customers,
-              items: items,
-            ),
+            builder: (_) =>
+                ScrapSalesInvoiceScreen(customers: customers, items: items),
           ),
         );
         break;
@@ -2750,9 +2922,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => ScrapPurchaseInvoiceScreen(
-              customers: customers,
-            ),
+            builder: (_) => ScrapPurchaseInvoiceScreen(customers: customers),
           ),
         );
         break;
@@ -2760,9 +2930,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
         if (!mounted) return;
         await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => const PurchaseInvoiceScreen(),
-          ),
+          MaterialPageRoute(builder: (_) => const PurchaseInvoiceScreen()),
         );
         break;
       case _InvoiceCreationTarget.salesReturn:

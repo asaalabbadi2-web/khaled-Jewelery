@@ -216,6 +216,26 @@ def ensure_invoice_branch_columns(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_invoice_employee_columns(engine: Engine) -> None:
+    """Ensure invoice employee_id column exists for legacy databases."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "invoice",
+                [
+                    ("employee_id", "INTEGER", "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
 def ensure_app_user_security_columns(engine: Engine) -> None:
     """Ensure AppUser security columns exist (2FA + future session tooling)."""
     columns_added: list[str] = []
@@ -225,6 +245,10 @@ def ensure_app_user_security_columns(engine: Engine) -> None:
                 engine,
                 "app_user",
                 [
+                    ("email", "VARCHAR(150)", "NULL"),
+                    ("phone", "VARCHAR(30)", "NULL"),
+                    ("must_change_password", "BOOLEAN", "0"),
+                    ("password_changed_at", "DATETIME", "NULL"),
                     ("totp_secret", "TEXT", "NULL"),
                     ("two_factor_enabled", "BOOLEAN", "0"),
                     ("two_factor_verified_at", "DATETIME", "NULL"),

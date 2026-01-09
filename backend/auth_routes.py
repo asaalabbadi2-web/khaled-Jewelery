@@ -26,6 +26,7 @@ from models import (
     TokenBlacklist,
     RefreshToken,
     LoginAttempt,
+    AuthActionAttempt,
     PasswordResetToken,
     Settings,
 )
@@ -42,8 +43,12 @@ from typing import Optional, Dict, Tuple
 from sqlalchemy import func
 
 from datetime import datetime, timedelta
+import os
+import smtplib
+from email.message import EmailMessage
 import hashlib
 import secrets
+import logging
 
 from setup_utils import is_setup_locked
 
@@ -53,6 +58,8 @@ except Exception:  # pragma: no cover
     pyotp = None
 
 auth_bp = Blueprint('auth', __name__)
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -70,6 +77,205 @@ def _user_agent() -> Optional[str]:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def _is_production_env() -> bool:
+    value = (
+        os.getenv('APP_ENV')
+        or os.getenv('ENV')
+        or os.getenv('FLASK_ENV')
+        or os.getenv('PYTHON_ENV')
+        or ''
+    ).strip().lower()
+    return value in ('prod', 'production')
+
+
+def _normalize_identifier(value: Optional[str]) -> str:
+    """Normalize email/phone-ish identifiers.
+
+    - Emails: lowercase + strip.
+    - Phone-like: keep digits and an optional leading '+'.
+    """
+    ident = (value or '').strip().lower()
+    if ident and '@' not in ident:
+        keep = []
+        for i, ch in enumerate(ident):
+            if ch.isdigit() or (ch == '+' and i == 0):
+                keep.append(ch)
+        ident = ''.join(keep)
+    return ident
+
+
+def _hash_identifier(value: Optional[str]) -> Optional[str]:
+    ident = _normalize_identifier(value)
+    if not ident:
+        return None
+    return hashlib.sha256(ident.encode('utf-8')).hexdigest()
+
+
+def _rate_limit_public_action(
+    *,
+    action: str,
+    identifier: Optional[str],
+    limit: int,
+    window: timedelta,
+    per_ip: bool = True,
+) -> bool:
+    """DB-backed rate limiting.
+
+    Default scope is per (action, ip, identifier_hash). When per_ip=False, scope
+    becomes per (action, identifier_hash) across all IPs (useful for per-account
+    throttles to reduce spam).
+    """
+    ip = _client_ip() or ''
+    ident_hash = _hash_identifier(identifier)
+    window_start = _now() - window
+
+    q = AuthActionAttempt.query.filter(AuthActionAttempt.action == action)
+    q = q.filter(AuthActionAttempt.created_at >= window_start)
+    if per_ip:
+        q = q.filter(AuthActionAttempt.ip_address == ip)
+    if ident_hash:
+        q = q.filter(AuthActionAttempt.identifier_hash == ident_hash)
+    return q.count() >= int(limit)
+
+
+def _record_public_action_attempt(
+    *,
+    action: str,
+    identifier: Optional[str],
+    success: bool,
+    blocked_reason: Optional[str] = None,
+) -> None:
+    db.session.add(
+        AuthActionAttempt(
+            action=action,
+            identifier_hash=_hash_identifier(identifier),
+            ip_address=_client_ip() or '',
+            user_agent=(_user_agent() or '')[:255],
+            success=bool(success),
+            blocked_reason=blocked_reason,
+            created_at=_now(),
+        )
+    )
+
+
+def _smtp_is_configured() -> bool:
+    return bool((os.getenv('SMTP_HOST') or '').strip()) and bool((os.getenv('SMTP_FROM') or '').strip())
+
+
+def _send_email_best_effort(*, to_email: str, subject: str, body: str) -> bool:
+    """Best-effort SMTP email sender.
+
+    Configure via env:
+    - SMTP_HOST (required)
+    - SMTP_PORT (optional, default 587)
+    - SMTP_USER / SMTP_PASSWORD (optional)
+    - SMTP_USE_TLS (optional, default true)
+    - SMTP_FROM (required)
+    """
+    try:
+        host = (os.getenv('SMTP_HOST') or '').strip()
+        from_email = (os.getenv('SMTP_FROM') or '').strip()
+        if not host or not from_email:
+            return False
+
+        port = int(os.getenv('SMTP_PORT') or '587')
+        user = (os.getenv('SMTP_USER') or '').strip() or None
+        password = (os.getenv('SMTP_PASSWORD') or '').strip() or None
+        use_tls = (os.getenv('SMTP_USE_TLS') or 'true').strip().lower() in ('1', 'true', 'yes')
+
+        msg = EmailMessage()
+        msg['From'] = from_email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.set_content(body)
+
+        with smtplib.SMTP(host, port, timeout=10) as server:
+            server.ehlo()
+            if use_tls:
+                server.starttls()
+                server.ehlo()
+            if user and password:
+                server.login(user, password)
+            server.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
+@auth_bp.route('/auth/smtp/test', methods=['POST'])
+@require_auth
+def smtp_test():
+    """Send a test email via configured SMTP (system_admin only)."""
+    try:
+        actor = g.current_user
+        actor_role = _actor_app_user_role(actor)
+        if actor_role != 'system_admin':
+            return _forbidden('غير مصرح', error='forbidden', status=403)
+
+        data = request.get_json(silent=True) or {}
+        to_email = (data.get('to_email') or data.get('email') or '').strip()
+        if not to_email or '@' not in to_email:
+            return jsonify({'success': False, 'message': 'to_email مطلوب'}), 400
+
+        if not _smtp_is_configured():
+            return jsonify({
+                'success': False,
+                'error': 'smtp_not_configured',
+                'message': 'SMTP غير مهيأ',
+            }), 400
+
+        ok = _send_email_best_effort(
+            to_email=to_email,
+            subject='اختبار البريد - YasarGoldPOS',
+            body='هذه رسالة اختبار لإعدادات SMTP. يمكنك تجاهلها.',
+        )
+
+        return jsonify({
+            'success': bool(ok),
+            'message': 'تم الإرسال' if ok else 'فشل الإرسال',
+        }), 200
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+def _should_return_sensitive_debug_payload() -> bool:
+    """Only allow returning reset tokens/usernames when explicitly enabled.
+
+    This avoids leaking account enumeration or reset secrets in production.
+    """
+    if _is_production_env():
+        return False
+    return (os.getenv('AUTH_DEBUG_RETURN_SECRETS') or '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _find_app_user_by_identifier(identifier: str) -> Optional[AppUser]:
+    ident = _normalize_identifier(identifier)
+    if not ident:
+        return None
+    # tolerate phone formatting: spaces and dashes
+    phone_norm = ''.join(ch for ch in ident if ch.isdigit() or ch == '+')
+    q = AppUser.query
+
+    try:
+        # Prefer email match
+        user = q.filter(func.lower(func.trim(AppUser.email)) == ident).first() if hasattr(AppUser, 'email') else None
+        if user:
+            return user
+    except Exception:
+        pass
+
+    try:
+        if hasattr(AppUser, 'phone'):
+            # Very simple phone comparison; keep best-effort.
+            user = q.filter(func.trim(AppUser.phone) == phone_norm).first()
+            if user:
+                return user
+    except Exception:
+        pass
+
+    return None
 
 
 def _issue_refresh_token_for_user(user, user_type: str, days: Optional[int] = None) -> str:
@@ -628,8 +834,30 @@ def confirm_password_reset():
     """Reset password using a reset token."""
     try:
         data = request.get_json() or {}
-        token_plain = data.get('token')
+        token_plain = data.get('token') or data.get('otp')
         new_password = data.get('new_password')
+
+        # Rate limit confirm attempts to reduce OTP guessing.
+        confirm_limit = int(os.getenv('AUTH_OTP_CONFIRM_LIMIT', '10') or '10')
+        confirm_window_minutes = int(os.getenv('AUTH_OTP_CONFIRM_WINDOW_MINUTES', '15') or '15')
+        if _rate_limit_public_action(
+            action='password_reset_confirm',
+            identifier=str(token_plain or ''),
+            limit=confirm_limit,
+            window=timedelta(minutes=confirm_window_minutes),
+        ):
+            _record_public_action_attempt(
+                action='password_reset_confirm',
+                identifier=str(token_plain or ''),
+                success=False,
+                blocked_reason='rate_limited',
+            )
+            db.session.commit()
+            return jsonify({
+                'success': False,
+                'message': 'محاولات كثيرة. حاول لاحقاً',
+                'error': 'rate_limited',
+            }), 429
 
         if not token_plain or not new_password:
             return jsonify({'success': False, 'message': 'token و new_password مطلوبين'}), 400
@@ -639,8 +867,22 @@ def confirm_password_reset():
         token_hash = _hash_token(str(token_plain))
         rec = PasswordResetToken.query.filter_by(token_hash=token_hash).first()
         if not rec or rec.is_used:
+            _record_public_action_attempt(
+                action='password_reset_confirm',
+                identifier=str(token_plain),
+                success=False,
+                blocked_reason='invalid_token',
+            )
+            db.session.commit()
             return jsonify({'success': False, 'message': 'توكن غير صالح', 'error': 'invalid_token'}), 401
         if rec.expires_at and rec.expires_at < _now():
+            _record_public_action_attempt(
+                action='password_reset_confirm',
+                identifier=str(token_plain),
+                success=False,
+                blocked_reason='token_expired',
+            )
+            db.session.commit()
             return jsonify({'success': False, 'message': 'انتهت صلاحية التوكن', 'error': 'token_expired'}), 401
 
         target = AppUser.query.get(rec.user_id) if rec.user_type == 'app_user' else User.query.get(rec.user_id)
@@ -648,6 +890,12 @@ def confirm_password_reset():
             return jsonify({'success': False, 'message': 'المستخدم غير موجود'}), 404
 
         target.set_password(str(new_password))
+        # If the account was flagged for forced change, clear it.
+        try:
+            if isinstance(target, AppUser) and hasattr(target, 'must_change_password'):
+                target.must_change_password = False
+        except Exception:
+            pass
         rec.is_used = True
         rec.used_at = _now()
         rec.used_ip = _client_ip()
@@ -659,11 +907,233 @@ def confirm_password_reset():
             'revoked_reason': 'password_reset',
         })
 
+        _record_public_action_attempt(
+            action='password_reset_confirm',
+            identifier=str(token_plain),
+            success=True,
+        )
+
         db.session.commit()
         return jsonify({'success': True, 'message': 'تم إعادة تعيين كلمة المرور'}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@auth_bp.route('/auth/forgot-username', methods=['POST'])
+def forgot_username():
+    """Username recovery by email/phone (best-effort).
+
+    Always returns a generic success message to avoid account enumeration.
+    If SMTP is configured and identifier is an email, sends the username.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        identifier = data.get('email') or data.get('phone') or data.get('identifier')
+        identifier = (identifier or '').strip()
+
+        # Generic response shape.
+        payload = {
+            'success': True,
+            'message': 'إذا كانت البيانات صحيحة فسيتم إرسال اسم المستخدم إلى وسيلة التواصل المسجلة',
+        }
+
+        # Rate limit: default 3 requests per hour per IP+identifier.
+        req_limit = int(os.getenv('AUTH_USERNAME_RECOVERY_LIMIT', '3') or '3')
+        window_minutes = int(os.getenv('AUTH_USERNAME_RECOVERY_WINDOW_MINUTES', '60') or '60')
+        if _rate_limit_public_action(
+            action='forgot_username',
+            identifier=identifier,
+            limit=req_limit,
+            window=timedelta(minutes=window_minutes),
+        ):
+            _record_public_action_attempt(
+                action='forgot_username',
+                identifier=identifier,
+                success=False,
+                blocked_reason='rate_limited',
+            )
+            db.session.commit()
+            return jsonify(payload), 200
+
+        user = _find_app_user_by_identifier(identifier)
+        if user:
+            # Additional spam protection: cap per-account requests regardless of IP.
+            user_key = f"user:{user.id}"
+            if _rate_limit_public_action(
+                action='forgot_username',
+                identifier=user_key,
+                limit=req_limit,
+                window=timedelta(minutes=window_minutes),
+                per_ip=False,
+            ):
+                _record_public_action_attempt(
+                    action='forgot_username',
+                    identifier=user_key,
+                    success=False,
+                    blocked_reason='rate_limited_user',
+                )
+                db.session.commit()
+                return jsonify(payload), 200
+
+            # Prefer the registered email; fall back to provided identifier if it's an email.
+            to_email = (getattr(user, 'email', None) or '').strip() or (
+                identifier.strip() if '@' in identifier else ''
+            )
+            if to_email and _smtp_is_configured():
+                ok = _send_email_best_effort(
+                    to_email=to_email,
+                    subject='استعادة اسم المستخدم',
+                    body=f"اسم المستخدم الخاص بك هو: {user.username}",
+                )
+                if not ok:
+                    try:
+                        logger.warning(
+                            'SMTP send failed: forgot_username to_email_hash=%s',
+                            hashlib.sha256(to_email.encode('utf-8')).hexdigest()[:10],
+                        )
+                    except Exception:
+                        pass
+
+            _record_public_action_attempt(
+                action='forgot_username',
+                identifier=user_key,
+                success=True,
+            )
+
+            if _should_return_sensitive_debug_payload():
+                payload['debug_username'] = user.username
+
+        _record_public_action_attempt(
+            action='forgot_username',
+            identifier=identifier,
+            success=True,
+        )
+
+        db.session.commit()
+
+        return jsonify(payload), 200
+    except Exception:
+        # Still generic success.
+        return jsonify({
+            'success': True,
+            'message': 'إذا كانت البيانات صحيحة فسيتم إرسال اسم المستخدم إلى وسيلة التواصل المسجلة',
+        }), 200
+
+
+@auth_bp.route('/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    """Password reset initiation by email/phone.
+
+    Generates a 6-digit OTP (stored hashed) that expires after 15 minutes.
+    Always returns a generic success message to avoid enumeration.
+
+    To return the OTP in development for testing, set: AUTH_DEBUG_RETURN_SECRETS=1
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        identifier = data.get('email') or data.get('phone') or data.get('identifier')
+        identifier = (identifier or '').strip()
+
+        payload = {
+            'success': True,
+            'message': 'إذا كانت البيانات صحيحة فسيتم إرسال رمز إعادة التعيين (صالح لمدة 15 دقيقة)',
+        }
+
+        # Rate limit: default 3 requests per hour per IP+identifier.
+        req_limit = int(os.getenv('AUTH_OTP_REQUEST_LIMIT', '3') or '3')
+        window_minutes = int(os.getenv('AUTH_OTP_REQUEST_WINDOW_MINUTES', '60') or '60')
+        if _rate_limit_public_action(
+            action='forgot_password',
+            identifier=identifier,
+            limit=req_limit,
+            window=timedelta(minutes=window_minutes),
+        ):
+            _record_public_action_attempt(
+                action='forgot_password',
+                identifier=identifier,
+                success=False,
+                blocked_reason='rate_limited',
+            )
+            db.session.commit()
+            return jsonify(payload), 200
+
+        user = _find_app_user_by_identifier(identifier)
+        if user:
+            # Additional spam protection: cap per-account requests regardless of IP.
+            user_key = f"user:{user.id}"
+            if _rate_limit_public_action(
+                action='forgot_password',
+                identifier=user_key,
+                limit=req_limit,
+                window=timedelta(minutes=window_minutes),
+                per_ip=False,
+            ):
+                _record_public_action_attempt(
+                    action='forgot_password',
+                    identifier=user_key,
+                    success=False,
+                    blocked_reason='rate_limited_user',
+                )
+                db.session.commit()
+                return jsonify(payload), 200
+
+            otp = f"{secrets.randbelow(10**6):06d}"
+            token_hash = _hash_token(otp)
+            expires_at = _now() + timedelta(minutes=15)
+
+            rec = PasswordResetToken(
+                token_hash=token_hash,
+                user_id=user.id,
+                user_type='app_user',
+                expires_at=expires_at,
+            )
+            db.session.add(rec)
+
+            # Prefer the registered email; fall back to provided identifier if it's an email.
+            to_email = (getattr(user, 'email', None) or '').strip() or (
+                identifier.strip() if '@' in identifier else ''
+            )
+            if to_email and _smtp_is_configured():
+                ok = _send_email_best_effort(
+                    to_email=to_email,
+                    subject='رمز إعادة تعيين كلمة المرور',
+                    body=f"رمز إعادة تعيين كلمة المرور: {otp}\nتنتهي صلاحيته خلال 15 دقيقة.",
+                )
+                if not ok:
+                    try:
+                        logger.warning(
+                            'SMTP send failed: forgot_password to_email_hash=%s',
+                            hashlib.sha256(to_email.encode('utf-8')).hexdigest()[:10],
+                        )
+                    except Exception:
+                        pass
+
+            _record_public_action_attempt(
+                action='forgot_password',
+                identifier=user_key,
+                success=True,
+            )
+
+            if _should_return_sensitive_debug_payload():
+                payload['debug_otp'] = otp
+                payload['expires_at'] = expires_at.isoformat()
+
+        _record_public_action_attempt(
+            action='forgot_password',
+            identifier=identifier,
+            success=True,
+        )
+
+        db.session.commit()
+
+        return jsonify(payload), 200
+    except Exception:
+        # Still generic success.
+        return jsonify({
+            'success': True,
+            'message': 'إذا كانت البيانات صحيحة فسيتم إرسال رمز إعادة التعيين (صالح لمدة 15 دقيقة)',
+        }), 200
 
 
 @auth_bp.route('/auth/2fa/setup', methods=['POST'])
@@ -1077,6 +1547,11 @@ def change_password():
             }), 400
         
         user.set_password(new_password)
+        try:
+            if isinstance(user, AppUser) and hasattr(user, 'must_change_password'):
+                user.must_change_password = False
+        except Exception:
+            pass
         db.session.commit()
         
         return jsonify({
@@ -1860,6 +2335,33 @@ def get_app_user(app_user_id):
         }), 500
 
 
+@auth_bp.route('/app-users/by-employee/<int:employee_id>', methods=['GET'])
+@require_auth
+def get_app_user_by_employee(employee_id):
+    """Fetch linked AppUser for a given employee.
+
+    Returns success with app_user=null when no account exists.
+    """
+    try:
+        actor = g.current_user
+        actor_role = _actor_app_user_role(actor)
+
+        # Allow managers/system admins (and legacy admins) to inspect linkage.
+        if actor_role not in ('system_admin', 'manager'):
+            return _forbidden('غير مصرح', error='forbidden', status=403)
+
+        app_user = AppUser.query.filter_by(employee_id=employee_id).first()
+        return jsonify({
+            'success': True,
+            'app_user': app_user.to_dict(include_employee=True) if app_user else None,
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+
 @auth_bp.route('/app-users/from-employee', methods=['POST'])
 @require_auth
 def create_app_user_from_employee():
@@ -1871,6 +2373,8 @@ def create_app_user_from_employee():
         employee_id = data.get('employee_id')
         username = data.get('username')
         password = data.get('password')
+        email = data.get('email')
+        phone = data.get('phone')
         role = _normalize_app_user_role(data.get('role', 'employee'))
         permissions = data.get('permissions')
         
@@ -1878,6 +2382,14 @@ def create_app_user_from_employee():
             return jsonify({
                 'success': False,
                 'message': 'يجب إدخال معرف الموظف واسم المستخدم وكلمة المرور'
+            }), 400
+
+        email_norm = (str(email).strip() if email else '')
+        phone_norm = (str(phone).strip() if phone else '')
+        if not email_norm or not phone_norm:
+            return jsonify({
+                'success': False,
+                'message': 'يجب إدخال البريد الإلكتروني ورقم الجوال'
             }), 400
         
         # التحقق من وجود الموظف
@@ -1929,6 +2441,8 @@ def create_app_user_from_employee():
             employee_id=employee_id,
             role=role,
             permissions=permissions,
+            email=email_norm,
+            phone=phone_norm,
         )
         app_user.set_password(password)
         
@@ -1972,6 +2486,8 @@ def create_app_user():
 
         username = data.get('username')
         password = data.get('password')
+        email = data.get('email')
+        phone = data.get('phone')
         role = _normalize_app_user_role(data.get('role', 'employee'))
         employee_id = data.get('employee_id')
         full_name = data.get('full_name')
@@ -2002,6 +2518,14 @@ def create_app_user():
             return jsonify({
                 'success': False,
                 'message': 'يجب إدخال اسم المستخدم وكلمة المرور'
+            }), 400
+
+        email_norm = (str(email).strip() if email else '')
+        phone_norm = (str(phone).strip() if phone else '')
+        if not email_norm or not phone_norm:
+            return jsonify({
+                'success': False,
+                'message': 'يجب إدخال البريد الإلكتروني ورقم الجوال'
             }), 400
 
         if AppUser.query.filter_by(username=username).first():
@@ -2036,6 +2560,8 @@ def create_app_user():
             role=role,
             permissions=permissions,
             is_active=bool(is_active),
+            email=email_norm,
+            phone=phone_norm,
         )
         app_user.set_password(password)
 
@@ -2136,6 +2662,24 @@ def reset_app_user_password(app_user_id):
             return jsonify({'success': False, 'message': 'يجب إدخال كلمة المرور الجديدة'}), 400
 
         app_user.set_password(new_password)
+        try:
+            app_user.must_change_password = True
+        except Exception:
+            pass
+
+        # Revoke refresh tokens for the target user (best-effort).
+        try:
+            RefreshToken.query.filter_by(
+                user_id=app_user.id,
+                user_type='app_user',
+                is_revoked=False,
+            ).update({
+                'is_revoked': True,
+                'revoked_at': _now(),
+                'revoked_reason': 'admin_password_reset',
+            })
+        except Exception:
+            pass
         db.session.commit()
 
         return jsonify({'success': True, 'message': 'تم تحديث كلمة المرور بنجاح'}), 200
@@ -2159,6 +2703,14 @@ def update_app_user(app_user_id):
             }), 404
 
         data = request.get_json() or {}
+
+        # Normalize optional contact fields.
+        if 'email' in data:
+            v = (data.get('email') or '').strip()
+            data['email'] = v if v else None
+        if 'phone' in data:
+            v = (data.get('phone') or '').strip()
+            data['phone'] = v if v else None
 
         target_role = _normalize_app_user_role(getattr(app_user, 'role', None))
 

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../api_service.dart';
+import '../models/app_user_model.dart';
 import '../models/employee_model.dart';
+import '../providers/auth_provider.dart';
 import '../utils.dart';
 
 class EmployeesScreen extends StatefulWidget {
@@ -102,51 +105,24 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     }
   }
 
-  Future<void> _deleteEmployee(EmployeeModel employee) async {
-    final isAr = widget.isArabic;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(isAr ? 'حذف الموظف' : 'Delete Employee'),
-          content: Text(
-            isAr
-                ? 'هل أنت متأكد من حذف ${employee.name}؟'
-                : 'Are you sure you want to delete ${employee.name}?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(isAr ? 'إلغاء' : 'Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(isAr ? 'حذف' : 'Delete'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (confirm != true) return;
-
-    try {
-      await widget.api.deleteEmployee(employee.id ?? 0);
-      setState(() {
-        _employees.removeWhere((e) => e.id == employee.id);
-      });
-      _showSnack(isAr ? 'تم حذف الموظف' : 'Employee deleted');
-    } catch (e) {
-      _showSnack(e.toString(), isError: true);
-    }
-  }
-
   Future<void> _showCreateUserDialog(EmployeeModel employee) async {
     final isAr = widget.isArabic;
     final usernameController = TextEditingController();
     final passwordController = TextEditingController();
+    final emailController = TextEditingController();
+    final phoneController = TextEditingController();
     final formKey = GlobalKey<FormState>();
-    String selectedRole = 'staff';
+    final auth = context.read<AuthProvider>();
+    final isSystemAdmin = auth.isSystemAdmin;
+    final isManager = auth.role == 'manager';
+
+    final allowedRoles = isSystemAdmin
+        ? const ['employee', 'accountant', 'manager']
+        : (isManager ? const ['employee'] : const ['employee']);
+    String selectedRole = allowedRoles.first;
+
+    emailController.text = (employee.email ?? '').trim();
+    phoneController.text = (employee.phone ?? '').trim();
 
     final result = await showDialog<bool>(
       context: context,
@@ -188,6 +164,45 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                       ),
                       const SizedBox(height: 16),
                       TextFormField(
+                        controller: emailController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'البريد الإلكتروني' : 'Email',
+                          border: const OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.emailAddress,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return isAr
+                                ? 'يجب إدخال البريد الإلكتروني'
+                                : 'Email is required';
+                          }
+                          if (!value.contains('@')) {
+                            return isAr
+                                ? 'صيغة البريد غير صحيحة'
+                                : 'Invalid email format';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: phoneController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'رقم الجوال' : 'Mobile',
+                          border: const OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.phone,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return isAr
+                                ? 'يجب إدخال رقم الجوال'
+                                : 'Mobile is required';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
                         controller: passwordController,
                         obscureText: true,
                         decoration: InputDecoration(
@@ -211,11 +226,26 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                           labelText: isAr ? 'الدور' : 'Role',
                           border: const OutlineInputBorder(),
                         ),
-                        items: [
-                          DropdownMenuItem(value: 'staff', child: Text(isAr ? 'موظف' : 'Staff')),
-                          DropdownMenuItem(value: 'manager', child: Text(isAr ? 'مدير' : 'Manager')),
-                          DropdownMenuItem(value: 'admin', child: Text(isAr ? 'مسؤول' : 'Admin')),
-                        ],
+                        items: allowedRoles
+                            .map(
+                              (r) => DropdownMenuItem(
+                                value: r,
+                                child: Text(
+                                  isAr
+                                      ? {
+                                            'employee': 'بائع',
+                                            'accountant': 'محاسب',
+                                            'manager': 'مدير فرع',
+                                          }[r] ?? r
+                                      : {
+                                            'employee': 'Seller',
+                                            'accountant': 'Accountant',
+                                            'manager': 'Branch Manager',
+                                          }[r] ?? r,
+                                ),
+                              ),
+                            )
+                            .toList(),
                         onChanged: (value) {
                           if (value != null) {
                             setState(() {
@@ -255,6 +285,8 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
         employeeId: employee.id!,
         username: usernameController.text.trim(),
         password: passwordController.text,
+        email: emailController.text.trim(),
+        phone: phoneController.text.trim(),
         role: selectedRole,
       );
       
@@ -267,6 +299,61 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     } finally {
       usernameController.dispose();
       passwordController.dispose();
+      emailController.dispose();
+      phoneController.dispose();
+    }
+  }
+
+  Future<void> _promptResetAppUserPassword(AppUserModel appUser) async {
+    final isAr = widget.isArabic;
+    final controller = TextEditingController();
+
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(isAr ? 'إعادة تعيين كلمة المرور' : 'Reset Password'),
+          content: TextField(
+            controller: controller,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: isAr ? 'كلمة مرور جديدة' : 'New password',
+              hintText: isAr ? '6 أحرف على الأقل' : 'Min 6 characters',
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(isAr ? 'إلغاء' : 'Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(isAr ? 'تأكيد' : 'Confirm'),
+            ),
+          ],
+        ),
+      );
+
+      if (ok != true) return;
+
+      final newPassword = controller.text.trim();
+      if (newPassword.length < 6) {
+        _showSnack(
+          isAr
+              ? 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'
+              : 'Password too short',
+          isError: true,
+        );
+        return;
+      }
+
+      await widget.api.resetUserPassword(appUser.id ?? 0, newPassword);
+      _showSnack(isAr ? 'تم تحديث كلمة المرور' : 'Password updated');
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    } finally {
+      controller.dispose();
     }
   }
 
@@ -319,13 +406,18 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
         final textTheme = theme.textTheme;
         final colorScheme = theme.colorScheme;
 
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: SingleChildScrollView(
-            controller: _scrollController,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+        final auth = context.read<AuthProvider>();
+        final canManageAccounts = auth.isSystemAdmin || auth.role == 'manager';
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                 Row(
                   children: [
                     Icon(Icons.badge, color: colorScheme.primary),
@@ -413,6 +505,136 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                if (canManageAccounts && employee.id != null) ...[
+                  Text(
+                    isAr ? 'حساب الدخول' : 'Login Account',
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FutureBuilder<AppUserModel?>(
+                    future: widget.api.getUserByEmployeeId(employee.id!),
+                    builder: (context, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+
+                      if (snap.hasError) {
+                        return Text(
+                          isAr
+                              ? 'تعذر تحميل حساب الدخول'
+                              : 'Failed to load login account',
+                          style: textTheme.bodyMedium,
+                        );
+                      }
+
+                      final linked = snap.data;
+                      if (linked == null) {
+                        return Text(
+                          isAr
+                              ? 'لا يوجد حساب دخول مرتبط'
+                              : 'No linked login account',
+                          style: textTheme.bodyMedium,
+                        );
+                      }
+
+                      final roleLabelAr = {
+                        'employee': 'بائع',
+                        'accountant': 'محاسب',
+                        'manager': 'مدير فرع',
+                        'system_admin': 'مسؤول النظام',
+                      }[linked.role];
+                      final roleLabelEn = {
+                        'employee': 'Seller',
+                        'accountant': 'Accountant',
+                        'manager': 'Branch Manager',
+                        'system_admin': 'System Admin',
+                      }[linked.role];
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _InfoRow(
+                            label: isAr ? 'اسم المستخدم' : 'Username',
+                            value: linked.username,
+                          ),
+                          _InfoRow(
+                            label: isAr ? 'الدور' : 'Role',
+                            value: isAr
+                                ? (roleLabelAr ?? linked.role)
+                                : (roleLabelEn ?? linked.role),
+                          ),
+                          _InfoRow(
+                            label: isAr ? 'الحالة' : 'Status',
+                            value: linked.isActive
+                                ? (isAr ? 'مفعل' : 'Enabled')
+                                : (isAr ? 'معطل' : 'Disabled'),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              TextButton.icon(
+                                icon: Icon(
+                                  linked.isActive
+                                      ? Icons.lock_outline
+                                      : Icons.lock_open,
+                                ),
+                                label: Text(
+                                  linked.isActive
+                                      ? (isAr
+                                          ? 'تعطيل الحساب'
+                                          : 'Disable account')
+                                      : (isAr
+                                          ? 'تفعيل الحساب'
+                                          : 'Enable account'),
+                                ),
+                                onPressed: () async {
+                                  try {
+                                    final isActive = await widget.api
+                                        .toggleUserActive(linked.id ?? 0);
+                                    _showSnack(
+                                      isActive
+                                          ? (isAr
+                                              ? 'تم تفعيل الحساب'
+                                              : 'Account enabled')
+                                          : (isAr
+                                              ? 'تم تعطيل الحساب'
+                                              : 'Account disabled'),
+                                    );
+                                    // Reopen to refresh linked account snapshot.
+                                    Navigator.of(context).pop();
+                                    _showEmployeeDetails(employee);
+                                  } catch (e) {
+                                    _showSnack(e.toString(), isError: true);
+                                  }
+                                },
+                              ),
+                              TextButton.icon(
+                                icon: const Icon(Icons.key_outlined),
+                                label: Text(
+                                  isAr
+                                      ? 'إعادة التعيين الإداري'
+                                      : 'Admin password reset',
+                                ),
+                                onPressed: () {
+                                  Navigator.of(context).pop();
+                                  _promptResetAppUserPassword(linked);
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 Row(
                   children: [
                     TextButton.icon(
@@ -434,9 +656,11 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                     ),
                   ],
                 ),
-              ],
-            ),
-          ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -564,18 +788,12 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                                   onSelected: (value) {
                                     if (value == 'edit') {
                                       _openEmployeeForm(employee: employee);
-                                    } else if (value == 'delete') {
-                                      _deleteEmployee(employee);
                                     }
                                   },
                                   itemBuilder: (context) => [
                                     PopupMenuItem(
                                       value: 'edit',
                                       child: Text(isAr ? 'تعديل' : 'Edit'),
-                                    ),
-                                    PopupMenuItem(
-                                      value: 'delete',
-                                      child: Text(isAr ? 'حذف' : 'Delete'),
                                     ),
                                   ],
                                 ),

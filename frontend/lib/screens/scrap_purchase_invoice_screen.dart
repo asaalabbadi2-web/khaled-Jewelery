@@ -749,6 +749,40 @@ class _ScrapPurchaseInvoiceScreenState
     }
   }
 
+  Future<bool> _confirmDeferredInvoiceSave({
+    required double total,
+    required double totalPaid,
+    required double remaining,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('فاتورة آجل / دفع جزئي'),
+          content: Text(
+            'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\n'
+            'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\n'
+            'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\n\n'
+            'هل تريد حفظ الفاتورة بهذا الشكل؟',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('حفظ'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
   // ==================== Submit Invoice ====================
   Future<void> _submitInvoice() async {
     if (_items.isEmpty) {
@@ -761,22 +795,47 @@ class _ScrapPurchaseInvoiceScreenState
       return;
     }
 
-    // 🆕 التحقق من وجود دفعات
-    if (_payments.isEmpty) {
-      _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
-      return;
-    }
+    final allowPartialPayments = _settingsProvider.allowPartialInvoicePayments;
 
-    // 🆕 التحقق من اكتمال الدفع مع tolerance للفروقات العشرية
+    // 🧾 التحقق من الدفع (مع دعم الفواتير الآجلة عند تفعيل الإعداد)
     final total = _calculateGrandTotal();
-    final remaining = (total - _totalPayments).abs();
+    final totalPaid = _totalPayments;
+    final remaining = total - totalPaid;
 
-    if (remaining > 0.01) {
-      // tolerance = 1 قرش
-      _showError(
-        'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+    if (_payments.isEmpty) {
+      if (!allowPartialPayments) {
+        _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
+        return;
+      }
+
+      final proceed = await _confirmDeferredInvoiceSave(
+        total: total,
+        totalPaid: totalPaid,
+        remaining: total,
       );
-      return;
+      if (!proceed) return;
+    } else {
+      // منع الدفع الزائد
+      if (remaining < -0.01) {
+        _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
+        return;
+      }
+
+      if (remaining > 0.01) {
+        if (!allowPartialPayments) {
+          _showError(
+            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+          );
+          return;
+        }
+
+        final proceed = await _confirmDeferredInvoiceSave(
+          total: total,
+          totalPaid: totalPaid,
+          remaining: remaining,
+        );
+        if (!proceed) return;
+      }
     }
 
     try {

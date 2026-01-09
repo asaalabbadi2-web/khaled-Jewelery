@@ -518,16 +518,16 @@ class _UsersScreenState extends State<UsersScreen> {
                           final roleLabel = isAr
                               ? {
                                       'system_admin': 'مسؤول النظام',
-                                      'manager': 'مدير',
+                                      'manager': 'مدير فرع',
                                       'accountant': 'محاسب',
-                                      'employee': 'موظف',
+                                      'employee': 'بائع',
                                     }[user.role] ??
                                     'مستخدم'
                               : {
                                       'system_admin': 'System Admin',
-                                      'manager': 'Manager',
+                                      'manager': 'Branch Manager',
                                       'accountant': 'Accountant',
-                                      'employee': 'Employee',
+                                      'employee': 'Seller',
                                     }[user.role] ??
                                     'User';
                           final lastLoginText = _formatLastLogin(
@@ -705,6 +705,8 @@ class _UserFormDialogState extends State<UserFormDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
+  late final TextEditingController _emailController;
+  late final TextEditingController _phoneController;
   String _role = 'employee';
   bool _isActive = true;
   int? _selectedEmployeeId;
@@ -717,6 +719,8 @@ class _UserFormDialogState extends State<UserFormDialog> {
     final user = widget.user;
     _usernameController = TextEditingController(text: user?.username ?? '');
     _passwordController = TextEditingController();
+    _emailController = TextEditingController(text: user?.email ?? '');
+    _phoneController = TextEditingController(text: user?.phone ?? '');
     _selectedEmployeeId = user?.employeeId;
     _role = user?.role ?? 'employee';
     _isActive = user?.isActive ?? true;
@@ -759,6 +763,8 @@ class _UserFormDialogState extends State<UserFormDialog> {
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
     super.dispose();
   }
 
@@ -767,6 +773,8 @@ class _UserFormDialogState extends State<UserFormDialog> {
 
     final payload = <String, dynamic>{
       'username': _usernameController.text.trim(),
+      'email': _emailController.text.trim(),
+      'phone': _phoneController.text.trim(),
       'employee_id': _selectedEmployeeId,
       'role': _role,
       'is_active': _isActive,
@@ -849,6 +857,45 @@ class _UserFormDialogState extends State<UserFormDialog> {
                     return null;
                   },
                 ),
+                TextFormField(
+                  controller: _emailController,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'البريد الإلكتروني' : 'Email',
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                  validator: (value) {
+                    if (widget.user == null) {
+                      if (value == null || value.trim().isEmpty) {
+                        return isAr
+                            ? 'البريد الإلكتروني مطلوب'
+                            : 'Email is required';
+                      }
+                      if (!value.contains('@')) {
+                        return isAr
+                            ? 'صيغة البريد غير صحيحة'
+                            : 'Invalid email format';
+                      }
+                    }
+                    return null;
+                  },
+                ),
+                TextFormField(
+                  controller: _phoneController,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'رقم الجوال' : 'Mobile',
+                  ),
+                  keyboardType: TextInputType.phone,
+                  validator: (value) {
+                    if (widget.user == null) {
+                      if (value == null || value.trim().isEmpty) {
+                        return isAr
+                            ? 'رقم الجوال مطلوب'
+                            : 'Mobile is required';
+                      }
+                    }
+                    return null;
+                  },
+                ),
                 DropdownButtonFormField<String>(
                   value: effectiveRole,
                   items: allowedRoles
@@ -859,15 +906,15 @@ class _UserFormDialogState extends State<UserFormDialog> {
                             isAr
                                 ? {
                                         'system_admin': 'مسؤول النظام',
-                                        'manager': 'مدير',
+                                        'manager': 'مدير فرع',
                                         'accountant': 'محاسب',
-                                        'employee': 'موظف',
+                                        'employee': 'بائع',
                                       }[r] ?? r
                                 : {
                                         'system_admin': 'System Admin',
-                                        'manager': 'Manager',
+                                        'manager': 'Branch Manager',
                                         'accountant': 'Accountant',
-                                        'employee': 'Employee',
+                                        'employee': 'Seller',
                                       }[r] ?? r,
                           ),
                         ),

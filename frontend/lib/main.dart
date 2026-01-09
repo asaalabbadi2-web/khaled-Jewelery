@@ -14,6 +14,7 @@ import 'screens/add_item_screen_enhanced.dart';
 import 'screens/items_screen_enhanced.dart';
 import 'api_service.dart';
 import 'screens/login_screen.dart';
+import 'screens/change_password_screen.dart';
 import 'screens/initial_setup_screen.dart';
 
 Future<void> main() async {
@@ -230,6 +231,9 @@ class AuthGate extends StatelessWidget {
         );
 
         if (auth.isAuthenticated || (kDebugMode && bypassFlag && !auth.needsSetup)) {
+          if (auth.isAuthenticated && auth.mustChangePassword) {
+            return const ChangePasswordScreen(force: true);
+          }
           return HomeScreenEnhanced(
             onToggleLocale: onToggleLocale,
             isArabic: isArabic,

@@ -43,6 +43,8 @@ import 'melting_renewal_screen.dart';
 import 'gold_reservation_screen.dart';
 import 'offices_screen.dart';
 import 'posting_management_screen.dart';
+import 'audit_log_screen.dart';
+import 'shift_closing_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
 import 'printing_center_screen.dart';
@@ -137,7 +139,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   void _syncGoldPriceAutoRefresh(SettingsProvider settings) {
     final enabled = settings.settings['gold_price_auto_update_enabled'] == true;
-    final minutesRaw = settings.settings['gold_price_auto_update_interval_minutes'];
+    final minutesRaw =
+        settings.settings['gold_price_auto_update_interval_minutes'];
     final minutes = (minutesRaw is num)
         ? minutesRaw.toInt()
         : int.tryParse(minutesRaw?.toString() ?? '') ?? 60;
@@ -311,9 +314,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('فشل تحديث السعر: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('فشل تحديث السعر: $e')));
     } finally {
       if (mounted) {
         setState(() {
@@ -553,7 +556,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [gold.withValues(alpha: 0.85), gold.withValues(alpha: 0.45)],
+            colors: [
+              gold.withValues(alpha: 0.85),
+              gold.withValues(alpha: 0.45),
+            ],
             begin: AlignmentDirectional.topStart,
             end: AlignmentDirectional.bottomEnd,
           ),
@@ -593,13 +599,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         style: TextStyle(
                           fontFamily: 'Cairo',
                           fontSize: 13,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.8,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 10),
                       Row(
                         children: [
-                          Icon(Icons.person, size: 16, color: theme.colorScheme.onSurface.withValues(alpha: 0.85)),
+                          Icon(
+                            Icons.person,
+                            size: 16,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.85,
+                            ),
+                          ),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
@@ -612,7 +626,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                                 fontFamily: 'Cairo',
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.9),
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.9,
+                                ),
                               ),
                             ),
                           ),
@@ -626,7 +642,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         style: TextStyle(
                           fontFamily: 'Cairo',
                           fontSize: 12,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.75,
+                          ),
                         ),
                       ),
                     ],
@@ -661,7 +679,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       Color? color,
     }) {
       // Ensure every destination belongs to a titled section (collapsible).
-      currentSection ??= _DrawerSection(title: isAr ? 'القائمة' : 'Menu', color: gold);
+      currentSection ??= _DrawerSection(
+        title: isAr ? 'القائمة' : 'Menu',
+        color: gold,
+      );
       if (!sections.contains(currentSection)) {
         sections.add(currentSection!);
       }
@@ -690,9 +711,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               : theme.colorScheme.surface,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
-            side: BorderSide(
-              color: theme.dividerColor.withValues(alpha: 0.55),
-            ),
+            side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.55)),
           ),
           child: ListTile(
             dense: true,
@@ -1147,6 +1166,30 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       },
     );
 
+    addDestination(
+      icon: Icons.fact_check,
+      title: isAr ? 'إغلاق اليومية' : 'Shift Closing',
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ShiftClosingScreen(api: api, isArabic: isAr),
+          ),
+        );
+      },
+    );
+
+    addDestination(
+      icon: Icons.history,
+      title: isAr ? 'سجل التدقيق' : 'Audit Log',
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+        );
+      },
+    );
+
     addDivider();
     addSection(
       isAr ? ' الإعدادات والأدوات' : ' Settings & Tools',
@@ -1198,7 +1241,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const GoldPriceManualScreenEnhanced()),
+          MaterialPageRoute(
+            builder: (_) => const GoldPriceManualScreenEnhanced(),
+          ),
         );
         await _loadAllData();
       },
@@ -1273,8 +1318,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 tilePadding: const EdgeInsetsDirectional.fromSTEB(14, 2, 14, 2),
-                childrenPadding:
-                    const EdgeInsetsDirectional.fromSTEB(10, 0, 10, 10),
+                childrenPadding: const EdgeInsetsDirectional.fromSTEB(
+                  10,
+                  0,
+                  10,
+                  10,
+                ),
                 collapsedIconColor: theme.iconTheme.color,
                 iconColor: theme.colorScheme.primary,
                 title: Row(
@@ -1303,13 +1352,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     child: ListTile(
                       dense: true,
                       visualDensity: VisualDensity.compact,
-                      contentPadding:
-                          const EdgeInsetsDirectional.fromSTEB(8, 0, 8, 0),
+                      contentPadding: const EdgeInsetsDirectional.fromSTEB(
+                        8,
+                        0,
+                        8,
+                        0,
+                      ),
                       leading: Container(
                         width: 34,
                         height: 34,
                         decoration: BoxDecoration(
-                          color: iconColor?.withValues(alpha: 0.12) ??
+                          color:
+                              iconColor?.withValues(alpha: 0.12) ??
                               theme.colorScheme.primary.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(10),
                         ),
@@ -1339,10 +1393,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       width: 360,
       child: Container(
         color: theme.drawerTheme.backgroundColor ?? theme.colorScheme.surface,
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: drawerChildren,
-        ),
+        child: ListView(padding: EdgeInsets.zero, children: drawerChildren),
       ),
     );
   }
@@ -1360,9 +1411,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             children: [
               Icon(Icons.workspace_premium, size: 28),
               const SizedBox(width: 10),
-              Expanded(
-                child: Text(isAr ? 'مجوهرات خالد' : 'Khaled Jewelry'),
-              ),
+              Expanded(child: Text(isAr ? 'مجوهرات خالد' : 'Khaled Jewelry')),
             ],
           ),
           actions: [
@@ -1405,8 +1454,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         children: [
                           CircleAvatar(
                             radius: 16,
-                            backgroundColor: AppColors.primaryGold.withValues(alpha: 
-                              0.2,
+                            backgroundColor: AppColors.primaryGold.withValues(
+                              alpha: 0.2,
                             ),
                             child: Icon(
                               Icons.person,
@@ -1729,8 +1778,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               Text(
                                 'سعر الأونصة',
                                 style: TextStyle(
-                                  color: colorScheme.onPrimary.withValues(alpha: 
-                                    0.95,
+                                  color: colorScheme.onPrimary.withValues(
+                                    alpha: 0.95,
                                   ),
                                   fontSize: 11,
                                   fontFamily: 'Cairo',
@@ -1793,7 +1842,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           Text(
                             'عيار $mainKarat',
                             style: TextStyle(
-                              color: colorScheme.onPrimary.withValues(alpha: 0.85),
+                              color: colorScheme.onPrimary.withValues(
+                                alpha: 0.85,
+                              ),
                               fontSize: 10,
                               fontFamily: 'Cairo',
                             ),
@@ -2172,7 +2223,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => AddReturnInvoiceScreen(api: api, returnType: 'مرتجع بيع'),
+            builder: (_) =>
+                AddReturnInvoiceScreen(api: api, returnType: 'مرتجع بيع'),
           ),
         );
         break;
@@ -2180,7 +2232,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => AddReturnInvoiceScreen(api: api, returnType: 'مرتجع شراء'),
+            builder: (_) =>
+                AddReturnInvoiceScreen(api: api, returnType: 'مرتجع شراء'),
           ),
         );
         break;
@@ -2232,9 +2285,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       case 'journal_entry':
         result = await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => AddEditJournalEntryScreen(),
-          ),
+          MaterialPageRoute(builder: (_) => AddEditJournalEntryScreen()),
         );
         break;
       case 'accounts':
@@ -2247,10 +2298,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => ReportsMainScreen(
-              api: api,
-              isArabic: widget.isArabic,
-            ),
+            builder: (_) =>
+                ReportsMainScreen(api: api, isArabic: widget.isArabic),
           ),
         );
         break;
@@ -2269,9 +2318,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => PrintingCenterScreen(
-              isArabic: widget.isArabic,
-            ),
+            builder: (_) => PrintingCenterScreen(isArabic: widget.isArabic),
           ),
         );
         break;
@@ -2322,9 +2369,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => PostingManagementScreen(
-              isArabic: widget.isArabic,
-            ),
+            builder: (_) => PostingManagementScreen(isArabic: widget.isArabic),
           ),
         );
         break;
@@ -2721,8 +2766,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     margin: EdgeInsets.only(bottom: 8),
                     padding: EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withValues(alpha: 
-                        isDark ? 0.5 : 1,
+                      color: theme.colorScheme.surface.withValues(
+                        alpha: isDark ? 0.5 : 1,
                       ),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(

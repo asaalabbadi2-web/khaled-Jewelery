@@ -8,6 +8,8 @@ class SettingsProvider with ChangeNotifier {
     'enabled': true,
     'price_source': 'live',
     'allow_override': true,
+    'shift_close_cash_deficit_threshold': 50.0,
+    'shift_close_gold_pure_deficit_threshold_grams': 0.10,
   };
 
   Map<String, dynamic> _settings = {};
@@ -108,6 +110,16 @@ class SettingsProvider with ChangeNotifier {
     fallback: true,
     );
 
+  double get shiftCloseCashDeficitThreshold => _safeDouble(
+    weightClosingSettings['shift_close_cash_deficit_threshold'],
+    fallback: 50.0,
+  );
+
+  double get shiftCloseGoldPureDeficitThresholdGrams => _safeDouble(
+    weightClosingSettings['shift_close_gold_pure_deficit_threshold_grams'],
+    fallback: 0.10,
+  );
+
   // Helper methods
   int _safeInt(dynamic value, {int fallback = 0}) {
     if (value == null) return fallback;
@@ -176,6 +188,22 @@ class SettingsProvider with ChangeNotifier {
         parsed['allow_override'],
         fallback: normalized['allow_override'] as bool,
       );
+
+      final cashThreshold = _safeDouble(
+        parsed['shift_close_cash_deficit_threshold'],
+        fallback: (normalized['shift_close_cash_deficit_threshold'] as num).toDouble(),
+      );
+      normalized['shift_close_cash_deficit_threshold'] =
+          cashThreshold < 0 ? 0.0 : cashThreshold;
+
+      final goldThreshold = _safeDouble(
+        parsed['shift_close_gold_pure_deficit_threshold_grams'],
+        fallback:
+            (normalized['shift_close_gold_pure_deficit_threshold_grams'] as num)
+                .toDouble(),
+      );
+      normalized['shift_close_gold_pure_deficit_threshold_grams'] =
+          goldThreshold < 0 ? 0.0 : goldThreshold;
     }
 
     return normalized;

@@ -1,5 +1,13 @@
 import sys
 import os
+# Load environment variables from project root if available (optional).
+try:
+	from dotenv import load_dotenv
+	_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+	load_dotenv(os.path.join(_repo_root, '.env'), override=False)
+	load_dotenv(os.path.join(_repo_root, '.env.production'), override=False)
+except Exception:
+	pass
 # Ensure the backend package directory is importable as top-level for legacy
 # imports like `from models import ...` and `from config import ...`.
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -45,6 +53,7 @@ from schema_guard import (
 	ensure_weight_closing_columns,
 	ensure_invoice_tax_columns,
 	ensure_invoice_branch_columns,
+	ensure_invoice_employee_columns,
 	ensure_journal_line_dimension_columns,
 )
 
@@ -137,6 +146,7 @@ def create_tables():
 		ensure_weight_closing_columns(db.engine)
 		ensure_invoice_tax_columns(db.engine)
 		ensure_invoice_branch_columns(db.engine)
+		ensure_invoice_employee_columns(db.engine)
 		ensure_journal_line_dimension_columns(db.engine)
 
 

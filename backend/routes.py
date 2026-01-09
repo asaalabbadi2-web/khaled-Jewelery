@@ -24,6 +24,7 @@ from models import (
     Voucher,
     PaymentMethod,
     InvoicePayment,
+    SafeBoxTransaction,
     AccountingMapping,
     InventoryCostingConfig,
     WeightClosingOrder,
@@ -222,6 +223,15 @@ def _enforce_api_auth_and_permissions():
             'error': 'user_inactive'
         }), 403
 
+    # ✅ Public-for-all-authenticated: viewing gold/ounce price should not be permission-gated.
+    # Keep authentication and inactive-user blocking, but skip permission enforcement.
+    try:
+        normalized_path = (request.path or '').rstrip('/')
+        if request.method == 'GET' and normalized_path in ('/api/gold_price', '/api/gold-price'):
+            return None
+    except Exception:
+        pass
+
     # Legacy admin has full access
     if bool(getattr(user, 'is_admin', False)):
         return None
@@ -287,12 +297,120 @@ def _inline_pick_number(item_data, keys, default=0.0):
 
 DEFAULT_WEIGHT_CLOSING_SETTINGS = {
     'main_karat': 21,
-    'price_source': 'manual',
+    # live | average | invoice
+    'price_source': 'live',
+    # UI flags used by the Settings screen
+    'enabled': True,
+    'allow_override': True,
+    # Shift closing security thresholds (manager alerts)
+    'shift_close_cash_deficit_threshold': 50.0,
+    'shift_close_gold_pure_deficit_threshold_grams': 0.10,
     'order_number_prefix': 'WCO',
     'reservation_code_prefix': 'RES',
     'inventory_account_id': 1310,  # مخزون ذهب عيار 21
     'cash_account_id': 1100,       # الصندوق
 }
+
+
+@api.route('/weight-closing/settings', methods=['GET'])
+@require_permission('system.settings')
+def get_weight_closing_settings():
+    """Return weight closing settings payload (merged with defaults)."""
+    return jsonify(_load_weight_closing_settings()), 200
+
+
+@api.route('/weight-closing/settings', methods=['PUT'])
+@require_permission('system.settings')
+def update_weight_closing_settings():
+    """Update weight closing settings (stored in Settings.weight_closing_settings JSON)."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'invalid_payload'}), 400
+
+    # Load current + defaults
+    merged = _load_weight_closing_settings()
+
+    # Normalize supported keys (keep it permissive, but sane)
+    if 'enabled' in payload:
+        merged['enabled'] = bool(payload.get('enabled') is True)
+
+    if 'allow_override' in payload:
+        merged['allow_override'] = bool(payload.get('allow_override') is True)
+
+    if 'price_source' in payload:
+        src = (str(payload.get('price_source') or '').strip().lower())
+        if src in {'live', 'average', 'invoice'}:
+            merged['price_source'] = src
+
+    if 'shift_close_cash_deficit_threshold' in payload:
+        merged['shift_close_cash_deficit_threshold'] = max(
+            0.0,
+            float(_coerce_float(payload.get('shift_close_cash_deficit_threshold'), 50.0)),
+        )
+
+    if 'shift_close_gold_pure_deficit_threshold_grams' in payload:
+        merged['shift_close_gold_pure_deficit_threshold_grams'] = max(
+            0.0,
+            float(_coerce_float(payload.get('shift_close_gold_pure_deficit_threshold_grams'), 0.10)),
+        )
+
+    # Persist
+    settings_row = Settings.query.first()
+    if not settings_row:
+        settings_row = Settings(main_karat=get_main_karat() or 21)
+        db.session.add(settings_row)
+        db.session.flush()
+
+    settings_row.weight_closing_settings = json.dumps(merged, ensure_ascii=False)
+    db.session.commit()
+    return jsonify(_load_weight_closing_settings()), 200
+
+
+@api.route('/system-alerts', methods=['GET'])
+@require_permission('reports.financial')
+def list_system_alerts():
+    """List system alerts (MVP: filterable by reviewed/severity)."""
+    from models import SystemAlert
+
+    severity = (request.args.get('severity') or '').strip().lower() or None
+    reviewed = request.args.get('reviewed')
+
+    q = SystemAlert.query
+    if severity in {'critical', 'warning', 'info'}:
+        q = q.filter(SystemAlert.severity == severity)
+
+    if reviewed is not None:
+        s = str(reviewed).strip().lower()
+        if s in {'0', 'false', 'no', 'n'}:
+            q = q.filter(SystemAlert.is_reviewed.is_(False))
+        elif s in {'1', 'true', 'yes', 'y'}:
+            q = q.filter(SystemAlert.is_reviewed.is_(True))
+
+    rows = q.order_by(SystemAlert.created_at.desc()).limit(50).all()
+    return jsonify({'success': True, 'count': len(rows), 'alerts': [r.to_dict() for r in rows]}), 200
+
+
+@api.route('/system-alerts/<int:alert_id>/review', methods=['PUT'])
+@require_permission('reports.financial')
+def review_system_alert(alert_id: int):
+    from models import SystemAlert
+
+    row = SystemAlert.query.get_or_404(alert_id)
+    if row.is_reviewed:
+        return jsonify({'success': True, 'alert': row.to_dict()}), 200
+
+    user_name = None
+    try:
+        user_name = getattr(getattr(g, 'current_user', None), 'username', None)
+    except Exception:
+        user_name = None
+    user_name = user_name or 'system'
+
+    row.is_reviewed = True
+    row.reviewed_at = datetime.utcnow()
+    row.reviewed_by = user_name
+    db.session.commit()
+    return jsonify({'success': True, 'alert': row.to_dict()}), 200
 
 
 def _coerce_float(value, default=0.0):
@@ -2066,7 +2184,8 @@ def get_purchase_items():
             'karat': i.karat,
             'category_id': i.category_id,
             'category_name': i.category.name if i.category else None,
-        } for i in items
+        }
+        for i in items
     ])
 
 
@@ -2752,32 +2871,112 @@ def add_invoice_payment(invoice_id: int):
     if not pm_obj:
         return jsonify({'error': 'payment_method_not_found'}), 404
 
+    # Resolve safe box (single source of truth: PaymentMethod -> SafeBox -> Account)
+    resolved_safe_box_id = None
+    try:
+        raw_safe_box_id = data.get('safe_box_id')
+        if raw_safe_box_id not in (None, '', False):
+            resolved_safe_box_id = int(raw_safe_box_id)
+    except Exception:
+        resolved_safe_box_id = None
+
+    if resolved_safe_box_id is None:
+        resolved_safe_box_id = invoice.safe_box_id
+
+    if resolved_safe_box_id is None:
+        resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
+
+    if resolved_safe_box_id is None:
+        return jsonify({
+            'error': 'missing_safe_box_for_payment_method',
+            'message': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
+            'payment_method_id': pm_id,
+            'payment_method_name': getattr(pm_obj, 'name', None),
+        }), 400
+
+    # Validate safe box exists (avoid FK failures later; still keep atomic rollback below)
+    safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
+    if not safe_box_obj:
+        return jsonify({
+            'error': 'safe_box_not_found',
+            'message': 'الخزينة المحددة غير موجودة',
+            'safe_box_id': resolved_safe_box_id,
+        }), 400
+
     commission_rate = _to_float(getattr(pm_obj, 'commission_rate', 0.0), 0.0)
     commission_amount = amount * (commission_rate / 100.0) if commission_rate > 0 else 0.0
     commission_vat = commission_amount * 0.15
     net_amount = amount - commission_amount - commission_vat
 
-    payment = InvoicePayment(
-        invoice_id=invoice.id,
-        payment_method_id=pm_id,
-        amount=amount,
-        commission_rate=commission_rate,
-        commission_amount=commission_amount,
-        commission_vat=commission_vat,
-        net_amount=net_amount,
-        notes=notes,
-    )
+    try:
+        payment = InvoicePayment(
+            invoice_id=invoice.id,
+            payment_method_id=pm_id,
+            amount=amount,
+            commission_rate=commission_rate,
+            commission_amount=commission_amount,
+            commission_vat=commission_vat,
+            net_amount=net_amount,
+            notes=notes,
+        )
 
-    db.session.add(payment)
+        db.session.add(payment)
 
-    new_paid = paid_amount + amount
-    invoice.amount_paid = round(new_paid, 2)
-    if invoice.amount_paid >= total_amount - eps:
-        invoice.status = 'paid'
-    else:
-        invoice.status = 'partially_paid'
+        # Also record safe box ledger transaction (رقابة)
+        def _direction_for_invoice_type(t: str) -> str:
+            t = (t or '').strip()
+            if not t:
+                return 'in'
+            if t == 'بيع':
+                return 'in'
+            if t == 'مرتجع بيع':
+                return 'out'
+            if t in ('شراء من عميل', 'شراء من مورد'):
+                return 'out'
+            if t in ('مرتجع شراء', 'مرتجع شراء من مورد'):
+                return 'in'
+            # fallback
+            return 'in'
 
-    db.session.commit()
+        created_by_name = None
+        try:
+            created_by_name = getattr(g, 'current_user', None).username if getattr(g, 'current_user', None) else None
+        except Exception:
+            created_by_name = None
+
+        db.session.flush()  # ensure payment.id is available
+        db.session.add(
+            SafeBoxTransaction(
+                safe_box_id=resolved_safe_box_id,
+                ref_type='invoice_payment',
+                ref_id=payment.id,
+                invoice_id=invoice.id,
+                invoice_payment_id=payment.id,
+                payment_method_id=pm_id,
+                direction=_direction_for_invoice_type(getattr(invoice, 'invoice_type', None)),
+                amount_cash=amount,
+                notes=notes,
+                created_by=created_by_name,
+            )
+        )
+
+        new_paid = paid_amount + amount
+        invoice.amount_paid = round(new_paid, 2)
+        if invoice.amount_paid >= total_amount - eps:
+            invoice.status = 'paid'
+        else:
+            invoice.status = 'partially_paid'
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Payment atomicity failure (invoice_id={invoice_id}, safe_box_id={resolved_safe_box_id}): {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': 'payment_post_failed',
+            'message': 'تعذر تسجيل الدفعة بسبب فشل تسجيل حركة الخزينة/المعاملة. لم يتم حفظ أي تغييرات.',
+        }), 500
 
     invoice_dict = invoice.to_dict()
     customer_name = (
@@ -2789,6 +2988,78 @@ def add_invoice_payment(invoice_id: int):
     invoice_dict['customer_name'] = customer_name
     invoice_dict['supplier_name'] = supplier_name
     return jsonify(invoice_dict), 201
+
+
+@api.route('/safe-boxes/<int:safe_box_id>/transactions', methods=['GET'])
+@require_permission('safe_boxes.view')
+def list_safe_box_transactions(safe_box_id: int):
+    """List safe box transactions (ledger) with optional date range.
+
+    Query params:
+      - from (ISO datetime)
+      - to (ISO datetime)
+      - limit (default 200)
+    """
+    SafeBox.query.get_or_404(safe_box_id)
+
+    q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_box_id)
+    from_value = request.args.get('from')
+    to_value = request.args.get('to')
+    try:
+        if from_value:
+            q = q.filter(SafeBoxTransaction.created_at >= datetime.fromisoformat(from_value))
+    except Exception:
+        return jsonify({'error': 'invalid_from_date'}), 400
+    try:
+        if to_value:
+            q = q.filter(SafeBoxTransaction.created_at <= datetime.fromisoformat(to_value))
+    except Exception:
+        return jsonify({'error': 'invalid_to_date'}), 400
+
+    try:
+        limit = int(request.args.get('limit', 200))
+    except Exception:
+        limit = 200
+    limit = max(1, min(limit, 1000))
+
+    rows = q.order_by(SafeBoxTransaction.created_at.desc()).limit(limit).all()
+    return jsonify([r.to_dict() for r in rows])
+
+
+@api.route('/safe-boxes/<int:safe_box_id>/balance', methods=['GET'])
+@require_permission('safe_boxes.view')
+def get_safe_box_balance(safe_box_id: int):
+    """Compute safe box balance from ledger transactions."""
+    safe_box = SafeBox.query.get_or_404(safe_box_id)
+
+    q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_box_id)
+    from_value = request.args.get('from')
+    to_value = request.args.get('to')
+    try:
+        if from_value:
+            q = q.filter(SafeBoxTransaction.created_at >= datetime.fromisoformat(from_value))
+    except Exception:
+        return jsonify({'error': 'invalid_from_date'}), 400
+    try:
+        if to_value:
+            q = q.filter(SafeBoxTransaction.created_at <= datetime.fromisoformat(to_value))
+    except Exception:
+        return jsonify({'error': 'invalid_to_date'}), 400
+
+    cash_in = q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0)).filter(
+        SafeBoxTransaction.direction == 'in'
+    ).scalar() or 0.0
+    cash_out = q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0)).filter(
+        SafeBoxTransaction.direction == 'out'
+    ).scalar() or 0.0
+
+    return jsonify({
+        'safe_box_id': safe_box.id,
+        'safe_box_name': safe_box.name,
+        'cash_in': round(float(cash_in), 2),
+        'cash_out': round(float(cash_out), 2),
+        'cash_balance': round(float(cash_in) - float(cash_out), 2),
+    })
 
 
 @api.route('/invoices/<int:invoice_id>/print-template', methods=['PUT'])
@@ -3496,9 +3767,68 @@ def add_invoice():
 
         # 🆕 الحصول على المستخدم الحالي وتعيينه لـ posted_by
         # عند تفعيل auth_required لا نسمح بـ fallback من body
+        # ملاحظة: نُفضل اسم الموظف المربوط بالحساب (إن وجد) وإلا نستخدم الاسم/المستخدم.
         posted_by_username = None
+        employee_id_for_invoice = None
         if current_user:
-            posted_by_username = current_user.username
+            employee_display_name = None
+
+            # 1) Direct relationship: current_user.employee (AppUser)
+            linked_employee = getattr(current_user, 'employee', None)
+            if linked_employee:
+                if getattr(linked_employee, 'id', None):
+                    employee_id_for_invoice = linked_employee.id
+                if getattr(linked_employee, 'name', None):
+                    employee_display_name = linked_employee.name
+
+            # 2) employee_id attribute (AppUser)
+            if employee_id_for_invoice is None:
+                try:
+                    employee_id_value = getattr(current_user, 'employee_id', None)
+                    if employee_id_value not in (None, '', 0, '0'):
+                        employee_id_for_invoice = int(employee_id_value)
+                except Exception:
+                    employee_id_for_invoice = None
+
+            if employee_display_name is None and employee_id_for_invoice:
+                try:
+                    from models import Employee
+
+                    emp = Employee.query.get(employee_id_for_invoice)
+                    if emp and emp.name:
+                        employee_display_name = emp.name
+                except Exception:
+                    employee_display_name = None
+
+            # 3) Legacy User: map username -> AppUser (case-insensitive/trim) -> Employee
+            if employee_id_for_invoice is None or employee_display_name is None:
+                try:
+                    from models import AppUser
+                    from sqlalchemy import func
+
+                    username_value = getattr(current_user, 'username', None)
+                    username_key = (str(username_value).strip().lower() if username_value else '')
+                    if username_key:
+                        app_user = AppUser.query.filter(
+                            func.lower(func.trim(AppUser.username)) == username_key
+                        ).first()
+                        if app_user:
+                            if employee_id_for_invoice is None and getattr(app_user, 'employee_id', None):
+                                try:
+                                    employee_id_for_invoice = int(app_user.employee_id)
+                                except Exception:
+                                    employee_id_for_invoice = employee_id_for_invoice
+                            if app_user.employee and app_user.employee.name:
+                                employee_display_name = app_user.employee.name
+                                employee_id_for_invoice = app_user.employee.id
+                except Exception:
+                    pass
+
+            posted_by_username = (
+                employee_display_name
+                or getattr(current_user, 'full_name', None)
+                or getattr(current_user, 'username', None)
+            )
         elif not auth_required:
             posted_by_username = (
                 data.get('posted_by')
@@ -3507,10 +3837,18 @@ def add_invoice():
                 or data.get('user')
             )
 
+            # Optional: accept employee_id from the client when auth isn't required
+            try:
+                raw_emp_id = data.get('employee_id')
+                employee_id_for_invoice = int(raw_emp_id) if raw_emp_id not in (None, '') else None
+            except Exception:
+                employee_id_for_invoice = None
+
         new_invoice = Invoice(
             invoice_type_id=next_invoice_type_id,
             customer_id=data.get('customer_id'),
             supplier_id=data.get('supplier_id'),
+            employee_id=employee_id_for_invoice,
             branch_id=branch_id,
             office_id=office_id,
             date=datetime.fromisoformat(data['date']),
@@ -3791,6 +4129,56 @@ def add_invoice():
                 pm_id = payment.get('payment_method_id')
                 pm_amount = _to_float(payment.get('amount', 0.0))
                 pm_obj = PaymentMethod.query.get(pm_id)
+
+                # Resolve safe box per payment (single source of truth)
+                resolved_safe_box_id = None
+                try:
+                    raw_safe_box_id = payment.get('safe_box_id')
+                    if raw_safe_box_id not in (None, '', False):
+                        resolved_safe_box_id = int(raw_safe_box_id)
+                except Exception:
+                    resolved_safe_box_id = None
+                if resolved_safe_box_id is None:
+                    resolved_safe_box_id = new_invoice.safe_box_id
+                if resolved_safe_box_id is None and pm_obj is not None:
+                    resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
+
+                if resolved_safe_box_id is None:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'missing_safe_box_for_payment_method',
+                        'message': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
+                        'payment_method_id': pm_id,
+                        'payment_method_name': getattr(pm_obj, 'name', None) if pm_obj else None,
+                    }), 400
+
+                # Validate safe box exists (avoid FK failures and keep atomicity explicit)
+                safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
+                if not safe_box_obj:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'safe_box_not_found',
+                        'message': 'الخزينة المحددة غير موجودة',
+                        'safe_box_id': resolved_safe_box_id,
+                        'payment_method_id': pm_id,
+                        'payment_method_name': getattr(pm_obj, 'name', None) if pm_obj else None,
+                    }), 400
+
+                def _direction_for_invoice_type(t: str) -> str:
+                    t = (t or '').strip()
+                    if not t:
+                        return 'in'
+                    if t == 'بيع':
+                        return 'in'
+                    if t == 'مرتجع بيع':
+                        return 'out'
+                    if t in ('شراء من عميل', 'شراء من مورد'):
+                        return 'out'
+                    if t in ('مرتجع شراء', 'مرتجع شراء من مورد'):
+                        return 'in'
+                    return 'in'
+
+                created_by_name = posted_by_username
                 
                 # حساب العمولة وضريبتها لهذه الدفعة
                 pm_commission_rate = _to_float(payment.get('commission_rate', pm_obj.commission_rate if pm_obj else 0.0))
@@ -3803,7 +4191,7 @@ def add_invoice():
                 pm_commission_vat = _to_float(payment.get('commission_vat', pm_commission_amount * 0.15))  # 🆕 ضريبة 15%
                 pm_net_amount = _to_float(payment.get('net_amount', pm_amount - pm_commission_amount - pm_commission_vat))
                 
-                db.session.add(InvoicePayment(
+                payment_row = InvoicePayment(
                     invoice_id=new_invoice.id,
                     payment_method_id=pm_id,
                     amount=pm_amount,
@@ -3812,21 +4200,90 @@ def add_invoice():
                     commission_vat=pm_commission_vat,
                     net_amount=pm_net_amount,
                     notes=payment.get('notes')
-                ))
+                )
+                db.session.add(payment_row)
+                db.session.flush()
+
+                db.session.add(
+                    SafeBoxTransaction(
+                        safe_box_id=resolved_safe_box_id,
+                        ref_type='invoice_payment',
+                        ref_id=payment_row.id,
+                        invoice_id=new_invoice.id,
+                        invoice_payment_id=payment_row.id,
+                        payment_method_id=pm_id,
+                        direction=_direction_for_invoice_type(new_invoice.invoice_type),
+                        amount_cash=pm_amount,
+                        notes=payment.get('notes'),
+                        created_by=created_by_name,
+                    )
+                )
         
         # وسيلة دفع واحدة (للتوافق مع الكود القديم)
         elif payment_method_id:
             pm_obj = PaymentMethod.query.get(payment_method_id)
             pm_commission_rate = pm_obj.commission_rate if pm_obj else 0.0
+
+            resolved_safe_box_id = new_invoice.safe_box_id or (getattr(pm_obj, 'default_safe_box_id', None) if pm_obj else None)
+            if resolved_safe_box_id is None:
+                db.session.rollback()
+                return jsonify({
+                    'error': 'missing_safe_box_for_payment_method',
+                    'message': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
+                    'payment_method_id': payment_method_id,
+                    'payment_method_name': getattr(pm_obj, 'name', None) if pm_obj else None,
+                }), 400
+
+            safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
+            if not safe_box_obj:
+                db.session.rollback()
+                return jsonify({
+                    'error': 'safe_box_not_found',
+                    'message': 'الخزينة المحددة غير موجودة',
+                    'safe_box_id': resolved_safe_box_id,
+                    'payment_method_id': payment_method_id,
+                    'payment_method_name': getattr(pm_obj, 'name', None) if pm_obj else None,
+                }), 400
+
+            def _direction_for_invoice_type(t: str) -> str:
+                t = (t or '').strip()
+                if not t:
+                    return 'in'
+                if t == 'بيع':
+                    return 'in'
+                if t == 'مرتجع بيع':
+                    return 'out'
+                if t in ('شراء من عميل', 'شراء من مورد'):
+                    return 'out'
+                if t in ('مرتجع شراء', 'مرتجع شراء من مورد'):
+                    return 'in'
+                return 'in'
             
-            db.session.add(InvoicePayment(
+            payment_row = InvoicePayment(
                 invoice_id=new_invoice.id,
                 payment_method_id=payment_method_id,
                 amount=_extract_float('total', 0.0),
                 commission_rate=pm_commission_rate,
                 commission_amount=commission_amount,
                 net_amount=net_amount
-            ))
+            )
+            db.session.add(payment_row)
+            db.session.flush()
+
+            db.session.add(
+                SafeBoxTransaction(
+                    safe_box_id=resolved_safe_box_id,
+                    ref_type='invoice_payment',
+                    ref_id=payment_row.id,
+                    invoice_id=new_invoice.id,
+                    invoice_payment_id=payment_row.id,
+                    payment_method_id=payment_method_id,
+                    direction=_direction_for_invoice_type(new_invoice.invoice_type),
+                    amount_cash=_extract_float('total', 0.0),
+                    notes=None,
+                    created_by=posted_by_username,
+                )
+            )
 
         # --- 2. Aggregate Gold and Cash Totals ---
         total_cash = new_invoice.total
@@ -5492,6 +5949,20 @@ def add_invoice():
             new_invoice.posted_at = now
         if not new_invoice.posted_by:
             new_invoice.posted_by = posted_by_username or 'system'
+
+        # 🧾 Sync payment status from amount_paid vs total
+        try:
+            total_amount = float(new_invoice.total or 0.0)
+            paid_amount = float(new_invoice.amount_paid or 0.0)
+            eps = 0.01
+            if paid_amount <= eps:
+                new_invoice.status = 'unpaid'
+            elif paid_amount >= total_amount - eps:
+                new_invoice.status = 'paid'
+            else:
+                new_invoice.status = 'partially_paid'
+        except Exception:
+            pass
 
         journal_entry.is_posted = True
         if hasattr(journal_entry, 'posted_at') and not getattr(journal_entry, 'posted_at', None):
@@ -11070,6 +11541,117 @@ def create_journal_entry_from_voucher(voucher):
         return None
 
 
+def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
+    """Append SafeBoxTransaction rows for voucher lines that target a SafeBox account.
+
+    We derive SafeBox by matching VoucherAccountLine.account_id to SafeBox.account_id.
+    Direction is derived from voucher line_type:
+      - debit  => safe in
+      - credit => safe out
+
+    Notes:
+    - We write only for approved vouchers (called by approve endpoint).
+    - We best-effort link to a PaymentMethod if one exists whose default safe is this SafeBox.
+    """
+    if not voucher or not getattr(voucher, 'id', None):
+        return []
+
+    lines = VoucherAccountLine.query.filter_by(voucher_id=voucher.id).all()
+    if not lines:
+        return []
+
+    # Build account_id -> SafeBox mapping
+    account_ids = list({l.account_id for l in lines if getattr(l, 'account_id', None) is not None})
+    safe_by_account_id = {}
+    if account_ids:
+        for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
+            safe_by_account_id[sb.account_id] = sb
+
+    # Best-effort cache: safe_box_id -> payment_method_id
+    pm_by_safe_id = {}
+    safe_ids = list({sb.id for sb in safe_by_account_id.values()})
+    if safe_ids:
+        for pm in PaymentMethod.query.filter(PaymentMethod.default_safe_box_id.in_(safe_ids)).all():
+            if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe_id:
+                pm_by_safe_id[pm.default_safe_box_id] = pm.id
+
+    created = []
+    for line in lines:
+        sb = safe_by_account_id.get(line.account_id)
+        if not sb:
+            continue
+
+        direction = 'in' if (line.line_type == 'debit') else 'out'
+        tx = SafeBoxTransaction(
+            safe_box_id=sb.id,
+            ref_type='voucher',
+            ref_id=voucher.id,
+            payment_method_id=pm_by_safe_id.get(sb.id),
+            direction=direction,
+            notes=f"Voucher {voucher.voucher_number} - {voucher.voucher_type}",
+            created_by=created_by or voucher.created_by,
+        )
+
+        if line.amount_type == 'cash':
+            tx.amount_cash = float(line.amount or 0.0)
+        elif line.amount_type == 'gold':
+            # Weight per karat
+            karat = int(line.karat) if line.karat else None
+            weight = float(line.amount or 0.0)
+            if karat == 18:
+                tx.weight_18k = weight
+            elif karat == 22:
+                tx.weight_22k = weight
+            elif karat == 24:
+                tx.weight_24k = weight
+            else:
+                tx.weight_21k = weight
+
+        db.session.add(tx)
+        created.append(tx)
+
+    return created
+
+
+def _append_safe_reversal_transactions_for_voucher(voucher: Voucher, created_by=None, reason=None):
+    """Append reversing SafeBoxTransaction rows for a previously-approved voucher."""
+    if not voucher or not getattr(voucher, 'id', None):
+        return []
+
+    # Avoid double reversal
+    existing_reversal = (
+        SafeBoxTransaction.query.filter_by(ref_type='voucher_reversal', ref_id=voucher.id)
+        .order_by(SafeBoxTransaction.id.desc())
+        .first()
+    )
+    if existing_reversal:
+        return []
+
+    original = SafeBoxTransaction.query.filter_by(ref_type='voucher', ref_id=voucher.id).all()
+    if not original:
+        return []
+
+    created = []
+    for tx in original:
+        rev = SafeBoxTransaction(
+            safe_box_id=tx.safe_box_id,
+            ref_type='voucher_reversal',
+            ref_id=voucher.id,
+            payment_method_id=tx.payment_method_id,
+            direction='out' if (tx.direction or 'in') == 'in' else 'in',
+            amount_cash=float(tx.amount_cash or 0.0),
+            weight_18k=float(tx.weight_18k or 0.0),
+            weight_21k=float(tx.weight_21k or 0.0),
+            weight_22k=float(tx.weight_22k or 0.0),
+            weight_24k=float(tx.weight_24k or 0.0),
+            notes=(reason or '') or f"Reversal for voucher {voucher.voucher_number}",
+            created_by=created_by or voucher.cancelled_by if hasattr(voucher, 'cancelled_by') else created_by or voucher.created_by,
+        )
+        db.session.add(rev)
+        created.append(rev)
+    return created
+
+
 @api.route('/vouchers', methods=['GET'])
 def get_vouchers():
     print("DEBUG: get_vouchers called")
@@ -11426,6 +12008,29 @@ def approve_voucher(voucher_id):
         voucher.approved_at = datetime.now()
         voucher.approved_by = approved_by
         voucher.journal_entry_id = journal_entry.id
+
+        # Ledger: append SafeBoxTransaction rows for any safe-box lines
+        _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+
+        # Audit log
+        try:
+            AuditLog.log_action(
+                user_name=approved_by,
+                action='approve_voucher',
+                entity_type='Voucher',
+                entity_id=voucher.id,
+                entity_number=voucher.voucher_number,
+                details=json.dumps({
+                    'voucher_type': voucher.voucher_type,
+                    'amount_cash': float(voucher.amount_cash or 0.0),
+                    'amount_gold': float(voucher.amount_gold or 0.0),
+                }, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+        except Exception:
+            pass
         
         db.session.commit()
         
@@ -11536,9 +12141,32 @@ def cancel_voucher(voucher_id):
                 reason=reason
             )
 
+        # Reverse SafeBox ledger movements (append-only)
+        _append_safe_reversal_transactions_for_voucher(
+            voucher,
+            created_by=cancelled_by,
+            reason=f"Voucher cancel: {reason}",
+        )
+
         voucher.status = 'cancelled'
         voucher.cancellation_reason = reason
         voucher.cancelled_at = datetime.now()
+
+        # Audit log
+        try:
+            AuditLog.log_action(
+                user_name=cancelled_by,
+                action='cancel_voucher',
+                entity_type='Voucher',
+                entity_id=voucher.id,
+                entity_number=voucher.voucher_number,
+                details=json.dumps({'reason': reason}, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+        except Exception:
+            pass
         
         db.session.commit()
         
@@ -11592,26 +12220,43 @@ def get_vouchers_stats():
 def initialize_payment_system():
     """
     تهيئة شجرة الحسابات ووسائل الدفع الافتراضية
-    هذا Endpoint يُستدعى مرة واحدة فقط عند الإعداد الأولي
+    يدعم الحذف الكامل وإعادة التهيئة عبر المعامل force=true
     """
     try:
-        # التحقق من وجود بيانات مسبقاً
-
-
-        existing_accounts = Account.query.filter(Account.account_number.in_([
-            '1111', '1112', '1113', '1114', '1115', '1116', '1117'
-        ])).count()
+        # 🆕 دعم الحذف الكامل وإعادة التهيئة
+        force_reset = request.json.get('force', False) if request.json else False
         
-
-
-
-
-        if existing_accounts > 0:
-            return jsonify({
-                'status': 'warning',
-                'message': 'Payment accounts already exist',
-                'existing_count': existing_accounts
-            }), 200
+        if force_reset:
+            # حذف جميع وسائل الدفع الموجودة
+            PaymentMethod.query.delete()
+            db.session.commit()
+            
+            # حذف حسابات وسائل الدفع إذا لم تُستخدم
+            payment_account_numbers = [
+                '1111', '1112', '1113', '1114', '1115', '1116', '1117', '1118', '1119',
+                '5111', '5112', '5113', '5114', '5115', '5116'
+            ]
+            for acc_num in payment_account_numbers:
+                acc = Account.query.filter_by(account_number=acc_num).first()
+                if acc:
+                    # تحقق من عدم استخدام الحساب في قيود
+                    journal_lines_count = JournalEntryLine.query.filter_by(account_id=acc.id).count()
+                    if journal_lines_count == 0:
+                        db.session.delete(acc)
+            
+            db.session.commit()
+        else:
+            # التحقق من وجود بيانات مسبقاً (السلوك القديم)
+            existing_accounts = Account.query.filter(Account.account_number.in_([
+                '1111', '1112', '1113', '1114', '1115', '1116', '1117'
+            ])).count()
+            
+            if existing_accounts > 0:
+                return jsonify({
+                    'status': 'warning',
+                    'message': 'Payment accounts already exist. Use {"force": true} to reset.',
+                    'existing_count': existing_accounts
+                }), 200
         
         # 1. إنشاء شجرة الحسابات
         accounts_data = [
@@ -15253,6 +15898,275 @@ def get_gold_income_statement():
     except Exception as e:
         print(f"❌ Error generating gold income statement: {e}")
         return jsonify({'error': f'فشل إنشاء قائمة الدخل الوزنية: {str(e)}'}), 500
+
+
+@api.route('/dashboard/admin', methods=['GET'])
+@require_permission('reports.financial')
+def get_admin_dashboard():
+    """Admin dashboard aggregates for KPIs, charts, and alerts.
+
+    Response shape (stable contract for Flutter):
+      - kpis: cash_balance, gold_by_karat, gold_pure_24k, sales_today
+      - series: last_7_days_sales (net_value/net_weight per day)
+      - alerts: last_shift_closing (cash_diff/gold_pure_24k_diff)
+    """
+    from models import SafeBox, SafeBoxTransaction, Invoice, AuditLog, GoldPrice, SystemAlert
+
+    now = datetime.now()
+    today_start = datetime.combine(now.date(), datetime.min.time())
+    tomorrow_start = today_start + timedelta(days=1)
+
+    # --- Ledger-derived balances (current, all-time) ---
+    signed_cash_expr = case(
+        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
+        else_=-SafeBoxTransaction.amount_cash,
+    )
+    signed_w18_expr = case(
+        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_18k),
+        else_=-SafeBoxTransaction.weight_18k,
+    )
+    signed_w21_expr = case(
+        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_21k),
+        else_=-SafeBoxTransaction.weight_21k,
+    )
+    signed_w22_expr = case(
+        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_22k),
+        else_=-SafeBoxTransaction.weight_22k,
+    )
+    signed_w24_expr = case(
+        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_24k),
+        else_=-SafeBoxTransaction.weight_24k,
+    )
+
+    ledger_row = (
+        db.session.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (SafeBox.safe_type.in_(['cash', 'bank', 'check']), signed_cash_expr),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ).label('cash_balance'),
+            func.coalesce(
+                func.sum(case((SafeBox.safe_type == 'gold', signed_w18_expr), else_=0.0)),
+                0.0,
+            ).label('w18'),
+            func.coalesce(
+                func.sum(case((SafeBox.safe_type == 'gold', signed_w21_expr), else_=0.0)),
+                0.0,
+            ).label('w21'),
+            func.coalesce(
+                func.sum(case((SafeBox.safe_type == 'gold', signed_w22_expr), else_=0.0)),
+                0.0,
+            ).label('w22'),
+            func.coalesce(
+                func.sum(case((SafeBox.safe_type == 'gold', signed_w24_expr), else_=0.0)),
+                0.0,
+            ).label('w24'),
+        )
+        .select_from(SafeBoxTransaction)
+        .join(SafeBox, SafeBox.id == SafeBoxTransaction.safe_box_id)
+        .filter(SafeBox.is_active.is_(True))
+        .first()
+    )
+
+    cash_balance = float(getattr(ledger_row, 'cash_balance', 0.0) or 0.0)
+    gold_18k = float(getattr(ledger_row, 'w18', 0.0) or 0.0)
+    gold_21k = float(getattr(ledger_row, 'w21', 0.0) or 0.0)
+    gold_22k = float(getattr(ledger_row, 'w22', 0.0) or 0.0)
+    gold_24k = float(getattr(ledger_row, 'w24', 0.0) or 0.0)
+
+    gold_pure_24k = (
+        (gold_18k * (18.0 / 24.0))
+        + (gold_21k * (21.0 / 24.0))
+        + (gold_22k * (22.0 / 24.0))
+        + gold_24k
+    )
+
+    # --- Sales today (posted only) ---
+    sale_types = {
+        'بيع': 1,
+        'مرتجع بيع': -1,
+    }
+    today_invoices = (
+        Invoice.query
+        .filter(Invoice.invoice_type.in_(list(sale_types.keys())))
+        .filter(Invoice.is_posted.is_(True))
+        .filter(Invoice.date >= today_start)
+        .filter(Invoice.date < tomorrow_start)
+        .all()
+    )
+
+    sales_today_value = 0.0
+    sales_today_weight = 0.0
+    for inv in today_invoices:
+        sign = sale_types.get(inv.invoice_type, 1)
+        sales_today_value += float(inv.total or 0.0) * sign
+        sales_today_weight += float(inv.total_weight or 0.0) * sign
+
+    # --- Last 7 days sales series (posted only) ---
+    start_7 = today_start - timedelta(days=6)
+    series_invoices = (
+        Invoice.query
+        .filter(Invoice.invoice_type.in_(list(sale_types.keys())))
+        .filter(Invoice.is_posted.is_(True))
+        .filter(Invoice.date >= start_7)
+        .filter(Invoice.date < tomorrow_start)
+        .order_by(Invoice.date.asc())
+        .all()
+    )
+
+    by_day = {}
+    for i in range(7):
+        day = (start_7 + timedelta(days=i)).date()
+        key = day.isoformat()
+        by_day[key] = {
+            'period': key,
+            'net_value': 0.0,
+            'net_weight': 0.0,
+            'documents': 0,
+        }
+
+    for inv in series_invoices:
+        sign = sale_types.get(inv.invoice_type, 1)
+        period_key = (inv.date.date() if inv.date else now.date()).isoformat()
+        bucket = by_day.get(period_key)
+        if bucket is None:
+            continue
+        bucket['documents'] += 1
+        bucket['net_value'] += float(inv.total or 0.0) * sign
+        bucket['net_weight'] += float(inv.total_weight or 0.0) * sign
+
+    last_7_days_sales = list(by_day.values())
+
+    # --- Valuation (presentation-only): pure 24k grams * raw spot per gram (24k) ---
+    spot_price_24k_per_gram = None
+    spot_price_timestamp = None
+    try:
+        latest = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+        if latest and latest.price:
+            spot_price_24k_per_gram = (float(latest.price) / 31.1035) * 3.75
+            spot_price_timestamp = latest.date.isoformat() if latest.date else None
+    except Exception:
+        spot_price_24k_per_gram = None
+        spot_price_timestamp = None
+
+    inventory_value = None
+    if spot_price_24k_per_gram is not None:
+        try:
+            inventory_value = float(gold_pure_24k) * float(spot_price_24k_per_gram)
+        except Exception:
+            inventory_value = None
+
+    # --- Critical alerts (unreviewed) ---
+    critical_unreviewed_count = 0
+    critical_latest = None
+    try:
+        critical_unreviewed_count = (
+            SystemAlert.query.filter(SystemAlert.severity == 'critical')
+            .filter(SystemAlert.is_reviewed.is_(False))
+            .count()
+        )
+        critical_latest = (
+            SystemAlert.query.filter(SystemAlert.severity == 'critical')
+            .filter(SystemAlert.is_reviewed.is_(False))
+            .order_by(SystemAlert.created_at.desc())
+            .first()
+        )
+        critical_latest = critical_latest.to_dict() if critical_latest else None
+    except Exception:
+        critical_unreviewed_count = 0
+        critical_latest = None
+
+    # --- Alerts: last shift closing (system-wide) ---
+    last_shift_alert = None
+    try:
+        last_close = (
+            AuditLog.query.filter_by(action='shift_closing', success=True)
+            .order_by(AuditLog.timestamp.desc())
+            .first()
+        )
+        if last_close and last_close.details:
+            try:
+                details = (
+                    json.loads(last_close.details)
+                    if isinstance(last_close.details, str)
+                    else (last_close.details or {})
+                )
+            except Exception:
+                details = {}
+
+            cash_diff = None
+            try:
+                cash_diff = float(((details.get('totals') or {}).get('total_difference')))
+            except Exception:
+                cash_diff = None
+
+            gold_pure_diff = None
+            try:
+                gold_pure_diff = float(
+                    (((details.get('gold') or {}).get('pure_24k') or {}).get('difference'))
+                )
+            except Exception:
+                gold_pure_diff = None
+
+            last_shift_alert = {
+                'entity_number': getattr(last_close, 'entity_number', None),
+                'timestamp': last_close.timestamp.isoformat()
+                if getattr(last_close, 'timestamp', None)
+                else None,
+                'user_name': getattr(last_close, 'user_name', None),
+                'cash_difference': cash_diff,
+                'gold_pure_24k_difference': gold_pure_diff,
+            }
+    except Exception:
+        last_shift_alert = None
+
+    return jsonify({
+        'success': True,
+        'generated_at': now.isoformat(),
+        'kpis': {
+            'cash_balance': round(cash_balance, 2),
+            'gold_by_karat': {
+                '18k': round(gold_18k, 3),
+                '21k': round(gold_21k, 3),
+                '22k': round(gold_22k, 3),
+                '24k': round(gold_24k, 3),
+            },
+            'gold_pure_24k': round(gold_pure_24k, 3),
+            'sales_today': {
+                'net_value': round(sales_today_value, 2),
+                'net_weight': round(sales_today_weight, 3),
+                'documents': len(today_invoices),
+            },
+        },
+        'series': {
+            'last_7_days_sales': [
+                {
+                    'period': row['period'],
+                    'documents': int(row.get('documents') or 0),
+                    'net_value': round(float(row.get('net_value') or 0.0), 2),
+                    'net_weight': round(float(row.get('net_weight') or 0.0), 3),
+                }
+                for row in last_7_days_sales
+            ],
+        },
+        'alerts': {
+            'last_shift_closing': last_shift_alert,
+            'critical_unreviewed_count': int(critical_unreviewed_count or 0),
+            'critical_unreviewed_latest': critical_latest,
+        },
+        'valuation': {
+            'spot_price_24k_per_gram': round(float(spot_price_24k_per_gram), 2)
+            if spot_price_24k_per_gram is not None
+            else None,
+            'spot_price_timestamp': spot_price_timestamp,
+            'currency': 'ر.س',
+            'inventory_value': round(float(inventory_value), 2) if inventory_value is not None else None,
+        },
+    }), 200
 
 
 

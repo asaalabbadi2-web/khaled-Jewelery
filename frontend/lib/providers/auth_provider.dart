@@ -13,11 +13,13 @@ class AuthProvider extends ChangeNotifier {
   AppUserModel? _currentUser;
   bool _loading = false;
   bool _needsSetup = false;
+  bool _mustChangePassword = false;
 
   AppUserModel? get currentUser => _currentUser;
   bool get isAuthenticated => _currentUser != null;
   bool get isLoading => _loading;
   bool get needsSetup => _needsSetup;
+  bool get mustChangePassword => _mustChangePassword;
 
   String get username => _currentUser?.username ?? '';
   String get fullName {
@@ -67,6 +69,7 @@ class AuthProvider extends ChangeNotifier {
         try {
           final decoded = json.decode(raw) as Map<String, dynamic>;
           _currentUser = AppUserModel.fromStorageMap(decoded);
+          _mustChangePassword = _currentUser?.mustChangePassword ?? false;
           _needsSetup = false;
           return;
         } catch (error) {
@@ -253,6 +256,7 @@ class AuthProvider extends ChangeNotifier {
           }
 
           _currentUser = parsedUser;
+          _mustChangePassword = parsedUser.mustChangePassword;
 
           await prefs.setString(
             _storageKey,
@@ -288,6 +292,14 @@ class AuthProvider extends ChangeNotifier {
       _loading = false;
       notifyListeners();
     }
+  }
+
+  void clearMustChangePassword() {
+    _mustChangePassword = false;
+    if (_currentUser != null && _currentUser!.mustChangePassword) {
+      _currentUser = _currentUser!.copyWith(mustChangePassword: false);
+    }
+    notifyListeners();
   }
 
   Future<void> logout() async {

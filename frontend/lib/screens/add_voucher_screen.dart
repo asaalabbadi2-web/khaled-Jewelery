@@ -74,6 +74,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   List<Map<String, dynamic>> _suppliers = [];
   List<Map<String, dynamic>> _accounts = [];
   List<SafeBoxModel> _safeBoxes = [];
+
+  final Map<int, double> _safeLedgerCashBalance = {};
+  final Set<int> _safeLedgerCashBalanceLoading = {};
   List<EmployeeModel> _employees = [];
 
   int? _selectedCustomerId;
@@ -488,6 +491,47 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       return _safeBoxes.firstWhere((sb) => sb.accountId == accountId);
     } catch (_) {
       return null;
+    }
+  }
+
+  double _parseLineAmount(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value.trim()) ?? 0.0;
+    return 0.0;
+  }
+
+  Future<void> _ensureSafeLedgerBalanceLoaded(SafeBoxModel safe) async {
+    final safeId = safe.id;
+    if (safeId == null) {
+      return;
+    }
+
+    if (_safeLedgerCashBalance.containsKey(safeId)) {
+      return;
+    }
+    if (_safeLedgerCashBalanceLoading.contains(safeId)) {
+      return;
+    }
+
+    setState(() {
+      _safeLedgerCashBalanceLoading.add(safeId);
+    });
+    try {
+      final resp = await _apiService.getSafeBoxLedgerBalance(safeId);
+      final bal = (resp['cash_balance'] as num?)?.toDouble() ?? 0.0;
+      if (!mounted) return;
+      setState(() {
+        _safeLedgerCashBalance[safeId] = bal;
+      });
+    } catch (_) {
+      // Best-effort UI hint; ignore failures (permissions/network).
+    } finally {
+      if (mounted) {
+        setState(() {
+          _safeLedgerCashBalanceLoading.remove(safeId);
+        });
+      }
     }
   }
 
@@ -2510,11 +2554,71 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 setState(() {
                   line.accountId = acc['id'];
                 });
+
+                // If selected account is a SafeBox-backed account, load ledger balance.
+                final safe = (acc['safe_model'] is SafeBoxModel)
+                    ? acc['safe_model'] as SafeBoxModel
+                    : _findSafeByAccountId(_coerceAccountId(acc['id']));
+                if (safe != null && (safe.safeType == 'cash' || safe.safeType == 'bank')) {
+                  _ensureSafeLedgerBalanceLoaded(safe);
+                }
               },
             ),
             const SizedBox(height: 12),
 
-            const SizedBox(height: 12),
+            Builder(
+              builder: (context) {
+                final safe = _findSafeByAccountId(line.accountId);
+                if (safe == null) return const SizedBox.shrink();
+                if (safe.id == null) return const SizedBox.shrink();
+                if (!(safe.safeType == 'cash' || safe.safeType == 'bank')) {
+                  return const SizedBox.shrink();
+                }
+
+                final safeId = safe.id!;
+                final isLoading =
+                    _safeLedgerCashBalanceLoading.contains(safeId);
+                final bal = _safeLedgerCashBalance[safeId];
+                final amount = _parseLineAmount(line.amount);
+
+                final isOutflowFromSafe =
+                    widget.voucherType == 'payment' &&
+                    line.lineType == 'credit' &&
+                    line.amountType == 'cash';
+                final insufficient = isOutflowFromSafe && bal != null && amount > bal + 0.01;
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isLoading
+                            ? 'جاري تحميل رصيد الخزينة...'
+                            : (bal == null
+                                  ? 'رصيد الخزينة غير متاح'
+                                  : 'رصيد الخزينة الحالي: ${bal.toStringAsFixed(2)} ر.س'),
+                        style: TextStyle(
+                          color: insufficient ? AppColors.error : Colors.grey.shade700,
+                          fontWeight: insufficient ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                      ),
+                      if (insufficient)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            'تنبيه: الرصيد لا يغطي مبلغ الصرف',
+                            style: TextStyle(
+                              color: AppColors.error,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
 
             // Amount type (Cash/Gold)
             RadioGroup<String>(

@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
+import 'forgot_password_screen.dart';
+import 'username_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -194,6 +196,36 @@ class _LoginScreenState extends State<LoginScreen> {
                                   )
                                 : const Text('تسجيل الدخول'),
                           ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            TextButton(
+                              onPressed: isLoading
+                                  ? null
+                                  : () {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) => const UsernameRecoveryScreen(),
+                                        ),
+                                      );
+                                    },
+                              child: const Text('نسيت اسم المستخدم؟'),
+                            ),
+                            TextButton(
+                              onPressed: isLoading
+                                  ? null
+                                  : () {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) => const ForgotPasswordScreen(),
+                                        ),
+                                      );
+                                    },
+                              child: const Text('نسيت كلمة المرور؟'),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 16),
                         Text(

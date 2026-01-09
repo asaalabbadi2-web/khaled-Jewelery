@@ -729,12 +729,15 @@ class Invoice(db.Model):
     invoice_type_id = db.Column(db.Integer, nullable=False)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
+    # 🆕 الموظف المنفّذ/البائع (مربوط بحساب المستخدم)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=True)
     branch_id = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True)  # 🆕 الفرع (منفصل عن مكاتب التسكير)
     office_id = db.Column(db.Integer, db.ForeignKey('office.id'), nullable=True)  # 🆕 للتسكير من المكاتب
     date = db.Column(db.DateTime, nullable=False)
     total = db.Column(db.Float, nullable=False)
 
     branch = db.relationship('Branch', foreign_keys=[branch_id])
+    employee = db.relationship('Employee', foreign_keys=[employee_id])
     
     # نوع الفاتورة - 6 أنواع
     # 'بيع', 'شراء من عميل', 'مرتجع بيع', 'مرتجع شراء', 'شراء من مورد', 'مرتجع شراء من مورد'
@@ -850,6 +853,7 @@ class Invoice(db.Model):
             'invoice_type_id': self.invoice_type_id,
             'customer_id': self.customer_id,
             'supplier_id': self.supplier_id,
+            'employee_id': self.employee_id,
             'branch_id': self.branch_id,
             'office_id': self.office_id,  # 🆕 المكتب
             'date': self.date.isoformat(),
@@ -903,6 +907,46 @@ class Invoice(db.Model):
             'gold_type': self.gold_type,
             'items': [item.to_dict() for item in self.items]
         }
+
+        # 🆕 اسم الموظف المنفذ
+        # - المصدر الأساسي: employee_id المخزن على الفاتورة
+        # - fallback: محاولة ربط posted_by كـ username في AppUser
+        # - fallback أخير: posted_by كتسمية عرض
+        try:
+            employee_name = None
+
+            # 1) Direct relationship / employee_id
+            if self.employee and self.employee.name:
+                employee_name = self.employee.name
+            elif getattr(self, 'employee_id', None):
+                try:
+                    emp = Employee.query.get(self.employee_id)
+                    if emp and emp.name:
+                        employee_name = emp.name
+                except Exception:
+                    employee_name = None
+
+            # 2) Map posted_by to AppUser.username (case-insensitive/trim)
+            if employee_name is None and self.posted_by:
+                try:
+                    from sqlalchemy import func
+
+                    posted_by_key = str(self.posted_by).strip().lower()
+                    user = AppUser.query.filter(
+                        func.lower(func.trim(AppUser.username)) == posted_by_key
+                    ).first()
+                    if user and user.employee and user.employee.name:
+                        employee_name = user.employee.name
+                except Exception:
+                    employee_name = None
+
+            # 3) Final fallback: show posted_by as-is
+            if employee_name is None:
+                employee_name = self.posted_by
+
+            result['employee_name'] = employee_name
+        except Exception:
+            result['employee_name'] = None
 
         # 🆕 اسم الفرع (اختياري) لتسهيل العرض في الواجهات
         try:
@@ -2049,6 +2093,86 @@ class InvoicePayment(db.Model):
         return f'<InvoicePayment Invoice#{self.invoice_id} - {self.amount} via {self.payment_method_id}>'
 
 
+class SafeBoxTransaction(db.Model):
+    """Ledger movements for SafeBox (رقابة الخزينة).
+
+    This is the audit-friendly source of truth for safe balances.
+    We do not mutate balances directly; instead, we append transactions.
+    """
+
+    __tablename__ = 'safe_box_transaction'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    safe_box_id = db.Column(
+        db.Integer,
+        db.ForeignKey('safe_box.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+
+    # Reference (optional but strongly recommended)
+    ref_type = db.Column(db.String(40), nullable=True, index=True)  # invoice_payment, invoice, voucher...
+    ref_id = db.Column(db.Integer, nullable=True, index=True)
+
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id', ondelete='SET NULL'), nullable=True, index=True)
+    invoice_payment_id = db.Column(
+        db.Integer,
+        db.ForeignKey('invoice_payment.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    payment_method_id = db.Column(db.Integer, db.ForeignKey('payment_method.id', ondelete='SET NULL'), nullable=True)
+
+    # Direction: in/out
+    direction = db.Column(db.String(10), nullable=False, default='in')
+
+    # Cash amount (SAR)
+    amount_cash = db.Column(db.Float, nullable=False, default=0.0)
+
+    # Optional weight tracking by karat (grams)
+    weight_18k = db.Column(db.Float, nullable=False, default=0.0)
+    weight_21k = db.Column(db.Float, nullable=False, default=0.0)
+    weight_22k = db.Column(db.Float, nullable=False, default=0.0)
+    weight_24k = db.Column(db.Float, nullable=False, default=0.0)
+
+    notes = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False, index=True)
+    created_by = db.Column(db.String(100), nullable=True)
+
+    safe_box = db.relationship('SafeBox', backref=db.backref('transactions', lazy=True, cascade='all, delete-orphan'))
+    invoice = db.relationship('Invoice', foreign_keys=[invoice_id])
+    invoice_payment = db.relationship('InvoicePayment', foreign_keys=[invoice_payment_id])
+    payment_method = db.relationship('PaymentMethod', foreign_keys=[payment_method_id])
+
+    def signed_cash(self) -> float:
+        amt = float(self.amount_cash or 0.0)
+        return amt if (self.direction or 'in') == 'in' else -amt
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'safe_box_id': self.safe_box_id,
+            'ref_type': self.ref_type,
+            'ref_id': self.ref_id,
+            'invoice_id': self.invoice_id,
+            'invoice_payment_id': self.invoice_payment_id,
+            'payment_method_id': self.payment_method_id,
+            'direction': self.direction,
+            'amount_cash': float(self.amount_cash or 0.0),
+            'weight_18k': float(self.weight_18k or 0.0),
+            'weight_21k': float(self.weight_21k or 0.0),
+            'weight_22k': float(self.weight_22k or 0.0),
+            'weight_24k': float(self.weight_24k or 0.0),
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_by': self.created_by,
+        }
+
+
+
+
 class Employee(db.Model):
     """نموذج الموظفين"""
     __tablename__ = 'employee'
@@ -2119,7 +2243,11 @@ class AppUser(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     full_name = db.Column(db.String(200), nullable=True)
+    email = db.Column(db.String(150), nullable=True)
+    phone = db.Column(db.String(30), nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    must_change_password = db.Column(db.Boolean, default=False, nullable=False)
+    password_changed_at = db.Column(db.DateTime, nullable=True)
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=True)
     # الأدوار: system_admin, manager, accountant, employee
     role = db.Column(db.String(50), nullable=False, default='employee')
@@ -2165,6 +2293,10 @@ class AppUser(db.Model):
     def set_password(self, password: str):
         # استخدام خوارزمية مدعومة عبر OpenSSL لضمان التوافق عبر البيئات
         self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+        try:
+            self.password_changed_at = datetime.utcnow()
+        except Exception:
+            pass
 
     def check_password(self, password: str) -> bool:
         if not self.password_hash:
@@ -2176,6 +2308,8 @@ class AppUser(db.Model):
             'id': self.id,
             'username': self.username,
             'full_name': self.full_name,
+            'email': self.email,
+            'phone': self.phone,
             'employee_id': self.employee_id,
             'role': self.role,
             'permissions': self.permissions,
@@ -2183,6 +2317,8 @@ class AppUser(db.Model):
             'is_admin': self.is_admin,
             'last_login_at': self.last_login_at.isoformat() if self.last_login_at else None,
             'two_factor_enabled': bool(self.two_factor_enabled),
+            'must_change_password': bool(self.must_change_password),
+            'password_changed_at': self.password_changed_at.isoformat() if self.password_changed_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -2249,6 +2385,25 @@ class LoginAttempt(db.Model):
     user_agent = db.Column(db.String(255), nullable=True)
     success = db.Column(db.Boolean, default=False, nullable=False, index=True)
     failure_reason = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class AuthActionAttempt(db.Model):
+    """محاولات إجراءات حساسة (OTP/username recovery) لمنع التخمين/الإساءة.
+
+    - نخزن identifier_hash فقط (بدون حفظ البريد/الهاتف صراحةً) لتقليل PII.
+    - يُستخدم للـ rate limiting على مستوى IP + identifier_hash.
+    """
+
+    __tablename__ = 'auth_action_attempts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    action = db.Column(db.String(50), nullable=False, index=True)
+    identifier_hash = db.Column(db.String(64), nullable=True, index=True)
+    ip_address = db.Column(db.String(45), nullable=True, index=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    success = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    blocked_reason = db.Column(db.String(50), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
@@ -2619,6 +2774,7 @@ class AuditLog(db.Model):
     # النتيجة
     success = db.Column(db.Boolean, nullable=False, default=True)  # نجحت العملية أم فشلت
     error_message = db.Column(db.Text, nullable=True)  # رسالة الخطأ إن وجدت
+
     
     # الفهارس لتسريع البحث
     __table_args__ = (
@@ -2668,6 +2824,9 @@ class AuditLog(db.Model):
             'create_entry': 'إنشاء قيد',
             'update_entry': 'تعديل قيد',
             'delete_entry': 'حذف قيد',
+            'shift_closing': 'إغلاق اليومية',
+            'approve_voucher': 'ترحيل سند',
+            'cancel_voucher': 'إلغاء سند',
         }
         return actions_map.get(self.action, self.action)
     
@@ -2679,6 +2838,8 @@ class AuditLog(db.Model):
             'Customer': 'عميل',
             'Supplier': 'مورد',
             'Account': 'حساب',
+            'ShiftClosing': 'إغلاق اليومية',
+            'Voucher': 'سند',
         }
         return entity_types_map.get(self.entity_type, self.entity_type)
     
@@ -3298,6 +3459,63 @@ class BonusInvoiceLink(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     bonus_id = db.Column(db.Integer, db.ForeignKey('employee_bonus.id'), nullable=False)
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False)
+
+
+class SystemAlert(db.Model):
+    """Persistent in-app alerts for managers (MVP).
+
+    Used for shift closing threshold breaches (cash/gold deficits).
+    """
+
+    __tablename__ = 'system_alerts'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    alert_type = db.Column(db.String(50), nullable=False, index=True)  # shift_closing
+    severity = db.Column(db.String(20), nullable=False, index=True)  # critical | warning | info
+
+    title = db.Column(db.String(200), nullable=True)
+    message = db.Column(db.Text, nullable=True)
+
+    entity_type = db.Column(db.String(50), nullable=True)  # ShiftClosing
+    entity_id = db.Column(db.Integer, nullable=True)
+    entity_number = db.Column(db.String(50), nullable=True, index=True)
+
+    details = db.Column(db.Text, nullable=True)  # JSON
+
+    is_reviewed = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    reviewed_by = db.Column(db.String(100), nullable=True)
+
+    created_by = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False, index=True)
+
+    def to_dict(self):
+        import json
+
+        decoded_details = None
+        if self.details:
+            try:
+                decoded_details = json.loads(self.details) if isinstance(self.details, str) else self.details
+            except Exception:
+                decoded_details = None
+
+        return {
+            'id': self.id,
+            'alert_type': self.alert_type,
+            'severity': self.severity,
+            'title': self.title,
+            'message': self.message,
+            'entity_type': self.entity_type,
+            'entity_id': self.entity_id,
+            'entity_number': self.entity_number,
+            'details': decoded_details,
+            'is_reviewed': bool(self.is_reviewed),
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+            'reviewed_by': self.reviewed_by,
+            'created_by': self.created_by,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 
