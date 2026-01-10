@@ -88,6 +88,13 @@ def _ensure_columns(
     with engine.connect() as connection:
         dialect = _dialect_name(engine, connection)
         inspector = inspect(connection)
+        try:
+            if not inspector.has_table(table):
+                return []
+        except Exception:
+            # If the dialect doesn't support has_table properly, fall back to get_columns.
+            pass
+
         existing = {column["name"] for column in inspector.get_columns(table)}
 
     for name, ddl_type, default in columns:
