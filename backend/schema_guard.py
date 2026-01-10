@@ -81,35 +81,39 @@ def _ensure_columns(
         Names of columns that were added during this invocation.
     """
     added: list[str] = []
+    dialect = ''
+    existing: set[str] = set()
+    # Use a dedicated connection for inspection only. SQLAlchemy 2.0 may autobegin
+    # a transaction during inspection, which makes nested begin() calls invalid.
     with engine.connect() as connection:
-
         dialect = _dialect_name(engine, connection)
         inspector = inspect(connection)
         existing = {column["name"] for column in inspector.get_columns(table)}
-        for name, ddl_type, default in columns:
-            if name in existing:
-                continue
-            LOGGER.warning(
-                "Missing column %s.%s detected at runtime; applying lightweight migration",
-                table,
-                name,
-            )
-            norm_type, norm_default = _normalize_column_ddl_for_dialect(
-                dialect=dialect,
-                ddl_type=ddl_type,
-                default=default,
-            )
-            ddl = text(
-                f"ALTER TABLE {table} ADD COLUMN {name} {norm_type} DEFAULT {norm_default}"
-            )
-            # Execute each statement in its own transaction. This prevents a single
-            # failing ALTER from rolling back previously-added columns (notably on Postgres).
-            try:
-                with connection.begin():
-                    connection.execute(ddl)
-                added.append(f"{table}.{name}")
-            except SQLAlchemyError as exc:
-                LOGGER.error("Auto schema guard failed adding %s.%s: %s", table, name, exc)
+
+    for name, ddl_type, default in columns:
+        if name in existing:
+            continue
+        LOGGER.warning(
+            "Missing column %s.%s detected at runtime; applying lightweight migration",
+            table,
+            name,
+        )
+        norm_type, norm_default = _normalize_column_ddl_for_dialect(
+            dialect=dialect,
+            ddl_type=ddl_type,
+            default=default,
+        )
+        ddl = text(
+            f"ALTER TABLE {table} ADD COLUMN {name} {norm_type} DEFAULT {norm_default}"
+        )
+        # Execute each statement in its own fresh transaction/connection.
+        try:
+            with engine.begin() as ddl_connection:
+                ddl_connection.execute(ddl)
+            added.append(f"{table}.{name}")
+            existing.add(name)
+        except SQLAlchemyError as exc:
+            LOGGER.error("Auto schema guard failed adding %s.%s: %s", table, name, exc)
 
     return added
 
