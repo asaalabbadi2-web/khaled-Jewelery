@@ -148,6 +148,20 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   String paymentMethod = 'cash';
   double amountPaid = 0;
 
+  void _resetAfterSave() {
+    setState(() {
+      _currentStep = 0;
+      selectedOriginalInvoice = null;
+      _returnItems = [];
+      _isLoadingInvoiceDetails = false;
+      _invoiceDetailsError = null;
+      returnReason = '';
+      paymentMethod = 'cash';
+      amountPaid = 0;
+      _returnReasonController.clear();
+    });
+  }
+
   List<ReturnItemRow> get _selectedItems => _returnItems
     .where((item) => item.isSelected && (item.weight > 0 || item.quantity > 0))
     .toList();
@@ -520,7 +534,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       }
 
       if (!mounted) return;
-      Navigator.pop(context, true);
+      _resetAfterSave();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(

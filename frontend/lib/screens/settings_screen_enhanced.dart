@@ -97,6 +97,9 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
 
   bool _requireAuthForInvoiceCreate = false;
 
+  bool _idleTimeoutEnabled = true;
+  int _idleTimeoutMinutes = 30;
+
   bool _allowPartialInvoicePayments = false;
 
   bool _voucherAutoPost = false;
@@ -329,6 +332,25 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           fallback: false,
         );
 
+        _idleTimeoutEnabled = _safeBool(
+          settings['idle_timeout_enabled'],
+          fallback: true,
+        );
+
+        final dynamic rawIdleMinutes = settings['idle_timeout_minutes'];
+        int? parsedIdleMinutes;
+        if (rawIdleMinutes is int) {
+          parsedIdleMinutes = rawIdleMinutes;
+        } else if (rawIdleMinutes is double) {
+          parsedIdleMinutes = rawIdleMinutes.toInt();
+        } else if (rawIdleMinutes != null) {
+          parsedIdleMinutes = int.tryParse(rawIdleMinutes.toString().trim());
+        }
+        parsedIdleMinutes ??= 30;
+        if (parsedIdleMinutes < 1) parsedIdleMinutes = 1;
+        if (parsedIdleMinutes > 10080) parsedIdleMinutes = 10080;
+        _idleTimeoutMinutes = parsedIdleMinutes;
+
         _allowPartialInvoicePayments = _safeBool(
           settings['allow_partial_invoice_payments'],
           fallback: false,
@@ -400,6 +422,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'company_tax_number': _companyTaxNumberController.text.trim(),
       'voucher_auto_post': _voucherAutoPost,
       'require_auth_for_invoice_create': _requireAuthForInvoiceCreate,
+      'idle_timeout_enabled': _idleTimeoutEnabled,
+      'idle_timeout_minutes': _idleTimeoutMinutes,
       'allow_partial_invoice_payments': _allowPartialInvoicePayments,
       'print_template_by_invoice_type': _normalizedPrintTemplateByType(),
     };
@@ -1423,6 +1447,84 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                   context,
                 ).textTheme.bodySmall?.copyWith(color: _mutedTextColor),
               ),
+            ),
+            const SizedBox(height: 20),
+            _buildSectionCard(
+              icon: Icons.lock_outline,
+              iconColor: _primaryColor,
+              title: 'الأمان',
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('تسجيل الخروج عند عدم النشاط'),
+                  subtitle: const Text('عند التعطيل لن يتم إنهاء الجلسة تلقائياً بسبب الخمول'),
+                  value: _idleTimeoutEnabled,
+                  onChanged: (val) {
+                    setState(() => _idleTimeoutEnabled = val);
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('مدة عدم النشاط (بالدقائق)'),
+                  subtitle: Text(
+                    _idleTimeoutEnabled
+                        ? '$_idleTimeoutMinutes دقيقة'
+                        : 'الميزة معطلة',
+                    style: TextStyle(color: _mutedTextColor),
+                  ),
+                  trailing: Icon(
+                    Icons.edit,
+                    color: _idleTimeoutEnabled ? _primaryColor : _mutedTextColor,
+                  ),
+                  enabled: _idleTimeoutEnabled,
+                  onTap: !_idleTimeoutEnabled
+                      ? null
+                      : () async {
+                          final controller = TextEditingController(
+                            text: _idleTimeoutMinutes.toString(),
+                          );
+                          final result = await showDialog<int>(
+                            context: context,
+                            builder: (context) {
+                              return AlertDialog(
+                                title: const Text('مدة عدم النشاط'),
+                                content: TextField(
+                                  controller: controller,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'بالدقائق',
+                                    hintText: 'مثال: 30',
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.of(context).pop(),
+                                    child: const Text('إلغاء'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      final value = int.tryParse(
+                                        controller.text.trim(),
+                                      );
+                                      Navigator.of(context).pop(value);
+                                    },
+                                    child: const Text('حفظ'),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+
+                          if (result == null) return;
+                          var minutes = result;
+                          if (minutes < 1) minutes = 1;
+                          if (minutes > 10080) minutes = 10080;
+                          setState(() {
+                            _idleTimeoutMinutes = minutes;
+                          });
+                        },
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             FilledButton.tonalIcon(

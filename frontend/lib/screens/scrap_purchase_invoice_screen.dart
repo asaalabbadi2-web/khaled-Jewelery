@@ -84,6 +84,22 @@ class _ScrapPurchaseInvoiceScreenState
   ];
   String _goldCondition = _goldConditionOptions[1];
 
+  void _resetAfterSave() {
+    setState(() {
+      _selectedCustomerId = null;
+      _items.clear();
+      _payments.clear();
+      _selectedPaymentMethodId = null;
+      _selectedSafeBoxId = null;
+      _smartInputController.clear();
+      _customAmountController.clear();
+      _goldImages.clear();
+      _purchaseNotesController.clear();
+      _goldCondition = _goldConditionOptions[1];
+    });
+    _smartInputFocus.requestFocus();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -985,7 +1001,7 @@ class _ScrapPurchaseInvoiceScreenState
       }
 
       if (!mounted) return;
-      Navigator.pop(context, true);
+      _resetAfterSave();
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }

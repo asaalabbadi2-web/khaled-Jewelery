@@ -208,6 +208,13 @@ def _enforce_api_auth_and_permissions():
     if not user:
         user = get_current_user()
         if not user:
+            auth_error = getattr(g, 'auth_error', None)
+            if auth_error == 'session_expired':
+                return jsonify({
+                    'success': False,
+                    'message': 'انتهت الجلسة بسبب عدم النشاط. الرجاء تسجيل الدخول مرة أخرى',
+                    'error': 'session_expired'
+                }), 401
             return jsonify({
                 'success': False,
                 'message': 'يجب تسجيل الدخول أولاً',
@@ -1032,6 +1039,40 @@ def update_settings():
     # 🆕 إعدادات الأمان
     if 'require_auth_for_invoice_create' in data:
         settings.require_auth_for_invoice_create = data['require_auth_for_invoice_create']
+
+    # 🆕 إنهاء الجلسة عند عدم النشاط
+    if 'idle_timeout_enabled' in data:
+        raw = data['idle_timeout_enabled']
+        if isinstance(raw, bool):
+            settings.idle_timeout_enabled = raw
+        elif isinstance(raw, (int, float)):
+            settings.idle_timeout_enabled = bool(raw)
+        elif isinstance(raw, str):
+            s = raw.strip().lower()
+            settings.idle_timeout_enabled = s in {'1', 'true', 'yes', 'y', 'on'}
+        else:
+            settings.idle_timeout_enabled = True
+
+    if 'idle_timeout_minutes' in data:
+        raw = data.get('idle_timeout_minutes')
+        minutes = None
+        try:
+            minutes = int(raw)
+        except Exception:
+            try:
+                minutes = int(str(raw).strip())
+            except Exception:
+                minutes = None
+
+        if minutes is None:
+            # keep existing value
+            pass
+        else:
+            if minutes < 1:
+                minutes = 1
+            if minutes > 10080:
+                minutes = 10080
+            settings.idle_timeout_minutes = minutes
 
     # 🆕 إعدادات الدفع الجزئي/البيع الآجل
     if 'allow_partial_invoice_payments' in data:

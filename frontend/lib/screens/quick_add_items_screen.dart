@@ -43,6 +43,21 @@ class _QuickAddItemsScreenState extends State<QuickAddItemsScreen> {
   List<Category> categories = [];
   bool categoriesLoading = false;
   bool saving = false;
+
+  void _resetAfterSave() {
+    for (final piece in pieces) {
+      piece.dispose();
+    }
+    setState(() {
+      _baseNameController.clear();
+      _wagePerGramController.clear();
+      _bulkWeightsController.clear();
+      _selectedKarat = '21';
+      _selectedCategoryId = null;
+      _hasStones = false;
+      pieces = [PieceData()];
+    });
+  }
   
   @override
   void initState() {
@@ -234,7 +249,7 @@ class _QuickAddItemsScreenState extends State<QuickAddItemsScreen> {
       if (widget.embedded) {
         widget.onSuccess?.call();
       } else {
-        Navigator.pop(context, true);
+        _resetAfterSave();
       }
       
     } catch (e) {

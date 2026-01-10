@@ -48,6 +48,10 @@ JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256').strip() or 'HS256'
 # Short-lived access token improves security. Keep it small and refresh silently.
 JWT_ACCESS_TOKEN_EXP_MINUTES = _env_int('JWT_ACCESS_TOKEN_EXP_MINUTES', default=60 * 24)
 
+# Auto-logout on inactivity (server-side).
+# 0 disables idle-timeout enforcement.
+JWT_IDLE_TIMEOUT_MINUTES = _env_int('JWT_IDLE_TIMEOUT_MINUTES', default=30)
+
 # Long-lived refresh token (server-side revocable)
 JWT_REFRESH_TOKEN_EXP_DAYS = _env_int('JWT_REFRESH_TOKEN_EXP_DAYS', default=14)
 

@@ -56,6 +56,18 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   // 🆕 الخزائن
   int? _selectedSafeBoxId;
 
+  void _resetAfterSave() {
+    setState(() {
+      _selectedCustomerId = null;
+      _items.clear();
+      _payments.clear();
+      _selectedPaymentMethodId = null;
+      _selectedSafeBoxId = null;
+      _smartInputController.clear();
+    });
+    _smartInputFocus.requestFocus();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -788,7 +800,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         }
 
         if (!context.mounted) return;
-        Navigator.pop(context, true);
+        _resetAfterSave();
       }
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');

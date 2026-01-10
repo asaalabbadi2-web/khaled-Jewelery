@@ -193,6 +193,8 @@ def ensure_settings_columns(engine: Engine) -> None:
                 [
                     ("weight_closing_settings", "TEXT", "'{}'"),
                     ("require_auth_for_invoice_create", "BOOLEAN", "0"),
+                    ("idle_timeout_enabled", "BOOLEAN", "1"),
+                    ("idle_timeout_minutes", "INTEGER", "30"),
                     ("allow_partial_invoice_payments", "BOOLEAN", "0"),
                     ("password_policy", "TEXT", "NULL"),
                     ("company_logo_base64", "TEXT", "NULL"),

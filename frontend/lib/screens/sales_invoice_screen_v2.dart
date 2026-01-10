@@ -81,6 +81,24 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   double _invoiceCostManufacturingComponent = 0.0;
   double _invoiceCostTotal = 0.0;
 
+  void _resetAfterSave() {
+    setState(() {
+      _selectedCustomerId = null;
+      _items.clear();
+      _payments.clear();
+      _selectedPaymentMethodId = null;
+      _selectedSafeBoxId = null;
+      _showAdvancedPaymentOptions = false;
+      _smartInputController.clear();
+      _customAmountController.clear();
+      _invoiceWeightMain = 0.0;
+      _invoiceCostGoldComponent = 0.0;
+      _invoiceCostManufacturingComponent = 0.0;
+      _invoiceCostTotal = 0.0;
+    });
+    _smartInputFocus.requestFocus();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1575,7 +1593,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       }
 
       if (!mounted) return;
-      Navigator.pop(context, true);
+      _resetAfterSave();
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }

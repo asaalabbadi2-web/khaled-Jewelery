@@ -1692,6 +1692,14 @@ class Settings(db.Model):
     # عند التفعيل: يمنع إنشاء الفواتير بدون Authorization token
     require_auth_for_invoice_create = db.Column(db.Boolean, default=False)
 
+    # 🆕 إنهاء الجلسة عند عدم النشاط (Auto logout)
+    # عند التعطيل: لا يتم فرض انتهاء الجلسة بسبب عدم النشاط
+    idle_timeout_enabled = db.Column(db.Boolean, default=True)
+
+    # 🆕 مدة الخمول بالدقائق
+    # تُستخدم فقط إذا كان idle_timeout_enabled=True
+    idle_timeout_minutes = db.Column(db.Integer, default=30)
+
     # 🆕 السماح بالدفع الجزئي/البيع الآجل عند إنشاء الفواتير
     # عند التعطيل: يجب أن يساوي مجموع الدفعات إجمالي الفاتورة
     allow_partial_invoice_payments = db.Column(db.Boolean, default=False)
@@ -1772,6 +1780,8 @@ class Settings(db.Model):
             'allow_discount': self.allow_discount,
             'allow_manual_invoice_items': self.allow_manual_invoice_items,
             'require_auth_for_invoice_create': bool(self.require_auth_for_invoice_create),
+            'idle_timeout_enabled': bool(getattr(self, 'idle_timeout_enabled', True)),
+            'idle_timeout_minutes': int(getattr(self, 'idle_timeout_minutes', 30) or 30),
             'allow_partial_invoice_payments': bool(self.allow_partial_invoice_payments),
             'manufacturing_wage_mode': (self.manufacturing_wage_mode or 'expense'),
             'voucher_auto_post': self.voucher_auto_post,
@@ -2372,6 +2382,24 @@ class RefreshToken(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = db.Column(db.DateTime, nullable=True)
+
+
+class SessionActivity(db.Model):
+    """Per-user last activity tracking for idle session expiry."""
+
+    __tablename__ = 'session_activity'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False, index=True)
+    user_type = db.Column(db.String(20), nullable=False, index=True)  # user | app_user
+
+    last_activity_at = db.Column(db.DateTime, nullable=False, index=True, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'user_type', name='uq_session_activity_user'),
+    )
 
 
 class LoginAttempt(db.Model):

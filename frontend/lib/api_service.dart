@@ -1,7 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode, kIsWeb;
+  show
+    TargetPlatform,
+    ValueNotifier,
+    debugPrint,
+    defaultTargetPlatform,
+    kDebugMode,
+    kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -54,7 +60,22 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+class ApiAuthException implements Exception {
+  final String? code;
+  final String message;
+
+  ApiAuthException(this.message, {this.code});
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
+  /// When set, the app should force a logout and return to login.
+  /// Used to avoid infinite refresh loops when the server rejects refresh.
+  static final ValueNotifier<ApiAuthException?> authInvalidation =
+      ValueNotifier<ApiAuthException?>(null);
+
   final String _baseUrl;
 
   Future<String>? _refreshInFlight;
@@ -93,34 +114,70 @@ class ApiService {
     final existing = _refreshInFlight;
     if (existing != null) return existing;
 
-    final future = () async {
+    final Future<String> future = (() async {
       final prefs = await SharedPreferences.getInstance();
+
       // Support legacy / prefixed keys that may exist in production (e.g. "flutter.refresh_token").
       final refreshToken =
           prefs.getString('refresh_token') ??
           prefs.getString('flutter.refresh_token') ??
           prefs.getString('refreshToken');
+
       if (refreshToken == null || refreshToken.isEmpty) {
-        throw Exception('لا توجد جلسة صالحة. الرجاء تسجيل الدخول مرة أخرى');
+        // No refresh token available -> force re-login.
+        await prefs.remove('jwt_token');
+        await prefs.remove('flutter.jwt_token');
+        await prefs.remove('auth_token');
+        await prefs.remove('flutter.auth_token');
+        await prefs.remove('refresh_token');
+        await prefs.remove('flutter.refresh_token');
+        await prefs.remove('auth_current_user');
+        final err = ApiAuthException(
+          'لا توجد جلسة صالحة. الرجاء تسجيل الدخول مرة أخرى',
+          code: 'authentication_required',
+        );
+        ApiService.authInvalidation.value = err;
+        throw err;
       }
 
-      final refreshed = await refreshAccessToken(refreshToken);
-      final newAccess = refreshed['token']?.toString();
-      final newRefresh = refreshed['refresh_token']?.toString();
+      try {
+        final refreshed = await refreshAccessToken(refreshToken);
+        final newAccess = refreshed['token']?.toString();
+        final newRefresh = refreshed['refresh_token']?.toString();
 
-      if (newAccess == null || newAccess.isEmpty) {
-        throw Exception('فشل تحديث الجلسة');
-      }
+        if (newAccess == null || newAccess.isEmpty) {
+          throw ApiAuthException('فشل تحديث الجلسة');
+        }
 
-      // Persist under both canonical and prefixed keys to migrate older installs.
-      await prefs.setString('jwt_token', newAccess);
-      await prefs.setString('flutter.jwt_token', newAccess);
-      if (newRefresh != null && newRefresh.isNotEmpty) {
-        await prefs.setString('refresh_token', newRefresh);
-        await prefs.setString('flutter.refresh_token', newRefresh);
+        // Persist under both canonical and prefixed keys to migrate older installs.
+        await prefs.setString('jwt_token', newAccess);
+        await prefs.setString('flutter.jwt_token', newAccess);
+        if (newRefresh != null && newRefresh.isNotEmpty) {
+          await prefs.setString('refresh_token', newRefresh);
+          await prefs.setString('flutter.refresh_token', newRefresh);
+        }
+        return newAccess;
+      } on ApiAuthException catch (e) {
+        // Break infinite refresh loops: if refresh is rejected, clear stored session.
+        final code = (e.code ?? '').toLowerCase();
+        final fatal = code == 'session_expired' ||
+            code == 'invalid_refresh' ||
+            code == 'refresh_expired' ||
+            code == 'authentication_required';
+
+        if (fatal) {
+          await prefs.remove('jwt_token');
+          await prefs.remove('flutter.jwt_token');
+          await prefs.remove('auth_token');
+          await prefs.remove('flutter.auth_token');
+          await prefs.remove('refresh_token');
+          await prefs.remove('flutter.refresh_token');
+          await prefs.remove('auth_current_user');
+          ApiService.authInvalidation.value = e;
+        }
+        rethrow;
       }
-      return newAccess;
-    }();
+    })();
 
     _refreshInFlight = future;
     try {

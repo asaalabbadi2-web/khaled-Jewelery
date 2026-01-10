@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'dart:ui';
+import 'package:flutter/services.dart';
 import 'src/url_strategy_stub.dart'
   if (dart.library.html) 'src/url_strategy_web.dart' as url_strategy;
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -93,7 +95,8 @@ class _MyAppState extends State<MyApp> {
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
 
-    return MaterialApp(
+    return IdleLogoutWrapper(
+      child: MaterialApp(
       title: 'مجوهرات خالد',
       builder: (context, widget) {
         // تخصيص widget الخطأ
@@ -164,8 +167,22 @@ class _MyAppState extends State<MyApp> {
         GlobalCupertinoLocalizations.delegate,
       ],
       routes: {
-        '/add_item': (context) => AddItemScreenEnhanced(api: ApiService()),
-        '/items': (context) => ItemsScreenEnhanced(api: ApiService()),
+        '/add_item': (context) => Consumer<AuthProvider>(
+              builder: (context, auth, _) {
+                if (auth.isAuthenticated) {
+                  return AddItemScreenEnhanced(api: ApiService());
+                }
+                return const LoginScreen();
+              },
+            ),
+        '/items': (context) => Consumer<AuthProvider>(
+              builder: (context, auth, _) {
+                if (auth.isAuthenticated) {
+                  return ItemsScreenEnhanced(api: ApiService());
+                }
+                return const LoginScreen();
+              },
+            ),
         '/setup': (context) => AuthGate(
               onToggleLocale: _toggleLocale,
               isArabic: _locale.languageCode == 'ar',
@@ -186,6 +203,150 @@ class _MyAppState extends State<MyApp> {
         isArabic: _locale.languageCode == 'ar',
       ),
       debugShowCheckedModeBanner: false,
+      ),
+    );
+  }
+}
+
+class IdleLogoutWrapper extends StatefulWidget {
+  final Widget child;
+
+  const IdleLogoutWrapper({
+    super.key,
+    required this.child,
+  });
+
+  @override
+  State<IdleLogoutWrapper> createState() => _IdleLogoutWrapperState();
+}
+
+class _IdleLogoutWrapperState extends State<IdleLogoutWrapper>
+    with WidgetsBindingObserver {
+  Timer? _timer;
+  DateTime _lastActivityAt = DateTime.now();
+
+  void _onAuthInvalidation() {
+    final err = ApiService.authInvalidation.value;
+    if (err == null) return;
+    // Clear first to prevent re-entrancy.
+    ApiService.authInvalidation.value = null;
+    final auth = context.read<AuthProvider>();
+    if (auth.isAuthenticated) {
+      auth.logout();
+    }
+  }
+
+  void _onRawKey(RawKeyEvent event) {
+    _recordActivity();
+  }
+
+  Duration _idleTimeoutFor(SettingsProvider settings) {
+    if (!settings.idleTimeoutEnabled) {
+      return Duration.zero;
+    }
+    final minutes = settings.idleTimeoutMinutes;
+    if (minutes <= 0) {
+      return Duration.zero;
+    }
+    return Duration(minutes: minutes);
+  }
+
+  void _recordActivity() {
+    _lastActivityAt = DateTime.now();
+    _restartTimerIfNeeded();
+  }
+
+  void _restartTimerIfNeeded() {
+    if (!mounted) return;
+
+    final auth = context.read<AuthProvider>();
+    final settings = context.read<SettingsProvider>();
+    if (!auth.isAuthenticated) {
+      _timer?.cancel();
+      _timer = null;
+      return;
+    }
+
+    if (!settings.idleTimeoutEnabled) {
+      _timer?.cancel();
+      _timer = null;
+      return;
+    }
+
+    final timeout = _idleTimeoutFor(settings);
+    if (timeout == Duration.zero) {
+      return;
+    }
+
+    _timer?.cancel();
+    _timer = Timer(timeout, () {
+      _handleTimeout();
+    });
+  }
+
+  Future<void> _handleTimeout() async {
+    if (!mounted) return;
+
+    final auth = context.read<AuthProvider>();
+    if (!auth.isAuthenticated) return;
+
+    final settings = context.read<SettingsProvider>();
+
+    final timeout = _idleTimeoutFor(settings);
+    if (timeout == Duration.zero) return;
+
+    final elapsed = DateTime.now().difference(_lastActivityAt);
+    if (elapsed < timeout) {
+      _restartTimerIfNeeded();
+      return;
+    }
+
+    await auth.logout();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    RawKeyboard.instance.addListener(_onRawKey);
+    ApiService.authInvalidation.addListener(_onAuthInvalidation);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restartTimerIfNeeded();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _recordActivity();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    RawKeyboard.instance.removeListener(_onRawKey);
+    ApiService.authInvalidation.removeListener(_onAuthInvalidation);
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer2<AuthProvider, SettingsProvider>(
+      builder: (context, auth, settings, _) {
+        // Keep timer state synced with auth/settings changes.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _restartTimerIfNeeded();
+        });
+
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (_) => _recordActivity(),
+          onPointerSignal: (_) => _recordActivity(),
+          child: widget.child,
+        );
+      },
     );
   }
 }

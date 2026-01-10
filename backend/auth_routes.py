@@ -62,6 +62,30 @@ auth_bp = Blueprint('auth', __name__)
 logger = logging.getLogger(__name__)
 
 
+def _touch_user_activity(user_type: str, user_id: int) -> None:
+    """Best-effort initialize/refresh last-activity timestamp for idle-timeout."""
+    try:
+        from auth_decorators import _set_last_activity  # local import to avoid circular deps
+        _set_last_activity(user_type, int(user_id), _now())
+    except Exception:
+        pass
+
+
+def _is_idle_expired(user_type: str, user_id: int) -> bool:
+    """Check inactivity expiry for refresh endpoint."""
+    try:
+        from auth_decorators import _idle_timeout_seconds, _get_last_activity
+        timeout = int(_idle_timeout_seconds())
+        if timeout <= 0:
+            return False
+        last = _get_last_activity(user_type, int(user_id))
+        if last is None:
+            return False
+        return (_now() - last).total_seconds() > timeout
+    except Exception:
+        return False
+
+
 def _now() -> datetime:
     return datetime.utcnow()
 
@@ -470,6 +494,8 @@ def login():
                 days=(30 if remember_me else None),
             )
 
+            _touch_user_activity('app_user', app_user.id)
+
             _record_login_attempt(username, success=True)
 
             AuditLog.log_action(
@@ -525,6 +551,8 @@ def login():
             user_type='user',
             days=(30 if remember_me else None),
         )
+
+        _touch_user_activity('user', user.id)
 
         _record_login_attempt(username, success=True)
 
@@ -650,6 +678,18 @@ def refresh_access_token():
             db.session.commit()
             return jsonify({'success': False, 'message': 'انتهت الجلسة', 'error': 'refresh_expired'}), 401
 
+        # Enforce idle timeout: after long inactivity, force full re-login.
+        if _is_idle_expired(session.user_type, session.user_id):
+            session.is_revoked = True
+            session.revoked_at = _now()
+            session.revoked_reason = 'idle_timeout'
+            db.session.commit()
+            return jsonify({
+                'success': False,
+                'message': 'انتهت الجلسة بسبب عدم النشاط. الرجاء تسجيل الدخول مرة أخرى',
+                'error': 'session_expired',
+            }), 401
+
         # Load user
         user = None
         if session.user_type == 'app_user':
@@ -671,6 +711,8 @@ def refresh_access_token():
 
         new_refresh = _issue_refresh_token_for_user(user, user_type=session.user_type)
         new_access = generate_token(user)
+
+        _touch_user_activity(session.user_type, session.user_id)
 
         db.session.commit()
         return jsonify({

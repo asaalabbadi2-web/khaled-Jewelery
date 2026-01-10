@@ -22,9 +22,15 @@ from config import (
     JWT_DEV_FALLBACK_SECRET,
     JWT_ALGORITHM,
     JWT_ACCESS_TOKEN_EXP_MINUTES,
+    JWT_IDLE_TIMEOUT_MINUTES,
 )
 
 from models import User, AppUser, db
+
+try:
+    from models import Settings
+except Exception:  # pragma: no cover
+    Settings = None
 
 from config import ENABLE_REDIS_CACHE
 from redis_client import get_redis
@@ -34,6 +40,263 @@ try:
     from models import TokenBlacklist
 except Exception:  # pragma: no cover
     TokenBlacklist = None
+
+try:
+    from models import RefreshToken, SessionActivity
+except Exception:  # pragma: no cover
+    RefreshToken = None
+    SessionActivity = None
+
+
+def _now() -> datetime:
+    return datetime.utcnow()
+
+
+def _idle_timeout_seconds() -> int:
+    # Default minutes come from env (config), but can be overridden by DB settings.
+    try:
+        minutes = int(JWT_IDLE_TIMEOUT_MINUTES)
+    except Exception:
+        minutes = 0
+    if minutes <= 0:
+        return 0
+
+    enabled = True
+    db_minutes = None
+
+    enabled_key = 'settings:idle_timeout_enabled'
+    minutes_key = 'settings:idle_timeout_minutes'
+    cache_hit = False
+
+    if ENABLE_REDIS_CACHE:
+        r = get_redis()
+        if r is not None:
+            try:
+                cached_enabled = r.get(enabled_key)
+                cached_minutes = r.get(minutes_key)
+
+                if cached_enabled is not None:
+                    s = cached_enabled.decode('utf-8') if hasattr(cached_enabled, 'decode') else str(cached_enabled)
+                    s = s.strip().lower()
+                    enabled = s in ('1', 'true', 'yes', 'y', 'on')
+                    cache_hit = True
+
+                if cached_minutes is not None:
+                    s2 = cached_minutes.decode('utf-8') if hasattr(cached_minutes, 'decode') else str(cached_minutes)
+                    try:
+                        db_minutes = int(str(s2).strip())
+                    except Exception:
+                        db_minutes = None
+                    cache_hit = True
+            except Exception:
+                cache_hit = False
+
+    if not cache_hit and Settings is not None:
+        try:
+            row = Settings.query.first()
+            if row is not None:
+                enabled = bool(getattr(row, 'idle_timeout_enabled', True))
+                try:
+                    db_minutes = int(getattr(row, 'idle_timeout_minutes', None))
+                except Exception:
+                    db_minutes = None
+
+            if ENABLE_REDIS_CACHE:
+                r = get_redis()
+                if r is not None:
+                    try:
+                        r.setex(enabled_key, 60, '1' if enabled else '0')
+                        if db_minutes is not None:
+                            r.setex(minutes_key, 60, str(int(db_minutes)))
+                    except Exception:
+                        pass
+        except Exception:
+            enabled = True
+            db_minutes = None
+
+    if not enabled:
+        return 0
+
+    if db_minutes is not None:
+        if db_minutes < 1:
+            db_minutes = 1
+        if db_minutes > 10080:
+            db_minutes = 10080
+        minutes = db_minutes
+
+    return int(minutes) * 60
+
+
+def _subject_from_payload(payload: Dict) -> Optional[Dict[str, object]]:
+    if not payload:
+        return None
+    app_user_id = payload.get('app_user_id')
+    if app_user_id:
+        return {'user_type': 'app_user', 'user_id': int(app_user_id)}
+    user_id = payload.get('user_id')
+    if user_id:
+        return {'user_type': 'user', 'user_id': int(user_id)}
+    return None
+
+
+def _activity_cache_key(user_type: str, user_id: int) -> str:
+    return f'act:last:{user_type}:{user_id}'
+
+
+def _get_last_activity(user_type: str, user_id: int) -> Optional[datetime]:
+    if ENABLE_REDIS_CACHE:
+        r = get_redis()
+        if r is not None:
+            try:
+                raw = r.get(_activity_cache_key(user_type, user_id))
+                if raw:
+                    ts = int(raw)
+                    return datetime.utcfromtimestamp(ts)
+            except Exception:
+                pass
+
+    if not SessionActivity:
+        return None
+    try:
+        row = SessionActivity.query.filter_by(user_type=user_type, user_id=user_id).first()
+        return row.last_activity_at if row else None
+    except Exception:
+        return None
+
+
+def _set_last_activity(user_type: str, user_id: int, when: datetime) -> None:
+    timeout = _idle_timeout_seconds()
+    if ENABLE_REDIS_CACHE:
+        r = get_redis()
+        if r is not None:
+            try:
+                ts = int(when.timestamp())
+                ttl = max(timeout * 2, 3600) if timeout > 0 else 3600
+                r.setex(_activity_cache_key(user_type, user_id), ttl, str(ts))
+            except Exception:
+                pass
+
+    if not SessionActivity:
+        return
+    try:
+        row = SessionActivity.query.filter_by(user_type=user_type, user_id=user_id).first()
+        if not row:
+            row = SessionActivity(user_type=user_type, user_id=user_id, last_activity_at=when, created_at=when, updated_at=when)
+            db.session.add(row)
+        else:
+            row.last_activity_at = when
+            row.updated_at = when
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _touch_last_activity_throttled(user_type: str, user_id: int) -> None:
+    timeout = _idle_timeout_seconds()
+    if timeout <= 0:
+        return
+    now = _now()
+    last = _get_last_activity(user_type, user_id)
+    # Reduce DB writes, but avoid a throttle that's >= the idle timeout.
+    # If timeout is small (e.g. 60s), throttling at 60s can cause false expirations.
+    throttle_seconds = 60
+    if timeout <= 300:
+        throttle_seconds = max(5, min(60, int(timeout // 4)))
+
+    if last and (now - last).total_seconds() < throttle_seconds:
+        return
+    _set_last_activity(user_type, user_id, now)
+
+
+def _revoke_user_refresh_tokens(user_type: str, user_id: int, reason: str = 'idle_timeout') -> None:
+    if not RefreshToken:
+        return
+    try:
+        (RefreshToken.query
+         .filter_by(user_type=user_type, user_id=user_id, is_revoked=False)
+         .update({
+             'is_revoked': True,
+             'revoked_at': _now(),
+             'revoked_reason': reason,
+         }, synchronize_session=False))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _blacklist_access_token_best_effort(payload: Dict, reason: str) -> None:
+    if not TokenBlacklist:
+        return
+    try:
+        jti = payload.get('jti')
+        exp = payload.get('exp')
+        if not jti or not exp:
+            return
+        exp_dt = datetime.utcfromtimestamp(exp) if isinstance(exp, (int, float)) else None
+        if not exp_dt:
+            return
+
+        exists = TokenBlacklist.query.filter_by(jti=jti).first()
+        if not exists:
+            db.session.add(TokenBlacklist(
+                jti=jti,
+                token_type='access',
+                expires_at=exp_dt,
+                reason=reason,
+            ))
+            db.session.commit()
+
+        if ENABLE_REDIS_CACHE:
+            r = get_redis()
+            if r is not None:
+                try:
+                    ttl = int((exp_dt - _now()).total_seconds())
+                    if ttl > 0:
+                        r.setex(f'bl:jti:{jti}', ttl, '1')
+                    else:
+                        r.set(f'bl:jti:{jti}', '1')
+                except Exception:
+                    pass
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def _enforce_idle_timeout(payload: Dict) -> bool:
+    """Return True if session is still valid; False if expired due to inactivity."""
+    timeout = _idle_timeout_seconds()
+    if timeout <= 0:
+        return True
+
+    subject = _subject_from_payload(payload or {})
+    if not subject:
+        return True
+
+    user_type = subject['user_type']
+    user_id = subject['user_id']
+    now = _now()
+
+    last = _get_last_activity(str(user_type), int(user_id))
+    if last is None:
+        # First-seen: initialize activity.
+        _set_last_activity(str(user_type), int(user_id), now)
+        return True
+
+    if (now - last).total_seconds() > timeout:
+        try:
+            # Let downstream respond with a specific code.
+            g.auth_error = 'session_expired'
+        except Exception:
+            pass
+        _blacklist_access_token_best_effort(payload or {}, reason='idle_timeout')
+        _revoke_user_refresh_tokens(str(user_type), int(user_id), reason='idle_timeout')
+        return False
+
+    # Valid session: refresh activity timestamp (throttled).
+    _touch_last_activity_throttled(str(user_type), int(user_id))
+    return True
 
 def _get_jwt_secret() -> str:
     # في الإنتاج يجب ضبط JWT_SECRET_KEY. في التطوير نسمح بـ fallback لتجنب كسر التشغيل.
@@ -141,6 +404,8 @@ def decode_token(token):
         jti = payload.get('jti')
         if jti and _is_blacklisted(jti):
             return None
+        if not _enforce_idle_timeout(payload):
+            return None
         return payload
     except jwt.ExpiredSignatureError:
         return None  # Token منتهي الصلاحية
@@ -205,6 +470,13 @@ def require_auth(f):
         user = get_current_user()
         
         if not user:
+            auth_error = getattr(g, 'auth_error', None)
+            if auth_error == 'session_expired':
+                return jsonify({
+                    'success': False,
+                    'message': 'انتهت الجلسة بسبب عدم النشاط. الرجاء تسجيل الدخول مرة أخرى',
+                    'error': 'session_expired'
+                }), 401
             return jsonify({
                 'success': False,
                 'message': 'يجب تسجيل الدخول أولاً',

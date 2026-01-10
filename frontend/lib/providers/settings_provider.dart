@@ -80,6 +80,31 @@ class SettingsProvider with ChangeNotifier {
 
   bool get allowPartialInvoicePayments =>
     _safeBool(_settings['allow_partial_invoice_payments'], fallback: false);
+
+  bool get idleTimeoutEnabled =>
+      _safeBool(_settings['idle_timeout_enabled'], fallback: true);
+
+  int get idleTimeoutMinutes {
+    final dynamic raw = _settings['idle_timeout_minutes'];
+    int? minutes;
+    if (raw is int) {
+      minutes = raw;
+    } else if (raw is double) {
+      minutes = raw.toInt();
+    } else if (raw != null) {
+      minutes = int.tryParse(raw.toString().trim());
+    }
+
+    // Fallback if server doesn't provide it yet.
+    minutes ??= const int.fromEnvironment(
+      'IDLE_TIMEOUT_MINUTES',
+      defaultValue: 30,
+    );
+
+    if (minutes < 1) minutes = 1;
+    if (minutes > 10080) minutes = 10080;
+    return minutes;
+  }
   double get defaultDiscountRate =>
       _safeDouble(_settings['default_discount_rate'], fallback: 0.0);
   double get defaultDiscountPercent => defaultDiscountRate * 100;

@@ -47,6 +47,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
   bool _isEditMode = false;
   String? _itemCode; // كود الصنف (يُولّد تلقائياً)
   _AddItemEntryMode _entryMode = _AddItemEntryMode.single;
+  int _quickAddResetCounter = 0;
 
   @override
   void initState() {
@@ -108,7 +109,27 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
         backgroundColor: AppColors.success,
       ),
     );
-    Navigator.pop(context, true);
+    setState(() {
+      _quickAddResetCounter++;
+    });
+  }
+
+  void _resetSingleEntryAfterAdd({Map<String, dynamic>? response}) {
+    setState(() {
+      _itemCode = response?['item_code']?.toString();
+      _nameController.clear();
+      _weightController.clear();
+      _descriptionController.clear();
+      _countController.text = '1';
+      _stockController.text = '1';
+
+      // Keep karat/wage/price as-is for fast repeated entry.
+      if (response?['barcode'] != null) {
+        _barcodeController.text = response!['barcode'].toString();
+      } else {
+        _barcodeController.clear();
+      }
+    });
   }
 
   Future<void> _scanBarcode() async {
@@ -207,7 +228,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
           if (!mounted) return;
 
           DataSyncBus.notifyItemsChanged();
-          Navigator.pop(context, true);
+          _resetSingleEntryAfterAdd(response: response is Map ? Map<String, dynamic>.from(response) : null);
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -241,7 +262,10 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
       if (itemMutated) {
         DataSyncBus.notifyItemsChanged();
       }
-      Navigator.pop(context, true);
+
+      if (!_isEditMode) {
+        _resetSingleEntryAfterAdd(response: response is Map ? Map<String, dynamic>.from(response) : null);
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -251,6 +275,10 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
           backgroundColor: AppColors.success,
         ),
       );
+
+      if (_isEditMode) {
+        Navigator.pop(context, true);
+      }
     } catch (e) {
       if (!mounted) return;
 
@@ -709,7 +737,7 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
 
   Widget _buildQuickAddEmbedded() {
     return QuickAddItemsScreen(
-      key: const ValueKey('quickAddEmbedded'),
+      key: ValueKey('quickAddEmbedded_$_quickAddResetCounter'),
       api: widget.api,
       embedded: true,
       onSuccess: _handleQuickAddSuccess,

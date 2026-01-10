@@ -68,6 +68,19 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   double _taxTotal = 0;
   double _grandTotal = 0;
 
+  void _resetAfterSave() {
+    setState(() {
+      _selectedSupplierId = null;
+      _karatLines = [];
+      _inlineItems = [];
+      _showAdvancedPaymentOptions = false;
+      _selectedPaymentMethodId = null;
+      _selectedSafeBoxId = null;
+      _supplierError = null;
+      _applyTotals(_KaratTotals.zero);
+    });
+  }
+
   double _vatRateFromSettings() {
     try {
       final settings = context.read<SettingsProvider>();
@@ -1048,7 +1061,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       }
 
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      _resetAfterSave();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
