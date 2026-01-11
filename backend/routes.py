@@ -1972,10 +1972,18 @@ def get_supplier_weight_statement(supplier_id):
     running_balance_cash = 0.0
     running_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
 
+    # IMPORTANT:
+    # The DB may tag `supplier_id` on multiple lines within the same journal entry
+    # (inventory/tax/etc). For a supplier statement we only want the line(s)
+    # affecting supplier payable accounts, otherwise debits/credits cancel out.
     journal_lines = (
-        JournalEntryLine.query.join(JournalEntry)
+        JournalEntryLine.query
+        .join(JournalEntry)
+        .join(Account, JournalEntryLine.account_id == Account.id)
         .filter(JournalEntryLine.supplier_id == supplier_id)
         .filter(JournalEntryLine.is_deleted == False)  # noqa: E712
+        .filter(Account.type == 'Liability')
+        .filter(Account.account_number.like('21%'))
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
@@ -2038,20 +2046,6 @@ def get_supplier_weight_statement(supplier_id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
-    # Entity balances (from Supplier cached balances) for faster/consistent display
-    entity_gold_details = {
-        '18k': float(supplier.balance_gold_18k or 0.0),
-        '21k': float(supplier.balance_gold_21k or 0.0),
-        '22k': float(supplier.balance_gold_22k or 0.0),
-        '24k': float(supplier.balance_gold_24k or 0.0),
-    }
-    entity_gold_normalized = (
-        convert_to_main_karat(entity_gold_details['18k'], 18) +
-        convert_to_main_karat(entity_gold_details['21k'], 21) +
-        convert_to_main_karat(entity_gold_details['22k'], 22) +
-        convert_to_main_karat(entity_gold_details['24k'], 24)
-    )
-
     return jsonify({
         'account_name': supplier.name,
         'main_karat': main_karat,
@@ -2067,11 +2061,6 @@ def get_supplier_weight_statement(supplier_id):
         'closing_balance_cash': running_balance_cash,
         'closing_balance_gold_normalized': closing_balance_gold_normalized,
         'closing_balance_gold_details': running_balances_gold,
-        'entity_balances': {
-            'cash': float(supplier.balance_cash or 0.0),
-            'gold_normalized': entity_gold_normalized,
-            'gold_details': entity_gold_details,
-        },
     })
 
 
