@@ -22,6 +22,10 @@ from models import (
     Permission,
     AppUser,
     Employee,
+    Invoice,
+    Payroll,
+    Attendance,
+    EmployeeBonus,
     AuditLog,
     TokenBlacklist,
     RefreshToken,
@@ -2113,13 +2117,28 @@ def delete_user(user_id):
                 'success': False,
                 'message': 'لا يمكنك حذف حسابك الخاص'
             }), 400
-        
+
+        # Policy: إذا كان للمستخدم عمليات على النظام (AuditLog)، لا يتم حذفه بل يُلغى تفعيله.
         username = user.username
+        has_ops = AuditLog.query.filter_by(user_name=username).first() is not None
+        if has_ops:
+            user.is_active = False
+            user.updated_at = datetime.utcnow()
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'deleted': False,
+                'deactivated': True,
+                'message': f'لا يمكن حذف المستخدم {username} لوجود عمليات/سجلات. تم إلغاء تفعيله بدلاً من الحذف'
+            }), 200
+
         db.session.delete(user)
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
+            'deleted': True,
+            'deactivated': False,
             'message': f'تم حذف المستخدم {username} بنجاح'
         }), 200
         
@@ -2346,11 +2365,40 @@ def _forbidden(message: str, error: str = 'forbidden', status: int = 403):
     return jsonify({'success': False, 'error': error, 'message': message}), status
 
 @auth_bp.route('/app-users', methods=['GET'])
-@require_auth
+@require_permission('users.view')
 def get_app_users():
-    """الحصول على قائمة مستخدمي النظام"""
+    """الحصول على قائمة مستخدمي النظام (AppUser)
+
+    Query params:
+    - search: username/full_name/email/phone
+    - is_active: true/false
+    - role: system_admin/manager/accountant/employee
+    """
     try:
-        app_users = AppUser.query.all()
+        search = (request.args.get('search') or '').strip()
+        is_active = request.args.get('is_active')
+        role = (request.args.get('role') or '').strip()
+
+        query = AppUser.query
+        if search:
+            term = f"%{search}%"
+            query = query.filter(
+                db.or_(
+                    AppUser.username.ilike(term),
+                    AppUser.full_name.ilike(term),
+                    AppUser.email.ilike(term),
+                    AppUser.phone.ilike(term),
+                )
+            )
+
+        if is_active is not None:
+            active_bool = str(is_active).lower() in ('true', '1', 'yes')
+            query = query.filter(AppUser.is_active == active_bool)
+
+        if role:
+            query = query.filter(AppUser.role == role)
+
+        app_users = query.order_by(AppUser.created_at.desc()).all()
         return jsonify({
             'success': True,
             'app_users': [u.to_dict(include_employee=True) for u in app_users],
@@ -2364,7 +2412,7 @@ def get_app_users():
 
 
 @auth_bp.route('/app-users/<int:app_user_id>', methods=['GET'])
-@require_auth
+@require_permission('users.view')
 def get_app_user(app_user_id):
     """الحصول على تفاصيل مستخدم"""
     try:
@@ -2387,7 +2435,7 @@ def get_app_user(app_user_id):
 
 
 @auth_bp.route('/app-users/by-employee/<int:employee_id>', methods=['GET'])
-@require_auth
+@require_permission('users.view')
 def get_app_user_by_employee(employee_id):
     """Fetch linked AppUser for a given employee.
 
@@ -2414,7 +2462,7 @@ def get_app_user_by_employee(employee_id):
 
 
 @auth_bp.route('/app-users/from-employee', methods=['POST'])
-@require_auth
+@require_permission('users.create')
 def create_app_user_from_employee():
     """إنشاء حساب مستخدم من موظف"""
     try:
@@ -2515,7 +2563,7 @@ def create_app_user_from_employee():
 
 
 @auth_bp.route('/app-users', methods=['POST'])
-@require_auth
+@require_permission('users.create')
 def create_app_user():
     """إنشاء AppUser (مع/بدون ربط موظف).
 
@@ -2634,7 +2682,7 @@ def create_app_user():
 
 
 @auth_bp.route('/app-users/<int:app_user_id>/toggle-active', methods=['POST'])
-@require_auth
+@require_permission('users.edit')
 def toggle_app_user_active(app_user_id):
     """تبديل حالة تفعيل AppUser."""
     try:
@@ -2699,7 +2747,7 @@ def toggle_app_user_active(app_user_id):
 
 
 @auth_bp.route('/app-users/<int:app_user_id>/reset-password', methods=['POST'])
-@require_auth
+@require_permission('users.edit')
 def reset_app_user_password(app_user_id):
     """إعادة تعيين كلمة المرور لـ AppUser."""
     try:
@@ -2740,7 +2788,7 @@ def reset_app_user_password(app_user_id):
 
 
 @auth_bp.route('/app-users/<int:app_user_id>', methods=['PUT'])
-@require_auth
+@require_permission('users.edit')
 def update_app_user(app_user_id):
     """تحديث بيانات مستخدم"""
     try:
@@ -2861,22 +2909,66 @@ def update_app_user(app_user_id):
 
 
 @auth_bp.route('/app-users/<int:app_user_id>', methods=['DELETE'])
-@require_auth
+@require_permission('users.delete')
 def delete_app_user(app_user_id):
     """حذف مستخدم"""
     try:
+        actor = g.current_user
         app_user = AppUser.query.get(app_user_id)
         if not app_user:
             return jsonify({
                 'success': False,
                 'message': 'المستخدم غير موجود'
             }), 404
+
+        # Prevent deleting own account (AppUser only)
+        if isinstance(actor, AppUser) and actor.id == app_user_id:
+            return jsonify({
+                'success': False,
+                'error': 'self_action_not_allowed',
+                'message': 'لا يمكنك حذف حسابك الخاص'
+            }), 400
+
+        # Prevent deleting the last active system admin
+        if app_user.role == 'system_admin' and bool(app_user.is_active):
+            active_admins = AppUser.query.filter_by(role='system_admin', is_active=True).count()
+            if active_admins <= 1:
+                return jsonify({
+                    'success': False,
+                    'error': 'last_admin_protection',
+                    'message': 'لا يمكن حذف آخر مسؤول نظام فعّال'
+                }), 400
+
+        # Policy: إذا كان للمستخدم عمليات (من خلال الموظف المرتبط)، لا يتم حذفه بل يُلغى تفعيله.
+        has_ops = False
+        employee_id = getattr(app_user, 'employee_id', None)
+        if employee_id:
+            has_ops = (
+                Invoice.query.filter_by(employee_id=employee_id).first() is not None
+                or Payroll.query.filter_by(employee_id=employee_id).first() is not None
+                or Attendance.query.filter_by(employee_id=employee_id).first() is not None
+                or EmployeeBonus.query.filter_by(employee_id=employee_id).first() is not None
+            )
+
+        if has_ops:
+            app_user.is_active = False
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'deleted': False,
+                'deactivated': True,
+                'is_active': False,
+                'message': 'لا يمكن حذف المستخدم لوجود عمليات/سجلات مرتبطة. تم إلغاء تفعيله بدلاً من الحذف',
+                'app_user': app_user.to_dict(include_employee=True),
+            }), 200
         
         db.session.delete(app_user)
         db.session.commit()
         
         return jsonify({
             'success': True,
+            'deleted': True,
+            'deactivated': False,
             'message': 'تم حذف المستخدم بنجاح'
         }), 200
         

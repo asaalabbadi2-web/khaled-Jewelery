@@ -116,7 +116,8 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
 
   void _resetSingleEntryAfterAdd({Map<String, dynamic>? response}) {
     setState(() {
-      _itemCode = response?['item_code']?.toString();
+      // بعد الحفظ نُصفّر كود/رقم الصنف حتى لا يبقى ظاهرًا للمدخل التالي
+      _itemCode = null;
       _nameController.clear();
       _weightController.clear();
       _descriptionController.clear();
@@ -217,11 +218,10 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
         // حفظ item_code و barcode المُولّدين من السيرفر
         if (response != null) {
           itemMutated = true;
-          if (response['item_code'] != null) {
-            _itemCode = response['item_code'];
-          }
-          if (response['barcode'] != null) {
-            _barcodeController.text = response['barcode'];
+          final createdItemCode = response['item_code']?.toString();
+          final createdBarcode = response['barcode']?.toString();
+          if (createdBarcode != null && createdBarcode.isNotEmpty) {
+            _barcodeController.text = createdBarcode;
           }
 
           // رسالة نجاح مع تفاصيل التوليد التلقائي
@@ -237,14 +237,14 @@ class _AddItemScreenEnhancedState extends State<AddItemScreenEnhanced> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('✅ تم إضافة الصنف بنجاح'),
-                  if (response['item_code'] != null)
+                  if (createdItemCode != null && createdItemCode.isNotEmpty)
                     Text(
-                      'كود الصنف: ${response['item_code']}',
+                      'كود الصنف: $createdItemCode',
                       style: const TextStyle(fontSize: 12),
                     ),
-                  if (response['barcode'] != null)
+                  if (createdBarcode != null && createdBarcode.isNotEmpty)
                     Text(
-                      'الباركود: ${response['barcode']}',
+                      'الباركود: $createdBarcode',
                       style: const TextStyle(fontSize: 12),
                     ),
                 ],

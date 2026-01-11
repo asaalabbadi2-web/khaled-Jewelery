@@ -25,7 +25,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _roles = [];
   bool _loading = false;
-  bool? _activeFilter;
+  bool? _activeFilter = true;
   String? _token;
 
   @override

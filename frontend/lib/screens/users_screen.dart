@@ -21,7 +21,7 @@ class UsersScreen extends StatefulWidget {
 class _UsersScreenState extends State<UsersScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<AppUserModel> _users = [];
-  bool? _activeFilter;
+  bool? _activeFilter = true;
   bool _loading = false;
 
   @override
@@ -265,9 +265,36 @@ class _UsersScreenState extends State<UsersScreen> {
     if (confirm != true) return;
 
     try {
-      await widget.api.deleteUser(user.id ?? 0);
-      setState(() => _users.removeWhere((u) => u.id == user.id));
-      _showSnack(widget.isArabic ? 'تم حذف المستخدم' : 'User deleted');
+      final response = await widget.api.deleteUser(user.id ?? 0);
+      final deactivated = response['deactivated'] == true;
+      final deleted = response['deleted'] == true;
+
+      if (deactivated) {
+        setState(() {
+          final index = _users.indexWhere((u) => u.id == user.id);
+          if (index != -1) {
+            _users[index] = user.copyWith(isActive: false);
+          }
+        });
+      } else if (deleted) {
+        setState(() => _users.removeWhere((u) => u.id == user.id));
+      } else {
+        // Fallback: refresh from server
+        await _loadUsers();
+      }
+
+      final message = (response['message'] as String?)?.trim();
+      if (message != null && message.isNotEmpty) {
+        _showSnack(message);
+      } else {
+        _showSnack(
+          deactivated
+              ? (widget.isArabic
+                  ? 'تم إلغاء تفعيل المستخدم بدلاً من الحذف'
+                  : 'User deactivated instead of deleted')
+              : (widget.isArabic ? 'تم حذف المستخدم' : 'User deleted'),
+        );
+      }
     } catch (e) {
       _showSnack(e.toString(), isError: true);
     }
@@ -433,7 +460,7 @@ class _UsersScreenState extends State<UsersScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          isAr ? 'الدور:  ' : 'Role: \u00A0',
+                          isAr ? 'الدور: ' : 'Role: ',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],

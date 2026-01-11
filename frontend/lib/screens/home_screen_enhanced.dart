@@ -161,7 +161,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         if (!mounted) return;
         final auth = context.read<AuthProvider>();
         if (!auth.isAuthenticated) return;
-        if (!auth.hasPermission('gold_price.view')) return;
         await _loadGoldPrice();
       },
     );
@@ -247,7 +246,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
       debugPrint('🔄 بدء تحميل البيانات...');
       final futures = <Future<void>>[];
-      if (auth.hasPermission('gold_price.view')) futures.add(_loadGoldPrice());
+      if (auth.isAuthenticated) futures.add(_loadGoldPrice());
       if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
       if (auth.hasPermission('items.view')) futures.add(_loadItems());
       if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../models/category_model.dart';
+import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
 import '../services/data_sync_bus.dart';
 import 'add_item_screen_enhanced.dart';
@@ -268,6 +270,8 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final auth = context.watch<AuthProvider>();
+    final canCreateItems = auth.hasPermission('items.create');
 
     return Scaffold(
       appBar: AppBar(
@@ -285,36 +289,38 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
             onPressed: _showFilterDialog,
           ),
           // 🚀 زر الإضافة السريعة
-          IconButton(
-            icon: const Icon(Icons.flash_on),
-            tooltip: 'إضافة سريعة',
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => QuickAddItemsScreen(api: widget.api),
-                ),
-              );
-              if (result == true) {
-                await _loadItems(notifyListeners: true);
-              }
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: 'إضافة صنف جديد',
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => AddItemScreenEnhanced(api: widget.api),
-                ),
-              );
-              if (result == true) {
-                await _loadItems(notifyListeners: true);
-              }
-            },
-          ),
+          if (canCreateItems)
+            IconButton(
+              icon: const Icon(Icons.flash_on),
+              tooltip: 'إضافة سريعة',
+              onPressed: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => QuickAddItemsScreen(api: widget.api),
+                  ),
+                );
+                if (result == true) {
+                  await _loadItems(notifyListeners: true);
+                }
+              },
+            ),
+          if (canCreateItems)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              tooltip: 'إضافة صنف جديد',
+              onPressed: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AddItemScreenEnhanced(api: widget.api),
+                  ),
+                );
+                if (result == true) {
+                  await _loadItems(notifyListeners: true);
+                }
+              },
+            ),
         ],
       ),
       body: loading
@@ -526,23 +532,29 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
     final karatBadgeColor = AppColors.primaryGold;
+    final auth = context.read<AuthProvider>();
+    final canCreateItems = auth.hasPermission('items.create');
+    final canEditItems = auth.hasPermission('items.edit');
+    final canDeleteItems = auth.hasPermission('items.delete');
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       elevation: theme.cardTheme.elevation ?? 1,
       child: InkWell(
-        onTap: () async {
-          final result = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  AddItemScreenEnhanced(api: widget.api, itemToEdit: item),
-            ),
-          );
-          if (result == true) {
-            await _loadItems(notifyListeners: true);
-          }
-        },
+        onTap: canEditItems
+            ? () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        AddItemScreenEnhanced(api: widget.api, itemToEdit: item),
+                  ),
+                );
+                if (result == true) {
+                  await _loadItems(notifyListeners: true);
+                }
+              }
+            : null,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -735,7 +747,8 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () async {
+                      onPressed: canCreateItems
+                          ? () async {
                         // 🔄 استنساخ الصنف بسرعة
                         final result = await Navigator.push(
                           context,
@@ -749,7 +762,8 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                         if (result == true) {
                           await _loadItems(notifyListeners: true);
                         }
-                      },
+                      }
+                          : null,
                       icon: const Icon(Icons.copy, size: 16),
                       label: const Text('استنساخ'),
                       style: OutlinedButton.styleFrom(
@@ -762,20 +776,22 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => AddItemScreenEnhanced(
-                              api: widget.api,
-                              itemToEdit: item,
-                            ),
-                          ),
-                        );
-                        if (result == true) {
-                          await _loadItems(notifyListeners: true);
-                        }
-                      },
+                      onPressed: canEditItems
+                          ? () async {
+                              final result = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => AddItemScreenEnhanced(
+                                    api: widget.api,
+                                    itemToEdit: item,
+                                  ),
+                                ),
+                              );
+                              if (result == true) {
+                                await _loadItems(notifyListeners: true);
+                              }
+                            }
+                          : null,
                       icon: const Icon(Icons.edit, size: 16),
                       label: const Text('تعديل'),
                       style: OutlinedButton.styleFrom(
@@ -784,16 +800,17 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () => _deleteItem(item),
-                    icon: const Icon(
-                      Icons.delete,
-                      color: AppColors.error,
-                      size: 20,
+                  if (canDeleteItems)
+                    IconButton(
+                      onPressed: () => _deleteItem(item),
+                      icon: const Icon(
+                        Icons.delete,
+                        color: AppColors.error,
+                        size: 20,
+                      ),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
                     ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
                 ],
               ),
             ],
@@ -859,17 +876,19 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
           ),
           const SizedBox(height: 8),
           TextButton.icon(
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => AddItemScreenEnhanced(api: widget.api),
-                ),
-              );
-              if (result == true) {
-                await _loadItems(notifyListeners: true);
-              }
-            },
+            onPressed: (context.read<AuthProvider>().hasPermission('items.create'))
+                ? () async {
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AddItemScreenEnhanced(api: widget.api),
+                      ),
+                    );
+                    if (result == true) {
+                      await _loadItems(notifyListeners: true);
+                    }
+                  }
+                : null,
             icon: const Icon(Icons.add),
             label: Text(
               'إضافة صنف جديد',

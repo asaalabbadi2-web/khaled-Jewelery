@@ -3086,13 +3086,18 @@ class ApiService {
     throw Exception(_readApiErrorMessage(response, 'فشل في تحديث المستخدم'));
   }
 
-  Future<void> deleteUser(int userId) async {
+  Future<Map<String, dynamic>> deleteUser(int userId) async {
     final response = await _authedDelete(
       Uri.parse('$_baseUrl/app-users/$userId'),
     );
-    if (response.statusCode != 200) {
-      throw Exception(_readApiErrorMessage(response, 'فشل في حذف المستخدم'));
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      return <String, dynamic>{'success': true};
     }
+    throw Exception(_readApiErrorMessage(response, 'فشل في حذف المستخدم'));
   }
 
   Future<bool> toggleUserActive(int userId) async {

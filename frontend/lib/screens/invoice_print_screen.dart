@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart' show rootBundle;
@@ -45,6 +46,8 @@ class InvoicePrintScreen extends StatefulWidget {
 }
 
 class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
+  bool get _isArabic => widget.isArabic;
+
   bool _isGenerating = false;
   bool _autoActionTriggered = false;
   // Cache PDFs by format signature. Some preview/print flows request multiple
@@ -313,6 +316,9 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     final key = (presetKey ?? '').trim();
     if (key.isEmpty) return null;
 
+    final include = await _loadTemplateBackgroundIncludeInPrintForPreset(key);
+    if (!include) return null;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('template_background_$key');
@@ -329,6 +335,17 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
       return bytes;
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<bool> _loadTemplateBackgroundIncludeInPrintForPreset(String presetKey) async {
+    final key = presetKey.trim();
+    if (key.isEmpty) return true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool('template_background_include_in_print_$key') ?? true;
+    } catch (_) {
+      return true;
     }
   }
 
@@ -632,42 +649,45 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.isArabic ? 'طباعة الفاتورة' : 'Print Invoice'),
-        backgroundColor: const Color(0xFFD4AF37),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.print),
-            onPressed: (_pdfFontsReady && _templateAssetsReady) ? _printPdf : null,
-            tooltip: widget.isArabic ? 'طباعة' : 'Print',
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _showPrintSettings,
-            tooltip: widget.isArabic ? 'إعدادات الطباعة' : 'Print Settings',
-          ),
-          IconButton(
-            icon: const Icon(Icons.download),
-            onPressed: (_pdfFontsReady && _templateAssetsReady) ? _downloadPdf : null,
-            tooltip: widget.isArabic ? 'تحميل PDF' : 'Download PDF',
-          ),
-        ],
-      ),
-      body: (!_pdfFontsReady || !_templateAssetsReady || _isGenerating)
-          ? const Center(child: CircularProgressIndicator())
-          : PdfPreview(
-              build: (format) => _buildPdfForFormat(format),
-              canChangePageFormat: false,
-              canChangeOrientation: false,
-              canDebug: false,
-              // Enable printing from preview on desktop for better macOS compatibility.
-              allowPrinting: !kIsWeb,
-              allowSharing: true,
-              initialPageFormat: _getPdfPageFormat(),
-              pdfFileName:
-                  'invoice_${widget.invoice['invoice_type_id']}_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
+    return Directionality(
+      textDirection: _isArabic ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_isArabic ? 'طباعة الفاتورة' : 'Print Invoice'),
+          backgroundColor: const Color(0xFFD4AF37),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.print),
+              onPressed: (_pdfFontsReady && _templateAssetsReady) ? _printPdf : null,
+              tooltip: _isArabic ? 'طباعة' : 'Print',
             ),
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _showPrintSettings,
+              tooltip: _isArabic ? 'إعدادات الطباعة' : 'Print Settings',
+            ),
+            IconButton(
+              icon: const Icon(Icons.download),
+              onPressed: (_pdfFontsReady && _templateAssetsReady) ? _downloadPdf : null,
+              tooltip: _isArabic ? 'تحميل PDF' : 'Download PDF',
+            ),
+          ],
+        ),
+        body: (!_pdfFontsReady || !_templateAssetsReady || _isGenerating)
+            ? const Center(child: CircularProgressIndicator())
+            : PdfPreview(
+                build: (format) => _buildPdfForFormat(format),
+                canChangePageFormat: false,
+                canChangeOrientation: false,
+                canDebug: false,
+                // Enable printing from preview on desktop for better macOS compatibility.
+                allowPrinting: !kIsWeb,
+                allowSharing: true,
+                initialPageFormat: _getPdfPageFormat(),
+                pdfFileName:
+                    'invoice_${widget.invoice['invoice_type_id']}_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
+              ),
+      ),
     );
   }
 
@@ -767,7 +787,7 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     doc.addPage(
       pw.Page(
         pageFormat: format,
-        textDirection: widget.isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+        textDirection: _isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
         theme: pw.ThemeData.withFont(
           base: _pdfFontBase!,
           bold: _pdfFontBold!,
@@ -786,7 +806,8 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
           }
           debugPrint('[PrintDiag|Gen] Building standard page...');
           final page = pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            crossAxisAlignment:
+                _isArabic ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
             children: [
               // رأس الصفحة
               _buildHeader(context),
@@ -829,13 +850,104 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   pw.Widget _buildHeader(pw.Context context) {
     final companyName = (_companyName != null && _companyName!.trim().isNotEmpty)
         ? _companyName!.trim()
-        : (widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry');
+        : (_isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry');
 
     final companyAddress = (_companyAddress ?? '').trim();
     final companyPhone = (_companyPhone ?? '').trim();
     final companyTaxNumber = (_companyTaxNumber ?? '').trim();
 
     final shouldShowLogo = _showLogo && _settingsShowCompanyLogo;
+
+    final companyBlock = pw.Column(
+      crossAxisAlignment:
+          _isArabic ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
+      children: [
+        if (shouldShowLogo)
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
+            children: [
+              if (_companyLogoBytes != null && !_isArabic)
+                pw.Container(
+                  width: 36,
+                  height: 36,
+                  margin: const pw.EdgeInsets.only(right: 8),
+                  child: pw.Image(
+                    pw.MemoryImage(_companyLogoBytes!),
+                    fit: pw.BoxFit.contain,
+                  ),
+                ),
+              pw.Text(
+                companyName,
+                style: pw.TextStyle(
+                  fontSize: 20,
+                  fontWeight: pw.FontWeight.bold,
+                  color: _printInColor
+                      ? const PdfColor.fromInt(0xFFD4AF37)
+                      : PdfColors.black,
+                ),
+              ),
+              if (_companyLogoBytes != null && _isArabic)
+                pw.Container(
+                  width: 36,
+                  height: 36,
+                  margin: const pw.EdgeInsets.only(left: 8),
+                  child: pw.Image(
+                    pw.MemoryImage(_companyLogoBytes!),
+                    fit: pw.BoxFit.contain,
+                  ),
+                ),
+            ],
+          ),
+        if (_showAddress) ...[
+          pw.SizedBox(height: 5),
+          if (companyAddress.isNotEmpty)
+            pw.Text(
+              '${_isArabic ? 'العنوان' : 'Address'}: $companyAddress',
+              style: const pw.TextStyle(fontSize: 10),
+              textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
+            ),
+          if (companyPhone.isNotEmpty)
+            pw.Text(
+              '${_isArabic ? 'هاتف' : 'Phone'}: $companyPhone',
+              style: const pw.TextStyle(fontSize: 10),
+              textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
+            ),
+          if (_showTaxInfo && companyTaxNumber.isNotEmpty)
+            pw.Text(
+              '${_isArabic ? 'الرقم الضريبي' : 'VAT No'}: $companyTaxNumber',
+              style: const pw.TextStyle(fontSize: 10),
+              textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
+            ),
+        ],
+      ],
+    );
+
+    final invoiceTypeBlock = pw.Container(
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        color: _printInColor ? const PdfColor.fromInt(0xFFD4AF37) : PdfColors.grey300,
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        children: [
+          pw.Text(
+            _isArabic ? 'فاتورة' : 'Invoice',
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+              color: _printInColor ? PdfColors.white : PdfColors.black,
+            ),
+          ),
+          pw.Text(
+            '${widget.invoice['invoice_type'] ?? ''}',
+            style: pw.TextStyle(
+              fontSize: 14,
+              color: _printInColor ? PdfColors.white : PdfColors.black,
+            ),
+          ),
+        ],
+      ),
+    );
 
     return pw.Container(
       decoration: const pw.BoxDecoration(
@@ -846,86 +958,9 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
       padding: const pw.EdgeInsets.only(bottom: 10),
       child: pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-        children: [
-          // شعار ومعلومات الشركة
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              if (shouldShowLogo)
-                pw.Row(
-                  crossAxisAlignment: pw.CrossAxisAlignment.center,
-                  children: [
-                    if (_companyLogoBytes != null)
-                      pw.Container(
-                        width: 36,
-                        height: 36,
-                        margin: const pw.EdgeInsets.only(right: 8),
-                        child: pw.Image(
-                          pw.MemoryImage(_companyLogoBytes!),
-                          fit: pw.BoxFit.contain,
-                        ),
-                      ),
-                    pw.Text(
-                      companyName,
-                      style: pw.TextStyle(
-                        fontSize: 20,
-                        fontWeight: pw.FontWeight.bold,
-                        color: _printInColor
-                            ? const PdfColor.fromInt(0xFFD4AF37)
-                            : PdfColors.black,
-                      ),
-                    ),
-                  ],
-                ),
-              if (_showAddress) ...[
-                pw.SizedBox(height: 5),
-                if (companyAddress.isNotEmpty)
-                  pw.Text(
-                    '${widget.isArabic ? 'العنوان' : 'Address'}: $companyAddress',
-                    style: const pw.TextStyle(fontSize: 10),
-                  ),
-                if (companyPhone.isNotEmpty)
-                  pw.Text(
-                    '${widget.isArabic ? 'هاتف' : 'Phone'}: $companyPhone',
-                    style: const pw.TextStyle(fontSize: 10),
-                  ),
-                if (_showTaxInfo && companyTaxNumber.isNotEmpty)
-                  pw.Text(
-                    '${widget.isArabic ? 'الرقم الضريبي' : 'VAT No'}: $companyTaxNumber',
-                    style: const pw.TextStyle(fontSize: 10),
-                  ),
-              ],
-            ],
-          ),
-
-          // نوع الفاتورة
-          pw.Container(
-            padding: const pw.EdgeInsets.all(10),
-            decoration: pw.BoxDecoration(
-              color: _printInColor ? const PdfColor.fromInt(0xFFD4AF37) : PdfColors.grey300,
-              borderRadius: pw.BorderRadius.circular(8),
-            ),
-            child: pw.Column(
-              children: [
-                pw.Text(
-                  widget.isArabic ? 'فاتورة' : 'Invoice',
-                  style: pw.TextStyle(
-                    fontSize: 16,
-                    fontWeight: pw.FontWeight.bold,
-                    color: _printInColor ? PdfColors.white : PdfColors.black,
-                  ),
-                ),
-                pw.Text(
-                  '${widget.invoice['invoice_type'] ?? ''}',
-                  style: pw.TextStyle(
-                    fontSize: 14,
-                    color: _printInColor ? PdfColors.white : PdfColors.black,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+        children: _isArabic
+            ? [invoiceTypeBlock, companyBlock]
+            : [companyBlock, invoiceTypeBlock],
       ),
     );
   }
@@ -935,63 +970,82 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     final invoiceDate = DateTime.tryParse(widget.invoice['date']?.toString() ?? '') ??
         DateTime.now();
 
-    return pw.Row(
-      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+    final infoColumn = pw.Column(
+      crossAxisAlignment:
+          _isArabic ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
       children: [
-        pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            _buildInfoRow(
-              widget.isArabic ? 'رقم الفاتورة:' : 'Invoice No:',
-              '#${widget.invoice['invoice_type_id'] ?? ''}',
-            ),
-            _buildInfoRow(
-              widget.isArabic ? 'التاريخ:' : 'Date:',
-              dateFormat.format(invoiceDate),
-            ),
-            if (widget.invoice['customer_name'] != null)
-              _buildInfoRow(
-                widget.isArabic ? 'العميل:' : 'Customer:',
-                widget.invoice['customer_name'] ?? '',
-              ),
-            if (widget.invoice['supplier_name'] != null)
-              _buildInfoRow(
-                widget.isArabic ? 'المورد:' : 'Supplier:',
-                widget.invoice['supplier_name'] ?? '',
-              ),
-          ],
+        _buildInfoRow(
+          _isArabic ? 'رقم الفاتورة:' : 'Invoice No:',
+          '#${widget.invoice['invoice_type_id'] ?? ''}',
         ),
-        if (widget.invoice['is_posted'] == true)
-          pw.Container(
+        _buildInfoRow(
+          _isArabic ? 'التاريخ:' : 'Date:',
+          dateFormat.format(invoiceDate),
+        ),
+        if (widget.invoice['customer_name'] != null)
+          _buildInfoRow(
+            _isArabic ? 'العميل:' : 'Customer:',
+            widget.invoice['customer_name'] ?? '',
+          ),
+        if (widget.invoice['supplier_name'] != null)
+          _buildInfoRow(
+            _isArabic ? 'المورد:' : 'Supplier:',
+            widget.invoice['supplier_name'] ?? '',
+          ),
+      ],
+    );
+
+    final postedBadge = (widget.invoice['is_posted'] == true)
+        ? pw.Container(
             padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: pw.BoxDecoration(
               color: _printInColor ? PdfColors.green : PdfColors.grey300,
               borderRadius: pw.BorderRadius.circular(12),
             ),
             child: pw.Text(
-              widget.isArabic ? 'مرحّل' : 'Posted',
+              _isArabic ? 'مرحّل' : 'Posted',
               style: pw.TextStyle(
                 color: _printInColor ? PdfColors.white : PdfColors.black,
                 fontWeight: pw.FontWeight.bold,
               ),
             ),
-          ),
-      ],
+          )
+        : null;
+
+    final children = <pw.Widget>[
+      infoColumn,
+      if (postedBadge != null) postedBadge,
+    ];
+
+    return pw.Row(
+      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+      children: _isArabic ? children.reversed.toList() : children,
     );
   }
 
   pw.Widget _buildInfoRow(String label, String value) {
     return pw.Padding(
       padding: const pw.EdgeInsets.only(bottom: 4),
-      child: pw.Row(
-        children: [
-          pw.Text(
-            label,
-            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+      child: pw.Align(
+        alignment: _isArabic ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+        child: pw.RichText(
+          textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
+          text: pw.TextSpan(
+            children: [
+              pw.TextSpan(
+                text: label,
+                style: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: 11,
+                ),
+              ),
+              pw.TextSpan(
+                text: ' $value',
+                style: const pw.TextStyle(fontSize: 11),
+              ),
+            ],
           ),
-          pw.SizedBox(width: 8),
-          pw.Text(value, style: const pw.TextStyle(fontSize: 11)),
-        ],
+        ),
       ),
     );
   }
@@ -1009,15 +1063,26 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
       truncated = false;
     }
 
+    final baseColumnWidths = <int, pw.TableColumnWidth>{
+      0: const pw.FlexColumnWidth(0.8),
+      1: const pw.FlexColumnWidth(3),
+      2: const pw.FlexColumnWidth(1.2),
+      3: const pw.FlexColumnWidth(1.4),
+      if (_showPrices) 4: const pw.FlexColumnWidth(0.9),
+      if (_showPrices) 5: const pw.FlexColumnWidth(2.7),
+    };
+
+    final columnCount = _showPrices ? 6 : 4;
+    final columnWidths = _isArabic
+        ? <int, pw.TableColumnWidth>{
+            for (var i = 0; i < columnCount; i++)
+              i: baseColumnWidths[columnCount - 1 - i]!,
+          }
+        : baseColumnWidths;
+
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey400),
-      columnWidths: {
-        0: const pw.FlexColumnWidth(1),
-        1: const pw.FlexColumnWidth(3),
-        2: const pw.FlexColumnWidth(1.5),
-        3: const pw.FlexColumnWidth(1.5),
-        if (_showPrices) 4: const pw.FlexColumnWidth(2),
-      },
+      columnWidths: columnWidths,
       children: [
         // رأس الجدول
         pw.TableRow(
@@ -1026,14 +1091,24 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
                 ? PdfColors.yellow100
                 : PdfColors.grey300,
           ),
-          children: [
-            _buildTableCell(widget.isArabic ? '#' : 'No', isHeader: true),
-            _buildTableCell(widget.isArabic ? 'اسم الصنف' : 'Item Name', isHeader: true),
-            _buildTableCell(widget.isArabic ? 'العيار' : 'Karat', isHeader: true),
-            _buildTableCell(widget.isArabic ? 'الوزن (جم)' : 'Weight (g)', isHeader: true),
-            if (_showPrices)
-              _buildTableCell(widget.isArabic ? 'السعر' : 'Price', isHeader: true),
-          ],
+          children: () {
+            final headerCells = <pw.Widget>[
+              _buildTableCell(widget.isArabic ? '#' : 'No', isHeader: true),
+              _buildTableCell(widget.isArabic ? 'اسم الصنف' : 'Item Name',
+                  isHeader: true),
+              _buildTableCell(widget.isArabic ? 'العيار' : 'Karat', isHeader: true),
+              _buildTableCell(widget.isArabic ? 'الوزن (جم)' : 'Weight (g)',
+                  isHeader: true),
+              if (_showPrices)
+                _buildTableCell(widget.isArabic ? 'الكمية' : 'Qty', isHeader: true),
+              if (_showPrices)
+                _buildTableCell(
+                  widget.isArabic ? 'تفاصيل المبلغ' : 'Amount Details',
+                  isHeader: true,
+                ),
+            ];
+            return _isArabic ? headerCells.reversed.toList() : headerCells;
+          }(),
         ),
 
         // بيانات الأصناف
@@ -1046,30 +1121,138 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
 
           final name = (item['name'] ?? item['item_name'] ?? '').toString();
           final karat = (item['karat'] ?? '').toString();
-          final weight = _weight(item['weight'] ?? item['total_weight']);
-          final priceText = _money(item['price'] ?? item['net'] ?? item['total']);
-          return pw.TableRow(
-            children: [
-              _buildTableCell('${index + 1}'),
-              _buildTableCell(name),
-              _buildTableCell(karat),
-              _buildTableCell(weight),
-              if (_showPrices)
-                _buildTableCell(priceText),
-            ],
-          );
+          final rawWeight = item['weight'] ?? item['total_weight'];
+          final weight = _weight(rawWeight);
+
+          final qty = _asDouble(item['quantity'], fallback: 1);
+          final qtyInt = qty <= 0 ? 1 : qty.round();
+
+          final total = _asDouble(item['price'] ?? item['total']);
+          final tax = _asDouble(item['tax']);
+          final net = _asDouble(item['net'], fallback: (total - tax));
+          final unitPrice = qtyInt > 0 ? (total / qtyInt) : total;
+
+          final wagePerGram = _asDouble(item['wage']);
+          final weightPerItem = _asDouble(rawWeight);
+          final wageTotal = (wagePerGram > 0 && weightPerItem > 0)
+              ? (wagePerGram * weightPerItem * qtyInt)
+              : 0.0;
+
+          final cells = <pw.Widget>[
+            _buildTableCell('${index + 1}'),
+            _buildTableCell(name),
+            _buildTableCell(karat),
+            _buildTableCell(weight),
+            if (_showPrices) _buildTableCell(qtyInt.toString()),
+            if (_showPrices)
+              _buildAmountDetailsCell(
+                unitPrice: unitPrice,
+                net: net,
+                tax: tax,
+                total: total,
+                wagePerGram: wagePerGram,
+                wageTotal: wageTotal,
+              ),
+          ];
+          return pw.TableRow(children: _isArabic ? cells.reversed.toList() : cells);
         }),
         if (truncated)
           pw.TableRow(
-            children: [
-              _buildTableCell('...'),
-              _buildTableCell(widget.isArabic ? 'تم اختصار العناصر' : 'Items truncated'),
-              _buildTableCell(''),
-              _buildTableCell(''),
-              if (_showPrices) _buildTableCell(''),
-            ],
+            children: () {
+              final truncatedCells = <pw.Widget>[
+                _buildTableCell('...'),
+                _buildTableCell(
+                    widget.isArabic ? 'تم اختصار العناصر' : 'Items truncated'),
+                _buildTableCell(''),
+                _buildTableCell(''),
+                if (_showPrices) _buildTableCell(''),
+                if (_showPrices) _buildTableCell(''),
+              ];
+              return _isArabic
+                  ? truncatedCells.reversed.toList()
+                  : truncatedCells;
+            }(),
           ),
       ],
+    );
+  }
+
+  pw.Widget _buildAmountDetailsCell({
+    required double unitPrice,
+    required double net,
+    required double tax,
+    required double total,
+    double wagePerGram = 0,
+    double wageTotal = 0,
+  }) {
+    final rows = <pw.Widget>[];
+
+    rows.add(
+      pw.Text(
+        widget.isArabic
+            ? 'وحدة: ${_money(unitPrice)}'
+            : 'Unit: ${_money(unitPrice)}',
+        style: const pw.TextStyle(fontSize: 9),
+        textAlign: pw.TextAlign.center,
+      ),
+    );
+
+    if (wagePerGram > 0) {
+      rows.add(
+        pw.Text(
+          widget.isArabic
+              ? 'مص/جم: ${_money(wagePerGram)}'
+              : 'Wage/g: ${_money(wagePerGram)}',
+          style: const pw.TextStyle(fontSize: 9),
+          textAlign: pw.TextAlign.center,
+        ),
+      );
+    }
+
+    if (wageTotal > 0) {
+      rows.add(
+        pw.Text(
+          widget.isArabic
+              ? 'مصنعية: ${_money(wageTotal)}'
+              : 'Wage: ${_money(wageTotal)}',
+          style: const pw.TextStyle(fontSize: 9),
+          textAlign: pw.TextAlign.center,
+        ),
+      );
+    }
+
+    rows.add(
+      pw.Text(
+        widget.isArabic ? 'صافي: ${_money(net)}' : 'Net: ${_money(net)}',
+        style: const pw.TextStyle(fontSize: 9),
+        textAlign: pw.TextAlign.center,
+      ),
+    );
+    rows.add(
+      pw.Text(
+        widget.isArabic ? 'ضريبة: ${_money(tax)}' : 'VAT: ${_money(tax)}',
+        style: const pw.TextStyle(fontSize: 9),
+        textAlign: pw.TextAlign.center,
+      ),
+    );
+    rows.add(
+      pw.Text(
+        widget.isArabic ? 'إجمالي: ${_money(total)}' : 'Total: ${_money(total)}',
+        style: pw.TextStyle(
+          fontSize: 9,
+          fontWeight: pw.FontWeight.bold,
+        ),
+        textAlign: pw.TextAlign.center,
+      ),
+    );
+
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(6),
+      child: pw.Column(
+        mainAxisSize: pw.MainAxisSize.min,
+        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+        children: rows,
+      ),
     );
   }
 
@@ -1095,7 +1278,7 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     final subtotal = (total - totalTax);
 
     return pw.Container(
-      alignment: pw.Alignment.centerLeft,
+      alignment: _isArabic ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
       child: pw.Container(
         width: 200,
         decoration: pw.BoxDecoration(
@@ -1129,24 +1312,26 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   }
 
   pw.Widget _buildTotalRow(String label, String value, {bool isBold = false}) {
+    final labelW = pw.Text(
+      label,
+      style: pw.TextStyle(
+        fontSize: 10,
+        fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal,
+      ),
+    );
+    final valueW = pw.Text(
+      '$value ${_isArabic ? 'ريال' : 'SAR'}',
+      style: pw.TextStyle(
+        fontSize: 10,
+        fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal,
+      ),
+    );
+
+    final children = _isArabic ? <pw.Widget>[valueW, labelW] : <pw.Widget>[labelW, valueW];
+
     return pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-      children: [
-        pw.Text(
-          label,
-          style: pw.TextStyle(
-            fontSize: 10,
-            fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal,
-          ),
-        ),
-        pw.Text(
-          '$value ${widget.isArabic ? 'ريال' : 'SAR'}',
-          style: pw.TextStyle(
-            fontSize: 10,
-            fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal,
-          ),
-        ),
-      ],
+      children: children,
     );
   }
 

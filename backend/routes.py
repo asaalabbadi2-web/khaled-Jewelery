@@ -2063,6 +2063,7 @@ def get_supplier_weight_statement(supplier_id):
 
 # Items CRUD
 @api.route('/items/<int:id>', methods=['PUT'])
+@require_permission('items.edit')
 def update_item(id):
     """
     تحديث صنف موجود
@@ -2103,12 +2104,14 @@ def update_item(id):
     })
 
 @api.route('/items/<int:id>', methods=['DELETE'])
+@require_permission('items.delete')
 def delete_item(id):
     item = Item.query.get_or_404(id)
     db.session.delete(item)
     db.session.commit()
     return jsonify({'result': 'success'})
 @api.route('/items', methods=['GET'])
+@require_permission('items.view')
 def get_items():
     query = Item.query
 
@@ -2291,6 +2294,7 @@ def delete_purchase_item(item_id):
     return jsonify({'result': 'success'})
 
 @api.route('/items', methods=['POST'])
+@require_permission('items.create')
 def add_item():
     """
     إضافة صنف جديد
@@ -7137,6 +7141,7 @@ def delete_journal_entry(id):
 # ============================================================================
 
 @api.route('/reports/sales_overview', methods=['GET'])
+@require_permission('employees.view')
 @require_permission('reports.sales')
 def get_sales_overview_report():
     """تقرير ملخص المبيعات وفق النظام الوزني"""
@@ -10667,6 +10672,7 @@ def list_employees():
 
 
 @api.route('/employees', methods=['POST'])
+@require_permission('employees.create')
 def create_employee():
     """إنشاء موظف جديد مع حساب تلقائي"""
     from employee_account_helpers import (
@@ -10763,12 +10769,14 @@ def create_employee():
 
 
 @api.route('/employees/<int:employee_id>', methods=['GET'])
+@require_permission('employees.view')
 def get_employee(employee_id):
     employee = Employee.query.get_or_404(employee_id)
     return jsonify(employee.to_dict(include_details=True))
 
 
 @api.route('/employees/<int:employee_id>', methods=['PUT'])
+@require_permission('employees.edit')
 def update_employee(employee_id):
     employee = Employee.query.get_or_404(employee_id)
     data = request.get_json() or {}
@@ -10800,52 +10808,47 @@ def update_employee(employee_id):
 
 
 @api.route('/employees/<int:employee_id>', methods=['DELETE'])
+@require_permission('employees.delete')
 def delete_employee(employee_id):
     employee = Employee.query.get_or_404(employee_id)
 
     try:
-        # حذف سجلات الحضور المرتبطة (إن وجدت)
-        Attendance.query.filter_by(employee_id=employee.id).delete(synchronize_session=False)
+        # Policy: لا نحذف موظفاً لديه عمليات/سجلات مرتبطة؛ نقوم بإلغاء تفعيله بدلاً من الحذف.
+        has_attendance = Attendance.query.filter_by(employee_id=employee.id).first() is not None
+        has_payroll = Payroll.query.filter_by(employee_id=employee.id).first() is not None
+        has_invoices = Invoice.query.filter_by(employee_id=employee.id).first() is not None
+        has_bonuses = EmployeeBonus.query.filter_by(employee_id=employee.id).first() is not None
 
-        # حذف سجلات الرواتب والسندات المرتبطة بها
-        payroll_entries = Payroll.query.filter_by(employee_id=employee.id).all()
-        deleted_payroll_ids = []
-        deleted_voucher_ids = []
-        deleted_journal_ids = []
+        # Also treat linked user-account as operational linkage (avoid breaking logins).
+        has_linked_user = getattr(employee, 'user_account', None) is not None
 
-        for payroll_entry in payroll_entries:
-            # حذف السند المرتبط (إن وجد)
-            if payroll_entry.voucher_id:
-                voucher = Voucher.query.get(payroll_entry.voucher_id)
-                if voucher is not None:
-                    if voucher.journal_entry_id:
-                        journal_entry = JournalEntry.query.get(voucher.journal_entry_id)
-                        if journal_entry is not None:
-                            deleted_journal_ids.append(journal_entry.id)
-                            db.session.delete(journal_entry)
-                    deleted_voucher_ids.append(voucher.id)
-                    db.session.delete(voucher)
-
-            deleted_payroll_ids.append(payroll_entry.id)
-            db.session.delete(payroll_entry)
+        if has_attendance or has_payroll or has_invoices or has_bonuses or has_linked_user:
+            employee.is_active = False
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'deleted': False,
+                'deactivated': True,
+                'is_active': False,
+                'message': 'لا يمكن حذف الموظف لوجود عمليات/سجلات مرتبطة. تم إلغاء تفعيله بدلاً من الحذف',
+            }), 200
 
         db.session.delete(employee)
         db.session.commit()
 
-        response = {
+        return jsonify({
+            'success': True,
+            'deleted': True,
+            'deactivated': False,
             'message': 'تم حذف الموظف بنجاح',
-            'removed_payroll_entries': deleted_payroll_ids,
-            'removed_vouchers': deleted_voucher_ids,
-            'removed_journal_entries': deleted_journal_ids,
-        }
-
-        return jsonify(response)
+        }), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Failed to delete employee: {str(e)}'}), 500
 
 
 @api.route('/employees/<int:employee_id>/toggle-active', methods=['POST'])
+@require_permission('employees.edit')
 def toggle_employee_active(employee_id):
     employee = Employee.query.get_or_404(employee_id)
     employee.is_active = not employee.is_active

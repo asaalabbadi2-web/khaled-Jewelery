@@ -41,6 +41,7 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
   final Map<String, ElementPosition> _elements = {};
 
   Uint8List? _backgroundImageBytes;
+  bool _includeBackgroundInPrint = true;
   
   String? _selectedElement;
   double _zoom = 1.0;
@@ -65,6 +66,11 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
     return 'template_background_${suffix.isEmpty ? 'default' : suffix}';
   }
 
+  String get _backgroundIncludeInPrintStorageKey {
+    final suffix = (widget.presetKey ?? 'default').trim();
+    return 'template_background_include_in_print_${suffix.isEmpty ? 'default' : suffix}';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -74,7 +80,30 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
         .clamp(150.0, 4000.0);
     _initializeElements();
     _loadBackgroundImage();
+    _loadIncludeBackgroundInPrint();
     _loadLayout();
+  }
+
+  Future<void> _loadIncludeBackgroundInPrint() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getBool(_backgroundIncludeInPrintStorageKey);
+      if (!mounted) return;
+      setState(() {
+        _includeBackgroundInPrint = v ?? true;
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _setIncludeBackgroundInPrint(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_backgroundIncludeInPrintStorageKey, value);
+    if (!mounted) return;
+    setState(() {
+      _includeBackgroundInPrint = value;
+    });
   }
 
   Future<void> _loadBackgroundImage() async {
@@ -171,9 +200,11 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
   Future<void> _clearBackgroundImage() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_backgroundStorageKey);
+    await prefs.remove(_backgroundIncludeInPrintStorageKey);
     if (!mounted) return;
     setState(() {
       _backgroundImageBytes = null;
+      _includeBackgroundInPrint = true;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -468,6 +499,31 @@ class _TemplatePositioningScreenState extends State<TemplatePositioningScreen> {
                       ],
                     ),
                   ),
+                  if (_backgroundImageBytes != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: SwitchListTile.adaptive(
+                        value: _includeBackgroundInPrint,
+                        onChanged: (v) => _setIncludeBackgroundInPrint(v),
+                        title: Text(
+                          widget.isArabic
+                              ? 'تضمين الصورة في الطباعة'
+                              : 'Include image in printing',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                        subtitle: Text(
+                          widget.isArabic
+                              ? 'إذا كانت الصورة قالب محاذاة فقط، عطّل هذا الخيار'
+                              : 'Disable if the image is only for alignment',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        dense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                      ),
+                    ),
                   Expanded(
                     child: ListView(
                       children: _elements.entries.map((entry) {
