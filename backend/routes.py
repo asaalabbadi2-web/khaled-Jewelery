@@ -1961,63 +1961,149 @@ def get_supplier_ledger(supplier_id):
 
 @api.route('/suppliers/<int:supplier_id>/statement', methods=['GET'])
 def get_supplier_weight_statement(supplier_id):
-    """
-    🆕 كشف حساب مورد بالوزن والقيمة التقييمية
-    
-    يعرض:
-    1. عمود الوزن (فعلي حسب العيار)
-    2. عمود القيمة (تقييمية بسعر اليوم)
-    
-    هذا يوضح للمستخدم:
-    - المورد دائن بالوزن (وليس نقداً)
-    - القيمة النقدية المعروضة هي تقييمية فقط (للمعلومية)
+    """كشف حساب المورد (صيغة موحدة لشاشة كشف الحساب في Flutter).
+
+    ملاحظة: هذا الـ endpoint يُستخدم من شاشة كشف الحساب ويتوقع نفس صيغة
+    `/accounts/<id>/statement` (lines/totals/closing balances).
     """
     supplier = Supplier.query.get_or_404(supplier_id)
-    
-    # الحصول على سعر الذهب الحالي
+    main_karat = get_main_karat()
+
+    running_balance_cash = 0.0
+    running_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+    journal_lines = (
+        JournalEntryLine.query.join(JournalEntry)
+        .filter(JournalEntryLine.supplier_id == supplier_id)
+        .filter(JournalEntryLine.is_deleted == False)  # noqa: E712
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .all()
+    )
+
+    statement_lines = []
+    total_cash_debit = 0.0
+    total_cash_credit = 0.0
+    total_gold_debit_normalized = 0.0
+    total_gold_credit_normalized = 0.0
+
+    for line in journal_lines:
+        # Update running balances for each karat
+        running_balances_gold['18k'] += (line.debit_18k or 0.0) - (line.credit_18k or 0.0)
+        running_balances_gold['21k'] += (line.debit_21k or 0.0) - (line.credit_21k or 0.0)
+        running_balances_gold['22k'] += (line.debit_22k or 0.0) - (line.credit_22k or 0.0)
+        running_balances_gold['24k'] += (line.debit_24k or 0.0) - (line.credit_24k or 0.0)
+        running_balance_cash += (line.cash_debit or 0.0) - (line.cash_credit or 0.0)
+
+        gold_debit_normalized = (
+            convert_to_main_karat(line.debit_18k or 0.0, 18) +
+            convert_to_main_karat(line.debit_21k or 0.0, 21) +
+            convert_to_main_karat(line.debit_22k or 0.0, 22) +
+            convert_to_main_karat(line.debit_24k or 0.0, 24)
+        )
+        gold_credit_normalized = (
+            convert_to_main_karat(line.credit_18k or 0.0, 18) +
+            convert_to_main_karat(line.credit_21k or 0.0, 21) +
+            convert_to_main_karat(line.credit_22k or 0.0, 22) +
+            convert_to_main_karat(line.credit_24k or 0.0, 24)
+        )
+
+        statement_lines.append({
+            'id': line.id,
+            'date': line.journal_entry.date.isoformat(),
+            'description': (line.journal_entry.description or ''),
+            'journal_entry_id': line.journal_entry_id,
+            'cash_debit': line.cash_debit or 0.0,
+            'cash_credit': line.cash_credit or 0.0,
+            'gold_debit': gold_debit_normalized,
+            'gold_credit': gold_credit_normalized,
+            'debit_18k': line.debit_18k or 0.0,
+            'credit_18k': line.credit_18k or 0.0,
+            'debit_21k': line.debit_21k or 0.0,
+            'credit_21k': line.credit_21k or 0.0,
+            'debit_22k': line.debit_22k or 0.0,
+            'credit_22k': line.credit_22k or 0.0,
+            'debit_24k': line.debit_24k or 0.0,
+            'credit_24k': line.credit_24k or 0.0,
+        })
+
+        total_cash_debit += float(line.cash_debit or 0.0)
+        total_cash_credit += float(line.cash_credit or 0.0)
+        total_gold_debit_normalized += float(gold_debit_normalized or 0.0)
+        total_gold_credit_normalized += float(gold_credit_normalized or 0.0)
+
+    closing_balance_gold_normalized = (
+        convert_to_main_karat(running_balances_gold['18k'], 18) +
+        convert_to_main_karat(running_balances_gold['21k'], 21) +
+        convert_to_main_karat(running_balances_gold['22k'], 22) +
+        convert_to_main_karat(running_balances_gold['24k'], 24)
+    )
+
+    # Entity balances (from Supplier cached balances) for faster/consistent display
+    entity_gold_details = {
+        '18k': float(supplier.balance_gold_18k or 0.0),
+        '21k': float(supplier.balance_gold_21k or 0.0),
+        '22k': float(supplier.balance_gold_22k or 0.0),
+        '24k': float(supplier.balance_gold_24k or 0.0),
+    }
+    entity_gold_normalized = (
+        convert_to_main_karat(entity_gold_details['18k'], 18) +
+        convert_to_main_karat(entity_gold_details['21k'], 21) +
+        convert_to_main_karat(entity_gold_details['22k'], 22) +
+        convert_to_main_karat(entity_gold_details['24k'], 24)
+    )
+
+    return jsonify({
+        'account_name': supplier.name,
+        'main_karat': main_karat,
+        'opening_balance_cash': 0.0,
+        'opening_balance_gold_normalized': 0.0,
+        'lines': statement_lines,
+        'totals': {
+            'cash_debit': total_cash_debit,
+            'cash_credit': total_cash_credit,
+            'gold_debit_normalized': total_gold_debit_normalized,
+            'gold_credit_normalized': total_gold_credit_normalized,
+        },
+        'closing_balance_cash': running_balance_cash,
+        'closing_balance_gold_normalized': closing_balance_gold_normalized,
+        'closing_balance_gold_details': running_balances_gold,
+        'entity_balances': {
+            'cash': float(supplier.balance_cash or 0.0),
+            'gold_normalized': entity_gold_normalized,
+            'gold_details': entity_gold_details,
+        },
+    })
+
+
+@api.route('/suppliers/<int:supplier_id>/weight-summary', methods=['GET'])
+def get_supplier_weight_summary(supplier_id):
+    """ملخص أرصدة المورد بالوزن + قيمة تقييمية (للإظهار فقط)."""
+    supplier = Supplier.query.get_or_404(supplier_id)
+
     gold_price_data = get_current_gold_price()
-    price_24k = gold_price_data.get('price_per_gram_24k', 0)
-    
-    # حساب أسعار العيارات
+    price_24k = gold_price_data.get('price_per_gram_24k', 0) or 0
+
     prices_by_karat = {
         '18': round(price_24k * 18 / 24, 2),
         '21': round(price_24k * 21 / 24, 2),
         '22': round(price_24k * 22 / 24, 2),
         '24': round(price_24k, 2),
     }
-    
-    # البحث عن حساب المورد
-    supplier_account = None
-    if supplier.account_id:
-        supplier_account = Account.query.get(supplier.account_id)
-    
-    if not supplier_account or not supplier_account.tracks_weight:
-        return jsonify({
-            'error': 'حساب المورد لا يتتبع الوزن',
-            'supplier': {
-                'id': supplier.id,
-                'name': supplier.name,
-                'code': supplier.supplier_code,
-            }
-        }), 400
-    
-    # الحصول على الأرصدة الفعلية
+
     balances = {
-        'weight_18k': round(supplier_account.balance_18k or 0.0, 3),
-        'weight_21k': round(supplier_account.balance_21k or 0.0, 3),
-        'weight_22k': round(supplier_account.balance_22k or 0.0, 3),
-        'weight_24k': round(supplier_account.balance_24k or 0.0, 3),
+        'weight_18k': round(float(supplier.balance_gold_18k or 0.0), 3),
+        'weight_21k': round(float(supplier.balance_gold_21k or 0.0), 3),
+        'weight_22k': round(float(supplier.balance_gold_22k or 0.0), 3),
+        'weight_24k': round(float(supplier.balance_gold_24k or 0.0), 3),
     }
-    
-    # حساب القيمة التقييمية لكل عيار
+
     valuations = {
         '18k': round(balances['weight_18k'] * prices_by_karat['18'], 2),
         '21k': round(balances['weight_21k'] * prices_by_karat['21'], 2),
         '22k': round(balances['weight_22k'] * prices_by_karat['22'], 2),
         '24k': round(balances['weight_24k'] * prices_by_karat['24'], 2),
     }
-    
-    # إجمالي الوزن بالعيار الرئيسي
+
     main_karat = gold_price_data.get('main_karat', 21)
     total_weight_main_karat = round(
         (balances['weight_18k'] * 18 / main_karat) +
@@ -2026,18 +2112,14 @@ def get_supplier_weight_statement(supplier_id):
         (balances['weight_24k'] * 24 / main_karat),
         3
     )
-    
-    # إجمالي القيمة التقييمية
+
     total_valuation = round(sum(valuations.values()), 2)
-    
+
     return jsonify({
         'supplier': {
             'id': supplier.id,
             'name': supplier.name,
             'code': supplier.supplier_code,
-            'account_id': supplier_account.id,
-            'account_number': supplier_account.account_number,
-            'account_name': supplier_account.name,
         },
         'balances': {
             'weights': balances,
