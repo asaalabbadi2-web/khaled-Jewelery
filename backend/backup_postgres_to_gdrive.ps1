@@ -1,5 +1,5 @@
 #requires -Version 5.1
-<
+<#
 PostgreSQL backup -> (encrypted) upload to Google Drive via rclone (Windows).
 
 Recommended approach:

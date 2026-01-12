@@ -56,6 +56,13 @@ Example upload:
 ### Option D: Google Drive (recommended for Hybrid on-prem) via rclone + encryption
 Best-practice for Google Drive is to use `rclone` with a `crypt` remote so backups are encrypted end-to-end before leaving the server.
 
+#### Step 0) إعداد Google Drive المشفّر (مرة واحدة)
+على السيرفر/جهاز النسخ الاحتياطي:
+- شغّل `rclone config`
+- أنشئ remote:
+  - `gdrive` (Google Drive)
+  - ثم `gdrive-crypt` (نوع `crypt`) فوق `gdrive:yasargold`
+
 1) Install `rclone` on the backup machine/server.
 
 2) Configure a Google Drive remote (interactive):
@@ -91,6 +98,12 @@ Parameter aliases (same script):
 - `-DbUser` is an alias for `-DockerUser`
 - `-DbName` is an alias for `-DockerDatabase`
 - `-DbPassword` is an alias for `-DockerPassword`
+
+#### Step 11) اختبار النسخ الاحتياطي يدويًا (مرة واحدة)
+شغّل أمر اختبار (Docker `pg_dump` بدون تثبيت PostgreSQL على Windows):
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File "C:\yasargold\backend\backup_postgres_to_gdrive.ps1" -UseDockerPgDump -DockerContainerName "yasargold-db" -DbUser "yasargold" -DbName "yasargold" -DbPassword "YOUR_PASSWORD" -RcloneRemote "gdrive-crypt:yasargold/postgres"`
+
+تأكد أن الملفات على Google Drive تظهر بأسماء “غير مفهومة” (هذا دليل التشفير يعمل عبر `rclone crypt`).
 
 Notes:
 - If your Postgres runs in Docker, you can still use this script by pointing `DATABASE_URL` to the Postgres service (or install PostgreSQL client tools on the host).
@@ -136,6 +149,16 @@ Logs:
 
 ## Scheduling on Windows (Task Scheduler)
 Recommended: use PowerShell scripts.
+
+#### Step 12) جدولة النسخ الاحتياطي كل ساعة (Task Scheduler)
+Task Scheduler → Create Task
+- General:
+  - “Run whether user is logged on or not”
+  - “Hidden”
+- Triggers: كل ساعة
+- Actions:
+  - Program: `pwsh.exe`
+  - Arguments: نفس أمر الخطوة 11 (مع مساراتك وكلمة المرور)
 
 Example action (PostgreSQL hourly):
 - Program/script: `pwsh.exe` (or `powershell.exe`)
