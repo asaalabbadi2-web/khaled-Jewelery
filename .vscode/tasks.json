@@ -1,5 +1,13 @@
 {
 	"version": "2.0.0",
+	"inputs": [
+		{
+			"id": "commitMessage",
+			"type": "promptString",
+			"description": "Commit message",
+			"default": "chore: updates"
+		}
+	],
 	"tasks": [
 		{
 			"label": "Run Backend Server",
@@ -9,6 +17,15 @@
 				"cwd": "${workspaceFolder}/backend"
 			},
 			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Git: Commit & Push",
+			"type": "shell",
+			"command": "git add -A && (git diff --cached --quiet || git commit -m \"${input:commitMessage}\") && git push",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
 			"problemMatcher": []
 		},
 		{
