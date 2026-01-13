@@ -22,6 +22,10 @@ class SafeBoxModel {
   final AccountInfo? account;
   final BalanceInfo? balance;
 
+  // Ledger-based balances (SafeBoxTransaction)
+  final Map<String, double>? weightBalance;
+  final double? totalWeightMainKarat;
+
   SafeBoxModel({
     this.id,
     required this.name,
@@ -41,9 +45,28 @@ class SafeBoxModel {
     this.createdBy,
     this.account,
     this.balance,
+    this.weightBalance,
+    this.totalWeightMainKarat,
   });
 
   factory SafeBoxModel.fromJson(Map<String, dynamic> json) {
+    Map<String, double>? parseWeightBalance(dynamic raw) {
+      if (raw is Map) {
+        final out = <String, double>{};
+        raw.forEach((key, value) {
+          final k = key.toString();
+          if (value is num) {
+            out[k] = value.toDouble();
+          } else {
+            final v = double.tryParse(value?.toString() ?? '');
+            if (v != null) out[k] = v;
+          }
+        });
+        return out;
+      }
+      return null;
+    }
+
     return SafeBoxModel(
       id: json['id'],
       name: json['name'],
@@ -67,6 +90,8 @@ class SafeBoxModel {
       balance: json['balance'] != null
           ? BalanceInfo.fromJson(json['balance'])
           : null,
+        weightBalance: parseWeightBalance(json['weight_balance']),
+        totalWeightMainKarat: (json['total_weight_main_karat'] as num?)?.toDouble(),
     );
   }
 
@@ -155,6 +180,12 @@ class SafeBoxModel {
 
   /// الرصيد النقدي
   double get cashBalance => balance?.cash ?? 0.0;
+
+  /// الرصيد الوزني (إن توفر من الـ ledger)
+  double get goldBalance24k => weightBalance?['24k'] ?? 0.0;
+  double get goldBalance22k => weightBalance?['22k'] ?? 0.0;
+  double get goldBalance21k => weightBalance?['21k'] ?? 0.0;
+  double get goldBalance18k => weightBalance?['18k'] ?? 0.0;
 
   /// نسخة من الكائن مع تحديثات
   SafeBoxModel copyWith({

@@ -17,8 +17,9 @@ import 'sales_overview_report_screen.dart';
 import 'customer_balances_aging_report_screen.dart';
 import 'gold_price_history_report_screen.dart';
 import 'gold_position_report_screen.dart';
+import 'gold_weight_trial_balance_report_screen.dart';
 import 'income_statement_report_screen.dart';
-import 'employee_scrap_ledger_report_screen.dart';
+import '../safe_boxes_screen.dart';
 import 'analytics_dashboard_screen.dart';
 import 'admin_dashboard_screen.dart';
 
@@ -395,10 +396,22 @@ class _ReportsMainScreenState extends State<ReportsMainScreen> {
           isArabic: widget.isArabic,
         );
         break;
-      case 'employee_scrap_ledger':
-        destination = EmployeeScrapLedgerReportScreen(
+      case 'gold_weight_trial_balance':
+        destination = GoldWeightTrialBalanceReportScreen(
           api: widget.api,
           isArabic: widget.isArabic,
+        );
+        break;
+      case 'safe_boxes_screen':
+        destination = SafeBoxesScreen(
+          api: widget.api,
+          isArabic: widget.isArabic,
+          balancesView: true,
+          initialFilterType: 'gold',
+          lockFilterType: true,
+          titleOverride: widget.isArabic
+              ? 'جرد صناديق الذهب (عهد الموظفين)'
+              : 'Gold Safe Boxes Inventory (Employees)',
         );
         break;
       case 'trial_balance':

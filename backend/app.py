@@ -68,6 +68,7 @@ from schema_guard import (
 	ensure_invoice_barter_columns,
 	ensure_invoice_branch_columns,
 	ensure_invoice_employee_columns,
+	ensure_employee_gold_safe_columns,
 	ensure_journal_line_dimension_columns,
 	ensure_supplier_columns,
 )
@@ -165,6 +166,7 @@ def create_tables():
 		ensure_invoice_barter_columns(db.engine)
 		ensure_invoice_branch_columns(db.engine)
 		ensure_invoice_employee_columns(db.engine)
+		ensure_employee_gold_safe_columns(db.engine)
 		ensure_journal_line_dimension_columns(db.engine)
 		ensure_supplier_columns(db.engine)
 

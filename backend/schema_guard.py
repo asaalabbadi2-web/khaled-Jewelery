@@ -353,6 +353,26 @@ def ensure_invoice_employee_columns(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_employee_gold_safe_columns(engine: Engine) -> None:
+    """Ensure employee gold_safe_box_id column exists for legacy databases."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "employee",
+                [
+                    ("gold_safe_box_id", "INTEGER", "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
 def ensure_app_user_security_columns(engine: Engine) -> None:
     """Ensure AppUser security columns exist (2FA + future session tooling)."""
     columns_added: list[str] = []

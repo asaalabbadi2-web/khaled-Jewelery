@@ -238,18 +238,30 @@ class ReportCatalog {
             requiresFilters: true,
           ),
           ReportDescriptor(
-            id: 'employee_scrap_ledger',
+            id: 'gold_safe_boxes_inventory',
             icon: Icons.badge_outlined,
-            titleAr: 'عهدة ذهب الكسر (الموظفين)',
-            titleEn: 'Employee Scrap Ledger',
-            descriptionAr:
-                'ملخص ذهب الكسر المستلم حسب العهدة (الموظف) مع إجماليات سريعة.',
-            descriptionEn:
-                'Scrap gold received grouped by employee custody with quick totals.',
-            route: 'employee_scrap_ledger',
+            titleAr: 'جرد صناديق الذهب (عهد الموظفين)',
+            titleEn: 'Gold Safe Boxes Inventory (Employees)',
+            descriptionAr: 'عرض جرد صناديق الذهب مع إجماليات سريعة.',
+            descriptionEn: 'Gold safe boxes inventory with quick totals.',
+            route: 'safe_boxes_screen',
             type: ReportType.gold,
             available: true,
             requiresFilters: true,
+          ),
+          ReportDescriptor(
+            id: 'gold_weight_trial_balance',
+            icon: Icons.balance,
+            titleAr: 'ميزان مراجعة الأوزان (خزنة ↔ حساب)',
+            titleEn: 'Gold Weight Trial Balance (Safe ↔ Account)',
+            descriptionAr:
+                'مطابقة أرصدة خزائن الذهب من دفتر الخزينة مع أرصدة الحسابات الوزنية المرتبطة وكشف الفروقات.',
+            descriptionEn:
+                'Reconcile gold safe ledger balances with linked weight accounts and show variances.',
+            route: 'gold_weight_trial_balance',
+            type: ReportType.gold,
+            available: true,
+            requiresFilters: false,
           ),
         ],
       ),

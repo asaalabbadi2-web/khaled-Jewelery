@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../models/app_user_model.dart';
 import '../models/employee_model.dart';
+import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../utils.dart';
 
@@ -376,6 +377,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
       context: context,
       builder: (context) {
         return EmployeeFormDialog(
+          api: widget.api,
           isArabic: widget.isArabic,
           employee: employee,
         );
@@ -832,9 +834,15 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 }
 
 class EmployeeFormDialog extends StatefulWidget {
+  final ApiService api;
   final bool isArabic;
   final EmployeeModel? employee;
-  const EmployeeFormDialog({super.key, required this.isArabic, this.employee});
+  const EmployeeFormDialog({
+    super.key,
+    required this.api,
+    required this.isArabic,
+    this.employee,
+  });
 
   @override
   State<EmployeeFormDialog> createState() => _EmployeeFormDialogState();
@@ -853,6 +861,10 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
   DateTime? _hireDate;
   DateTime? _terminationDate;
   bool _isActive = true;
+
+  List<SafeBoxModel> _goldSafes = const [];
+  bool _loadingGoldSafes = false;
+  int _selectedGoldSafeBoxId = 0; // 0 => main
 
   @override
   void initState() {
@@ -874,9 +886,31 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
     );
     _isActive = employee?.isActive ?? true;
 
+  _selectedGoldSafeBoxId = employee?.goldSafeBoxId ?? 0;
+
     // ✅ تحميل التواريخ من الموظف الحالي
     _hireDate = employee?.hireDate;
     _terminationDate = employee?.terminationDate;
+
+    _loadGoldSafes();
+  }
+
+  Future<void> _loadGoldSafes() async {
+    setState(() => _loadingGoldSafes = true);
+    try {
+      final safes = await widget.api.getSafeBoxes(
+        safeType: 'gold',
+        isActive: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _goldSafes = safes;
+      });
+    } catch (_) {
+      // Keep the form usable even if safes couldn't load.
+    } finally {
+      if (mounted) setState(() => _loadingGoldSafes = false);
+    }
   }
 
   @override
@@ -943,6 +977,7 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
       'hire_date': _hireDate?.toIso8601String().split('T').first,
       'termination_date': _terminationDate?.toIso8601String().split('T').first,
       'is_active': _isActive,
+      'gold_safe_box_id': _selectedGoldSafeBoxId,
     }..removeWhere((key, value) => value == null);
 
     Navigator.of(context).pop(payload);
@@ -1076,6 +1111,36 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                     labelText: isAr ? 'ملاحظات' : 'Notes',
                   ),
                   maxLines: 3,
+                ),
+                DropdownButtonFormField<int>(
+                  value: _selectedGoldSafeBoxId,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'خزنة الذهب' : 'Gold Safe',
+                    prefixIcon: const Icon(Icons.diamond),
+                  ),
+                  items: <DropdownMenuItem<int>>[
+                    DropdownMenuItem(
+                      value: 0,
+                      child: Text(
+                        isAr ? 'الخزنة الرئيسية (افتراضي)' : 'Main (default)',
+                      ),
+                    ),
+                    ..._goldSafes
+                        .where((s) => (s.id ?? 0) > 0)
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s.id!,
+                            child: Text(s.name),
+                          ),
+                        ),
+                  ],
+                  onChanged: _loadingGoldSafes
+                      ? null
+                      : (value) {
+                          setState(() {
+                            _selectedGoldSafeBoxId = value ?? 0;
+                          });
+                        },
                 ),
                 const SizedBox(height: 12),
                 SwitchListTile(

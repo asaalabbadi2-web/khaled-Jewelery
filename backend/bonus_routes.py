@@ -3,7 +3,8 @@ Routes لنظام المكافآت للموظفين
 ====================================
 
 Endpoints:
-- GET/POST /api/employees - إدارة الموظفين
+- GET/POST /api/employees - إدارة الموظفين (النظام الأساسي)
+- GET/PUT /api/bonus/employees - إدارة الموظفين (نظام المكافآت)
 - GET/POST/PUT/DELETE /api/bonus-rules - إدارة قواعد المكافآت
 - GET /api/invoice-types - الحصول على قائمة أنواع الفواتير المتاحة
 - GET/POST /api/bonuses - إدارة المكافآت
@@ -28,7 +29,7 @@ bonus_bp = Blueprint('bonuses', __name__)
 # 👥 إدارة الموظفين (Employees)
 # ==========================================
 
-@bonus_bp.route('/employees', methods=['GET'])
+@bonus_bp.route('/bonus/employees', methods=['GET'])
 @require_auth
 def get_employees():
     """عرض جميع الموظفين"""
@@ -56,7 +57,7 @@ def get_employees():
         }), 500
 
 
-@bonus_bp.route('/employees/<int:employee_id>', methods=['GET'])
+@bonus_bp.route('/bonus/employees/<int:employee_id>', methods=['GET'])
 @require_auth
 def get_employee(employee_id):
     """عرض موظف محدد"""
@@ -82,7 +83,7 @@ def get_employee(employee_id):
 # وتنشئ حساب محاسبي تلقائياً للموظف
 
 
-@bonus_bp.route('/employees/<int:employee_id>', methods=['PUT'])
+@bonus_bp.route('/bonus/employees/<int:employee_id>', methods=['PUT'])
 @require_auth
 @require_permission('employee.update')
 def update_employee(employee_id):
@@ -1048,7 +1049,7 @@ def pay_bonus(bonus_id):
         }), 500
 
 
-@bonus_bp.route('/employees/<int:employee_id>/bonuses-summary', methods=['GET'])
+@bonus_bp.route('/bonus/employees/<int:employee_id>/bonuses-summary', methods=['GET'])
 @require_auth
 def get_employee_bonuses_summary(employee_id):
     """الحصول على ملخص مكافآت موظف"""

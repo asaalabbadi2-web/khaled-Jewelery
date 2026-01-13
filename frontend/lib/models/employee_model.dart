@@ -13,6 +13,7 @@ class EmployeeModel {
   final DateTime? hireDate;
   final DateTime? terminationDate;
   final int? accountId;
+  final int? goldSafeBoxId;
   final bool isActive;
   final String? notes;
   final String? createdBy;
@@ -35,6 +36,7 @@ class EmployeeModel {
     required this.hireDate,
     required this.terminationDate,
     required this.accountId,
+    required this.goldSafeBoxId,
     required this.isActive,
     required this.notes,
     required this.createdBy,
@@ -59,6 +61,7 @@ class EmployeeModel {
       hireDate: _parseDate(json['hire_date']),
       terminationDate: _parseDate(json['termination_date']),
       accountId: json['account_id'] as int?,
+      goldSafeBoxId: json['gold_safe_box_id'] as int?,
       isActive: json['is_active'] as bool? ?? true,
       notes: json['notes'] as String?,
       createdBy: json['created_by'] as String?,
@@ -86,6 +89,7 @@ class EmployeeModel {
       'hire_date': hireDate?.toIso8601String(),
       'termination_date': terminationDate?.toIso8601String(),
       'account_id': accountId,
+      'gold_safe_box_id': goldSafeBoxId,
       'is_active': isActive,
       'notes': notes,
       'created_by': createdBy,
@@ -105,6 +109,7 @@ class EmployeeModel {
     DateTime? hireDate,
     DateTime? terminationDate,
     int? accountId,
+    int? goldSafeBoxId,
     bool? isActive,
     String? notes,
     String? createdBy,
@@ -127,6 +132,7 @@ class EmployeeModel {
       hireDate: hireDate ?? this.hireDate,
       terminationDate: terminationDate ?? this.terminationDate,
       accountId: accountId ?? this.accountId,
+      goldSafeBoxId: goldSafeBoxId ?? this.goldSafeBoxId,
       isActive: isActive ?? this.isActive,
       notes: notes ?? this.notes,
       createdBy: createdBy ?? this.createdBy,

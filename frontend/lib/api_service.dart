@@ -30,7 +30,14 @@ String _resolveApiBaseUrl() {
   if (kIsWeb) {
     // Use the current page host so the web app works from other machines
     // (LAN/IP) without hardcoding localhost.
-    final host = Uri.base.host.isNotEmpty ? Uri.base.host : '127.0.0.1';
+    final rawHost = Uri.base.host;
+    // On Flutter web dev servers the URL can sometimes be opened as
+    // http://0.0.0.0:<port>/ which is not a routable destination host.
+    // Also, some environments resolve `localhost` to IPv6 ::1 while the
+    // backend binds IPv4 only; using 127.0.0.1 avoids that class of issues.
+    final host = (rawHost.isEmpty || rawHost == '0.0.0.0' || rawHost == 'localhost')
+        ? '127.0.0.1'
+        : rawHost;
     final scheme = Uri.base.scheme.isNotEmpty ? Uri.base.scheme : 'http';
     return '$scheme://$host:8001/api';
   }
@@ -3602,6 +3609,49 @@ class ApiService {
     }
   }
 
+  /// الحصول على أرصدة الخزائن من الـ Ledger (SafeBoxTransaction)
+  /// Endpoint: GET /safe-boxes/balances?type=gold
+  Future<List<SafeBoxModel>> getSafeBoxBalances({
+    String? type,
+    bool? isActive,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final queryParams = <String, String>{};
+    if (type != null && type.trim().isNotEmpty) queryParams['type'] = type;
+    if (isActive != null) queryParams['is_active'] = isActive.toString();
+    if (from != null) queryParams['from'] = from.toIso8601String();
+    if (to != null) queryParams['to'] = to.toIso8601String();
+
+    final uri = Uri.parse(
+      '$_baseUrl/safe-boxes/balances',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
+    final response = await _authedGet(uri);
+    if (response.statusCode != 200) {
+      throw Exception('Failed to load safe box balances: ${response.body}');
+    }
+
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (decoded is Map<String, dynamic>) {
+      final rows = decoded['rows'];
+      if (rows is List) {
+        return rows
+            .whereType<Map<String, dynamic>>()
+            .map((j) => SafeBoxModel.fromJson(j))
+            .toList();
+      }
+    }
+    if (decoded is List) {
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map((j) => SafeBoxModel.fromJson(j))
+          .toList();
+    }
+
+    return <SafeBoxModel>[];
+  }
+
   /// الحصول على خزينة محددة
   Future<SafeBoxModel> getSafeBox(int id, {bool includeBalance = true}) async {
     final queryParams = <String, String>{};
@@ -3660,7 +3710,22 @@ class ApiService {
   Future<void> deleteSafeBox(int id) async {
     final response = await _authedDelete(Uri.parse('$_baseUrl/safe-boxes/$id'));
     if (response.statusCode != 200) {
-      throw Exception('Failed to delete safe box: ${response.body}');
+      final bodyStr = utf8.decode(response.bodyBytes);
+      try {
+        final decoded = json.decode(bodyStr);
+        if (decoded is Map<String, dynamic>) {
+          final msg =
+              (decoded['message'] as String?) ??
+              (decoded['error'] as String?) ??
+              'Failed to delete safe box';
+          // Keep full JSON in exception string so callers can parse details if needed.
+          throw Exception('$msg | $bodyStr');
+        }
+      } catch (_) {
+        // ignore JSON parsing failures
+      }
+
+      throw Exception('Failed to delete safe box: $bodyStr');
     }
   }
 
@@ -3715,6 +3780,33 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes));
     }
     throw Exception('Failed to load safe balance: ${response.body}');
+  }
+
+  /// ميزان مراجعة الأوزان (مطابقة خزائن الذهب ↔ الحسابات الوزنية المرتبطة)
+  /// Endpoint: GET /reports/gold-weight-trial-balance?date=YYYY-MM-DD
+  Future<Map<String, dynamic>> getGoldWeightTrialBalance({DateTime? date}) async {
+    final queryParams = <String, String>{};
+    if (date != null) {
+      // Backend expects date only.
+      final yyyy = date.year.toString().padLeft(4, '0');
+      final mm = date.month.toString().padLeft(2, '0');
+      final dd = date.day.toString().padLeft(2, '0');
+      queryParams['date'] = '$yyyy-$mm-$dd';
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/reports/gold-weight-trial-balance',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
+    final response = await _authedGet(uri);
+    final bodyStr = utf8.decode(response.bodyBytes);
+    if (response.statusCode == 200) {
+      final decoded = json.decode(bodyStr);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{'raw': decoded};
+    }
+
+    throw Exception(bodyStr);
   }
 
   /// الحصول على خزائن الدفع النشطة (نقدي + بنكي)

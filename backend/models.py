@@ -276,7 +276,11 @@ class PaymentMethod(db.Model):
     applicable_invoice_types = db.Column(db.JSON, nullable=True)
     
     # 🆕 الربط بالخزينة الافتراضية (الطريقة الوحيدة للربط بشجرة الحسابات)
-    default_safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=True)
+    default_safe_box_id = db.Column(
+        db.Integer,
+        db.ForeignKey('safe_box.id', ondelete='RESTRICT'),
+        nullable=True,
+    )
     default_safe_box = db.relationship('SafeBox', backref='payment_methods_using_as_default')
     
     # تاريخ الإنشاء
@@ -837,7 +841,11 @@ class Invoice(db.Model):
     payment_method_obj = db.relationship('PaymentMethod', backref='invoices')
     
     # 🆕 ربط بالخزينة (SafeBox)
-    safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=True)
+    safe_box_id = db.Column(
+        db.Integer,
+        db.ForeignKey('safe_box.id', ondelete='RESTRICT'),
+        nullable=True,
+    )
     safe_box = db.relationship('SafeBox', backref='invoices')
     
     # الاحتفاظ بالحقل القديم للتوافق مع الفواتير القديمة
@@ -2206,7 +2214,7 @@ class SafeBoxTransaction(db.Model):
 
     safe_box_id = db.Column(
         db.Integer,
-        db.ForeignKey('safe_box.id', ondelete='CASCADE'),
+        db.ForeignKey('safe_box.id', ondelete='RESTRICT'),
         nullable=False,
         index=True,
     )
@@ -2289,6 +2297,12 @@ class Employee(db.Model):
     hire_date = db.Column(db.Date, nullable=True)
     termination_date = db.Column(db.Date, nullable=True)
     account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=True)
+    # خزنة الذهب الخاصة بالموظف (اختياري). إذا كانت NULL فهذا يعني استخدام الخزنة الذهبية الرئيسية.
+    gold_safe_box_id = db.Column(
+        db.Integer,
+        db.ForeignKey('safe_box.id', ondelete='RESTRICT'),
+        nullable=True,
+    )
     is_active = db.Column(db.Boolean, default=True, index=True, nullable=False)
     notes = db.Column(db.Text, nullable=True)
 
@@ -2297,6 +2311,7 @@ class Employee(db.Model):
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False)
 
     account = db.relationship('Account', backref=db.backref('employees', lazy='dynamic'))
+    gold_safe_box = db.relationship('SafeBox', foreign_keys=[gold_safe_box_id])
 
     def to_dict(self, include_details: bool = False, include_bonuses: bool = False):
         data = {
@@ -2312,6 +2327,7 @@ class Employee(db.Model):
             'hire_date': self.hire_date.isoformat() if self.hire_date else None,
             'termination_date': self.termination_date.isoformat() if self.termination_date else None,
             'account_id': self.account_id,
+            'gold_safe_box_id': self.gold_safe_box_id,
             'is_active': self.is_active,
             'notes': self.notes,
             'created_by': self.created_by,
@@ -2834,8 +2850,19 @@ class SafeBox(db.Model):
     
     @staticmethod
     def get_gold_safe_by_karat(karat):
-        """الحصول على خزينة الذهب حسب العيار"""
-        return SafeBox.query.filter_by(safe_type='gold', karat=karat, is_active=True).first()
+        """الحصول على خزينة الذهب حسب العيار
+        
+        يبحث أولاً عن خزينة محددة بهذا العيار.
+        إذا لم توجد، يعيد أول خزينة عامة (بدون عيار محدد).
+        """
+        # محاولة إيجاد خزينة محددة بالعيار
+        specific = SafeBox.query.filter_by(safe_type='gold', karat=karat, is_active=True).first()
+        if specific:
+            return specific
+        
+        # إذا لم توجد، استخدم خزينة ذهب عامة (karat=None)
+        general = SafeBox.query.filter_by(safe_type='gold', karat=None, is_active=True).first()
+        return general
 
 
 # ==========================================

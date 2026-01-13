@@ -40,6 +40,7 @@ from models import (
     OfficeReservation,
     User,
     Category,
+    AuditLog,
 )
 from utils import normalize_number
 try:
@@ -3262,12 +3263,169 @@ def get_safe_box_balance(safe_box_id: int):
         SafeBoxTransaction.direction == 'out'
     ).scalar() or 0.0
 
+    def _sum_weight(field_name: str, direction: str) -> float:
+        col = getattr(SafeBoxTransaction, field_name)
+        return (
+            q.with_entities(func.coalesce(func.sum(col), 0.0))
+            .filter(SafeBoxTransaction.direction == direction)
+            .scalar()
+            or 0.0
+        )
+
+    w_in = {
+        '18k': float(_sum_weight('weight_18k', 'in')),
+        '21k': float(_sum_weight('weight_21k', 'in')),
+        '22k': float(_sum_weight('weight_22k', 'in')),
+        '24k': float(_sum_weight('weight_24k', 'in')),
+    }
+    w_out = {
+        '18k': float(_sum_weight('weight_18k', 'out')),
+        '21k': float(_sum_weight('weight_21k', 'out')),
+        '22k': float(_sum_weight('weight_22k', 'out')),
+        '24k': float(_sum_weight('weight_24k', 'out')),
+    }
+
     return jsonify({
         'safe_box_id': safe_box.id,
         'safe_box_name': safe_box.name,
         'cash_in': round(float(cash_in), 2),
         'cash_out': round(float(cash_out), 2),
         'cash_balance': round(float(cash_in) - float(cash_out), 2),
+        'weight_in': {k: round(v, 3) for k, v in w_in.items()},
+        'weight_out': {k: round(v, 3) for k, v in w_out.items()},
+        'weight_balance': {
+            k: round(float(w_in.get(k, 0.0)) - float(w_out.get(k, 0.0)), 3)
+            for k in ['18k', '21k', '22k', '24k']
+        },
+    })
+
+
+@api.route('/safe-boxes/balances', methods=['GET'])
+@require_permission('safe_boxes.view')
+def list_safe_box_balances():
+    """List safe box balances computed from SafeBoxTransaction ledger.
+
+    Query params:
+      - type or safe_type: filter by safe type (cash/bank/gold/check)
+      - is_active: true/false
+      - from, to: ISO datetime filters applied on transaction created_at
+
+    Returns: list of SafeBox dicts enriched with ledger balance fields.
+    """
+
+    safe_type = (request.args.get('type') or request.args.get('safe_type') or '').strip()
+    is_active_param = (request.args.get('is_active') or '').strip().lower()
+
+    q_safes = SafeBox.query
+    if safe_type:
+        q_safes = q_safes.filter(SafeBox.safe_type == safe_type)
+    if is_active_param in ('true', 'false'):
+        q_safes = q_safes.filter(SafeBox.is_active == (is_active_param == 'true'))
+
+    safes = q_safes.order_by(SafeBox.safe_type.asc(), SafeBox.is_default.desc(), SafeBox.name.asc()).all()
+
+    from_value = request.args.get('from')
+    to_value = request.args.get('to')
+    from_dt = None
+    to_dt = None
+    try:
+        if from_value:
+            from_dt = datetime.fromisoformat(from_value)
+    except Exception:
+        return jsonify({'error': 'invalid_from_date'}), 400
+    try:
+        if to_value:
+            to_dt = datetime.fromisoformat(to_value)
+    except Exception:
+        return jsonify({'error': 'invalid_to_date'}), 400
+
+    main_karat = float(get_main_karat() or 21)
+
+    def _ledger_balance_for_safe(safe_id: int) -> dict:
+        q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_id)
+        if from_dt:
+            q = q.filter(SafeBoxTransaction.created_at >= from_dt)
+        if to_dt:
+            q = q.filter(SafeBoxTransaction.created_at <= to_dt)
+
+        cash_in = (
+            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(SafeBoxTransaction.direction == 'in')
+            .scalar()
+            or 0.0
+        )
+        cash_out = (
+            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(SafeBoxTransaction.direction == 'out')
+            .scalar()
+            or 0.0
+        )
+
+        def _sum_weight(field_name: str, direction: str) -> float:
+            col = getattr(SafeBoxTransaction, field_name)
+            return (
+                q.with_entities(func.coalesce(func.sum(col), 0.0))
+                .filter(SafeBoxTransaction.direction == direction)
+                .scalar()
+                or 0.0
+            )
+
+        w_in = {
+            '18k': float(_sum_weight('weight_18k', 'in')),
+            '21k': float(_sum_weight('weight_21k', 'in')),
+            '22k': float(_sum_weight('weight_22k', 'in')),
+            '24k': float(_sum_weight('weight_24k', 'in')),
+        }
+        w_out = {
+            '18k': float(_sum_weight('weight_18k', 'out')),
+            '21k': float(_sum_weight('weight_21k', 'out')),
+            '22k': float(_sum_weight('weight_22k', 'out')),
+            '24k': float(_sum_weight('weight_24k', 'out')),
+        }
+        w_bal = {
+            k: float(w_in.get(k, 0.0) or 0.0) - float(w_out.get(k, 0.0) or 0.0)
+            for k in ['18k', '21k', '22k', '24k']
+        }
+
+        total_weight_main = 0.0
+        try:
+            for k, grams in w_bal.items():
+                karat = float(str(k).replace('k', ''))
+                total_weight_main += float(convert_to_main_karat(float(grams or 0.0), karat))
+        except Exception:
+            total_weight_main = 0.0
+
+        first_dt = q.with_entities(func.min(SafeBoxTransaction.created_at)).scalar()
+        last_dt = q.with_entities(func.max(SafeBoxTransaction.created_at)).scalar()
+
+        return {
+            'cash_in': round(float(cash_in), 2),
+            'cash_out': round(float(cash_out), 2),
+            'cash_balance': round(float(cash_in) - float(cash_out), 2),
+            'weight_in': {k: round(v, 3) for k, v in w_in.items()},
+            'weight_out': {k: round(v, 3) for k, v in w_out.items()},
+            'weight_balance': {k: round(v, 3) for k, v in w_bal.items()},
+            'total_weight_main_karat': round(float(total_weight_main), 3),
+            'main_karat': round(float(main_karat), 3),
+            'first_date': first_dt.isoformat() if first_dt else None,
+            'last_date': last_dt.isoformat() if last_dt else None,
+        }
+
+    results = []
+    for sb in safes:
+        sb_dict = sb.to_dict(include_account=True, include_balance=True)
+        sb_dict.update(_ledger_balance_for_safe(sb.id))
+        results.append(sb_dict)
+
+    return jsonify({
+        'rows': results,
+        'filters': {
+            'safe_type': safe_type or None,
+            'is_active': (is_active_param if is_active_param in ('true', 'false') else None),
+            'from': from_value,
+            'to': to_value,
+        },
+        'count': len(results),
     })
 
 
@@ -4627,6 +4785,22 @@ def add_invoice():
                 }), 400
 
             karat_int = int(round(float(settled_gold_karat)))
+
+            # Validation: if the safe is fixed to a single karat, enforce it.
+            try:
+                safe_karat = int(getattr(gold_safe, 'karat', None) or 0)
+            except Exception:
+                safe_karat = 0
+            if safe_karat in (18, 21, 22, 24) and karat_int != safe_karat:
+                db.session.rollback()
+                return jsonify({
+                    'error': 'karat_mismatch_for_safe_box',
+                    'message': f'الخزينة المحددة مخصصة لعيار {safe_karat} ولا تقبل عيار {karat_int}',
+                    'safe_box_id': settled_gold_safe_box_id,
+                    'allowed_karat': safe_karat,
+                    'karat': karat_int,
+                }), 400
+
             weight_kwargs = {
                 'weight_18k': 0.0,
                 'weight_21k': 0.0,
@@ -4712,6 +4886,83 @@ def add_invoice():
                 karat_val = line_data.get('karat')
                 weight_val = line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight')))
                 _register_gold_weight(karat_val, weight_val)
+
+        # --- Scrap purchase: deposit received gold into a gold safe (employee or main) ---
+        try:
+            is_scrap_purchase = (
+                (new_invoice.invoice_type == 'شراء من عميل')
+                and (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower() == 'scrap')
+            )
+        except Exception:
+            is_scrap_purchase = False
+
+        if is_scrap_purchase:
+            target_gold_safe_id = None
+            try:
+                holder_id = getattr(new_invoice, 'scrap_holder_employee_id', None)
+                employee_id_fallback = getattr(new_invoice, 'employee_id', None)
+
+                candidate_ids = []
+                for raw in (holder_id, employee_id_fallback):
+                    if raw in (None, '', False):
+                        continue
+                    try:
+                        candidate_ids.append(int(raw))
+                    except Exception:
+                        continue
+
+                for emp_id in candidate_ids:
+                    holder = Employee.query.get(emp_id)
+                    if holder and getattr(holder, 'gold_safe_box_id', None):
+                        target_gold_safe_id = int(holder.gold_safe_box_id)
+                        break
+            except Exception:
+                target_gold_safe_id = None
+
+            if target_gold_safe_id is None:
+                try:
+                    default_gold_safe = SafeBox.get_default_by_type('gold')
+                    if default_gold_safe and default_gold_safe.id:
+                        target_gold_safe_id = int(default_gold_safe.id)
+                except Exception:
+                    target_gold_safe_id = None
+
+            if target_gold_safe_id is None:
+                try:
+                    any_gold_safe = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+                    if any_gold_safe and any_gold_safe.id:
+                        target_gold_safe_id = int(any_gold_safe.id)
+                except Exception:
+                    target_gold_safe_id = None
+
+            if target_gold_safe_id is not None:
+                try:
+                    gold_safe = SafeBox.query.get(target_gold_safe_id)
+                    if gold_safe and (gold_safe.safe_type or '').lower() == 'gold' and bool(getattr(gold_safe, 'is_active', True)):
+                        weight_kwargs = {
+                            'weight_18k': float(gold_by_karat.get('18', 0.0) or 0.0),
+                            'weight_21k': float(gold_by_karat.get('21', 0.0) or 0.0),
+                            'weight_22k': float(gold_by_karat.get('22', 0.0) or 0.0),
+                            'weight_24k': float(gold_by_karat.get('24', 0.0) or 0.0),
+                        }
+                        has_any_weight = any(v > 0 for v in weight_kwargs.values())
+                        if has_any_weight:
+                            db.session.add(
+                                SafeBoxTransaction(
+                                    safe_box_id=target_gold_safe_id,
+                                    ref_type='invoice_scrap_receipt',
+                                    ref_id=new_invoice.id,
+                                    invoice_id=new_invoice.id,
+                                    direction='in',
+                                    amount_cash=0.0,
+                                    notes='scrap receipt',
+                                    created_by=posted_by_username,
+                                    **weight_kwargs,
+                                )
+                            )
+                except Exception:
+                    # Do not fail invoice creation if safebox movement cannot be recorded.
+                    pass
 
         # --- 3. Determine Accounts and Journal Entry Logic ---
         # 🆕 منطق محدث لدعم 6 أنواع من الفواتير
@@ -8035,16 +8286,19 @@ def get_sales_overview_report():
 @require_permission('employees.view')
 @require_permission('reports.gold_position')
 def get_employee_scrap_ledger_report():
-    """تقرير بسيط لتجميع ذهب الكسر حسب الموظف (العهدة).
+    """Legacy report endpoint.
 
-    يعتمد على فواتير: invoice_type='شراء من عميل' + gold_type='scrap'
-    ويجمع الوزن حسب العيار، مع تحويل إجمالي إلى العيار الرئيسي.
+    Previously computed scrap custody from invoices.
+    Now backed by gold SafeBox ledger balances (SafeBoxTransaction) to keep a
+    single source of truth after introducing gold safes.
 
     Query params:
-    - start_date, end_date (YYYY-MM-DD)
-    - branch_id (int)
-    - include_unposted (true/false)
-    - include_unassigned (true/false)
+    - start_date, end_date (YYYY-MM-DD) -> mapped to tx created_at range
+    - include_unassigned (true/false) -> include default/main gold safe bucket
+
+    NOTE:
+    - branch_id/include_unposted are accepted for backward compatibility but are
+      not applied to ledger-based balances.
     """
 
     start_date = request.args.get('start_date') or request.args.get('date_from')
@@ -8083,39 +8337,86 @@ def get_employee_scrap_ledger_report():
 
     main_karat = float(get_main_karat() or 21)
 
-    filters = [
-        Invoice.invoice_type == 'شراء من عميل',
-        Invoice.gold_type == 'scrap',
-    ]
+    # Resolve default/main gold safe (used as "unassigned" bucket).
+    default_gold_safe = None
+    try:
+        default_gold_safe = SafeBox.get_default_by_type('gold')
+    except Exception:
+        default_gold_safe = None
+    if default_gold_safe is None:
+        try:
+            default_gold_safe = (
+                SafeBox.query
+                .filter_by(safe_type='gold', is_active=True)
+                .order_by(SafeBox.is_default.desc(), SafeBox.id.asc())
+                .first()
+            )
+        except Exception:
+            default_gold_safe = None
 
-    if not include_unposted:
-        filters.append(Invoice.is_posted.is_(True))
+    def _ledger_balance_for_safe(safe_id: int) -> dict:
+        if not safe_id:
+            return {
+                'weights_by_karat': {},
+                'total_weight': 0.0,
+                'total_weight_main_karat': 0.0,
+                'first_date': None,
+                'last_date': None,
+            }
 
-    if branch_id is not None:
-        filters.append(Invoice.branch_id == branch_id)
+        q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_id)
+        if start_dt:
+            q = q.filter(SafeBoxTransaction.created_at >= start_dt)
+        if end_dt:
+            q = q.filter(SafeBoxTransaction.created_at < end_dt)
 
-    if start_dt:
-        filters.append(Invoice.date >= start_dt)
+        def _sum(field_name: str, direction: str) -> float:
+            col = getattr(SafeBoxTransaction, field_name)
+            return (
+                q.with_entities(func.coalesce(func.sum(col), 0.0))
+                .filter(SafeBoxTransaction.direction == direction)
+                .scalar()
+                or 0.0
+            )
 
-    if end_dt:
-        filters.append(Invoice.date < end_dt)
+        w_in = {
+            '18k': float(_sum('weight_18k', 'in')),
+            '21k': float(_sum('weight_21k', 'in')),
+            '22k': float(_sum('weight_22k', 'in')),
+            '24k': float(_sum('weight_24k', 'in')),
+        }
+        w_out = {
+            '18k': float(_sum('weight_18k', 'out')),
+            '21k': float(_sum('weight_21k', 'out')),
+            '22k': float(_sum('weight_22k', 'out')),
+            '24k': float(_sum('weight_24k', 'out')),
+        }
+        w_bal = {
+            k: float(w_in.get(k, 0.0) or 0.0) - float(w_out.get(k, 0.0) or 0.0)
+            for k in ['18k', '21k', '22k', '24k']
+        }
 
-    if not include_unassigned:
-        filters.append(Invoice.scrap_holder_employee_id.isnot(None))
+        total_weight = float(sum(w_bal.values()))
+        total_weight_main = 0.0
+        try:
+            for k, grams in w_bal.items():
+                karat = float(str(k).replace('k', ''))
+                total_weight_main += float(convert_to_main_karat(float(grams or 0.0), karat))
+        except Exception:
+            total_weight_main = 0.0
 
-    invoices = (
-        Invoice.query
-        .options(
-            joinedload(Invoice.items),
-            joinedload(Invoice.karat_lines),
-            joinedload(Invoice.scrap_holder_employee),
-        )
-        .filter(*filters)
-        .order_by(Invoice.date.asc(), Invoice.id.asc())
-        .all()
-    )
+        first_dt_local = q.with_entities(func.min(SafeBoxTransaction.created_at)).scalar()
+        last_dt_local = q.with_entities(func.max(SafeBoxTransaction.created_at)).scalar()
 
-    ledger_map = {}
+        return {
+            'weights_by_karat': {k: round_weight(v) for k, v in w_bal.items()},
+            'total_weight': round_weight(total_weight),
+            'total_weight_main_karat': round_weight(total_weight_main),
+            'first_date': first_dt_local.isoformat() if first_dt_local else None,
+            'last_date': last_dt_local.isoformat() if last_dt_local else None,
+        }
+
+    rows = []
     totals = {
         'invoice_count': 0,
         'total_value': 0.0,
@@ -8125,121 +8426,72 @@ def get_employee_scrap_ledger_report():
         'total_weight_main_karat': 0.0,
     }
 
-    def _karat_label(karat_value: float) -> str:
-        try:
-            karat_float = float(karat_value)
-        except Exception:
-            return 'unknown'
-        if karat_float.is_integer():
-            return f"{int(karat_float)}k"
-        return str(karat_float)
+    # Employee-linked gold safes
+    employees = (
+        Employee.query
+        .filter(Employee.gold_safe_box_id.isnot(None))
+        .order_by(Employee.name.asc(), Employee.id.asc())
+        .all()
+    )
 
-    def _accumulate_weights(target: dict, karat_value: float, grams_value: float):
-        if not grams_value:
-            return
-        try:
-            karat_float = float(karat_value)
-        except Exception:
-            return
-        if karat_float <= 0:
-            return
-        label = _karat_label(karat_float)
-        target[label] = float(target.get(label, 0.0) or 0.0) + float(grams_value)
+    for emp in employees:
+        safe_id = getattr(emp, 'gold_safe_box_id', None)
+        if not safe_id:
+            continue
+        safe = SafeBox.query.get(int(safe_id))
+        if not safe:
+            continue
 
-    for inv in invoices:
-        holder_id = getattr(inv, 'scrap_holder_employee_id', None)
-        bucket_key = holder_id  # can be None
-        if bucket_key not in ledger_map:
-            try:
-                holder_name = inv.scrap_holder_employee.name if inv.scrap_holder_employee else None
-            except Exception:
-                holder_name = None
+        bal = _ledger_balance_for_safe(int(safe.id))
+        row = {
+            'scrap_holder_employee_id': emp.id,
+            'scrap_holder_employee_name': emp.name,
+            'safe_box_id': safe.id,
+            'safe_box_name': safe.name,
+            'invoice_count': 0,
+            'total_value': 0.0,
+            'total_cash_paid': 0.0,
+            'weights_by_karat': dict(sorted((bal.get('weights_by_karat') or {}).items(), key=lambda item: item[0])),
+            'total_weight': bal.get('total_weight', 0.0),
+            'total_weight_main_karat': bal.get('total_weight_main_karat', 0.0),
+            'first_date': bal.get('first_date'),
+            'last_date': bal.get('last_date'),
+        }
+        rows.append(row)
 
-            ledger_map[bucket_key] = {
-                'scrap_holder_employee_id': holder_id,
-                'scrap_holder_employee_name': holder_name,
-                'invoice_count': 0,
-                'total_value': 0.0,
-                'total_cash_paid': 0.0,
-                'weights_by_karat': {},
-                'total_weight': 0.0,
-                'total_weight_main_karat': 0.0,
-                'first_date': None,
-                'last_date': None,
-            }
+        for k, v in (row.get('weights_by_karat') or {}).items():
+            totals['weights_by_karat'][k] = float(totals['weights_by_karat'].get(k, 0.0) or 0.0) + float(v or 0.0)
+        totals['total_weight'] += float(row.get('total_weight') or 0.0)
+        totals['total_weight_main_karat'] += float(row.get('total_weight_main_karat') or 0.0)
 
-        row = ledger_map[bucket_key]
-        row['invoice_count'] += 1
-        totals['invoice_count'] += 1
-
-        inv_total = float(getattr(inv, 'total', 0.0) or 0.0)
-        inv_paid = float(getattr(inv, 'amount_paid', 0.0) or 0.0)
-        row['total_value'] += inv_total
-        row['total_cash_paid'] += inv_paid
-        totals['total_value'] += inv_total
-        totals['total_cash_paid'] += inv_paid
-
-        try:
-            inv_date = inv.date
-            inv_date_iso = inv_date.isoformat() if inv_date else None
-        except Exception:
-            inv_date = None
-            inv_date_iso = None
-
-        if inv_date_iso:
-            if row['first_date'] is None or inv_date_iso < row['first_date']:
-                row['first_date'] = inv_date_iso
-            if row['last_date'] is None or inv_date_iso > row['last_date']:
-                row['last_date'] = inv_date_iso
-
-        # Avoid double counting: prefer karat_lines when they exist and have weight.
-        per_invoice_weights = defaultdict(float)
-
-        used_karat_lines = False
-        try:
-            if getattr(inv, 'karat_lines', None):
-                kl_sum = 0.0
-                for kl in inv.karat_lines:
-                    kl_sum += float(getattr(kl, 'weight_grams', 0.0) or 0.0)
-                if kl_sum > 0:
-                    used_karat_lines = True
-                    for kl in inv.karat_lines:
-                        karat_val = float(getattr(kl, 'karat', 0.0) or 0.0)
-                        grams_val = float(getattr(kl, 'weight_grams', 0.0) or 0.0)
-                        if grams_val and karat_val:
-                            per_invoice_weights[karat_val] += grams_val
-        except Exception:
-            used_karat_lines = False
-
-        if not used_karat_lines:
-            try:
-                for it in (inv.items or []):
-                    qty = int(getattr(it, 'quantity', 1) or 1)
-                    karat_val = float(getattr(it, 'karat', 0.0) or 0.0)
-                    grams_val = float(getattr(it, 'weight', 0.0) or 0.0) * qty
-                    if grams_val and karat_val:
-                        per_invoice_weights[karat_val] += grams_val
-            except Exception:
-                pass
-
-        for karat_val, grams_val in per_invoice_weights.items():
-            _accumulate_weights(row['weights_by_karat'], karat_val, grams_val)
-            _accumulate_weights(totals['weights_by_karat'], karat_val, grams_val)
-            row['total_weight'] += float(grams_val)
-            totals['total_weight'] += float(grams_val)
-            try:
-                row['total_weight_main_karat'] += float(convert_to_main_karat(float(grams_val), float(karat_val)))
-                totals['total_weight_main_karat'] += float(convert_to_main_karat(float(grams_val), float(karat_val)))
-            except Exception:
-                pass
-
-    rows = list(ledger_map.values())
+    # Optional "unassigned" bucket -> main/default gold safe.
+    if include_unassigned and default_gold_safe and getattr(default_gold_safe, 'id', None):
+        bal = _ledger_balance_for_safe(int(default_gold_safe.id))
+        row = {
+            'scrap_holder_employee_id': None,
+            'scrap_holder_employee_name': 'الخزنة الرئيسية (افتراضي)',
+            'safe_box_id': default_gold_safe.id,
+            'safe_box_name': default_gold_safe.name,
+            'invoice_count': 0,
+            'total_value': 0.0,
+            'total_cash_paid': 0.0,
+            'weights_by_karat': dict(sorted((bal.get('weights_by_karat') or {}).items(), key=lambda item: item[0])),
+            'total_weight': bal.get('total_weight', 0.0),
+            'total_weight_main_karat': bal.get('total_weight_main_karat', 0.0),
+            'first_date': bal.get('first_date'),
+            'last_date': bal.get('last_date'),
+        }
+        rows.append(row)
+        for k, v in (row.get('weights_by_karat') or {}).items():
+            totals['weights_by_karat'][k] = float(totals['weights_by_karat'].get(k, 0.0) or 0.0) + float(v or 0.0)
+        totals['total_weight'] += float(row.get('total_weight') or 0.0)
+        totals['total_weight_main_karat'] += float(row.get('total_weight_main_karat') or 0.0)
 
     for row in rows:
-        row['total_value'] = round_money(row['total_value'])
-        row['total_cash_paid'] = round_money(row['total_cash_paid'])
-        row['total_weight'] = round_weight(row['total_weight'])
-        row['total_weight_main_karat'] = round_weight(row['total_weight_main_karat'])
+        row['total_value'] = round_money(row.get('total_value'))
+        row['total_cash_paid'] = round_money(row.get('total_cash_paid'))
+        row['total_weight'] = round_weight(row.get('total_weight'))
+        row['total_weight_main_karat'] = round_weight(row.get('total_weight_main_karat'))
         row['weights_by_karat'] = {
             key: round_weight(value)
             for key, value in sorted((row.get('weights_by_karat') or {}).items(), key=lambda item: item[0])
@@ -8247,10 +8499,10 @@ def get_employee_scrap_ledger_report():
 
     rows.sort(key=lambda r: (r.get('total_weight_main_karat') or 0.0), reverse=True)
 
-    totals['total_value'] = round_money(totals['total_value'])
-    totals['total_cash_paid'] = round_money(totals['total_cash_paid'])
-    totals['total_weight'] = round_weight(totals['total_weight'])
-    totals['total_weight_main_karat'] = round_weight(totals['total_weight_main_karat'])
+    totals['total_value'] = round_money(totals.get('total_value'))
+    totals['total_cash_paid'] = round_money(totals.get('total_cash_paid'))
+    totals['total_weight'] = round_weight(totals.get('total_weight'))
+    totals['total_weight_main_karat'] = round_weight(totals.get('total_weight_main_karat'))
     totals['weights_by_karat'] = {
         key: round_weight(value)
         for key, value in sorted((totals.get('weights_by_karat') or {}).items(), key=lambda item: item[0])
@@ -8267,7 +8519,7 @@ def get_employee_scrap_ledger_report():
             'include_unposted': include_unposted,
             'include_unassigned': include_unassigned,
         },
-        'count': len(invoices),
+        'count': len(rows),
     })
 
 
@@ -11666,6 +11918,29 @@ def create_employee():
         created_by=data.get('created_by'),
     )
 
+    # Optional: assign employee gold safe box (NULL/0 => main gold safe)
+    if 'gold_safe_box_id' in data:
+        raw_gold_safe_id = data.get('gold_safe_box_id')
+        gold_safe_id = None
+        if raw_gold_safe_id not in (None, '', False):
+            try:
+                gold_safe_id = int(raw_gold_safe_id)
+            except Exception:
+                return jsonify({'error': 'gold_safe_box_id must be numeric'}), 400
+            if gold_safe_id == 0:
+                gold_safe_id = None
+
+        if gold_safe_id is not None:
+            sb = SafeBox.query.get(gold_safe_id)
+            if not sb:
+                return jsonify({'error': f'Gold safe box with ID {gold_safe_id} not found'}), 404
+            if (sb.safe_type or '').lower() != 'gold':
+                return jsonify({'error': 'Selected safe box is not a gold safe'}), 400
+            if not bool(getattr(sb, 'is_active', True)):
+                return jsonify({'error': 'Selected gold safe box is not active'}), 400
+
+        employee.gold_safe_box_id = gold_safe_id
+
     try:
         db.session.add(employee)
         db.session.commit()
@@ -11710,6 +11985,28 @@ def update_employee(employee_id):
 
     if 'account_id' in data:
         employee.account_id = data['account_id']
+
+    if 'gold_safe_box_id' in data:
+        raw_gold_safe_id = data.get('gold_safe_box_id')
+        gold_safe_id = None
+        if raw_gold_safe_id not in (None, '', False):
+            try:
+                gold_safe_id = int(raw_gold_safe_id)
+            except Exception:
+                return jsonify({'error': 'gold_safe_box_id must be numeric'}), 400
+            if gold_safe_id == 0:
+                gold_safe_id = None
+
+        if gold_safe_id is not None:
+            sb = SafeBox.query.get(gold_safe_id)
+            if not sb:
+                return jsonify({'error': f'Gold safe box with ID {gold_safe_id} not found'}), 404
+            if (sb.safe_type or '').lower() != 'gold':
+                return jsonify({'error': 'Selected safe box is not a gold safe'}), 400
+            if not bool(getattr(sb, 'is_active', True)):
+                return jsonify({'error': 'Selected gold safe box is not active'}), 400
+
+        employee.gold_safe_box_id = gold_safe_id
 
     if 'is_active' in data:
         employee.is_active = bool(data['is_active'])
@@ -12540,6 +12837,22 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
         if not sb:
             continue
 
+        # Validation: if the safe box is fixed to a single karat, reject mismatched gold lines.
+        if (getattr(sb, 'safe_type', None) == 'gold') and getattr(sb, 'karat', None) and (line.amount_type == 'gold'):
+            try:
+                safe_karat = int(getattr(sb, 'karat'))
+            except Exception:
+                safe_karat = None
+            try:
+                line_karat = int(line.karat) if line.karat is not None else None
+            except Exception:
+                line_karat = None
+
+            if safe_karat and line_karat != safe_karat:
+                raise ValueError(
+                    f"karat_mismatch_for_safe_box: safe_box_id={sb.id}, allowed={safe_karat}, got={line_karat}"
+                )
+
         direction = 'in' if (line.line_type == 'debit') else 'out'
         tx = SafeBoxTransaction(
             safe_box_id=sb.id,
@@ -13003,6 +13316,17 @@ def approve_voucher(voucher_id):
             }
         }), 200
         
+    except ValueError as e:
+        db.session.rollback()
+        msg = str(e)
+        if msg.startswith('karat_mismatch_for_safe_box:'):
+            # Provide a clean client-facing error.
+            return jsonify({
+                'error': 'karat_mismatch_for_safe_box',
+                'message': 'عيار الحركة لا يتطابق مع عيار الخزنة (الخزنة مخصصة لعيار واحد)',
+                'details': msg,
+            }), 400
+        return jsonify({'error': 'validation_error', 'message': msg}), 400
     except Exception as e:
         db.session.rollback()
         import traceback
@@ -14367,9 +14691,26 @@ def create_safe_box():
     if not account:
         return jsonify({'error': 'الحساب المحدد غير موجود'}), 404
     
-    # إذا كانت خزينة ذهبية، يجب تحديد العيار
-    if data['safe_type'] == 'gold' and not data.get('karat'):
-        return jsonify({'error': 'العيار مطلوب للخزائن الذهبية'}), 400
+    # التحقق من خزينة الذهب: الحساب يجب أن يدعم تتبع الوزن (tracks_weight=True)
+    if data['safe_type'] == 'gold':
+        # العيار اختياري: إذا حُدد، يجب أن يكون صحيحاً
+        karat = data.get('karat')
+        if karat:
+            try:
+                karat = int(karat)
+            except Exception:
+                return jsonify({'error': 'العيار غير صالح'}), 400
+            if karat not in (18, 21, 22, 24):
+                return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
+        else:
+            karat = None  # خزينة متعددة العيارات
+
+        tracks_weight = bool(getattr(account, 'tracks_weight', False))
+        if not tracks_weight:
+            return jsonify({
+                'error': 'الحساب المرتبط غير مناسب لخزنة الذهب',
+                'details': 'يجب أن يتتبع الوزن (tracks_weight=True)'
+            }), 400
     
     try:
         safe_box = SafeBox(
@@ -14377,7 +14718,7 @@ def create_safe_box():
             name_en=data.get('name_en'),
             safe_type=data['safe_type'],
             account_id=data['account_id'],
-            karat=data.get('karat'),
+            karat=karat if data.get('safe_type') == 'gold' else data.get('karat'),
             bank_name=data.get('bank_name'),
             iban=data.get('iban'),
             swift_code=data.get('swift_code'),
@@ -14426,7 +14767,35 @@ def update_safe_box(safe_box_id):
             safe_box.account_id = data['account_id']
         
         if 'karat' in data:
-            safe_box.karat = data['karat']
+            # العيار اختياري للخزائن الذهبية
+            karat_value = data['karat']
+            if karat_value:
+                try:
+                    karat_value = int(karat_value)
+                    if karat_value not in (18, 21, 22, 24):
+                        return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
+                except Exception:
+                    return jsonify({'error': 'العيار غير صالح'}), 400
+            else:
+                karat_value = None
+            safe_box.karat = karat_value
+
+        # ✅ تحقق إضافي: خزنة الذهب تحتاج حساباً يدعم تتبع الوزن
+        effective_type = (safe_box.safe_type or '').strip().lower()
+        if effective_type == 'gold':
+            account = Account.query.get(safe_box.account_id)
+            if not account:
+                return jsonify({'error': 'الحساب المحدد غير موجود'}), 404
+            tracks_weight = bool(getattr(account, 'tracks_weight', False))
+
+            if not tracks_weight:
+                return jsonify({
+                    'error': 'الحساب المرتبط غير مناسب لخزنة الذهب',
+                    'details': 'يجب أن يتتبع الوزن (tracks_weight=True)'
+                }), 400
+        else:
+            # لو تغير النوع من ذهب إلى غير ذهب، امسح العيار للحفاظ على الاتساق.
+            safe_box.karat = None
         
         if 'bank_name' in data:
             safe_box.bank_name = data['bank_name']
@@ -14443,14 +14812,18 @@ def update_safe_box(safe_box_id):
         if 'is_active' in data:
             safe_box.is_active = data['is_active']
         
-        if 'is_default' in data and data['is_default']:
-            # إلغاء تفعيل الافتراضية من الخزائن الأخرى من نفس النوع
-            SafeBox.query.filter(
-                SafeBox.safe_type == safe_box.safe_type,
-                SafeBox.id != safe_box_id,
-                SafeBox.is_default == True
-            ).update({'is_default': False})
-            safe_box.is_default = True
+        if 'is_default' in data:
+            is_default_value = bool(data['is_default'])
+            if is_default_value:
+                # إلغاء تفعيل الافتراضية من الخزائن الأخرى من نفس النوع
+                SafeBox.query.filter(
+                    SafeBox.safe_type == safe_box.safe_type,
+                    SafeBox.id != safe_box_id,
+                    SafeBox.is_default == True
+                ).update({'is_default': False})
+                safe_box.is_default = True
+            else:
+                safe_box.is_default = False
         
         if 'notes' in data:
             safe_box.notes = data['notes']
@@ -14468,9 +14841,37 @@ def update_safe_box(safe_box_id):
 def delete_safe_box(safe_box_id):
     """حذف خزينة"""
     safe_box = SafeBox.query.get_or_404(safe_box_id)
-    
-    # التحقق من عدم وجود معاملات مرتبطة (يمكن إضافة المزيد من الفحوصات)
-    # في المستقبل: فحص السندات والحركات المرتبطة بالحساب
+
+    # منع حذف الخزينة إذا كانت مرتبطة بكيانات أخرى (Restrict)
+    # ملاحظة: هذا الفحص مهم خصوصاً على SQLite/قواعد قديمة حيث قد لا توجد قيود FK فعلية.
+    try:
+        linked_employees = Employee.query.filter(Employee.gold_safe_box_id == safe_box_id).count()
+        linked_transactions = SafeBoxTransaction.query.filter(SafeBoxTransaction.safe_box_id == safe_box_id).count()
+        linked_invoices = Invoice.query.filter(Invoice.safe_box_id == safe_box_id).count()
+        linked_payment_methods = PaymentMethod.query.filter(PaymentMethod.default_safe_box_id == safe_box_id).count()
+
+        if any(v > 0 for v in [
+            linked_employees,
+            linked_transactions,
+            linked_invoices,
+            linked_payment_methods,
+        ]):
+            return jsonify({
+                'error': 'cannot_delete_safe_box_in_use',
+                'message': 'لا يمكن حذف الخزينة لأنها مرتبطة بموظف/عمليات/فواتير/وسائل دفع',
+                'details': {
+                    'employees_linked': int(linked_employees),
+                    'transactions_linked': int(linked_transactions),
+                    'invoices_linked': int(linked_invoices),
+                    'payment_methods_linked': int(linked_payment_methods),
+                },
+            }), 400
+    except Exception:
+        # إذا فشل الفحص لأي سبب، الأفضل عدم السماح بالحذف بدلاً من حذف بيانات مهمة.
+        return jsonify({
+            'error': 'cannot_delete_safe_box_validation_failed',
+            'message': 'تعذر التحقق من ارتباطات الخزينة قبل الحذف',
+        }), 400
     
     try:
         db.session.delete(safe_box)
@@ -14504,6 +14905,218 @@ def get_gold_safe_box_by_karat(karat):
         return jsonify({'error': f'لا توجد خزينة ذهب لعيار {karat}'}), 404
     
     return jsonify(safe_box.to_dict(include_account=True, include_balance=True))
+
+
+@api.route('/safe-boxes/transfer-voucher', methods=['POST'])
+@require_permission('safe_boxes.edit')
+def create_safe_box_transfer_voucher():
+    """Create a gold safe-box transfer voucher and update the SafeBox ledger immediately.
+
+    This is the execution tool for moving employee custody (gold safe) back to central safe.
+
+    Body JSON:
+      - from_safe_box_id: int (required)
+      - to_safe_box_id: int (required)
+      - weights: {"24k": float, "22k": float, "21k": float, "18k": float} (optional)
+        OR weight_24k/weight_22k/weight_21k/weight_18k (optional)
+      - date: ISO datetime (optional)
+      - notes: str (optional)
+      - created_by / approved_by: str (optional)
+
+    Result: creates an approved adjustment Voucher + JournalEntry + SafeBoxTransaction rows (out/in).
+    """
+
+    data = request.get_json(silent=True) or {}
+    from_safe_box_id = data.get('from_safe_box_id')
+    to_safe_box_id = data.get('to_safe_box_id')
+
+    if not from_safe_box_id or not to_safe_box_id:
+        return jsonify({'error': 'from_safe_box_id_and_to_safe_box_id_required'}), 400
+
+    try:
+        from_safe_box_id = int(from_safe_box_id)
+        to_safe_box_id = int(to_safe_box_id)
+    except Exception:
+        return jsonify({'error': 'invalid_safe_box_id'}), 400
+
+    if from_safe_box_id == to_safe_box_id:
+        return jsonify({'error': 'cannot_transfer_to_same_safe_box'}), 400
+
+    from_safe = SafeBox.query.get_or_404(from_safe_box_id)
+    to_safe = SafeBox.query.get_or_404(to_safe_box_id)
+
+    if (from_safe.safe_type or '').strip() != 'gold' or (to_safe.safe_type or '').strip() != 'gold':
+        return jsonify({'error': 'transfer_requires_gold_safe_boxes'}), 400
+
+    if not bool(getattr(from_safe, 'is_active', True)) or not bool(getattr(to_safe, 'is_active', True)):
+        return jsonify({'error': 'safe_box_inactive'}), 400
+
+    weights = data.get('weights') or {}
+    def _f(v):
+        try:
+            return float(v or 0.0)
+        except Exception:
+            return 0.0
+
+    w_24 = _f(weights.get('24k') if isinstance(weights, dict) else None)
+    w_22 = _f(weights.get('22k') if isinstance(weights, dict) else None)
+    w_21 = _f(weights.get('21k') if isinstance(weights, dict) else None)
+    w_18 = _f(weights.get('18k') if isinstance(weights, dict) else None)
+
+    # Allow alternate flat fields
+    if w_24 == 0.0:
+        w_24 = _f(data.get('weight_24k'))
+    if w_22 == 0.0:
+        w_22 = _f(data.get('weight_22k'))
+    if w_21 == 0.0:
+        w_21 = _f(data.get('weight_21k'))
+    if w_18 == 0.0:
+        w_18 = _f(data.get('weight_18k'))
+
+    for v in (w_24, w_22, w_21, w_18):
+        if v < 0:
+            return jsonify({'error': 'negative_weight_not_allowed'}), 400
+
+    if (w_24 + w_22 + w_21 + w_18) <= 0:
+        return jsonify({'error': 'no_weights_provided'}), 400
+
+    # Compute current source balance from ledger and enforce sufficiency.
+    q = SafeBoxTransaction.query.filter_by(safe_box_id=from_safe_box_id)
+    w_in = {
+        '18k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_18k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+        '21k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_21k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+        '22k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_22k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+        '24k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_24k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+    }
+    w_out = {
+        '18k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_18k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+        '21k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_21k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+        '22k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_22k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+        '24k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_24k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+    }
+    w_bal = {k: float(w_in.get(k, 0.0)) - float(w_out.get(k, 0.0)) for k in ['18k', '21k', '22k', '24k']}
+    eps = 1e-6
+    if (w_24 - (w_bal.get('24k', 0.0) or 0.0)) > eps:
+        return jsonify({'error': 'insufficient_balance_24k', 'available': round(w_bal.get('24k', 0.0), 3)}), 400
+    if (w_22 - (w_bal.get('22k', 0.0) or 0.0)) > eps:
+        return jsonify({'error': 'insufficient_balance_22k', 'available': round(w_bal.get('22k', 0.0), 3)}), 400
+    if (w_21 - (w_bal.get('21k', 0.0) or 0.0)) > eps:
+        return jsonify({'error': 'insufficient_balance_21k', 'available': round(w_bal.get('21k', 0.0), 3)}), 400
+    if (w_18 - (w_bal.get('18k', 0.0) or 0.0)) > eps:
+        return jsonify({'error': 'insufficient_balance_18k', 'available': round(w_bal.get('18k', 0.0), 3)}), 400
+
+    created_by = (data.get('approved_by') or data.get('created_by') or 'system')
+    notes = (data.get('notes') or '').strip() or None
+
+    try:
+        voucher_dt = datetime.fromisoformat(data.get('date')) if data.get('date') else datetime.now()
+    except Exception:
+        return jsonify({'error': 'invalid_date'}), 400
+
+    # Build balanced gold account lines (credit from_safe.account, debit to_safe.account)
+    def _line(account_id: int, *, line_type: str, karat: int, amount: float):
+        return VoucherAccountLine(
+            account_id=account_id,
+            line_type=line_type,
+            amount_type='gold',
+            amount=float(amount),
+            karat=float(karat),
+        )
+
+    lines = []
+    if w_24 > 0:
+        lines.append(_line(to_safe.account_id, line_type='debit', karat=24, amount=w_24))
+        lines.append(_line(from_safe.account_id, line_type='credit', karat=24, amount=w_24))
+    if w_22 > 0:
+        lines.append(_line(to_safe.account_id, line_type='debit', karat=22, amount=w_22))
+        lines.append(_line(from_safe.account_id, line_type='credit', karat=22, amount=w_22))
+    if w_21 > 0:
+        lines.append(_line(to_safe.account_id, line_type='debit', karat=21, amount=w_21))
+        lines.append(_line(from_safe.account_id, line_type='credit', karat=21, amount=w_21))
+    if w_18 > 0:
+        lines.append(_line(to_safe.account_id, line_type='debit', karat=18, amount=w_18))
+        lines.append(_line(from_safe.account_id, line_type='credit', karat=18, amount=w_18))
+
+    try:
+        # Generate voucher number with collision guard (rare)
+        voucher_number = None
+        for _ in range(5):
+            candidate = generate_voucher_number('adjustment', year=voucher_dt.year)
+            if not Voucher.query.filter_by(voucher_number=candidate).first():
+                voucher_number = candidate
+                break
+        if not voucher_number:
+            return jsonify({'error': 'voucher_number_generation_failed'}), 500
+
+        voucher = Voucher(
+            voucher_number=voucher_number,
+            voucher_type='adjustment',
+            date=voucher_dt,
+            party_type=None,
+            description=f"تحويل خزنة ذهب: {from_safe.name} → {to_safe.name}",
+            amount_cash=0.0,
+            amount_gold=float(w_24 + w_22 + w_21 + w_18),
+            reference_type='manual',
+            reference_number=None,
+            notes=notes,
+            created_by=created_by,
+            status='pending',
+        )
+        db.session.add(voucher)
+        db.session.flush()
+
+        for l in lines:
+            l.voucher_id = voucher.id
+            db.session.add(l)
+
+        # Approve/post immediately
+        journal_entry = create_journal_entry_from_voucher(voucher)
+        if not journal_entry:
+            raise Exception('فشل إنشاء القيد المحاسبي')
+
+        voucher.status = 'approved'
+        voucher.approved_at = datetime.now()
+        voucher.approved_by = created_by
+        voucher.journal_entry_id = journal_entry.id
+
+        _append_safe_transactions_for_voucher(voucher, created_by=created_by)
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'تم إنشاء سند التحويل وتحديث الخزائن بنجاح',
+            'voucher': voucher.to_dict(),
+            'journal_entry': {
+                'id': journal_entry.id,
+                'entry_number': journal_entry.entry_number,
+                'date': journal_entry.date.isoformat() if journal_entry.date else None,
+            },
+            'transfer': {
+                'from_safe_box_id': from_safe.id,
+                'to_safe_box_id': to_safe.id,
+                'weights': {
+                    '24k': round(float(w_24), 3),
+                    '22k': round(float(w_22), 3),
+                    '21k': round(float(w_21), 3),
+                    '18k': round(float(w_18), 3),
+                },
+            },
+        }), 201
+    except ValueError as e:
+        db.session.rollback()
+        msg = str(e)
+        if msg.startswith('karat_mismatch_for_safe_box:'):
+            return jsonify({
+                'error': 'karat_mismatch_for_safe_box',
+                'message': 'لا يمكن تنفيذ التحويل: عيار الحركة لا يتطابق مع عيار الخزنة (الخزنة مخصصة لعيار واحد)',
+                'details': msg,
+            }), 400
+        return jsonify({'error': 'validation_error', 'message': msg}), 400
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'safe_box_transfer_voucher_failed', 'message': str(e)}), 500
 
 
 # =========================================================================
@@ -16528,6 +17141,207 @@ def get_inventory_reconciliation_report():
     except Exception as e:
         print(f"❌ Error generating inventory reconciliation report: {e}")
         return jsonify({'error': f'فشل إنشاء تقرير مطابقة المخزون: {str(e)}'}), 500
+
+
+@api.route('/reports/gold-weight-trial-balance', methods=['GET'])
+@require_permission('reports.financial')
+def get_gold_weight_trial_balance_by_safe_box():
+    """ميزان مراجعة الأوزان (مطابقة الخزائن ↔ الحسابات الوزنية المرتبطة).
+
+    الهدف:
+    - جرد أرصدة كل خزنة ذهب من دفتر الخزينة (SafeBoxTransaction)
+    - مقارنة الرصيد مع الحساب الوزني المرتبط (عادةً 7xxx) من القيود اليومية
+    - إظهار الفرق (Variance) لاكتشاف أي تعديل يدوي على الحساب دون دفتر الخزنة (أو العكس)
+
+    Query Parameters:
+    - date: تاريخ نهاية التقرير (YYYY-MM-DD) - افتراضي: اليوم
+
+    Returns:
+    - rows: لكل خزنة: رصيد الخزنة، رصيد الحساب، والفرق لكل عيار + إجمالي محول للعيار الرئيسي
+    """
+    try:
+        from config import MAIN_KARAT
+
+        end_date_str = request.args.get('date')
+        if end_date_str:
+            end_date = datetime.fromisoformat(end_date_str).date()
+        else:
+            end_date = datetime.now().date()
+
+        main_karat = float(MAIN_KARAT or 21)
+        end_dt = datetime.combine(end_date, time.max)
+
+        def _to_float(v):
+            try:
+                return float(v or 0.0)
+            except Exception:
+                return 0.0
+
+        def _normalize_to_main(weight: float, karat: int) -> float:
+            k = float(karat)
+            if main_karat <= 0:
+                return float(weight or 0.0)
+            return float(weight or 0.0) * (k / main_karat)
+
+        def _total_main_from_by_karat(by_karat: dict) -> float:
+            return (
+                _normalize_to_main(_to_float(by_karat.get('18k')), 18)
+                + _normalize_to_main(_to_float(by_karat.get('21k')), 21)
+                + _normalize_to_main(_to_float(by_karat.get('22k')), 22)
+                + _normalize_to_main(_to_float(by_karat.get('24k')), 24)
+            )
+
+        def _safe_ledger_balance_by_karat(safe_id: int) -> dict:
+            # Use SQL aggregates for performance.
+            sign = case(
+                (SafeBoxTransaction.direction == 'in', 1.0),
+                else_=-1.0,
+            )
+            sums = (
+                db.session.query(
+                    func.coalesce(func.sum(SafeBoxTransaction.weight_18k * sign), 0.0).label('b18'),
+                    func.coalesce(func.sum(SafeBoxTransaction.weight_21k * sign), 0.0).label('b21'),
+                    func.coalesce(func.sum(SafeBoxTransaction.weight_22k * sign), 0.0).label('b22'),
+                    func.coalesce(func.sum(SafeBoxTransaction.weight_24k * sign), 0.0).label('b24'),
+                )
+                .filter(SafeBoxTransaction.safe_box_id == safe_id)
+                .filter(SafeBoxTransaction.created_at <= end_dt)
+                .first()
+            )
+
+            by_karat = {
+                '18k': round(_to_float(getattr(sums, 'b18', 0.0)), 3),
+                '21k': round(_to_float(getattr(sums, 'b21', 0.0)), 3),
+                '22k': round(_to_float(getattr(sums, 'b22', 0.0)), 3),
+                '24k': round(_to_float(getattr(sums, 'b24', 0.0)), 3),
+            }
+            return {
+                'by_karat': by_karat,
+                'total_main_karat': round(_total_main_from_by_karat(by_karat), 3),
+                'main_karat': int(main_karat),
+            }
+
+        def _account_balance_by_karat(account_id: int) -> dict:
+            if not account_id:
+                by_karat = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+                return {
+                    'by_karat': by_karat,
+                    'total_main_karat': 0.0,
+                    'main_karat': int(main_karat),
+                }
+
+            sums = (
+                db.session.query(
+                    func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0).label('d18'),
+                    func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0).label('c18'),
+                    func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0).label('d21'),
+                    func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0).label('c21'),
+                    func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0).label('d22'),
+                    func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0).label('c22'),
+                    func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0).label('d24'),
+                    func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0).label('c24'),
+                )
+                .join(JournalEntry)
+                .filter(JournalEntryLine.account_id == account_id)
+                .filter(JournalEntry.date <= end_date)
+                .first()
+            )
+
+            b18 = _to_float(getattr(sums, 'd18', 0.0)) - _to_float(getattr(sums, 'c18', 0.0))
+            b21 = _to_float(getattr(sums, 'd21', 0.0)) - _to_float(getattr(sums, 'c21', 0.0))
+            b22 = _to_float(getattr(sums, 'd22', 0.0)) - _to_float(getattr(sums, 'c22', 0.0))
+            b24 = _to_float(getattr(sums, 'd24', 0.0)) - _to_float(getattr(sums, 'c24', 0.0))
+
+            by_karat = {
+                '18k': round(b18, 3),
+                '21k': round(b21, 3),
+                '22k': round(b22, 3),
+                '24k': round(b24, 3),
+            }
+            return {
+                'by_karat': by_karat,
+                'total_main_karat': round(_total_main_from_by_karat(by_karat), 3),
+                'main_karat': int(main_karat),
+            }
+
+        def _variance(a: dict, b: dict) -> dict:
+            by_karat = {
+                '18k': round(_to_float(a.get('18k')) - _to_float(b.get('18k')), 3),
+                '21k': round(_to_float(a.get('21k')) - _to_float(b.get('21k')), 3),
+                '22k': round(_to_float(a.get('22k')) - _to_float(b.get('22k')), 3),
+                '24k': round(_to_float(a.get('24k')) - _to_float(b.get('24k')), 3),
+            }
+            total_main = round(_total_main_from_by_karat(by_karat), 3)
+            return {
+                'by_karat': by_karat,
+                'total_main_karat': total_main,
+                'main_karat': int(main_karat),
+            }
+
+        safes = (
+            SafeBox.query
+            .filter(SafeBox.safe_type == 'gold')
+            .order_by(SafeBox.is_active.desc(), SafeBox.name.asc())
+            .all()
+        )
+
+        rows = []
+        balanced_count = 0
+        total_variance_main = 0.0
+
+        for sb in safes:
+            safe_bal = _safe_ledger_balance_by_karat(int(sb.id))
+            acc = Account.query.get(sb.account_id) if sb.account_id else None
+            acc_bal = _account_balance_by_karat(int(sb.account_id) if sb.account_id else 0)
+
+            var = _variance(safe_bal['by_karat'], acc_bal['by_karat'])
+
+            # Consider balanced when variance is within a tiny tolerance.
+            tol = 0.0005
+            is_balanced = (
+                abs(_to_float(var.get('total_main_karat'))) < tol
+                and all(abs(_to_float(v)) < tol for v in (var.get('by_karat') or {}).values())
+            )
+
+            if is_balanced:
+                balanced_count += 1
+            total_variance_main += abs(_to_float(var.get('total_main_karat')))
+
+            rows.append({
+                'safe_box': {
+                    'id': sb.id,
+                    'name': sb.name,
+                    'safe_type': sb.safe_type,
+                    'karat': sb.karat,
+                    'is_active': bool(sb.is_active),
+                    'account_id': sb.account_id,
+                    'account_number': acc.account_number if acc else None,
+                    'account_name': acc.name if acc else None,
+                },
+                'safe_balance': safe_bal,
+                'account_balance': acc_bal,
+                'variance': var,
+                'is_balanced': bool(is_balanced),
+            })
+
+        return jsonify({
+            'report_type': 'gold_weight_trial_balance',
+            'date': end_date.isoformat(),
+            'main_karat': int(main_karat),
+            'rows': rows,
+            'summary': {
+                'total_safe_boxes': len(rows),
+                'balanced_safe_boxes': balanced_count,
+                'unbalanced_safe_boxes': len(rows) - balanced_count,
+                'total_abs_variance_main_karat': round(float(total_variance_main), 3),
+            },
+        }), 200
+
+    except ValueError:
+        return jsonify({'error': 'صيغة التاريخ غير صحيحة. استخدم YYYY-MM-DD'}), 400
+    except Exception as e:
+        print(f"❌ Error generating gold weight trial balance by safe box: {e}")
+        return jsonify({'error': f'فشل إنشاء ميزان مراجعة الأوزان: {str(e)}'}), 500
 
 
 @api.route('/reports/income-statement/cash', methods=['GET'])

@@ -6,8 +6,21 @@ class SafeBoxesScreen extends StatefulWidget {
   final ApiService api;
   final bool isArabic;
 
-  SafeBoxesScreen({super.key, ApiService? api, this.isArabic = true})
-    : api = api ?? ApiService();
+  // Optional: show ledger-based balances and lock to a specific safe type.
+  final bool balancesView;
+  final String? initialFilterType;
+  final bool lockFilterType;
+  final String? titleOverride;
+
+  SafeBoxesScreen({
+    super.key,
+    ApiService? api,
+    this.isArabic = true,
+    this.balancesView = false,
+    this.initialFilterType,
+    this.lockFilterType = false,
+    this.titleOverride,
+  }) : api = api ?? ApiService();
 
   @override
   State<SafeBoxesScreen> createState() => _SafeBoxesScreenState();
@@ -24,17 +37,30 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialFilterType != null &&
+        widget.initialFilterType!.isNotEmpty) {
+      _filterType = widget.initialFilterType!;
+    }
     _loadSafeBoxes();
   }
 
   Future<void> _loadSafeBoxes() async {
     setState(() => _isLoading = true);
     try {
-      final boxes = await widget.api.getSafeBoxes(
-        safeType: _filterType == 'all' ? null : _filterType,
-        includeAccount: true,
-        includeBalance: true,
-      );
+      final effectiveType = widget.lockFilterType
+          ? (widget.initialFilterType ?? _filterType)
+          : _filterType;
+
+      final boxes = widget.balancesView
+          ? await widget.api.getSafeBoxBalances(
+              type: effectiveType == 'all' ? null : effectiveType,
+              isActive: null,
+            )
+          : await widget.api.getSafeBoxes(
+              safeType: effectiveType == 'all' ? null : effectiveType,
+              includeAccount: true,
+              includeBalance: true,
+            );
       setState(() {
         _safeBoxes = boxes;
         _isLoading = false;
@@ -129,29 +155,6 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                       border: const OutlineInputBorder(),
                     ),
                   ),
-                  const SizedBox(height: 12),
-
-                  // الاسم بالإنجليزية
-                  TextField(
-                    controller: nameEnController,
-                    decoration: const InputDecoration(
-                      labelText: 'Name (English)',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // نوع الخزينة
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedType,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'نوع الخزينة *' : 'Safe Type *',
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: 'cash',
-                        child: Text(isAr ? 'نقدي' : 'Cash'),
                       ),
                       DropdownMenuItem(
                         value: 'bank',
@@ -182,7 +185,15 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                       if (query.isEmpty) {
                         return const Iterable<Map<String, dynamic>>.empty();
                       }
-                      return accounts.where((acc) {
+                      final selectable = selectedType == 'gold'
+                          ? accounts.where((acc) {
+                            // خزنة الذهب يجب أن ترتبط بحساب يتتبع الوزن
+                            final tracks = acc['tracks_weight'] == true;
+                            return tracks;
+                            })
+                          : accounts;
+
+                      return selectable.where((acc) {
                         final label = accountLabelFor(acc).toLowerCase();
                         return label.contains(query);
                       });
@@ -208,6 +219,11 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                               labelText: isAr
                                   ? 'الحساب المرتبط * (ابحث بالاسم/الرقم)'
                                   : 'Linked Account * (search by name/number)',
+                              helperText: selectedType == 'gold'
+                                  ? (isAr
+                                        ? 'اختر حساباً يتتبع الوزن (tracks_weight=true)'
+                                        : 'Choose an account that tracks weight (tracks_weight=true)')
+                                  : null,
                               border: const OutlineInputBorder(),
                             ),
                           );
@@ -245,13 +261,19 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
 
                   // العيار (للذهب فقط)
                   if (selectedType == 'gold')
-                    DropdownButtonFormField<int>(
-                      initialValue: selectedKarat,
+                    DropdownButtonFormField<int?>(
+                      value: selectedKarat,
                       decoration: InputDecoration(
-                        labelText: isAr ? 'العيار *' : 'Karat *',
+                        labelText: isAr
+                            ? 'العيار (اختياري)'
+                            : 'Karat (optional)',
                         border: const OutlineInputBorder(),
                       ),
                       items: const [
+                        DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('— خزينة متعددة العيارات —'),
+                        ),
                         DropdownMenuItem(value: 18, child: Text('18')),
                         DropdownMenuItem(value: 21, child: Text('21')),
                         DropdownMenuItem(value: 22, child: Text('22')),
@@ -262,6 +284,32 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                           selectedKarat = value;
                         });
                       },
+                    ),
+                  if (selectedType == 'gold') const SizedBox(height: 12),
+                  if (selectedType == 'gold')
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.blue.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Text(
+                        isAr
+                            ? '💡 نوعان:\n'
+                                  '• مع عيار: خزينة لعيار محدد فقط\n'
+                                  '• بدون عيار: تقبل جميع العيارات (أفضل للموظفين)'
+                            : '💡 Two types:\n'
+                                  '• With karat: specific karat only\n'
+                                  '• Without karat: accepts all karats (better for employees)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue.shade800,
+                          height: 1.4,
+                        ),
+                      ),
                     ),
                   if (selectedType == 'gold') const SizedBox(height: 12),
 
@@ -367,15 +415,6 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                   );
                   return;
                 }
-                if (selectedType == 'gold' && selectedKarat == null) {
-                  _showSnack(
-                    isAr
-                        ? 'العيار مطلوب للخزائن الذهبية'
-                        : 'Karat is required for gold',
-                    isError: true,
-                  );
-                  return;
-                }
 
                 final newSafeBox = SafeBoxModel(
                   id: safeBox?.id,
@@ -463,7 +502,45 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
         _showSnack(isAr ? 'تم الحذف بنجاح' : 'Deleted successfully');
         _loadSafeBoxes();
       } catch (e) {
-        _showSnack(e.toString(), isError: true);
+        final raw = e.toString();
+
+        Map<String, dynamic>? payload;
+        try {
+          final start = raw.indexOf('{');
+          final end = raw.lastIndexOf('}');
+          if (start != -1 && end != -1 && end > start) {
+            final jsonStr = raw.substring(start, end + 1);
+            final decoded = json.decode(jsonStr);
+            if (decoded is Map<String, dynamic>) {
+              payload = decoded;
+            }
+          }
+        } catch (_) {
+          payload = null;
+        }
+
+        final errCode = (payload?['error'] as String?) ?? '';
+        if (errCode == 'cannot_delete_safe_box_in_use') {
+          final details = payload?['details'] as Map<String, dynamic>?;
+          final employees = details?['employees_linked'] ?? 0;
+          final transactions = details?['transactions_linked'] ?? 0;
+          final invoices = details?['invoices_linked'] ?? 0;
+          final paymentMethods = details?['payment_methods_linked'] ?? 0;
+
+          _showSnack(
+            isAr
+                ? 'لا يمكن حذف الخزنة لأنها مستخدمة (موظفين: $employees، عمليات: $transactions، فواتير: $invoices، وسائل دفع: $paymentMethods)'
+                : 'Cannot delete safe box because it is in use (employees: $employees, transactions: $transactions, invoices: $invoices, payment methods: $paymentMethods).',
+            isError: true,
+          );
+          return;
+        }
+
+        final serverMsg = payload?['message'] as String?;
+        _showSnack(
+          serverMsg?.trim().isNotEmpty == true ? serverMsg! : raw,
+          isError: true,
+        );
       }
     }
   }
@@ -494,8 +571,34 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(isAr ? 'إدارة الخزائن' : 'Safe Boxes Management'),
+        title: Text(
+          widget.titleOverride ??
+              (isAr ? 'إدارة الخزائن' : 'Safe Boxes Management'),
+        ),
         actions: [
+          if (widget.balancesView &&
+              (widget.lockFilterType
+                  ? (widget.initialFilterType == 'gold')
+                  : (_filterType == 'gold')))
+            IconButton(
+              tooltip: isAr
+                  ? 'سند تحويل بين الخزائن'
+                  : 'Safe box transfer voucher',
+              icon: const Icon(Icons.swap_horiz),
+              onPressed: () async {
+                final result = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) => GoldSafeBoxTransferScreen(
+                      api: widget.api,
+                      isArabic: isAr,
+                    ),
+                  ),
+                );
+                if (result == true) {
+                  await _loadSafeBoxes();
+                }
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadSafeBoxes,
@@ -548,60 +651,62 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                     });
                   },
                 ),
-                FilterChip(
-                  label: Text(isAr ? 'الكل' : 'All'),
-                  selected: _filterType == 'all',
-                  onSelected: (selected) {
-                    setState(() {
-                      _filterType = 'all';
-                      _loadSafeBoxes();
-                    });
-                  },
-                ),
-                FilterChip(
-                  label: Text(isAr ? 'نقدي' : 'Cash'),
-                  selected: _filterType == 'cash',
-                  avatar: const Icon(Icons.money, size: 18),
-                  onSelected: (selected) {
-                    setState(() {
-                      _filterType = 'cash';
-                      _loadSafeBoxes();
-                    });
-                  },
-                ),
-                FilterChip(
-                  label: Text(isAr ? 'بنكي' : 'Bank'),
-                  selected: _filterType == 'bank',
-                  avatar: const Icon(Icons.account_balance, size: 18),
-                  onSelected: (selected) {
-                    setState(() {
-                      _filterType = 'bank';
-                      _loadSafeBoxes();
-                    });
-                  },
-                ),
-                FilterChip(
-                  label: Text(isAr ? 'ذهبي' : 'Gold'),
-                  selected: _filterType == 'gold',
-                  avatar: const Icon(Icons.diamond, size: 18),
-                  onSelected: (selected) {
-                    setState(() {
-                      _filterType = 'gold';
-                      _loadSafeBoxes();
-                    });
-                  },
-                ),
-                FilterChip(
-                  label: Text(isAr ? 'شيكات' : 'Checks'),
-                  selected: _filterType == 'check',
-                  avatar: const Icon(Icons.receipt_long, size: 18),
-                  onSelected: (selected) {
-                    setState(() {
-                      _filterType = 'check';
-                      _loadSafeBoxes();
-                    });
-                  },
-                ),
+                if (!widget.lockFilterType) ...[
+                  FilterChip(
+                    label: Text(isAr ? 'الكل' : 'All'),
+                    selected: _filterType == 'all',
+                    onSelected: (selected) {
+                      setState(() {
+                        _filterType = 'all';
+                        _loadSafeBoxes();
+                      });
+                    },
+                  ),
+                  FilterChip(
+                    label: Text(isAr ? 'نقدي' : 'Cash'),
+                    selected: _filterType == 'cash',
+                    avatar: const Icon(Icons.money, size: 18),
+                    onSelected: (selected) {
+                      setState(() {
+                        _filterType = 'cash';
+                        _loadSafeBoxes();
+                      });
+                    },
+                  ),
+                  FilterChip(
+                    label: Text(isAr ? 'بنكي' : 'Bank'),
+                    selected: _filterType == 'bank',
+                    avatar: const Icon(Icons.account_balance, size: 18),
+                    onSelected: (selected) {
+                      setState(() {
+                        _filterType = 'bank';
+                        _loadSafeBoxes();
+                      });
+                    },
+                  ),
+                  FilterChip(
+                    label: Text(isAr ? 'ذهبي' : 'Gold'),
+                    selected: _filterType == 'gold',
+                    avatar: const Icon(Icons.diamond, size: 18),
+                    onSelected: (selected) {
+                      setState(() {
+                        _filterType = 'gold';
+                        _loadSafeBoxes();
+                      });
+                    },
+                  ),
+                  FilterChip(
+                    label: Text(isAr ? 'شيكات' : 'Checks'),
+                    selected: _filterType == 'check',
+                    avatar: const Icon(Icons.receipt_long, size: 18),
+                    onSelected: (selected) {
+                      setState(() {
+                        _filterType = 'check';
+                        _loadSafeBoxes();
+                      });
+                    },
+                  ),
+                ],
               ],
             ),
           ),
@@ -681,7 +786,17 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                                 isAr ? safeBox.typeNameAr : safeBox.typeNameEn,
                                 style: TextStyle(color: safeBox.typeColor),
                               ),
-                              if (safeBox.balance != null)
+                              if (safeBox.safeType == 'gold' &&
+                                  safeBox.weightBalance != null)
+                                Text(
+                                  isAr
+                                      ? 'الرصيد الوزني: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}'
+                                      : 'Weight balance: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                )
+                              else if (safeBox.balance != null)
                                 Text(
                                   '${isAr ? 'الرصيد:' : 'Balance:'} ${safeBox.cashBalance.toStringAsFixed(2)} ${isAr ? 'ر.س' : 'SAR'}',
                                   style: const TextStyle(

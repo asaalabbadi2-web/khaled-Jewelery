@@ -68,6 +68,34 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   int? _selectedGoldSafeBoxId;
   int _selectedGoldPaidKarat = 21;
 
+  int? _selectedGoldSafeFixedKarat() {
+    final safeId = _selectedGoldSafeBoxId;
+    if (safeId == null) return null;
+    try {
+      final match = _goldSafeBoxes.firstWhere((b) => b.id == safeId);
+      final k = match.karat;
+      if (k == null) return null;
+      if (!{18, 21, 22, 24}.contains(k)) return null;
+      return k;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<int> _allowedGoldKaratsForSelectedSafe() {
+    final fixed = _selectedGoldSafeFixedKarat();
+    if (fixed != null) return [fixed];
+    return const [24, 22, 21, 18];
+  }
+
+  void _syncGoldPaidKaratWithSafeIfNeeded() {
+    final allowed = _allowedGoldKaratsForSelectedSafe();
+    if (allowed.isEmpty) return;
+    if (!allowed.contains(_selectedGoldPaidKarat)) {
+      _selectedGoldPaidKarat = allowed.first;
+    }
+  }
+
   List<Category> _categories = [];
   bool _isLoadingCategories = false;
   String? _categoriesError;
@@ -206,6 +234,18 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   Future<void> _loadGoldSafeBoxes() async {
     try {
+      final auth = context.read<AuthProvider>();
+      final employeeId = auth.currentUser?.employeeId;
+      int? employeeGoldSafeBoxId;
+      if (employeeId != null) {
+        try {
+          final employee = await _api.getEmployee(employeeId);
+          employeeGoldSafeBoxId = employee.goldSafeBoxId;
+        } catch (_) {
+          // Ignore failures; fall back to default safe selection.
+        }
+      }
+
       final allBoxes = await _api.getSafeBoxes();
       if (!mounted) return;
 
@@ -220,6 +260,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           _selectedGoldPaidKarat = mainKarat;
         }
 
+        final hasSelected = _selectedGoldSafeBoxId != null &&
+            _goldSafeBoxes.any((b) => b.id == _selectedGoldSafeBoxId);
+
+        // Prefer the employee-linked gold safe (if configured).
+        if (!hasSelected && employeeGoldSafeBoxId != null) {
+          final match = _goldSafeBoxes
+              .where((b) => b.id == employeeGoldSafeBoxId)
+              .toList();
+          if (match.isNotEmpty) {
+            _selectedGoldSafeBoxId = match.first.id;
+          }
+        }
+
+        // Otherwise fall back to the default/first safe.
         if (_selectedGoldSafeBoxId == null && _goldSafeBoxes.isNotEmpty) {
           final defaultBox = _goldSafeBoxes.firstWhere(
             (box) => box.isDefault == true && box.id != null,
@@ -227,6 +281,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           );
           _selectedGoldSafeBoxId = defaultBox.id;
         }
+
+        _syncGoldPaidKaratWithSafeIfNeeded();
       });
     } catch (e) {
       debugPrint('فشل تحميل خزائن الذهب: $e');
@@ -2027,7 +2083,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                       const SizedBox(width: 8),
                       DropdownButton<int>(
                         value: _selectedGoldPaidKarat,
-                        items: const [24, 22, 21, 18]
+                        items: _allowedGoldKaratsForSelectedSafe()
                             .map(
                               (k) => DropdownMenuItem<int>(
                                 value: k,
@@ -2074,6 +2130,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             onChanged: (value) {
               setState(() {
                 _selectedGoldSafeBoxId = value;
+                _syncGoldPaidKaratWithSafeIfNeeded();
               });
             },
           ),
@@ -2113,6 +2170,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           onChanged: (value) {
             setState(() {
               _selectedGoldSafeBoxId = value;
+              _syncGoldPaidKaratWithSafeIfNeeded();
             });
           },
         ),
@@ -2140,7 +2198,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             const SizedBox(width: 12),
             DropdownButton<int>(
               value: _selectedGoldPaidKarat,
-              items: const [24, 22, 21, 18]
+              items: _allowedGoldKaratsForSelectedSafe()
                   .map(
                     (k) =>
                         DropdownMenuItem<int>(value: k, child: Text('عيار $k')),
@@ -4150,7 +4208,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       text: existing?.description ?? '',
     );
 
-    double karat = existing?.karat ?? 21;
+    final allowedKarats = _allowedGoldKaratsForSelectedSafe();
+    final defaultKarat = allowedKarats.isNotEmpty
+        ? allowedKarats.first.toDouble()
+        : 21.0;
+    double karat = existing?.karat ?? defaultKarat;
+    if (allowedKarats.isNotEmpty && !allowedKarats.contains(karat.round())) {
+      karat = defaultKarat;
+    }
 
     final result = await showDialog<PurchaseKaratLine>(
       context: context,
@@ -4208,14 +4273,19 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         labelText: 'العيار',
                         border: OutlineInputBorder(),
                       ),
-                      items: const [18.0, 21.0, 22.0, 24.0]
-                          .map(
-                            (value) => DropdownMenuItem<double>(
-                              value: value,
-                              child: Text(value.toStringAsFixed(0)),
-                            ),
-                          )
-                          .toList(),
+                      items:
+                          (allowedKarats.isNotEmpty
+                                  ? allowedKarats
+                                        .map((k) => k.toDouble())
+                                        .toList()
+                                  : const [18.0, 21.0, 22.0, 24.0])
+                              .map(
+                                (value) => DropdownMenuItem<double>(
+                                  value: value,
+                                  child: Text(value.toStringAsFixed(0)),
+                                ),
+                              )
+                              .toList(),
                       onChanged: (value) {
                         if (value == null) return;
                         setDialogState(() {
@@ -4470,7 +4540,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final wageController = TextEditingController(text: '0');
     final wageTotalController = TextEditingController(text: '0');
     final notesController = TextEditingController();
-    double karat = 21;
+    final allowedKarats = _allowedGoldKaratsForSelectedSafe();
+    double karat = allowedKarats.isNotEmpty
+        ? allowedKarats.first.toDouble()
+        : 21.0;
     int wageModeIndex = 0; // 0: per-gram, 1: total
 
     wageController.selection = TextSelection(
@@ -4540,14 +4613,19 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         labelText: 'العيار',
                         border: OutlineInputBorder(),
                       ),
-                      items: const [18.0, 21.0, 22.0, 24.0]
-                          .map(
-                            (value) => DropdownMenuItem<double>(
-                              value: value,
-                              child: Text(value.toStringAsFixed(0)),
-                            ),
-                          )
-                          .toList(),
+                      items:
+                          (allowedKarats.isNotEmpty
+                                  ? allowedKarats
+                                        .map((k) => k.toDouble())
+                                        .toList()
+                                  : const [18.0, 21.0, 22.0, 24.0])
+                              .map(
+                                (value) => DropdownMenuItem<double>(
+                                  value: value,
+                                  child: Text(value.toStringAsFixed(0)),
+                                ),
+                              )
+                              .toList(),
                       onChanged: (value) {
                         if (value == null) return;
                         setDialogState(() {
