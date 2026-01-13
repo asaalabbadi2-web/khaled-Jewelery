@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../models/safe_box_model.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/auth_provider.dart';
 import 'add_customer_screen.dart';
 import '../widgets/invoice_type_banner.dart';
 import '../utils.dart';
@@ -943,12 +944,24 @@ class _ScrapPurchaseInvoiceScreenState
       // لا توجد ضريبة على شراء الكسر
       final totalTax = 0.0;
 
+      // الحصول على بيانات الموظف الحالي
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final currentUser = authProvider.currentUser;
+      final employeeId = currentUser?.employeeId;
+      final employeeName = currentUser?.employee?.name ?? currentUser?.fullName ?? '';
+      final employeeGoldSafeId = currentUser?.employee?.goldSafeBoxId;
+
       final invoiceData = {
         'customer_id': customerId,
         'branch_id': _selectedBranchId,
         'invoice_type': 'شراء من عميل',
         'gold_type': 'scrap',
         'transaction_type': 'buy', // 🆕 شراء من العميل
+        if (employeeName.isNotEmpty) 'posted_by': employeeName,
+        if (employeeId != null) 'employee_id': employeeId,
+        if (employeeId != null) 'scrap_holder_employee_id': employeeId,
+        // 🆕 خزينة الذهب للموظف (الأولوية للخزينة المرتبطة بالموظف)
+        if (employeeGoldSafeId != null) 'safe_box_id': employeeGoldSafeId,
         'date': DateTime.now().toIso8601String(),
         'total': totalAmount,
         'total_weight': totalWeight,

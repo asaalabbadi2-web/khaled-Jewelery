@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
+import 'gold_safe_transfer_screen.dart';
 
 class SafeBoxesScreen extends StatefulWidget {
   final ApiService api;
@@ -856,10 +857,39 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        icon: const Icon(Icons.add),
-        label: Text(isAr ? 'خزينة جديدة' : 'New Safe Box'),
-        onPressed: () => _showAddEditDialog(),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // زر تحويل الذهب (يظهر فقط عند عرض خزائن الذهب)
+          if (_filterType == 'gold' || (_filterType == 'all' && _safeBoxes.any((s) => s.safeType == 'gold')))
+            FloatingActionButton.extended(
+              heroTag: 'transfer_gold',
+              icon: const Icon(Icons.swap_horiz),
+              label: Text(isAr ? 'تحويل ذهب' : 'Transfer Gold'),
+              backgroundColor: Colors.orange.shade700,
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => GoldSafeTransferScreen(
+                      api: widget.api,
+                      isArabic: isAr,
+                    ),
+                  ),
+                ).then((_) => _loadSafeBoxes()); // تحديث القائمة بعد العودة
+              },
+            ),
+          if (_filterType == 'gold' || (_filterType == 'all' && _safeBoxes.any((s) => s.safeType == 'gold')))
+            const SizedBox(height: 12),
+          // زر إضافة خزينة
+          FloatingActionButton.extended(
+            heroTag: 'add_safe',
+            icon: const Icon(Icons.add),
+            label: Text(isAr ? 'خزينة جديدة' : 'New Safe Box'),
+            onPressed: () => _showAddEditDialog(),
+          ),
+        ],
       ),
     );
   }

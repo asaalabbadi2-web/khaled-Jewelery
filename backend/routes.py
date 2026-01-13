@@ -4237,8 +4237,6 @@ def add_invoice():
 
             if employee_display_name is None and employee_id_for_invoice:
                 try:
-                    from models import Employee
-
                     emp = Employee.query.get(employee_id_for_invoice)
                     if emp and emp.name:
                         employee_display_name = emp.name
@@ -4898,32 +4896,47 @@ def add_invoice():
 
         if is_scrap_purchase:
             target_gold_safe_id = None
+            
+            # 1. أولاً: استخدام safe_box_id من الفاتورة مباشرة (إن وجد)
             try:
-                holder_id = getattr(new_invoice, 'scrap_holder_employee_id', None)
-                employee_id_fallback = getattr(new_invoice, 'employee_id', None)
-
-                candidate_ids = []
-                for raw in (holder_id, employee_id_fallback):
-                    if raw in (None, '', False):
-                        continue
-                    try:
-                        candidate_ids.append(int(raw))
-                    except Exception:
-                        continue
-
-                for emp_id in candidate_ids:
-                    holder = Employee.query.get(emp_id)
-                    if holder and getattr(holder, 'gold_safe_box_id', None):
-                        target_gold_safe_id = int(holder.gold_safe_box_id)
-                        break
+                invoice_safe_box_id = getattr(new_invoice, 'safe_box_id', None)
+                if invoice_safe_box_id not in (None, '', 0, '0'):
+                    target_gold_safe_id = int(invoice_safe_box_id)
+                    print(f"\n🔍 SCRAP_RECEIPT: Using invoice safe_box_id directly: {target_gold_safe_id}")
             except Exception:
-                target_gold_safe_id = None
+                pass
+            
+            # 2. ثانياً: البحث عن خزينة الموظف
+            if target_gold_safe_id is None:
+                try:
+                    holder_id = getattr(new_invoice, 'scrap_holder_employee_id', None)
+                    employee_id_fallback = getattr(new_invoice, 'employee_id', None)
 
+                    candidate_ids = []
+                    for raw in (holder_id, employee_id_fallback):
+                        if raw in (None, '', False):
+                            continue
+                        try:
+                            candidate_ids.append(int(raw))
+                        except Exception:
+                            continue
+                    
+                    for emp_id in candidate_ids:
+                        holder = Employee.query.get(emp_id)
+                        if holder and getattr(holder, 'gold_safe_box_id', None):
+                            target_gold_safe_id = int(holder.gold_safe_box_id)
+                            print(f"\n🔍 SCRAP_RECEIPT: Using employee {emp_id} gold safe: {target_gold_safe_id}")
+                            break
+                except Exception:
+                    pass
+
+            # 3. ثالثاً: استخدام الخزينة الافتراضية
             if target_gold_safe_id is None:
                 try:
                     default_gold_safe = SafeBox.get_default_by_type('gold')
                     if default_gold_safe and default_gold_safe.id:
                         target_gold_safe_id = int(default_gold_safe.id)
+                        print(f"\n🔍 SCRAP_RECEIPT: Using default gold safe: {target_gold_safe_id}")
                 except Exception:
                     target_gold_safe_id = None
 

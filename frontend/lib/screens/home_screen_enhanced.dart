@@ -39,6 +39,8 @@ import 'attendance_screen.dart';
 import 'payroll_report_screen.dart';
 import 'bonus_management_screen.dart';
 import 'safe_boxes_screen.dart';
+import 'safe_boxes_dashboard_screen.dart'; // 🆕 لوحة تحكم خزائن الذهب
+import 'cash_safes_dashboard_screen.dart'; // 🆕 لوحة تحكم الخزائن النقدية
 import 'melting_renewal_screen.dart';
 import 'gold_reservation_screen.dart';
 import 'offices_screen.dart';
@@ -73,6 +75,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   List items = [];
   List invoices = [];
   List suppliers = [];
+  List safeBoxes = []; // 🆕 خزائن الذهب
 
   // Currency data
   double exchangeRate = 3.75; // سعر الصرف الافتراضي (دولار -> ريال سعودي)
@@ -242,6 +245,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         if (!auth.hasPermission('items.view')) items = [];
         if (!auth.hasPermission('invoices.view')) invoices = [];
         if (!auth.hasPermission('suppliers.view')) suppliers = [];
+        if (!auth.hasPermission('safe_boxes.view')) safeBoxes = [];
       });
 
       debugPrint('🔄 بدء تحميل البيانات...');
@@ -251,6 +255,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       if (auth.hasPermission('items.view')) futures.add(_loadItems());
       if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
       if (auth.hasPermission('suppliers.view')) futures.add(_loadSuppliers());
+      if (auth.hasPermission('safe_boxes.view')) futures.add(_loadSafeBoxes());
 
       await Future.wait(futures);
 
@@ -360,6 +365,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       setState(() => suppliers = data);
     } catch (e) {
       debugPrint('⚠️ خطأ في تحميل الموردين: $e');
+    }
+  }
+
+  Future<void> _loadSafeBoxes() async {
+    try {
+      final data = await api.getSafeBoxes();
+      setState(() => safeBoxes = data.map((s) => s.toJson()).toList());
+      debugPrint('✅ تم تحميل الخزائن: ${safeBoxes.length}');
+    } catch (e) {
+      debugPrint('⚠️ خطأ في تحميل الخزائن: $e');
     }
   }
 
@@ -1660,17 +1675,22 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               SizedBox(height: 16),
 
               // Sales Summary
-              _buildSalesSummaryCard(),
+              if (context.read<AuthProvider>().hasPermission('invoices.view'))
+                _buildSalesSummaryCard(),
 
-              SizedBox(height: 16),
+              if (context.read<AuthProvider>().hasPermission('invoices.view'))
+                SizedBox(height: 16),
 
               // Purchase Summary
-              _buildPurchaseSummaryCard(),
+              if (context.read<AuthProvider>().hasPermission('invoices.view'))
+                _buildPurchaseSummaryCard(),
 
-              SizedBox(height: 16),
+              if (context.read<AuthProvider>().hasPermission('invoices.view'))
+                SizedBox(height: 16),
 
               // Inventory Summary
-              _buildInventorySummaryCard(),
+              if (context.read<AuthProvider>().hasPermission('items.view'))
+                _buildInventorySummaryCard(),
 
               SizedBox(height: 16),
 
@@ -2888,6 +2908,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   }
 
   Widget _buildStatisticsRow() {
+    final auth = context.read<AuthProvider>();
+    
     return Row(
       children: [
         Expanded(
@@ -2921,6 +2943,38 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             },
           ),
         ),
+        if (auth.hasPermission('safe_boxes.view')) ...[
+          const SizedBox(width: 12),
+          Expanded(
+            child: _buildStatCard(
+              icon: Icons.account_balance_wallet,
+              label: 'خزائن الذهب',
+              value: safeBoxes.where((s) => s['safe_type'] == 'gold').length.toString(),
+              color: AppColors.primaryGold,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SafeBoxesDashboardScreen()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _buildStatCard(
+              icon: Icons.payments,
+              label: 'خزائن النقد',
+              value: safeBoxes.where((s) => s['safe_type'] == 'cash').length.toString(),
+              color: Colors.green,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => CashSafesDashboardScreen(api: api)),
+                );
+              },
+            ),
+          ),
+        ],
       ],
     );
   }

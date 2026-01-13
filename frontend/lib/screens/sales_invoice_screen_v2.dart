@@ -1730,6 +1730,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
         final barterWeightNet = _barterTotalWeightNet;
 
+        // الحصول على خزينة الذهب للموظف الحالي
+        final employeeGoldSafeId = authProvider.currentUser?.employee?.goldSafeBoxId;
+
         final scrapInvoiceData = {
           'customer_id': customerId,
           'branch_id': _selectedBranchId,
@@ -1740,6 +1743,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           if (sellerEmployeeId != null) 'employee_id': sellerEmployeeId,
           if (sellerEmployeeId != null)
             'scrap_holder_employee_id': sellerEmployeeId,
+          if (employeeGoldSafeId != null) 'safe_box_id': employeeGoldSafeId,
           'date': DateTime.now().toIso8601String(),
           'total': barterTotal,
           'total_weight': barterWeightNet,
@@ -2531,6 +2535,39 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         _buildActionButtons(),
                         const SizedBox(height: 24),
                         _buildPaymentSection(),
+                        const SizedBox(height: 20),
+                        // زر الحفظ أسفل بطاقة الإجماليات
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed:
+                                _items.isEmpty ||
+                                    _payments.isEmpty ||
+                                    _remainingAmount > 0.01
+                                ? null
+                                : _submitInvoice,
+                            icon: const Icon(Icons.check_circle_outline, size: 24),
+                            label: Text(
+                              _remainingAmount > 0.01
+                                  ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+                                  : 'حفظ الفاتورة',
+                            ),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 18,
+                                horizontal: 24,
+                              ),
+                              textStyle: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                              backgroundColor: colorScheme.primary,
+                              foregroundColor: colorScheme.onPrimary,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -2544,12 +2581,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               _buildActionButtons(),
               const SizedBox(height: 24),
               _buildPaymentSection(),
-            ],
-            const SizedBox(height: 32),
-            Align(
-              alignment: Alignment.center,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
+              const SizedBox(height: 20),
+              // زر الحفظ مباشرة أسفل بطاقة الإجماليات
+              SizedBox(
+                width: double.infinity,
                 child: FilledButton.icon(
                   onPressed:
                       _items.isEmpty ||
@@ -2557,7 +2592,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           _remainingAmount > 0.01
                       ? null
                       : _submitInvoice,
-                  icon: const Icon(Icons.check_circle_outline),
+                  icon: const Icon(Icons.check_circle_outline, size: 24),
                   label: Text(
                     _remainingAmount > 0.01
                         ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
@@ -2565,18 +2600,21 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                   ),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
-                      vertical: 16,
+                      vertical: 18,
                       horizontal: 24,
                     ),
-                    textStyle: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    textStyle: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
                     backgroundColor: colorScheme.primary,
                     foregroundColor: colorScheme.onPrimary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
             const SizedBox(height: 32),
             _buildCostingInsightCard(theme),
           ],
@@ -3809,6 +3847,13 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             labelText: label,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
+          onSubmitted: (value) {
+            final numValue = double.tryParse(value);
+            if (numValue != null) {
+              _updateItem(index, field, numValue);
+              Navigator.pop(context);
+            }
+          },
         ),
         actions: [
           TextButton(
@@ -4458,17 +4503,56 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                               ],
                             ),
                             const SizedBox(height: 10),
-                            TextField(
-                              controller: line.pricePerGramController,
-                              decoration: InputDecoration(
-                                labelText: 'سعر الشراء/جرام',
-                                suffixText: _settingsProvider.currencySymbol,
-                              ),
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: line.pricePerGramController,
+                                    decoration: InputDecoration(
+                                      labelText: 'سعر الشراء/جرام',
+                                      suffixText: _settingsProvider.currencySymbol,
+                                    ),
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    onChanged: (value) {
+                                      setState(() {
+                                        // حساب المبلغ الإجمالي من السعر/جرام
+                                        final price = _parseDouble(value);
+                                        if (price > 0 && net > 0) {
+                                          line.totalAmountController.text =
+                                              (price * net).toStringAsFixed(2);
+                                        }
+                                      });
+                                    },
                                   ),
-                              onChanged: (_) => setState(() {}),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextField(
+                                    controller: line.totalAmountController,
+                                    decoration: InputDecoration(
+                                      labelText: 'المبلغ الإجمالي',
+                                      suffixText: _settingsProvider.currencySymbol,
+                                    ),
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    onChanged: (value) {
+                                      setState(() {
+                                        // حساب السعر/جرام من المبلغ الإجمالي
+                                        final total = _parseDouble(value);
+                                        if (total > 0 && net > 0) {
+                                          line.pricePerGramController.text =
+                                              (total / net).toStringAsFixed(2);
+                                        }
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 10),
                             Row(
@@ -5570,6 +5654,7 @@ class _BarterLine {
   final TextEditingController standingController = TextEditingController();
   final TextEditingController stonesController = TextEditingController();
   final TextEditingController pricePerGramController = TextEditingController();
+  final TextEditingController totalAmountController = TextEditingController();
 
   _BarterLine({required this.karat});
 
@@ -5609,5 +5694,6 @@ class _BarterLine {
     standingController.dispose();
     stonesController.dispose();
     pricePerGramController.dispose();
+    totalAmountController.dispose();
   }
 }

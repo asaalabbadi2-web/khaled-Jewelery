@@ -184,11 +184,13 @@ class EmployeeSummary {
   final int id;
   final String name;
   final String employeeCode;
+  final int? goldSafeBoxId;
 
   const EmployeeSummary({
     required this.id,
     required this.name,
     required this.employeeCode,
+    this.goldSafeBoxId,
   });
 
   factory EmployeeSummary.fromJson(Map<String, dynamic> json) {
@@ -196,10 +198,16 @@ class EmployeeSummary {
       id: json['id'] as int? ?? 0,
       name: json['name'] as String? ?? '',
       employeeCode: json['employee_code'] as String? ?? '',
+      goldSafeBoxId: json['gold_safe_box_id'] as int?,
     );
   }
 
   Map<String, dynamic> toMap() {
-    return {'id': id, 'name': name, 'employee_code': employeeCode};
+    return {
+      'id': id,
+      'name': name,
+      'employee_code': employeeCode,
+      'gold_safe_box_id': goldSafeBoxId,
+    };
   }
 }
