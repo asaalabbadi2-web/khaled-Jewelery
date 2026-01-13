@@ -3652,6 +3652,43 @@ class ApiService {
     return <SafeBoxModel>[];
   }
 
+  /// إنشاء سند تحويل بين الخزائن (ذهب فقط) وتحديث الـ Ledger فوراً.
+  /// Endpoint: POST /safe-boxes/transfer-voucher
+  ///
+  /// ملاحظة: هذه الدالة لا تؤثر على أي شاشة/تدفق ما لم يتم استدعاؤها.
+  Future<Map<String, dynamic>> createSafeBoxTransferVoucher({
+    required int fromSafeBoxId,
+    required int toSafeBoxId,
+    required Map<String, double> weights,
+    String? notes,
+    DateTime? date,
+    String? approvedBy,
+  }) async {
+    final payload = <String, dynamic>{
+      'from_safe_box_id': fromSafeBoxId,
+      'to_safe_box_id': toSafeBoxId,
+      'weights': weights,
+      if (notes != null) 'notes': notes,
+      if (date != null) 'date': date.toIso8601String(),
+      if (approvedBy != null) 'approved_by': approvedBy,
+    };
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/safe-boxes/transfer-voucher'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+
+    final bodyStr = utf8.decode(response.bodyBytes);
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      final decoded = json.decode(bodyStr);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{'raw': decoded};
+    }
+
+    throw Exception(bodyStr);
+  }
+
   /// الحصول على خزينة محددة
   Future<SafeBoxModel> getSafeBox(int id, {bool includeBalance = true}) async {
     final queryParams = <String, String>{};

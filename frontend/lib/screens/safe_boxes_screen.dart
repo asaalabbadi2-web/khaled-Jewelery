@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
@@ -155,6 +157,29 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                       border: const OutlineInputBorder(),
                     ),
                   ),
+                  const SizedBox(height: 12),
+
+                  // الاسم بالإنجليزية
+                  TextField(
+                    controller: nameEnController,
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'الاسم بالإنجليزية' : 'Name (English)',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // النوع
+                  DropdownButtonFormField<String>(
+                    value: selectedType,
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'النوع *' : 'Type *',
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'cash',
+                        child: Text(isAr ? 'نقدي' : 'Cash'),
                       ),
                       DropdownMenuItem(
                         value: 'bank',
@@ -170,8 +195,13 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                       ),
                     ],
                     onChanged: (value) {
+                      if (value == null) return;
                       setDialogState(() {
-                        selectedType = value!;
+                        selectedType = value;
+                        // If not gold, clear karat selection.
+                        if (selectedType != 'gold') {
+                          selectedKarat = null;
+                        }
                       });
                     },
                   ),
@@ -576,29 +606,6 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
               (isAr ? 'إدارة الخزائن' : 'Safe Boxes Management'),
         ),
         actions: [
-          if (widget.balancesView &&
-              (widget.lockFilterType
-                  ? (widget.initialFilterType == 'gold')
-                  : (_filterType == 'gold')))
-            IconButton(
-              tooltip: isAr
-                  ? 'سند تحويل بين الخزائن'
-                  : 'Safe box transfer voucher',
-              icon: const Icon(Icons.swap_horiz),
-              onPressed: () async {
-                final result = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(
-                    builder: (_) => GoldSafeBoxTransferScreen(
-                      api: widget.api,
-                      isArabic: isAr,
-                    ),
-                  ),
-                );
-                if (result == true) {
-                  await _loadSafeBoxes();
-                }
-              },
-            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadSafeBoxes,

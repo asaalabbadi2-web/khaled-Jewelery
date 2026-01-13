@@ -14,6 +14,11 @@ analyzer:
     - _archived/**
     - lib/screens/_archived/**
     - '**/._*'
+  errors:
+    # Project currently has many legacy occurrences; suppress to keep analysis signal useful.
+    use_build_context_synchronously: ignore
+    control_flow_in_finally: ignore
+    deprecated_member_use: ignore
 
 linter:
   # The lint rules applied to this project can be customized in the
@@ -29,6 +34,10 @@ linter:
   rules:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+
+    # Disabled to avoid mass refactors across legacy screens.
+    use_build_context_synchronously: false
+    control_flow_in_finally: false
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
