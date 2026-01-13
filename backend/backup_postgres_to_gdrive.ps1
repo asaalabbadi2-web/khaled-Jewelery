@@ -40,6 +40,11 @@ param(
   [Alias('DbUser','DatabaseUser','Username')]
   [string]$DockerUser = "yasargold",
 
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingPlainTextForPassword',
+    'DockerPassword',
+    Justification = 'Used only to pass PGPASSWORD to pg_dump inside Docker. Prefer .pgpass/secret manager; kept for convenience.'
+  )]
   [Alias('DbPassword','DatabasePassword','Password')]
   [string]$DockerPassword = "",
 
