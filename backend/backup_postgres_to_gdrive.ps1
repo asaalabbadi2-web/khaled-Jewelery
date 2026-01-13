@@ -42,8 +42,9 @@ param(
 
   [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
     'PSAvoidUsingPlainTextForPassword',
-    'DockerPassword',
-    Justification = 'Used only to pass PGPASSWORD to pg_dump inside Docker. Prefer .pgpass/secret manager; kept for convenience.'
+    '',
+    Justification = 'Used only to pass PGPASSWORD to pg_dump inside Docker. Prefer .pgpass/secret manager; kept for convenience.',
+    Target = 'DockerPassword'
   )]
   [Alias('DbPassword','DatabasePassword','Password')]
   [string]$DockerPassword = "",
