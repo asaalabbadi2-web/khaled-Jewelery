@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, current_app
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, joinedload
 from sqlalchemy import func, or_, and_, case, cast, String
@@ -4337,6 +4337,17 @@ def add_invoice():
             if price_per_gram_24k <= 0:
                 price_per_gram_24k = 400.0
 
+        # --- Discount intelligence (audit) ---
+        total_discount_cash = 0.0
+        total_gross_cash = 0.0
+        large_discount_pct_threshold = 10.0
+        try:
+            raw_thr = str(os.getenv('LARGE_DISCOUNT_PCT', '')).strip()
+            if raw_thr:
+                large_discount_pct_threshold = float(raw_thr)
+        except Exception:
+            large_discount_pct_threshold = 10.0
+
         for item_data in data.get('items', []):
             print(f"\n📦 DEBUG - item_data: {item_data}")  # 🔍 Debug logging
 
@@ -4384,6 +4395,14 @@ def add_invoice():
             selling_price_val = _to_float(selling_price_raw, 0.0)
             tax_amount_val = _to_float(tax_amount_raw, 0.0)
             discount_amount_val = _to_float(discount_amount_raw, 0.0)
+
+            # Track discount for audit purposes (sales only)
+            try:
+                if str(invoice_type).strip() == 'بيع':
+                    total_discount_cash += max(0.0, float(discount_amount_val))
+                    total_gross_cash += max(0.0, float(selling_price_val))
+            except Exception:
+                pass
 
             print(f"   💵 selling_price={selling_price_val}, tax_amount={tax_amount_val}, discount={discount_amount_val}")
 
@@ -6941,6 +6960,34 @@ def add_invoice():
             journal_entry.posted_by = new_invoice.posted_by
         
         print(f"✅ Committing transaction...")
+
+        # Audit: large discount (sales)
+        try:
+            if str(invoice_type).strip() == 'بيع' and total_gross_cash > 0 and total_discount_cash > 0:
+                discount_pct = (total_discount_cash / total_gross_cash) * 100.0
+                if discount_pct >= float(large_discount_pct_threshold or 0.0):
+                    from models import AuditLog
+
+                    AuditLog.log_action(
+                        user_name=new_invoice.posted_by or posted_by_username or 'system',
+                        action='large_discount',
+                        entity_type='Invoice',
+                        entity_id=new_invoice.id,
+                        entity_number=getattr(new_invoice, 'invoice_number', None),
+                        details=json.dumps({
+                            'invoice_type': str(invoice_type).strip(),
+                            'discount_total_cash': round(float(total_discount_cash), 2),
+                            'gross_total_cash': round(float(total_gross_cash), 2),
+                            'discount_pct': round(float(discount_pct), 2),
+                            'threshold_pct': float(large_discount_pct_threshold),
+                        }, ensure_ascii=False),
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get('User-Agent'),
+                        success=True,
+                    )
+        except Exception:
+            pass
+
         db.session.commit()
         return jsonify(new_invoice.to_dict()), 201
 
@@ -13247,7 +13294,32 @@ def delete_voucher(voucher_id):
     if voucher.journal_entry_id:
         return jsonify({'error': 'Cannot delete voucher linked to journal entry. Cancel it instead.'}), 400
     
+    data = request.get_json(silent=True) or {}
+    deleted_by = data.get('deleted_by') or request.headers.get('X-User-Name') or 'system'
+    reason = data.get('reason') or 'delete'
+
     try:
+        # Audit log (before hard delete)
+        try:
+            AuditLog.log_action(
+                user_name=deleted_by,
+                action='delete_voucher',
+                entity_type='Voucher',
+                entity_id=voucher.id,
+                entity_number=voucher.voucher_number,
+                details=json.dumps({
+                    'voucher_type': voucher.voucher_type,
+                    'amount_cash': float(voucher.amount_cash or 0.0),
+                    'amount_gold': float(voucher.amount_gold or 0.0),
+                    'reason': reason,
+                }, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+        except Exception:
+            pass
+
         db.session.delete(voucher)
         db.session.commit()
         return jsonify({'message': 'Voucher deleted successfully'}), 200
@@ -17912,9 +17984,447 @@ def get_admin_dashboard():
     except Exception:
         last_shift_alert = None
 
+    # --- Purchases today (posted only) ---
+    purchase_types = {
+        'شراء': 1,
+        'مرتجع شراء': -1,
+    }
+    today_purchases = (
+        Invoice.query
+        .filter(Invoice.invoice_type.in_(list(purchase_types.keys())))
+        .filter(Invoice.is_posted.is_(True))
+        .filter(Invoice.date >= today_start)
+        .filter(Invoice.date < tomorrow_start)
+        .all()
+    )
+
+    purchases_today_value = 0.0
+    purchases_today_weight = 0.0
+    for inv in today_purchases:
+        sign = purchase_types.get(inv.invoice_type, 1)
+        purchases_today_value += float(inv.total or 0.0) * sign
+        purchases_today_weight += float(inv.total_weight or 0.0) * sign
+
+    # --- Last 7 days purchases series (posted only) ---
+    purchases_series = (
+        Invoice.query
+        .filter(Invoice.invoice_type.in_(list(purchase_types.keys())))
+        .filter(Invoice.is_posted.is_(True))
+        .filter(Invoice.date >= start_7)
+        .filter(Invoice.date < tomorrow_start)
+        .order_by(Invoice.date.asc())
+        .all()
+    )
+
+    purchases_by_day = {}
+    for i in range(7):
+        day = (start_7 + timedelta(days=i)).date()
+        key = day.isoformat()
+        purchases_by_day[key] = {
+            'period': key,
+            'net_value': 0.0,
+            'net_weight': 0.0,
+            'documents': 0,
+        }
+
+    for inv in purchases_series:
+        sign = purchase_types.get(inv.invoice_type, 1)
+        period_key = (inv.date.date() if inv.date else now.date()).isoformat()
+        bucket = purchases_by_day.get(period_key)
+        if bucket is None:
+            continue
+        bucket['documents'] += 1
+        bucket['net_value'] += float(inv.total or 0.0) * sign
+        bucket['net_weight'] += float(inv.total_weight or 0.0) * sign
+
+    last_7_days_purchases = list(purchases_by_day.values())
+
+    # --- Gold equivalent in main karat (21k) ---
+    main_karat = current_app.config.get('MAIN_KARAT', 21)
+    gold_equivalent_main_karat = (
+        (gold_18k * (18.0 / main_karat))
+        + gold_21k
+        + (gold_22k * (22.0 / main_karat))
+        + (gold_24k * (24.0 / main_karat))
+    )
+
+    # --- Price Intelligence: Average cost vs market price ---
+    from models import Item
+    avg_cost_per_gram = None
+    try:
+        # Calculate weighted average cost from inventory items
+        items_with_cost = (
+            Item.query
+            .filter(Item.is_active.is_(True))
+            .filter(Item.weight > 0)
+            .all()
+        )
+        total_cost = 0.0
+        total_weight_for_cost = 0.0
+        for item in items_with_cost:
+            item_weight = float(item.weight or 0.0)
+            item_karat = int(item.karat or 21)
+            # Convert to 24k equivalent for fair comparison
+            weight_24k = item_weight * (item_karat / 24.0)
+            # Use purchase price or calculate from gold price
+            item_cost = float(item.purchase_price or 0.0)
+            if item_cost > 0 and item_weight > 0:
+                total_cost += item_cost
+                total_weight_for_cost += weight_24k
+        
+        if total_weight_for_cost > 0:
+            avg_cost_per_gram = total_cost / total_weight_for_cost
+    except Exception:
+        avg_cost_per_gram = None
+
+    # Calculate profit margin
+    profit_margin = None
+    if avg_cost_per_gram and spot_price_24k_per_gram and avg_cost_per_gram > 0:
+        profit_margin = ((spot_price_24k_per_gram - avg_cost_per_gram) / avg_cost_per_gram) * 100
+
+    # --- Liquidity Coverage (7 days) ---
+    from models import Customer
+    payables_due_7_days = 0.0
+    receivables_due_7_days = 0.0
+    try:
+        # Get suppliers with credit balances (we owe them)
+        suppliers = Customer.query.filter(Customer.customer_type == 'مورد').all()
+        for supplier in suppliers:
+            balance = float(getattr(supplier, 'balance', 0) or 0)
+            if balance < 0:  # Negative balance means we owe them
+                payables_due_7_days += abs(balance)
+        
+        # Get customers with debit balances (they owe us)
+        customers = Customer.query.filter(Customer.customer_type == 'عميل').all()
+        for customer in customers:
+            balance = float(getattr(customer, 'balance', 0) or 0)
+            if balance > 0:  # Positive balance means they owe us
+                receivables_due_7_days += balance
+    except Exception:
+        payables_due_7_days = 0.0
+        receivables_due_7_days = 0.0
+
+    liquidity_coverage_ratio = None
+    if payables_due_7_days > 0:
+        liquidity_coverage_ratio = (cash_balance / payables_due_7_days) * 100
+
+    # --- Safe boxes summary ---
+    safe_boxes_summary = []
+    try:
+        safe_boxes = SafeBox.query.filter(SafeBox.is_active.is_(True)).all()
+        for sb in safe_boxes:
+            # Calculate balance for this safe box
+            sb_signed_cash = case(
+                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
+                else_=-SafeBoxTransaction.amount_cash,
+            )
+            sb_signed_w21 = case(
+                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_21k),
+                else_=-SafeBoxTransaction.weight_21k,
+            )
+            sb_row = (
+                db.session.query(
+                    func.coalesce(func.sum(sb_signed_cash), 0.0).label('cash'),
+                    func.coalesce(func.sum(sb_signed_w21), 0.0).label('gold_21k'),
+                )
+                .filter(SafeBoxTransaction.safe_box_id == sb.id)
+                .first()
+            )
+            
+            safe_boxes_summary.append({
+                'id': sb.id,
+                'name': sb.name,
+                'safe_type': sb.safe_type,
+                'balance_cash': round(float(getattr(sb_row, 'cash', 0) or 0), 2),
+                'balance_gold_21k': round(float(getattr(sb_row, 'gold_21k', 0) or 0), 3),
+            })
+    except Exception:
+        safe_boxes_summary = []
+
+    # --- Unposted invoices count ---
+    unposted_invoices_count = 0
+    try:
+        unposted_invoices_count = Invoice.query.filter(Invoice.is_posted.is_(False)).count()
+    except Exception:
+        unposted_invoices_count = 0
+
+    # --- Yesterday comparison ---
+    yesterday_start = today_start - timedelta(days=1)
+    yesterday_sales_value = 0.0
+    yesterday_purchases_value = 0.0
+    yesterday_sales_weight = 0.0
+    yesterday_purchases_weight = 0.0
+    try:
+        yesterday_sales = (
+            Invoice.query
+            .filter(Invoice.invoice_type.in_(list(sale_types.keys())))
+            .filter(Invoice.is_posted.is_(True))
+            .filter(Invoice.date >= yesterday_start)
+            .filter(Invoice.date < today_start)
+            .all()
+        )
+        for inv in yesterday_sales:
+            sign = sale_types.get(inv.invoice_type, 1)
+            yesterday_sales_value += float(inv.total or 0.0) * sign
+            yesterday_sales_weight += float(inv.total_weight or 0.0) * sign
+        
+        yesterday_purchases = (
+            Invoice.query
+            .filter(Invoice.invoice_type.in_(list(purchase_types.keys())))
+            .filter(Invoice.is_posted.is_(True))
+            .filter(Invoice.date >= yesterday_start)
+            .filter(Invoice.date < today_start)
+            .all()
+        )
+        for inv in yesterday_purchases:
+            sign = purchase_types.get(inv.invoice_type, 1)
+            yesterday_purchases_value += float(inv.total or 0.0) * sign
+            yesterday_purchases_weight += float(inv.total_weight or 0.0) * sign
+    except Exception:
+        yesterday_sales_value = 0.0
+        yesterday_purchases_value = 0.0
+        yesterday_sales_weight = 0.0
+        yesterday_purchases_weight = 0.0
+
+    # Calculate change percentages
+    sales_change_pct = None
+    if yesterday_sales_value > 0:
+        sales_change_pct = ((sales_today_value - yesterday_sales_value) / yesterday_sales_value) * 100
+    
+    purchases_change_pct = None
+    if yesterday_purchases_value > 0:
+        purchases_change_pct = ((purchases_today_value - yesterday_purchases_value) / yesterday_purchases_value) * 100
+
+    # Weight-based change percentages (preferred for this POS)
+    sales_change_pct_weight = None
+    if abs(yesterday_sales_weight) > 0:
+        sales_change_pct_weight = ((sales_today_weight - yesterday_sales_weight) / yesterday_sales_weight) * 100
+
+    purchases_change_pct_weight = None
+    if abs(yesterday_purchases_weight) > 0:
+        purchases_change_pct_weight = ((purchases_today_weight - yesterday_purchases_weight) / yesterday_purchases_weight) * 100
+
+    # --- Net Financial Position (Cash + Gold Value) ---
+    net_financial_position = cash_balance
+    if spot_price_24k_per_gram and spot_price_24k_per_gram > 0:
+        net_financial_position += gold_pure_24k * spot_price_24k_per_gram
+
+    # --- Today's Profit Margin (Sales - Purchases) ---
+    today_profit = sales_today_value - purchases_today_value
+    today_profit_margin_pct = None
+    if sales_today_value > 0:
+        today_profit_margin_pct = (today_profit / sales_today_value) * 100
+
+    # --- Gold Price Change from Yesterday ---
+    gold_price_change_pct = None
+    try:
+        yesterday_price = (
+            GoldPrice.query
+            .filter(GoldPrice.date < now.date())
+            .order_by(GoldPrice.date.desc())
+            .first()
+        )
+        if yesterday_price and yesterday_price.price and spot_price_24k_per_gram:
+            yesterday_spot = (float(yesterday_price.price) / 31.1035) * 3.75
+            if yesterday_spot > 0:
+                gold_price_change_pct = ((spot_price_24k_per_gram - yesterday_spot) / yesterday_spot) * 100
+    except Exception:
+        gold_price_change_pct = None
+
+    # --- Safe boxes with activity pulse (last 15 minutes) ---
+    fifteen_mins_ago = now - timedelta(minutes=15)
+    safe_boxes_enhanced = []
+    try:
+        for sb_data in safe_boxes_summary:
+            sb_id = sb_data['id']
+            # Check for recent activity
+            recent_activity = (
+                SafeBoxTransaction.query
+                .filter(SafeBoxTransaction.safe_box_id == sb_id)
+                .filter(SafeBoxTransaction.created_at >= fifteen_mins_ago)
+                .first()
+            )
+            sb_data['has_recent_activity'] = recent_activity is not None
+            safe_boxes_enhanced.append(sb_data)
+    except Exception:
+        safe_boxes_enhanced = safe_boxes_summary
+
+    # --- Sensitive Operations (Last 5 important actions) ---
+    sensitive_operations = []
+    try:
+        noise_actions = {
+            'login_success', 'login_failed', 'logout',
+            'forgot_password', 'forgot_username', 'password_reset_confirm',
+        }
+
+        recent_logs = (
+            AuditLog.query
+            .filter(AuditLog.success.is_(True))
+            .filter(~AuditLog.action.in_(list(noise_actions)))
+            .order_by(AuditLog.timestamp.desc())
+            .limit(8)
+            .all()
+        )
+        for log in recent_logs:
+            op_desc = {
+                # Shift closing
+                'shift_closing': 'إغلاق وردية',
+                # Posting/unposting
+                'post_invoice': 'ترحيل فاتورة',
+                'post': 'ترحيل',
+                'post_batch': 'ترحيل دفعة',
+                'unpost': 'إلغاء ترحيل',
+                # Vouchers
+                'approve_voucher': 'ترحيل سند',
+                'cancel_voucher': 'إلغاء سند',
+                'voucher_approve': 'اعتماد سند',
+                'voucher_reject': 'رفض سند',
+                'voucher_unapprove': 'إلغاء اعتماد سند',
+                'batch_voucher_approve': 'اعتماد دفعة سندات',
+                # Safety/ops
+                'delete_voucher': 'حذف سند',
+                'large_discount': 'خصم كبير',
+                'create_invoice': 'إنشاء فاتورة',
+            }.get(log.action, log.action)
+            
+            sensitive_operations.append({
+                'action': log.action,
+                'description': op_desc,
+                'user_name': getattr(log, 'user_name', None) or 'غير معروف',
+                'entity_type': getattr(log, 'entity_type', None),
+                'entity_number': getattr(log, 'entity_number', None),
+                'timestamp': log.timestamp.isoformat() if log.timestamp else None,
+                'time_ago': _time_ago(log.timestamp, now) if log.timestamp else None,
+            })
+    except Exception:
+        sensitive_operations = []
+
+    # --- Critical Alert Bar (compact) ---
+    critical_bar = []
+    try:
+        # 0) Count of unreviewed critical alerts (even if latest message missing)
+        try:
+            ccount = int(critical_unreviewed_count or 0)
+        except Exception:
+            ccount = 0
+
+        if ccount > 0:
+            critical_bar.append({
+                'severity': 'critical',
+                'message_ar': f"{ccount} تنبيهات حرجة بانتظار المراجعة",
+                'message_en': f"{ccount} critical alerts pending review",
+                'entity_type': 'SystemAlert',
+                'entity_number': None,
+            })
+
+        # 1) Latest unreviewed critical system alert
+        if isinstance(critical_latest, dict):
+            msg = (critical_latest.get('message') or critical_latest.get('title') or '').strip()
+            if msg:
+                critical_bar.append({
+                    'severity': 'critical',
+                    'message_ar': msg,
+                    'message_en': msg,
+                    'entity_type': critical_latest.get('entity_type'),
+                    'entity_number': critical_latest.get('entity_number'),
+                })
+
+        # 2) Shift closing diffs (when present)
+        if isinstance(last_shift_alert, dict):
+            cash_diff = last_shift_alert.get('cash_difference')
+            gold_diff = last_shift_alert.get('gold_pure_24k_difference')
+            entity_num = last_shift_alert.get('entity_number')
+            try:
+                cash_diff_f = float(cash_diff) if cash_diff is not None else 0.0
+            except Exception:
+                cash_diff_f = 0.0
+            try:
+                gold_diff_f = float(gold_diff) if gold_diff is not None else 0.0
+            except Exception:
+                gold_diff_f = 0.0
+
+            if abs(gold_diff_f) > 0.001:
+                critical_bar.append({
+                    'severity': 'warning',
+                    'message_ar': f"⚠️ يوجد فرق وزني (+/-{gold_diff_f:.3f} جم 24K) في إغلاق {entity_num or ''}".strip(),
+                    'message_en': f"Weight difference ({gold_diff_f:+.3f} g 24K) in shift closing {entity_num or ''}".strip(),
+                    'entity_type': 'ShiftClosing',
+                    'entity_number': entity_num,
+                })
+
+            if abs(cash_diff_f) > 0.01:
+                critical_bar.append({
+                    'severity': 'warning',
+                    'message_ar': f"⚠️ يوجد فرق نقدي ({cash_diff_f:+.2f}) في إغلاق {entity_num or ''}".strip(),
+                    'message_en': f"Cash difference ({cash_diff_f:+.2f}) in shift closing {entity_num or ''}".strip(),
+                    'entity_type': 'ShiftClosing',
+                    'entity_number': entity_num,
+                })
+
+        # 3) Low bank balance (optional threshold)
+        threshold = None
+        try:
+            raw_thr = os.getenv('BANK_LOW_BALANCE_THRESHOLD', '').strip()
+            if raw_thr:
+                threshold = float(raw_thr)
+        except Exception:
+            threshold = None
+
+        if threshold is not None:
+            for sb in safe_boxes_enhanced:
+                if (sb.get('safe_type') or '') != 'bank':
+                    continue
+                try:
+                    bal = float(sb.get('balance_cash') or 0.0)
+                except Exception:
+                    bal = 0.0
+                if bal < threshold:
+                    name = sb.get('name') or 'Bank'
+                    critical_bar.append({
+                        'severity': 'warning',
+                        'message_ar': f"⚠️ رصيد {name} تحت الحد المسموح ({bal:.2f} < {threshold:.2f})",
+                        'message_en': f"{name} balance below threshold ({bal:.2f} < {threshold:.2f})",
+                        'entity_type': 'SafeBox',
+                        'entity_number': None,
+                    })
+
+        # 4) Unposted invoices
+        try:
+            up = int(unposted_invoices_count or 0)
+        except Exception:
+            up = 0
+        if up > 0:
+            critical_bar.append({
+                'severity': 'warning',
+                'message_ar': f"⚠️ {up} فاتورة بانتظار الترحيل",
+                'message_en': f"{up} invoices pending posting",
+                'entity_type': 'Invoice',
+                'entity_number': None,
+            })
+    except Exception:
+        critical_bar = []
+
+    # --- Liquidity breakdown (Cash vs Banks) ---
+    cash_in_hand = 0.0
+    cash_in_banks = 0.0
+    try:
+        for sb_data in safe_boxes_enhanced:
+            if sb_data['safe_type'] == 'cash':
+                cash_in_hand += sb_data['balance_cash']
+            elif sb_data['safe_type'] == 'bank':
+                cash_in_banks += sb_data['balance_cash']
+    except Exception:
+        pass
+
     return jsonify({
         'success': True,
         'generated_at': now.isoformat(),
+        'global_snapshot': {
+            'net_financial_position': round(net_financial_position, 2),
+            'gold_price_24k': round(float(spot_price_24k_per_gram), 2) if spot_price_24k_per_gram else None,
+            'gold_price_change_pct': round(gold_price_change_pct, 2) if gold_price_change_pct is not None else None,
+            'gold_price_timestamp': spot_price_timestamp,
+        },
         'kpis': {
             'cash_balance': round(cash_balance, 2),
             'gold_by_karat': {
@@ -17924,11 +18434,28 @@ def get_admin_dashboard():
                 '24k': round(gold_24k, 3),
             },
             'gold_pure_24k': round(gold_pure_24k, 3),
+            'gold_equivalent_main_karat': round(gold_equivalent_main_karat, 3),
+            'main_karat': main_karat,
             'sales_today': {
                 'net_value': round(sales_today_value, 2),
                 'net_weight': round(sales_today_weight, 3),
                 'documents': len(today_invoices),
+                'change_pct': round(sales_change_pct, 1) if sales_change_pct is not None else None,
+                'change_pct_weight': round(sales_change_pct_weight, 1)
+                if sales_change_pct_weight is not None
+                else None,
             },
+            'purchases_today': {
+                'net_value': round(purchases_today_value, 2),
+                'net_weight': round(purchases_today_weight, 3),
+                'documents': len(today_purchases),
+                'change_pct': round(purchases_change_pct, 1) if purchases_change_pct is not None else None,
+                'change_pct_weight': round(purchases_change_pct_weight, 1)
+                if purchases_change_pct_weight is not None
+                else None,
+            },
+            'today_profit': round(today_profit, 2),
+            'today_profit_margin_pct': round(today_profit_margin_pct, 1) if today_profit_margin_pct is not None else None,
         },
         'series': {
             'last_7_days_sales': [
@@ -17940,11 +18467,22 @@ def get_admin_dashboard():
                 }
                 for row in last_7_days_sales
             ],
+            'last_7_days_purchases': [
+                {
+                    'period': row['period'],
+                    'documents': int(row.get('documents') or 0),
+                    'net_value': round(float(row.get('net_value') or 0.0), 2),
+                    'net_weight': round(float(row.get('net_weight') or 0.0), 3),
+                }
+                for row in last_7_days_purchases
+            ],
         },
         'alerts': {
             'last_shift_closing': last_shift_alert,
             'critical_unreviewed_count': int(critical_unreviewed_count or 0),
             'critical_unreviewed_latest': critical_latest,
+            'unposted_invoices_count': unposted_invoices_count,
+            'critical_bar': critical_bar[:3],
         },
         'valuation': {
             'spot_price_24k_per_gram': round(float(spot_price_24k_per_gram), 2)
@@ -17953,8 +18491,40 @@ def get_admin_dashboard():
             'spot_price_timestamp': spot_price_timestamp,
             'currency': 'ر.س',
             'inventory_value': round(float(inventory_value), 2) if inventory_value is not None else None,
+            'avg_cost_per_gram': round(float(avg_cost_per_gram), 2) if avg_cost_per_gram else None,
+            'profit_margin_pct': round(float(profit_margin), 2) if profit_margin is not None else None,
         },
+        'liquidity': {
+            'cash_available': round(cash_balance, 2),
+            'cash_in_hand': round(cash_in_hand, 2),
+            'cash_in_banks': round(cash_in_banks, 2),
+            'receivables': round(receivables_due_7_days, 2),
+            'payables_due_7_days': round(payables_due_7_days, 2),
+            'receivables_due_7_days': round(receivables_due_7_days, 2),
+            'coverage_ratio_pct': round(liquidity_coverage_ratio, 1) if liquidity_coverage_ratio is not None else None,
+        },
+        'safe_boxes': safe_boxes_enhanced,
+        'sensitive_operations': sensitive_operations,
     }), 200
+
+
+def _time_ago(dt, now):
+    """Helper to format time ago in Arabic."""
+    if not dt:
+        return None
+    diff = now - dt
+    seconds = diff.total_seconds()
+    if seconds < 60:
+        return 'الآن'
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        return f'منذ {mins} دقيقة'
+    elif seconds < 86400:
+        hours = int(seconds // 3600)
+        return f'منذ {hours} ساعة'
+    else:
+        days = int(seconds // 86400)
+        return f'منذ {days} يوم'
 
 
 
