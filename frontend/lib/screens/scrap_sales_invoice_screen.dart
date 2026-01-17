@@ -8,6 +8,8 @@ import '../widgets/invoice_type_banner.dart';
 import '../utils.dart';
 import 'invoice_print_screen.dart';
 
+enum _PreSaveDecision { cancel, proceed, proceedSuppressWarning }
+
 /// شاشة فاتورة بيع الكسر - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
 class ScrapSalesInvoiceScreen extends StatefulWidget {
@@ -613,30 +615,60 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     );
   }
 
-  Future<bool> _confirmDeferredInvoiceSave({
+  Future<_PreSaveDecision> _confirmDeferredInvoiceSave({
     required double total,
     required double totalPaid,
     required double remaining,
+    required double totalCost,
+    required bool paidBelowCost,
+    required bool saleBelowCost,
   }) async {
-    final result = await showDialog<bool>(
+    final lines = <String>[
+      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+    ];
+
+    if (totalCost > 0 && (paidBelowCost || saleBelowCost)) {
+      lines.add('');
+      lines.add('⚠️ تحذير:');
+      if (saleBelowCost) {
+        lines.add(
+          'سعر البيع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        );
+      } else if (paidBelowCost) {
+        lines.add(
+          'المدفوع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        );
+      }
+    }
+
+    lines.add('');
+    lines.add('هل تريد حفظ الفاتورة بهذا الشكل؟');
+
+    final result = await showDialog<_PreSaveDecision>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('فاتورة آجل / دفع جزئي'),
-          content: Text(
-            'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\n'
-            'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\n'
-            'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\n\n'
-            'هل تريد حفظ الفاتورة بهذا الشكل؟',
-          ),
+          content: Text(lines.join('\n')),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_PreSaveDecision.cancel),
               child: const Text('إلغاء'),
             ),
+            if (paidBelowCost || saleBelowCost)
+              TextButton(
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(_PreSaveDecision.proceedSuppressWarning),
+                child: const Text('حفظ بدون تحذير'),
+              ),
             ElevatedButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_PreSaveDecision.proceed),
               child: const Text('حفظ'),
             ),
           ],
@@ -644,7 +676,58 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       },
     );
 
-    return result ?? false;
+    return result ?? _PreSaveDecision.cancel;
+  }
+
+  Future<_PreSaveDecision> _confirmBelowCostInvoiceSave({
+    required double total,
+    required double totalPaid,
+    required double totalCost,
+    required bool paidBelowCost,
+    required bool saleBelowCost,
+  }) async {
+    final lines = <String>[
+      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      '',
+      '⚠️ تحذير قبل الحفظ:',
+      if (saleBelowCost) 'سعر البيع أقل من تكلفة الأصناف.',
+      if (!saleBelowCost && paidBelowCost) 'المدفوع أقل من تكلفة الأصناف.',
+      '',
+      'يمكنك المتابعة، وسيتم حفظ الفاتورة لكن قد تحتاج اعتماد مدير قبل الترحيل.',
+    ];
+
+    final result = await showDialog<_PreSaveDecision>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('تحذير قبل الحفظ'),
+          content: Text(lines.join('\n')),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_PreSaveDecision.cancel),
+              child: const Text('إلغاء'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop(_PreSaveDecision.proceedSuppressWarning),
+              child: const Text('حفظ بدون تحذير'),
+            ),
+            ElevatedButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_PreSaveDecision.proceed),
+              child: const Text('حفظ'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result ?? _PreSaveDecision.cancel;
   }
 
   // ==================== Submit Invoice ====================
@@ -666,6 +749,13 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     final totalPaid = _totalPayments;
     final remaining = total - totalPaid;
 
+    final totalCost = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
+    final paidBelowCost = totalPaid + 0.01 < totalCost;
+    final saleBelowCost = total + 0.01 < totalCost;
+
+    var suppressPostSaveApprovalWarning = false;
+    var shownDeferredDialog = false;
+
     if (_payments.isEmpty) {
       if (!allowPartialPayments) {
         _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
@@ -676,8 +766,14 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         total: total,
         totalPaid: totalPaid,
         remaining: total,
+        totalCost: totalCost,
+        paidBelowCost: paidBelowCost,
+        saleBelowCost: saleBelowCost,
       );
-      if (!proceed) return;
+      shownDeferredDialog = true;
+      if (proceed == _PreSaveDecision.cancel) return;
+      suppressPostSaveApprovalWarning =
+          proceed == _PreSaveDecision.proceedSuppressWarning;
     } else {
       // منع الدفع الزائد
       if (remaining < -0.01) {
@@ -697,9 +793,30 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           total: total,
           totalPaid: totalPaid,
           remaining: remaining,
+          totalCost: totalCost,
+          paidBelowCost: paidBelowCost,
+          saleBelowCost: saleBelowCost,
         );
-        if (!proceed) return;
+        shownDeferredDialog = true;
+        if (proceed == _PreSaveDecision.cancel) return;
+        suppressPostSaveApprovalWarning =
+            proceed == _PreSaveDecision.proceedSuppressWarning;
       }
+    }
+
+    if (!shownDeferredDialog &&
+        totalCost > 0 &&
+        (paidBelowCost || saleBelowCost)) {
+      final decision = await _confirmBelowCostInvoiceSave(
+        total: total,
+        totalPaid: totalPaid,
+        totalCost: totalCost,
+        paidBelowCost: paidBelowCost,
+        saleBelowCost: saleBelowCost,
+      );
+      if (decision == _PreSaveDecision.cancel) return;
+      suppressPostSaveApprovalWarning =
+          decision == _PreSaveDecision.proceedSuppressWarning;
     }
 
     try {
@@ -754,6 +871,65 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
       final response = await apiService.addInvoice(invoiceData);
 
+      final approvalRequired = response['approval_required'] == true;
+      final approvalReasons = (response['approval_reasons'] is List)
+          ? List<String>.from(response['approval_reasons'])
+          : <String>[
+              if (response['approval_reason'] != null)
+                response['approval_reason'].toString(),
+            ];
+
+      String? approvalWarning;
+      if (approvalRequired && !suppressPostSaveApprovalWarning) {
+        final parts = <String>[];
+        if (approvalReasons.contains('below_cost')) {
+          final below = (response['below_cost'] is Map)
+              ? Map<String, dynamic>.from(response['below_cost'])
+              : const <String, dynamic>{};
+          final saleExVat = (below['effective_sale_cash_ex_vat'] is num)
+              ? (below['effective_sale_cash_ex_vat'] as num).toDouble()
+              : double.tryParse(
+                      '${below['effective_sale_cash_ex_vat'] ?? 0}',
+                    ) ??
+                    0.0;
+          final costCash = (below['cost_cash'] is num)
+              ? (below['cost_cash'] as num).toDouble()
+              : double.tryParse('${below['cost_cash'] ?? 0}') ?? 0.0;
+          final profitEst = (below['profit_cash_estimate'] is num)
+              ? (below['profit_cash_estimate'] as num).toDouble()
+              : double.tryParse('${below['profit_cash_estimate'] ?? 0}') ?? 0.0;
+          parts.add(
+            '⚠️ بيع تحت التكلفة: صافي ${saleExVat.toStringAsFixed(2)} مقابل تكلفة ${costCash.toStringAsFixed(2)} (فرق ${profitEst.toStringAsFixed(2)})',
+          );
+        }
+        if (approvalReasons.contains('large_discount')) {
+          final discountPct = (response['discount_pct'] is num)
+              ? (response['discount_pct'] as num).toDouble()
+              : double.tryParse('${response['discount_pct'] ?? 0}') ?? 0.0;
+          final thresholdPct = (response['threshold_pct'] is num)
+              ? (response['threshold_pct'] as num).toDouble()
+              : double.tryParse('${response['threshold_pct'] ?? 0}') ?? 0.0;
+          parts.add(
+            '⚠️ خصم كبير: ${discountPct.toStringAsFixed(2)}% (الحد ${thresholdPct.toStringAsFixed(2)}%)',
+          );
+        }
+
+        approvalWarning = parts.isNotEmpty
+            ? '${parts.join('\n')}\nسيتم حفظ الفاتورة لكن لن تُرحَّل حتى اعتماد المدير.'
+            : '⚠️ تم حفظ الفاتورة لكن تحتاج اعتماد مدير قبل الترحيل.';
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(approvalWarning),
+              backgroundColor: Colors.orange.shade800,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+      }
+
       if (context.mounted) {
         final invoiceForPrint = Map<String, dynamic>.from(response);
         try {
@@ -773,9 +949,15 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           barrierDismissible: false,
           builder: (dialogContext) {
             return AlertDialog(
-              title: const Text('تم حفظ الفاتورة'),
+              title: Text(
+                approvalRequired
+                    ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                    : 'تم حفظ الفاتورة',
+              ),
               content: Text(
-                '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+                '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
+                '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
+                '\n\nهل تريد طباعتها الآن؟',
               ),
               actions: [
                 TextButton(

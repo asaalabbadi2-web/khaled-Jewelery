@@ -285,7 +285,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
               const Spacer(),
               Text(
-                isArabic ? 'غرفة العمليات' : 'Operations Center',
+                isArabic ? 'لوحة تحكم المدير' : 'Admin Dashboard',
                 style: theme.textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),

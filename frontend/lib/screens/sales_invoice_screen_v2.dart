@@ -12,6 +12,8 @@ import 'settings_screen_enhanced.dart';
 import '../utils/arabic_number_formatter.dart';
 import 'invoice_print_screen.dart';
 
+enum _PreSaveDecision { cancel, proceed, proceedSuppressWarning }
+
 /// شاشة فاتورة البيع - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
 class SalesInvoiceScreenV2 extends StatefulWidget {
@@ -1578,6 +1580,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final paidBelowCost = totalPaid + 0.01 < totalCost;
     final saleBelowCost = total + 0.01 < totalCost;
 
+    var suppressPostSaveApprovalWarning = false;
+    var shownDeferredDialog = false;
+
     final hasAnySettlement = _payments.isNotEmpty || barterTotal > 0.01;
 
     if (!hasAnySettlement) {
@@ -1594,7 +1599,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         paidBelowCost: paidBelowCost,
         saleBelowCost: saleBelowCost,
       );
-      if (!proceed) return;
+      shownDeferredDialog = true;
+      if (proceed == _PreSaveDecision.cancel) return;
+      suppressPostSaveApprovalWarning =
+          proceed == _PreSaveDecision.proceedSuppressWarning;
     } else {
       // منع الدفع الزائد
       if (remaining < -0.01) {
@@ -1618,8 +1626,26 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           paidBelowCost: paidBelowCost,
           saleBelowCost: saleBelowCost,
         );
-        if (!proceed) return;
+        shownDeferredDialog = true;
+        if (proceed == _PreSaveDecision.cancel) return;
+        suppressPostSaveApprovalWarning =
+            proceed == _PreSaveDecision.proceedSuppressWarning;
       }
+    }
+
+    if (!shownDeferredDialog &&
+        totalCost > 0 &&
+        (paidBelowCost || saleBelowCost)) {
+      final decision = await _confirmBelowCostInvoiceSave(
+        total: total,
+        totalPaid: totalPaid,
+        totalCost: totalCost,
+        paidBelowCost: paidBelowCost,
+        saleBelowCost: saleBelowCost,
+      );
+      if (decision == _PreSaveDecision.cancel) return;
+      suppressPostSaveApprovalWarning =
+          decision == _PreSaveDecision.proceedSuppressWarning;
     }
 
     try {
@@ -1695,6 +1721,65 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       final response = await apiService.addInvoice(invoiceData);
 
+      final approvalRequired = response['approval_required'] == true;
+      final approvalReasons = (response['approval_reasons'] is List)
+          ? List<String>.from(response['approval_reasons'])
+          : <String>[
+              if (response['approval_reason'] != null)
+                response['approval_reason'].toString(),
+            ];
+
+      String? approvalWarning;
+      if (approvalRequired && !suppressPostSaveApprovalWarning) {
+        final parts = <String>[];
+        if (approvalReasons.contains('below_cost')) {
+          final below = (response['below_cost'] is Map)
+              ? Map<String, dynamic>.from(response['below_cost'])
+              : const <String, dynamic>{};
+          final saleExVat = (below['effective_sale_cash_ex_vat'] is num)
+              ? (below['effective_sale_cash_ex_vat'] as num).toDouble()
+              : double.tryParse(
+                      '${below['effective_sale_cash_ex_vat'] ?? 0}',
+                    ) ??
+                    0.0;
+          final costCash = (below['cost_cash'] is num)
+              ? (below['cost_cash'] as num).toDouble()
+              : double.tryParse('${below['cost_cash'] ?? 0}') ?? 0.0;
+          final profitEst = (below['profit_cash_estimate'] is num)
+              ? (below['profit_cash_estimate'] as num).toDouble()
+              : double.tryParse('${below['profit_cash_estimate'] ?? 0}') ?? 0.0;
+          parts.add(
+            '⚠️ بيع تحت التكلفة: صافي ${saleExVat.toStringAsFixed(2)} مقابل تكلفة ${costCash.toStringAsFixed(2)} (فرق ${profitEst.toStringAsFixed(2)})',
+          );
+        }
+        if (approvalReasons.contains('large_discount')) {
+          final discountPct = (response['discount_pct'] is num)
+              ? (response['discount_pct'] as num).toDouble()
+              : double.tryParse('${response['discount_pct'] ?? 0}') ?? 0.0;
+          final thresholdPct = (response['threshold_pct'] is num)
+              ? (response['threshold_pct'] as num).toDouble()
+              : double.tryParse('${response['threshold_pct'] ?? 0}') ?? 0.0;
+          parts.add(
+            '⚠️ خصم كبير: ${discountPct.toStringAsFixed(2)}% (الحد ${thresholdPct.toStringAsFixed(2)}%)',
+          );
+        }
+
+        approvalWarning = parts.isNotEmpty
+            ? '${parts.join('\n')}\nسيتم حفظ الفاتورة لكن لن تُرحَّل حتى اعتماد المدير.'
+            : '⚠️ تم حفظ الفاتورة لكن تحتاج اعتماد مدير قبل الترحيل.';
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(approvalWarning),
+              backgroundColor: Colors.orange.shade800,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+      }
+
       // 🆕 Auto-create linked scrap purchase invoice for barter (offset)
       if (_enableBarter && barterTotal > 0.01) {
         final saleInvoiceId = response['id'];
@@ -1731,7 +1816,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         final barterWeightNet = _barterTotalWeightNet;
 
         // الحصول على خزينة الذهب للموظف الحالي
-        final employeeGoldSafeId = authProvider.currentUser?.employee?.goldSafeBoxId;
+        final employeeGoldSafeId =
+            authProvider.currentUser?.employee?.goldSafeBoxId;
 
         final scrapInvoiceData = {
           'customer_id': customerId,
@@ -1788,9 +1874,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         barrierDismissible: false,
         builder: (dialogContext) {
           return AlertDialog(
-            title: const Text('تم حفظ الفاتورة'),
+            title: Text(
+              approvalRequired
+                  ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                  : 'تم حفظ الفاتورة',
+            ),
             content: Text(
-              '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+              '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
+              '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
+              '\n\nهل تريد طباعتها الآن؟',
             ),
             actions: [
               TextButton(
@@ -1824,7 +1916,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
   }
 
-  Future<bool> _confirmDeferredInvoiceSave({
+  Future<_PreSaveDecision> _confirmDeferredInvoiceSave({
     required double total,
     required double totalPaid,
     required double remaining,
@@ -1857,7 +1949,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     final content = lines.join('\n');
 
-    return await showDialog<bool>(
+    return await showDialog<_PreSaveDecision>(
           context: context,
           builder: (dialogContext) {
             return AlertDialog(
@@ -1889,13 +1981,116 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               content: Text(content, style: theme.textTheme.bodyMedium),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, _PreSaveDecision.cancel),
                   child: Text(
                     'إلغاء',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: colorScheme.secondary,
                     ),
                   ),
+                ),
+                if (paidBelowCost || saleBelowCost)
+                  TextButton(
+                    onPressed: () => Navigator.pop(
+                      dialogContext,
+                      _PreSaveDecision.proceedSuppressWarning,
+                    ),
+                    child: const Text('حفظ بدون تحذير'),
+                  ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colorScheme.primary,
+                    foregroundColor: colorScheme.onPrimary,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 12,
+                    ),
+                  ),
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, _PreSaveDecision.proceed),
+                  child: const Text('حفظ'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        _PreSaveDecision.cancel;
+  }
+
+  Future<_PreSaveDecision> _confirmBelowCostInvoiceSave({
+    required double total,
+    required double totalPaid,
+    required double totalCost,
+    required bool paidBelowCost,
+    required bool saleBelowCost,
+  }) async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final lines = <String>[
+      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      '',
+      '⚠️ تحذير قبل الحفظ:',
+      if (saleBelowCost) 'سعر البيع أقل من تكلفة الأصناف.',
+      if (!saleBelowCost && paidBelowCost) 'المدفوع أقل من تكلفة الأصناف.',
+      '',
+      'يمكنك المتابعة، وسيتم حفظ الفاتورة لكن قد تحتاج اعتماد مدير قبل الترحيل.',
+    ];
+
+    return await showDialog<_PreSaveDecision>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) {
+            return AlertDialog(
+              backgroundColor: colorScheme.surface,
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.warning_amber,
+                      color: AppColors.warning,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'تحذير قبل الحفظ',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Text(
+                lines.join('\n'),
+                style: theme.textTheme.bodyMedium,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, _PreSaveDecision.cancel),
+                  child: Text(
+                    'إلغاء',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.secondary,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(
+                    dialogContext,
+                    _PreSaveDecision.proceedSuppressWarning,
+                  ),
+                  child: const Text('حفظ بدون تحذير'),
                 ),
                 FilledButton(
                   style: FilledButton.styleFrom(
@@ -1906,14 +2101,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       vertical: 12,
                     ),
                   ),
-                  onPressed: () => Navigator.pop(dialogContext, true),
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, _PreSaveDecision.proceed),
                   child: const Text('حفظ'),
                 ),
               ],
             );
           },
         ) ??
-        false;
+        _PreSaveDecision.cancel;
   }
 
   // ==================== Calculations ====================
@@ -2546,7 +2742,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                     _remainingAmount > 0.01
                                 ? null
                                 : _submitInvoice,
-                            icon: const Icon(Icons.check_circle_outline, size: 24),
+                            icon: const Icon(
+                              Icons.check_circle_outline,
+                              size: 24,
+                            ),
                             label: Text(
                               _remainingAmount > 0.01
                                   ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
@@ -4429,7 +4628,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           color: theme.colorScheme.surface,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: AppColors.primaryGold.withValues(alpha: 0.25),
+                            color: AppColors.primaryGold.withValues(
+                              alpha: 0.25,
+                            ),
                           ),
                         ),
                         child: Column(
@@ -4510,7 +4711,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                     controller: line.pricePerGramController,
                                     decoration: InputDecoration(
                                       labelText: 'سعر الشراء/جرام',
-                                      suffixText: _settingsProvider.currencySymbol,
+                                      suffixText:
+                                          _settingsProvider.currencySymbol,
                                     ),
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
@@ -4534,7 +4736,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                     controller: line.totalAmountController,
                                     decoration: InputDecoration(
                                       labelText: 'المبلغ الإجمالي',
-                                      suffixText: _settingsProvider.currencySymbol,
+                                      suffixText:
+                                          _settingsProvider.currencySymbol,
                                     ),
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
@@ -5685,7 +5888,8 @@ class _BarterLine {
   }
 
   double value(double Function(dynamic) parseDouble, double goldPrice24k) {
-    final v = netWeight(parseDouble) *
+    final v =
+        netWeight(parseDouble) *
         effectivePricePerGram(parseDouble, goldPrice24k);
     return double.tryParse(v.toStringAsFixed(2)) ?? 0.0;
   }

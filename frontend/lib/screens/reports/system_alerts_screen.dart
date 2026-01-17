@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../api_service.dart';
+import '../../providers/auth_provider.dart';
+import 'invoice_approval_screen.dart';
 
 class SystemAlertsScreen extends StatefulWidget {
   final ApiService api;
@@ -84,6 +87,13 @@ class _SystemAlertsScreenState extends State<SystemAlertsScreen> {
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value) ?? 0.0;
     return 0.0;
+  }
+
+  int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   bool _asBool(dynamic value) {
@@ -210,6 +220,11 @@ class _SystemAlertsScreenState extends State<SystemAlertsScreen> {
   }
 
   Widget _buildAlertCard(Map<String, dynamic> alert) {
+    final alertType = (alert['alert_type'] ?? '').toString().trim();
+    if (alertType == 'invoice_approval') {
+      return _buildInvoiceApprovalAlertCard(alert);
+    }
+
     final theme = Theme.of(context);
     final isArabic = widget.isArabic;
 
@@ -387,6 +402,164 @@ class _SystemAlertsScreenState extends State<SystemAlertsScreen> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInvoiceApprovalAlertCard(Map<String, dynamic> alert) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+    final auth = context.watch<AuthProvider>();
+
+    final details = alert['details'];
+    final detailsMap = details is Map
+        ? Map<String, dynamic>.from(details)
+        : <String, dynamic>{};
+
+    final alertId = _asInt(alert['id']);
+    final invoiceId = _asInt(alert['entity_id']);
+    final invoiceNumber = (alert['entity_number'] ?? invoiceId ?? '').toString();
+    final invoiceType = (detailsMap['invoice_type'] ?? '').toString();
+
+    final discountPct = detailsMap.containsKey('discount_pct')
+        ? _asDouble(detailsMap['discount_pct'])
+        : null;
+    final thresholdPct = detailsMap.containsKey('threshold_pct')
+        ? _asDouble(detailsMap['threshold_pct'])
+        : null;
+
+    final isReviewed = _asBool(alert['is_reviewed']);
+    final createdAt = _formatDate(alert['created_at']?.toString());
+
+    final background = theme.colorScheme.errorContainer;
+    final foreground = theme.colorScheme.onErrorContainer;
+
+    Future<void> openDetails() async {
+      if (invoiceId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isArabic ? 'معرف الفاتورة غير متاح' : 'Invoice id missing',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final result = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => InvoiceApprovalScreen(
+            api: widget.api,
+            isArabic: widget.isArabic,
+            invoiceId: invoiceId,
+            alertId: alertId,
+            alertDetails: detailsMap,
+          ),
+        ),
+      );
+
+      if (result == true) {
+        await _reload();
+      }
+    }
+
+    return Card(
+      elevation: 0,
+      color: background,
+      child: InkWell(
+        onTap: openDetails,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.verified_user_outlined, color: theme.colorScheme.error),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      (alert['title'] ?? (isArabic ? 'فاتورة تحتاج اعتماد' : 'Invoice needs approval'))
+                          .toString(),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: foreground,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  if (createdAt.isNotEmpty)
+                    Text(
+                      createdAt,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: foreground,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                isArabic
+                    ? 'فاتورة #$invoiceNumber تحتاج اعتماد قبل الترحيل'
+                    : 'Invoice #$invoiceNumber requires approval before posting',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: foreground,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (invoiceType.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    isArabic ? 'النوع: $invoiceType' : 'Type: $invoiceType',
+                    style: theme.textTheme.bodyMedium?.copyWith(color: foreground),
+                  ),
+                ),
+              if (discountPct != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    thresholdPct != null
+                        ? (isArabic
+                            ? 'نسبة الخصم: ${discountPct.toStringAsFixed(2)}% (الحد ${thresholdPct.toStringAsFixed(2)}%)'
+                            : 'Discount: ${discountPct.toStringAsFixed(2)}% (threshold ${thresholdPct.toStringAsFixed(2)}%)')
+                        : (isArabic
+                            ? 'نسبة الخصم: ${discountPct.toStringAsFixed(2)}%'
+                            : 'Discount: ${discountPct.toStringAsFixed(2)}%'),
+                    style: theme.textTheme.bodyMedium?.copyWith(color: foreground),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      isReviewed
+                          ? (isArabic ? 'تمت المراجعة' : 'Reviewed')
+                          : (isArabic ? 'غير مُراجع' : 'Unreviewed'),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: foreground,
+                      ),
+                    ),
+                  ),
+                  if (!isReviewed && alertId != null)
+                    ElevatedButton.icon(
+                      onPressed: () => _markReviewed(alertId),
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: Text(isArabic ? 'تمت المراجعة' : 'Mark reviewed'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (auth.isManager)
+                Text(
+                  isArabic ? 'اضغط لفتح التفاصيل' : 'Tap to open details',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: foreground.withOpacity(0.85),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

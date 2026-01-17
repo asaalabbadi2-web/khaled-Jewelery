@@ -1124,35 +1124,163 @@ def update_settings():
     return jsonify(settings.to_dict())
 
 @api.route('/system/reset', methods=['POST'])
+@require_permission('system.settings')
 def system_reset():
-    """
-    إعادة تهيئة النظام مع خيارات متعددة
-    
+    """System reset with multiple safety levels.
+
     Body Parameters (JSON):
-    - reset_type: نوع الإعادة (required)
-        * "transactions" - حذف العمليات فقط (القيود، الفواتير، السندات)
-        * "customers_suppliers" - حذف بيانات العملاء والموردين فقط
-        * "settings" - إعادة تعيين الإعدادات للقيم الافتراضية
-        * "all" - إعادة تهيئة كاملة مع الحفاظ على شجرة الحسابات (الافتراضي)
-        * "all_with_accounts" - إعادة تهيئة كاملة (بما في ذلك شجرة الحسابات)
-    
-    Returns:
-    - success: رسالة نجاح
-    - error: رسالة خطأ
+      - reset_type: str
+        Backward-compatible:
+          * "transactions" - حذف العمليات فقط (القيود، الفواتير، السندات)
+          * "nuclear" - تصفير شامل للعمليات (يشمل دفتر الخزائن + التنبيهات + السجل) مع إبقاء الهيكل الأساسي
+          * "customers_suppliers" - حذف/مسح بيانات العملاء والموردين
+          * "settings" - إعادة تعيين الإعدادات للقيم الافتراضية
+          * "all" - إعادة تهيئة كاملة مع الحفاظ على شجرة الحسابات
+          * "all_with_accounts" - إعادة تهيئة كاملة (بما في ذلك شجرة الحسابات)
+
+        Leveled (recommended):
+          * "balances_only" - تصفير الأرصدة التشغيلية فقط (SafeBoxTransaction)
+          * "oversight_only" - تصفير الرقابة (SystemAlert + AuditLog)
+          * "factory_data" - مسح كل البيانات التشغيلية + العملاء/الموردين مع إبقاء (الخزائن/الموظفين/الفروع/الحسابات)
+          * "full_wipe" - Full System Wipe (حذف كل شيء بما فيه الخزائن/الموظفين/الفروع/المكاتب) مع استثناء الأدمن
+
+      - confirm: str (required for dangerous actions)
     """
     try:
-        data = request.get_json() or {}
-        reset_type = data.get('reset_type', 'all')
+        data = request.get_json(silent=True) or {}
+        reset_type = (data.get('reset_type') or 'all').strip()
+
+        def _actor_is_system_admin() -> bool:
+            try:
+                actor = getattr(g, 'current_user', None)
+                return bool(getattr(actor, 'is_admin', False))
+            except Exception:
+                return False
+
+        def _is_production_env() -> bool:
+            # Support multiple common env var names used across deployments.
+            env = (
+                os.getenv('YASAR_ENV')
+                or os.getenv('APP_ENV')
+                or os.getenv('ENV')
+                or os.getenv('FLASK_ENV')
+                or ''
+            )
+            return str(env).strip().lower() in {'prod', 'production'}
+
+        def _dangerous_resets_allowed() -> bool:
+            val = os.getenv('ALLOW_DANGEROUS_RESETS')
+            return str(val or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+        # 🔒 Production Lock: block destructive reset types in production unless explicitly enabled.
+        if _is_production_env() and not _dangerous_resets_allowed():
+            if reset_type not in {'settings'}:
+                return jsonify({
+                    'status': 'error',
+                    'message': (
+                        'هذا الإجراء مقفّل على نسخة الإنتاج (Production Lock). '
+                        'لأسباب أمنية لا يُسمح بتنفيذ عمليات التصفير/الحذف على الإنتاج. '
+                        'إذا كنت متأكدًا، فعّل ALLOW_DANGEROUS_RESETS=true في بيئة التشغيل.'
+                    ),
+                    'error': 'production_lock',
+                    'reset_type': reset_type,
+                }), 403
         
-        if reset_type == 'transactions':
+        if reset_type in {'transactions', 'operations_only', 'operations'}:
             # حذف العمليات فقط (القيود، الفواتير، السندات، المدفوعات)
             _reset_transactions()
             message = 'تم حذف جميع العمليات بنجاح (القيود، الفواتير، السندات)'
+
+        elif reset_type in {'balances_only', 'balances'}:
+            confirm = (data.get('confirm') or '').strip()
+            if confirm != 'BALANCES':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'تأكيد غير صحيح. ارسل confirm=BALANCES لتصفير الأرصدة (دفتر الخزائن فقط).',
+                }), 400
+            _reset_balances_only()
+            message = 'تم تصفير الأرصدة التشغيلية للخزائن (SafeBoxTransaction) بنجاح.'
+
+        elif reset_type in {'oversight_only', 'oversight'}:
+            confirm = (data.get('confirm') or '').strip()
+            if confirm != 'AUDIT':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'تأكيد غير صحيح. ارسل confirm=AUDIT لمسح التنبيهات وسجل التدقيق.',
+                }), 400
+            _reset_oversight_only()
+            message = 'تم مسح التنبيهات وسجل النشاط (Audit) بنجاح.'
+
+        elif reset_type == 'nuclear':
+            if not _actor_is_system_admin():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'هذا الإجراء مسموح فقط لمسؤول النظام (system admin).',
+                }), 403
+            confirm = (data.get('confirm') or '').strip()
+            if confirm != 'RESET':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'تأكيد غير صحيح. ارسل confirm=RESET لتنفيذ التصفير الشامل.',
+                }), 400
+
+            _reset_nuclear_transactions()
+            message = (
+                'تم تنفيذ التصفير الشامل بنجاح: تم مسح دفتر الخزائن والعمليات والقيود '
+                'والفواتير والتنبيهات والسجل، مع إبقاء الخزائن/الموظفين/الفروع/الحسابات.'
+            )
             
-        elif reset_type == 'customers_suppliers':
+        elif reset_type in {'customers_suppliers', 'customers_only', 'customers'}:
             # حذف العملاء والموردين
+            confirm = (data.get('confirm') or '').strip()
+            # customers_suppliers historically had no confirm; keep it optional but allow enforcing it in UI.
+            if reset_type in {'customers_only', 'customers'} and confirm != 'CUSTOMERS':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'تأكيد غير صحيح. ارسل confirm=CUSTOMERS لمسح بيانات العملاء والموردين.',
+                }), 400
             _reset_customers_suppliers()
             message = 'تم حذف جميع بيانات العملاء والموردين بنجاح'
+
+        elif reset_type in {'factory_data', 'factory'}:
+            if not _actor_is_system_admin():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'هذا الإجراء مسموح فقط لمسؤول النظام (system admin).',
+                }), 403
+
+            confirm = (data.get('confirm') or '').strip()
+            if confirm != 'FACTORY':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'تأكيد غير صحيح. ارسل confirm=FACTORY لتنفيذ إعادة ضبط المصنع (بيانات).',
+                }), 400
+
+            _reset_factory_data()
+            message = (
+                'تم تنفيذ إعادة ضبط المصنع (بيانات) بنجاح: تم مسح العمليات ودفتر الخزائن والتنبيهات والسجل '
+                'ومسح العملاء/الموردين، مع إبقاء الخزائن/الموظفين/الفروع/شجرة الحسابات.'
+            )
+
+        elif reset_type in {'full_wipe', 'full_system_wipe'}:
+            if not _actor_is_system_admin():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'هذا الإجراء مسموح فقط لمسؤول النظام (system admin).',
+                }), 403
+
+            confirm = (data.get('confirm') or '').strip()
+            if confirm != 'WIPE-ALL':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'تأكيد غير صحيح. ارسل confirm=WIPE-ALL لتنفيذ Full System Wipe.',
+                }), 400
+
+            _reset_full_system_wipe()
+            message = (
+                'تم تنفيذ Full System Wipe بنجاح: تم حذف كل البيانات بما فيها الخزائن/الموظفين/الفروع/المكاتب '
+                'مع استثناء مستخدم الأدمن الرئيسي.'
+            )
             
         elif reset_type == 'settings':
             # إعادة تعيين الإعدادات
@@ -1182,15 +1310,19 @@ def system_reset():
         else:
             return jsonify({
                 'status': 'error', 
-                'message': f'نوع إعادة التهيئة غير صحيح: {reset_type}. الخيارات المتاحة: transactions, customers_suppliers, settings, all, all_with_accounts'
+                'message': (
+                    f'نوع إعادة التهيئة غير صحيح: {reset_type}. '
+                    'الخيارات: balances_only, transactions, oversight_only, customers_suppliers, nuclear, '
+                    'factory_data, full_wipe, settings, all, all_with_accounts'
+                )
             }), 400
         
         return jsonify({
-            'status': 'success', 
+            'status': 'success',
             'message': message,
-            'reset_type': reset_type
+            'reset_type': reset_type,
         }), 200
-        
+
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -1212,6 +1344,7 @@ def _reset_transactions():
 
         # حذف الفواتير وعناصرها ومدفوعاتها
         InvoicePayment.query.delete()
+        InvoiceKaratLine.query.delete()
         InvoiceItem.query.delete()
         Invoice.query.delete()
 
@@ -1252,17 +1385,334 @@ def _reset_transactions():
         raise e
 
 
-def _reset_customers_suppliers():
-    """حذف العملاء والموردين"""
+def _reset_nuclear_transactions():
+    """☢️ تصفير شامل للعمليات مع إبقاء الهيكل الأساسي (testing only).
+
+    يشمل:
+      - SafeBoxTransaction (دفتر الخزائن/الذهب)
+      - JournalEntry + JournalEntryLine
+      - Invoice + InvoiceItem + InvoicePayment + InvoiceKaratLine
+      - Voucher + VoucherAccountLine
+      - SystemAlert + AuditLog
+      - WeightClosingLog + SupplierGoldTransaction + InventoryCostingConfig
+    """
     try:
-        # حذف العملاء
+        from models import (
+            AuditLog,
+            InventoryCostingConfig,
+            SafeBoxTransaction,
+            SupplierGoldTransaction,
+            SystemAlert,
+            WeightClosingLog,
+        )
+
+        # Operational logs / alerts
+        try:
+            WeightClosingLog.query.delete()
+        except Exception:
+            pass
+        try:
+            SystemAlert.query.delete()
+        except Exception:
+            pass
+        try:
+            AuditLog.query.delete()
+        except Exception:
+            pass
+
+        # Clear ledger first so dashboard balances become zero
+        try:
+            SafeBoxTransaction.query.delete()
+        except Exception:
+            pass
+
+        # Other operational subsystems
+        try:
+            SupplierGoldTransaction.query.delete()
+        except Exception:
+            pass
+
+        # Costing snapshots/config
+        try:
+            InventoryCostingConfig.query.delete()
+        except Exception:
+            pass
+
+        # Core operations (journals/invoices/vouchers/payroll/etc)
+        _reset_transactions()
+
+        # Ensure balances are zeroed (in case _reset_transactions was adjusted in future)
+        db.session.query(Account).update({
+            Account.balance_cash: 0.0,
+            Account.balance_18k: 0.0,
+            Account.balance_21k: 0.0,
+            Account.balance_22k: 0.0,
+            Account.balance_24k: 0.0,
+        }, synchronize_session=False)
+
+        db.session.query(Customer).update({
+            Customer.balance_cash: 0.0,
+            Customer.balance_gold_18k: 0.0,
+            Customer.balance_gold_21k: 0.0,
+            Customer.balance_gold_22k: 0.0,
+            Customer.balance_gold_24k: 0.0,
+        }, synchronize_session=False)
+
+        db.session.query(Supplier).update({
+            Supplier.balance_cash: 0.0,
+            Supplier.balance_gold_18k: 0.0,
+            Supplier.balance_gold_21k: 0.0,
+            Supplier.balance_gold_22k: 0.0,
+            Supplier.balance_gold_24k: 0.0,
+        }, synchronize_session=False)
+
+        db.session.commit()
+
+    except Exception as e:
+        db.session.rollback()
+        raise e
+
+
+def _reset_balances_only():
+    """Reset only SafeBox ledger movements (opening custody to zero)."""
+    try:
+        SafeBoxTransaction.query.delete()
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        raise e
+
+
+def _reset_oversight_only():
+    """Reset oversight tables only (SystemAlert + AuditLog)."""
+    try:
+        from models import AuditLog, SystemAlert
+        try:
+            SystemAlert.query.delete()
+        except Exception:
+            pass
+        try:
+            AuditLog.query.delete()
+        except Exception:
+            pass
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        raise e
+
+
+def _reset_customers_suppliers():
+    """حذف العملاء والموردين بأمان.
+
+    ملاحظة: قد توجد علاقات عبر فواتير/سندات/قيود. لضمان عدم فشل IntegrityError:
+      - نفصل الروابط (set NULL) حيثما أمكن
+      - نحذف العمليات المرتبطة غير القابلة للفصل (مثل SupplierGoldTransaction)
+    """
+    try:
+        # Detach FK references to allow deletion
+        try:
+            db.session.query(Invoice).update({
+                Invoice.customer_id: None,
+                Invoice.supplier_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        try:
+            db.session.query(Voucher).update({
+                Voucher.customer_id: None,
+                Voucher.supplier_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        try:
+            db.session.query(JournalEntryLine).update({
+                JournalEntryLine.customer_id: None,
+                JournalEntryLine.supplier_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        try:
+            db.session.query(Office).update({
+                Office.supplier_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        # Supplier gold ledger depends on supplier_id (NOT NULL)
+        try:
+            from models import SupplierGoldTransaction
+            SupplierGoldTransaction.query.delete()
+        except Exception:
+            pass
+
+        # Delete customers/suppliers
         Customer.query.delete()
-        
-        # حذف الموردين
         Supplier.query.delete()
-        
+
         db.session.commit()
         
+    except Exception as e:
+        db.session.rollback()
+        raise e
+
+
+def _reset_factory_data():
+    """Factory reset (data): wipes operational data + customers/suppliers; keeps master structure."""
+    try:
+        from models import (
+            AuditLog,
+            InventoryCostingConfig,
+            SupplierGoldTransaction,
+            SystemAlert,
+            WeightClosingLog,
+        )
+
+        # Oversight first
+        try:
+            SystemAlert.query.delete()
+        except Exception:
+            pass
+        try:
+            AuditLog.query.delete()
+        except Exception:
+            pass
+        try:
+            WeightClosingLog.query.delete()
+        except Exception:
+            pass
+
+        # Weight-closing operational entities
+        try:
+            WeightClosingExecution.query.delete()
+        except Exception:
+            pass
+        try:
+            WeightClosingOrder.query.delete()
+        except Exception:
+            pass
+
+        # Office reservations are operational
+        try:
+            OfficeReservation.query.delete()
+        except Exception:
+            pass
+
+        # Ledger
+        try:
+            SafeBoxTransaction.query.delete()
+        except Exception:
+            pass
+
+        # Supplier gold movements (operational)
+        try:
+            SupplierGoldTransaction.query.delete()
+        except Exception:
+            pass
+
+        # Costing snapshots/config
+        try:
+            InventoryCostingConfig.query.delete()
+        except Exception:
+            pass
+
+        # Core operations
+        _reset_transactions()
+
+        # Detach office↔supplier link (Office keeps existing, supplier is wiped)
+        try:
+            db.session.query(Office).update({
+                Office.supplier_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        # Wipe customers/suppliers
+        Customer.query.delete()
+        Supplier.query.delete()
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        raise e
+
+
+def _reset_full_system_wipe():
+    """Full System Wipe with strict ordering.
+
+    Required order (as per safety spec):
+      1) transactions/operations (invoices/journals/vouchers + SafeBoxTransaction)
+      2) associations (customers/suppliers + inventory snapshots)
+      3) structure (SafeBox -> Users/Employees (keep admin) -> Branch -> Office)
+    """
+    try:
+        from models import AppUser
+
+        # Level 1 + 2
+        _reset_factory_data()
+
+        # Inventory: keep Item master data by default, but clear costing snapshots if any remained.
+        try:
+            InventoryCostingConfig.query.delete()
+        except Exception:
+            pass
+
+        # Level 3: structure
+        # To respect ondelete=RESTRICT, null-out SafeBox references first (without deleting those rows yet)
+        try:
+            db.session.query(Employee).update({
+                Employee.gold_safe_box_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        # AppUser may point to Employee (FK default RESTRICT). Detach before deleting employees.
+        try:
+            db.session.query(AppUser).update({
+                AppUser.employee_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        try:
+            db.session.query(PaymentMethod).update({
+                PaymentMethod.default_safe_box_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        # Delete safe boxes
+        SafeBox.query.delete()
+
+        # Delete employees
+        Employee.query.delete()
+
+        # Delete users, but keep main admin(s)
+        try:
+            User.query.filter(User.is_admin.is_(False)).delete(synchronize_session=False)
+        except Exception:
+            pass
+
+        try:
+            AppUser.query.filter(func.lower(AppUser.role) != 'system_admin').delete(synchronize_session=False)
+        except Exception:
+            pass
+
+        # Branches then Offices (as requested)
+        try:
+            from models import Branch
+            Branch.query.delete()
+        except Exception:
+            pass
+
+        try:
+            Office.query.delete()
+        except Exception:
+            pass
+
+        db.session.commit()
     except Exception as e:
         db.session.rollback()
         raise e
@@ -1301,6 +1751,7 @@ def _reset_settings():
 
 
 @api.route('/system/reset/info', methods=['GET'])
+@require_permission('system.settings')
 def get_reset_info():
     """
     الحصول على معلومات عن البيانات الحالية في النظام
@@ -1309,12 +1760,33 @@ def get_reset_info():
     - counts: عدد السجلات في كل جدول
     """
     try:
+        from models import AppUser, AuditLog, Branch, SafeBoxTransaction, SystemAlert, WeightClosingLog
+        def _is_production_env() -> bool:
+            env = (
+                os.getenv('YASAR_ENV')
+                or os.getenv('APP_ENV')
+                or os.getenv('ENV')
+                or os.getenv('FLASK_ENV')
+                or ''
+            )
+            return str(env).strip().lower() in {'prod', 'production'}
+
+        def _dangerous_resets_allowed() -> bool:
+            val = os.getenv('ALLOW_DANGEROUS_RESETS')
+            return str(val or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
         info = {
+            'safety': {
+                'production_lock': _is_production_env() and not _dangerous_resets_allowed(),
+                'is_production': _is_production_env(),
+                'dangerous_resets_allowed': _dangerous_resets_allowed(),
+            },
             'transactions': {
                 'journal_entries': JournalEntry.query.count(),
                 'journal_entry_lines': JournalEntryLine.query.count(),
                 'invoices': Invoice.query.count(),
                 'invoice_items': InvoiceItem.query.count(),
+                'invoice_karat_lines': InvoiceKaratLine.query.count(),
                 'invoice_payments': InvoicePayment.query.count(),
                 'vouchers': Voucher.query.count(),
                 'voucher_lines': VoucherAccountLine.query.count(),
@@ -1322,6 +1794,13 @@ def get_reset_info():
                 'bonus_invoice_links': BonusInvoiceLink.query.count(),
                 'payroll_entries': Payroll.query.count(),
                 'attendance_records': Attendance.query.count(),
+                'office_reservations': OfficeReservation.query.count(),
+                'weight_closing_orders': WeightClosingOrder.query.count(),
+                'weight_closing_executions': WeightClosingExecution.query.count(),
+                'safe_box_transactions': SafeBoxTransaction.query.count(),
+                'system_alerts': SystemAlert.query.count(),
+                'audit_logs': AuditLog.query.count(),
+                'weight_closing_logs': WeightClosingLog.query.count(),
             },
             'customers_suppliers': {
                 'customers': Customer.query.count(),
@@ -1334,7 +1813,10 @@ def get_reset_info():
                 'payment_methods': PaymentMethod.query.count(),
                 'safe_boxes': SafeBox.query.count(),
                 'employees': Employee.query.count(),
-                'app_users': User.query.count(),
+                'app_users': AppUser.query.count(),
+                'users': User.query.count(),
+                'branches': Branch.query.count(),
+                'offices': Office.query.count(),
                 'accounting_mappings': AccountingMapping.query.count(),
                 'bonus_rules': BonusRule.query.count(),
             },
@@ -3997,6 +4479,77 @@ def add_invoice():
     payment_method_obj = None  # نستخدمه لاحقاً عند الحاجة للخزينة الافتراضية
     karat_lines_data = data.get('karat_lines', [])
 
+    # 🛡️ Asset Protection: strict payload validation (weight integrity)
+    # منع إرسال items و karat_lines معاً في الحالات التي تؤثر على الأوزان
+    # (خصوصاً شراء الكسر/المقايضة) لتفادي التلاعب أو الازدواجية.
+    def _has_any_weight_in_items(items_list):
+        if not items_list or not isinstance(items_list, list):
+            return False
+        for it in items_list:
+            if not isinstance(it, dict):
+                continue
+            w = _to_float_request(it.get('weight', it.get('total_weight')), 0.0)
+            q = _to_float_request(it.get('quantity', 1), 1.0)
+            if w > 0 and (q if q > 0 else 1.0) > 0:
+                return True
+        return False
+
+    def _has_any_weight_in_karat_lines(lines_list):
+        if not lines_list or not isinstance(lines_list, list):
+            return False
+        for ln in lines_list:
+            if not isinstance(ln, dict):
+                continue
+            w = _to_float_request(
+                ln.get('weight_grams', ln.get('weight', ln.get('total_weight'))),
+                0.0,
+            )
+            k = _to_float_request(ln.get('karat'), 0.0)
+            if w > 0 and k > 0:
+                return True
+        return False
+
+    def _is_weight_sensitive_context(payload: dict) -> bool:
+        try:
+            gt = str((payload.get('gold_type') or 'new')).strip().lower()
+        except Exception:
+            gt = 'new'
+        try:
+            inv_t = str((payload.get('invoice_type') or '')).strip()
+        except Exception:
+            inv_t = ''
+        try:
+            bt = _to_float_request(payload.get('barter_total', 0.0), 0.0)
+        except Exception:
+            bt = 0.0
+        # Any barter/counterflow flags we know about.
+        has_barter_link = payload.get('barter_sale_invoice_id') not in (None, '', False)
+        try:
+            settled_gold_w = _to_float_request(payload.get('settled_gold_weight', 0.0), 0.0)
+        except Exception:
+            settled_gold_w = 0.0
+
+        # Scrap purchase and barter are the primary high-risk weight contexts.
+        if gt == 'scrap':
+            return True
+        if inv_t == 'شراء من عميل':
+            return True
+        if bt > 0.01 or has_barter_link or settled_gold_w > 0.0:
+            return True
+        return False
+
+    try:
+        items_payload = data.get('items', [])
+        weight_sensitive = _is_weight_sensitive_context(data)
+        if weight_sensitive and _has_any_weight_in_items(items_payload) and _has_any_weight_in_karat_lines(karat_lines_data):
+            return jsonify({
+                'error': 'payload_conflict_weight_sources',
+                'message': 'لا يمكن الجمع بين items و karat_lines في الفواتير الحساسة للأوزان (كسر/مقايضة). اختر مصدراً واحداً للوزن.',
+            }), 400
+    except Exception:
+        # Do not block invoice creation if validation itself fails unexpectedly.
+        pass
+
     # If the client supplied valid karat lines, treat them as the single source of truth
     # for gold weight totals to avoid double-counting with items (some clients send both).
     has_valid_karat_lines = False
@@ -4588,6 +5141,143 @@ def add_invoice():
         db.session.flush()
         print(f"🟢 Invoice #{new_invoice.id} created successfully!")
 
+        # --- Approval gates (sales) ---
+        # Allow saving but prevent posting/safebox effects until approved.
+        # Reasons:
+        # - large_discount
+        # - below_cost
+        approval_required = False
+        approval_reason = None
+        approval_reasons = []
+        discount_pct = None
+
+        below_cost_details = {
+            'enabled': False,
+            'cost_basis': None,
+            'cost_cash': 0.0,
+            'effective_sale_cash_ex_vat': 0.0,
+            'weight_main_grams_estimate': 0.0,
+            'avg_total_cost_per_gram': 0.0,
+            'profit_cash_estimate': 0.0,
+        }
+
+        def _safe_float(v, default=0.0):
+            try:
+                if v in (None, '', False):
+                    return float(default)
+                return float(v)
+            except Exception:
+                return float(default)
+
+        def _estimate_weight_main_from_payload() -> float:
+            """Estimate total weight in MAIN_KARAT from payload (items or karat_lines)."""
+            try:
+                main_k = _safe_float(get_main_karat(), 21.0)
+                if main_k <= 0:
+                    main_k = 21.0
+            except Exception:
+                main_k = 21.0
+
+            total_main = 0.0
+            try:
+                if has_valid_karat_lines and karat_lines_data and isinstance(karat_lines_data, list):
+                    for ln in karat_lines_data:
+                        if not isinstance(ln, dict):
+                            continue
+                        w = _to_float_request(
+                            ln.get('weight_grams', ln.get('weight', ln.get('total_weight'))),
+                            0.0,
+                        )
+                        k = _to_float_request(ln.get('karat'), 0.0)
+                        if w <= 0 or k <= 0:
+                            continue
+                        total_main += float(w) * (float(k) / float(main_k))
+                else:
+                    for it in (data.get('items') or []):
+                        if not isinstance(it, dict):
+                            continue
+                        w = _to_float_request(it.get('weight', it.get('total_weight')), 0.0)
+                        q = _to_float_request(it.get('quantity', 1), 1.0) or 1.0
+                        k = _to_float_request(it.get('karat'), 0.0)
+                        if w <= 0:
+                            continue
+                        if k <= 0:
+                            # If karat unknown, assume already in main karat.
+                            total_main += float(w) * float(q)
+                        else:
+                            total_main += float(w) * float(q) * (float(k) / float(main_k))
+            except Exception:
+                return 0.0
+
+            return round(max(total_main, 0.0), 4)
+
+        # Gate 1: Large discount
+        try:
+            if str(invoice_type).strip() == 'بيع' and total_gross_cash > 0 and total_discount_cash > 0:
+                discount_pct = (float(total_discount_cash) / float(total_gross_cash)) * 100.0
+                if discount_pct >= float(large_discount_pct_threshold or 0.0):
+                    approval_reasons.append('large_discount')
+        except Exception:
+            discount_pct = None
+
+        # Gate 2: Sale below cost
+        try:
+            if str(invoice_type).strip() == 'بيع':
+                # Effective sale value excluding VAT (and excluding commissions already in net_amount).
+                effective_sale_cash_ex_vat = _safe_float(new_invoice.net_amount, 0.0) - _safe_float(new_invoice.total_tax, 0.0)
+                effective_sale_cash_ex_vat = round(max(effective_sale_cash_ex_vat, 0.0), 2)
+
+                # Prefer client-provided total_cost if available (it is later used for profit computation as well).
+                provided_cost = _safe_float(getattr(new_invoice, 'total_cost', 0.0), 0.0)
+                cost_cash = 0.0
+                cost_basis = None
+
+                if provided_cost and provided_cost > 0:
+                    cost_cash = round(provided_cost, 2)
+                    cost_basis = 'provided_total_cost'
+                else:
+                    # Fallback to moving-average estimate when cost is not provided.
+                    weight_main = _estimate_weight_main_from_payload()
+                    snapshot = GoldCostingService.snapshot()
+                    avg_total = _safe_float(getattr(snapshot, 'avg_total', 0.0), 0.0)
+                    if weight_main > 0 and avg_total > 0:
+                        cost_cash = round(avg_total * weight_main, 2)
+                        cost_basis = 'moving_average'
+                    else:
+                        cost_cash = 0.0
+                        cost_basis = None
+
+                    below_cost_details['weight_main_grams_estimate'] = float(weight_main)
+                    below_cost_details['avg_total_cost_per_gram'] = float(avg_total)
+
+                below_cost_details['enabled'] = True
+                below_cost_details['cost_basis'] = cost_basis
+                below_cost_details['cost_cash'] = float(cost_cash)
+                below_cost_details['effective_sale_cash_ex_vat'] = float(effective_sale_cash_ex_vat)
+                below_cost_details['profit_cash_estimate'] = float(round(effective_sale_cash_ex_vat - cost_cash, 2))
+
+                # Trigger approval if we have a non-zero cost basis and sale is below it.
+                tol = 0.01
+                if cost_cash > 0 and (effective_sale_cash_ex_vat + tol) < cost_cash:
+                    approval_reasons.append('below_cost')
+        except Exception:
+            # Do not break invoice creation if costing gate fails unexpectedly.
+            pass
+
+        approval_required = bool(approval_reasons)
+        approval_reason = approval_reasons[0] if approval_reasons else None
+
+        if approval_required:
+            # Do not treat as settled/paid until approved/posting occurs.
+            try:
+                new_invoice.is_posted = False
+                new_invoice.amount_paid = 0.0
+                new_invoice.status = 'unpaid'
+                db.session.add(new_invoice)
+                db.session.flush()
+            except Exception:
+                pass
+
         # 🆕 --- 1.5. Create Invoice Payments (وسائل دفع متعددة) ---
         print(f"🟢 Step 2: Creating invoice payments (if any)...")
         if payments_data and isinstance(payments_data, list) and len(payments_data) > 0:
@@ -4661,6 +5351,17 @@ def add_invoice():
 
                 pm_commission_vat = _to_float(payment.get('commission_vat', pm_commission_amount * 0.15))  # 🆕 ضريبة 15%
                 pm_net_amount = _to_float(payment.get('net_amount', pm_amount - pm_commission_amount - pm_commission_vat))
+
+                payment_notes = payment.get('notes')
+                if approval_required:
+                    # Persist resolved safe_box_id for later approval/posting.
+                    try:
+                        payment_notes = json.dumps({
+                            'user_notes': payment_notes,
+                            'safe_box_id': resolved_safe_box_id,
+                        }, ensure_ascii=False)
+                    except Exception:
+                        payment_notes = payment.get('notes')
                 
                 payment_row = InvoicePayment(
                     invoice_id=new_invoice.id,
@@ -4670,25 +5371,26 @@ def add_invoice():
                     commission_amount=pm_commission_amount,
                     commission_vat=pm_commission_vat,
                     net_amount=pm_net_amount,
-                    notes=payment.get('notes')
+                    notes=payment_notes
                 )
                 db.session.add(payment_row)
                 db.session.flush()
 
-                db.session.add(
-                    SafeBoxTransaction(
-                        safe_box_id=resolved_safe_box_id,
-                        ref_type='invoice_payment',
-                        ref_id=payment_row.id,
-                        invoice_id=new_invoice.id,
-                        invoice_payment_id=payment_row.id,
-                        payment_method_id=pm_id,
-                        direction=_direction_for_invoice_type(new_invoice.invoice_type),
-                        amount_cash=pm_amount,
-                        notes=payment.get('notes'),
-                        created_by=created_by_name,
+                if not approval_required:
+                    db.session.add(
+                        SafeBoxTransaction(
+                            safe_box_id=resolved_safe_box_id,
+                            ref_type='invoice_payment',
+                            ref_id=payment_row.id,
+                            invoice_id=new_invoice.id,
+                            invoice_payment_id=payment_row.id,
+                            payment_method_id=pm_id,
+                            direction=_direction_for_invoice_type(new_invoice.invoice_type),
+                            amount_cash=pm_amount,
+                            notes=payment.get('notes'),
+                            created_by=created_by_name,
+                        )
                     )
-                )
         
         # وسيلة دفع واحدة (للتوافق مع الكود القديم)
         elif payment_method_id:
@@ -4733,6 +5435,16 @@ def add_invoice():
                 ):
                     return 'in'
                 return 'in'
+
+            payment_notes = None
+            if approval_required:
+                try:
+                    payment_notes = json.dumps({
+                        'user_notes': None,
+                        'safe_box_id': resolved_safe_box_id,
+                    }, ensure_ascii=False)
+                except Exception:
+                    payment_notes = None
             
             payment_row = InvoicePayment(
                 invoice_id=new_invoice.id,
@@ -4740,25 +5452,27 @@ def add_invoice():
                 amount=_extract_float('total', 0.0),
                 commission_rate=pm_commission_rate,
                 commission_amount=commission_amount,
-                net_amount=net_amount
+                net_amount=net_amount,
+                notes=payment_notes,
             )
             db.session.add(payment_row)
             db.session.flush()
 
-            db.session.add(
-                SafeBoxTransaction(
-                    safe_box_id=resolved_safe_box_id,
-                    ref_type='invoice_payment',
-                    ref_id=payment_row.id,
-                    invoice_id=new_invoice.id,
-                    invoice_payment_id=payment_row.id,
-                    payment_method_id=payment_method_id,
-                    direction=_direction_for_invoice_type(new_invoice.invoice_type),
-                    amount_cash=_extract_float('total', 0.0),
-                    notes=None,
-                    created_by=posted_by_username,
+            if not approval_required:
+                db.session.add(
+                    SafeBoxTransaction(
+                        safe_box_id=resolved_safe_box_id,
+                        ref_type='invoice_payment',
+                        ref_id=payment_row.id,
+                        invoice_id=new_invoice.id,
+                        invoice_payment_id=payment_row.id,
+                        payment_method_id=payment_method_id,
+                        direction=_direction_for_invoice_type(new_invoice.invoice_type),
+                        amount_cash=_extract_float('total', 0.0),
+                        notes=None,
+                        created_by=posted_by_username,
+                    )
                 )
-            )
 
         # --- Gold settlement (barter/partial) ---
         try:
@@ -4771,6 +5485,17 @@ def add_invoice():
         settled_gold_weight = _to_float_request(data.get('settled_gold_weight', 0.0))
         settled_gold_karat = _to_float_request(data.get('settled_gold_karat', 0.0))
         settled_gold_safe_box_id = data.get('settled_gold_safe_box_id')
+
+        # For approval-required invoices, do not allow gold settlement inputs (would require safe movements).
+        if approval_required:
+            if settled_gold_weight > 0 or settled_gold_karat > 0 or settled_gold_safe_box_id not in (None, '', False):
+                db.session.rollback()
+                return jsonify({
+                    'error': 'approval_required_no_gold_settlement',
+                    'message': 'لا يمكن حفظ سداد/مقايضة ذهب عند وجود اعتماد مطلوب. قم بإزالة بيانات سداد الذهب ثم احفظ، وبعد الاعتماد قم بالترحيل.',
+                    'approval_required': True,
+                    'reason': approval_reason,
+                }), 400
 
         if settled_gold_weight > 0 and settled_gold_karat > 0:
             try:
@@ -6929,8 +7654,156 @@ def add_invoice():
                 return jsonify({'error': error_msg, 'balance_details': balance_check}), 400
 
         # --- 7. Mark as Posted and Commit ---
-        print(f"✅ Balance verified! Marking invoice and journal entry as posted...")
         now = datetime.now()
+
+        if approval_required:
+            print("✅ Balance verified! Approval required; skipping posting/safebox effects...")
+
+            new_invoice.is_posted = False
+            # Keep posted_by as creator name, but do not set posted_at.
+            if not new_invoice.posted_by:
+                new_invoice.posted_by = posted_by_username or 'system'
+
+            # Keep entry unposted; it will be posted when invoice is approved.
+            journal_entry.is_posted = False
+            if hasattr(journal_entry, 'posted_at'):
+                journal_entry.posted_at = None
+            if hasattr(journal_entry, 'posted_by'):
+                journal_entry.posted_by = None
+
+            # Persistent manager alert.
+            try:
+                from models import SystemAlert
+
+                reason_labels = {
+                    'large_discount': 'خصم كبير',
+                    'below_cost': 'بيع تحت التكلفة',
+                }
+                reasons_human = [reason_labels.get(r, r) for r in (approval_reasons or ([approval_reason] if approval_reason else []))]
+                reasons_human = [r for r in reasons_human if r]
+
+                message_parts = []
+                if 'large_discount' in (approval_reasons or []):
+                    try:
+                        message_parts.append(
+                            f"خصم كبير: {round(float(discount_pct or 0.0), 2)}% "
+                            f"(الحد {float(large_discount_pct_threshold or 0.0)}%)"
+                        )
+                    except Exception:
+                        message_parts.append("خصم كبير")
+
+                if 'below_cost' in (approval_reasons or []):
+                    try:
+                        sale_ex_vat = float((below_cost_details or {}).get('effective_sale_cash_ex_vat', 0.0) or 0.0)
+                        cost_cash = float((below_cost_details or {}).get('cost_cash', 0.0) or 0.0)
+                        profit_est = float((below_cost_details or {}).get('profit_cash_estimate', 0.0) or 0.0)
+                        message_parts.append(
+                            f"بيع تحت التكلفة: صافي {round(sale_ex_vat, 2)} مقابل تكلفة {round(cost_cash, 2)} "
+                            f"(فرق {round(profit_est, 2)})"
+                        )
+                    except Exception:
+                        message_parts.append("بيع تحت التكلفة")
+
+                if not message_parts and reasons_human:
+                    message_parts.append(" / ".join(reasons_human))
+
+                alert_details = {
+                    'invoice_type': str(invoice_type).strip(),
+                    'approval_reason': approval_reason,
+                    'approval_reasons': approval_reasons or ([] if not approval_reason else [approval_reason]),
+                }
+
+                # Include discount info when applicable
+                if 'large_discount' in (approval_reasons or []):
+                    alert_details.update({
+                        'discount_total_cash': round(float(total_discount_cash), 2),
+                        'gross_total_cash': round(float(total_gross_cash), 2),
+                        'discount_pct': round(float(discount_pct or 0.0), 2),
+                        'threshold_pct': float(large_discount_pct_threshold or 0.0),
+                    })
+
+                # Include below-cost info when applicable
+                if 'below_cost' in (approval_reasons or []):
+                    try:
+                        alert_details['below_cost'] = below_cost_details
+                    except Exception:
+                        pass
+
+                alert = SystemAlert(
+                    alert_type='invoice_approval',
+                    severity='critical',
+                    title='فاتورة تحتاج اعتماد قبل الترحيل',
+                    message=" | ".join([p for p in message_parts if p]) or 'تحتاج اعتماد قبل الترحيل',
+                    entity_type='Invoice',
+                    entity_id=new_invoice.id,
+                    entity_number=getattr(new_invoice, 'invoice_number', None),
+                    details=json.dumps(alert_details, ensure_ascii=False),
+                    created_by=posted_by_username or 'system',
+                )
+                db.session.add(alert)
+            except Exception:
+                pass
+
+            # Audit: approval required (per-reason)
+            try:
+                from models import AuditLog
+
+                audit_base = {
+                    'invoice_type': str(invoice_type).strip(),
+                    'approval_required': True,
+                    'approval_reason': approval_reason,
+                    'approval_reasons': approval_reasons or ([] if not approval_reason else [approval_reason]),
+                }
+
+                if 'large_discount' in (approval_reasons or []):
+                    AuditLog.log_action(
+                        user_name=new_invoice.posted_by or posted_by_username or 'system',
+                        action='large_discount',
+                        entity_type='Invoice',
+                        entity_id=new_invoice.id,
+                        entity_number=getattr(new_invoice, 'invoice_number', None),
+                        details=json.dumps({
+                            **audit_base,
+                            'discount_total_cash': round(float(total_discount_cash), 2),
+                            'gross_total_cash': round(float(total_gross_cash), 2),
+                            'discount_pct': round(float(discount_pct or 0.0), 2),
+                            'threshold_pct': float(large_discount_pct_threshold or 0.0),
+                        }, ensure_ascii=False),
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get('User-Agent'),
+                        success=True,
+                    )
+
+                if 'below_cost' in (approval_reasons or []):
+                    AuditLog.log_action(
+                        user_name=new_invoice.posted_by or posted_by_username or 'system',
+                        action='below_cost',
+                        entity_type='Invoice',
+                        entity_id=new_invoice.id,
+                        entity_number=getattr(new_invoice, 'invoice_number', None),
+                        details=json.dumps({
+                            **audit_base,
+                            'below_cost': below_cost_details,
+                        }, ensure_ascii=False),
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get('User-Agent'),
+                        success=True,
+                    )
+            except Exception:
+                pass
+
+            db.session.commit()
+            resp = new_invoice.to_dict()
+            resp['approval_required'] = True
+            resp['approval_reason'] = approval_reason
+            resp['approval_reasons'] = approval_reasons or ([] if not approval_reason else [approval_reason])
+            if 'below_cost' in (approval_reasons or []):
+                resp['below_cost'] = below_cost_details
+            resp['discount_pct'] = round(float(discount_pct or 0.0), 2) if discount_pct is not None else None
+            resp['threshold_pct'] = float(large_discount_pct_threshold or 0.0)
+            return jsonify(resp), 201
+
+        print(f"✅ Balance verified! Marking invoice and journal entry as posted...")
         new_invoice.is_posted = True
         if not new_invoice.posted_at:
             new_invoice.posted_at = now
@@ -6958,14 +7831,14 @@ def add_invoice():
             journal_entry.posted_at = now
         if hasattr(journal_entry, 'posted_by') and not getattr(journal_entry, 'posted_by', None):
             journal_entry.posted_by = new_invoice.posted_by
-        
+
         print(f"✅ Committing transaction...")
 
         # Audit: large discount (sales)
         try:
             if str(invoice_type).strip() == 'بيع' and total_gross_cash > 0 and total_discount_cash > 0:
-                discount_pct = (total_discount_cash / total_gross_cash) * 100.0
-                if discount_pct >= float(large_discount_pct_threshold or 0.0):
+                discount_pct2 = (total_discount_cash / total_gross_cash) * 100.0
+                if discount_pct2 >= float(large_discount_pct_threshold or 0.0):
                     from models import AuditLog
 
                     AuditLog.log_action(
@@ -6978,7 +7851,7 @@ def add_invoice():
                             'invoice_type': str(invoice_type).strip(),
                             'discount_total_cash': round(float(total_discount_cash), 2),
                             'gross_total_cash': round(float(total_gross_cash), 2),
-                            'discount_pct': round(float(discount_pct), 2),
+                            'discount_pct': round(float(discount_pct2), 2),
                             'threshold_pct': float(large_discount_pct_threshold),
                         }, ensure_ascii=False),
                         ip_address=request.remote_addr,
@@ -18525,9 +19398,4 @@ def _time_ago(dt, now):
     else:
         days = int(seconds // 86400)
         return f'منذ {days} يوم'
-
-
-
-
-
 

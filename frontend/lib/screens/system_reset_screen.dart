@@ -17,6 +17,14 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
   bool _isCostingAction = false;
   Map<String, dynamic>? _systemInfo;
 
+  void _showProductionLockMessage() {
+    _showErrorDialog(
+      'هذا الإجراء مقفول على نسخة الإنتاج (Production Lock).\n\n'
+      'تم تعطيل عمليات التصفير/الحذف التدميرية لأسباب أمنية.\n'
+      'إذا كنت متأكدًا وتحتاج تنفيذها، فعّل السماح من بيئة التشغيل أو نفّذ ذلك على بيئة Staging.',
+    );
+  }
+
   int _toInt(dynamic value) {
     if (value is int) return value;
     if (value is num) return value.toInt();
@@ -66,12 +74,13 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
   Future<void> _performReset(
     String resetType,
     String title,
-    String description,
-  ) async {
+    String description, {
+    String? confirmToken,
+  }) async {
     final confirmed = await _showConfirmationDialog(
       title,
       description,
-      confirmationText: title,
+      confirmationText: confirmToken ?? title,
     );
 
     if (confirmed != true) return;
@@ -79,7 +88,10 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final response = await _apiService.resetSystem(resetType: resetType);
+      final response = await _apiService.resetSystem(
+        resetType: resetType,
+        confirmToken: confirmToken,
+      );
       if (!mounted) return;
 
       if (response['status'] == 'success') {
@@ -319,15 +331,18 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
     required Color color,
     required VoidCallback onPressed,
     required int itemCount,
+    bool forceDisabled = false,
+    String? disabledReason,
+    VoidCallback? onDisabledTap,
   }) {
-    bool disabled = itemCount == 0;
+    final bool disabled = forceDisabled || itemCount == 0;
     final radius = BorderRadius.circular(16);
     return Card(
       elevation: 2,
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
       shape: RoundedRectangleBorder(borderRadius: radius),
       child: InkWell(
-        onTap: disabled ? null : onPressed,
+        onTap: disabled ? onDisabledTap : onPressed,
         borderRadius: radius,
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -364,6 +379,34 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                           color: Theme.of(context).textTheme.bodySmall?.color,
                         ),
                       ),
+                      if (disabledReason != null &&
+                          disabledReason.trim().isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.lock_outline,
+                              size: 16,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                disabledReason,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -553,24 +596,93 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final auth = context.watch<AuthProvider>();
     final data = _systemInfo;
 
     final transactions = (data?['transactions'] as Map<String, dynamic>?) ?? {};
     final customersSuppliers =
         (data?['customers_suppliers'] as Map<String, dynamic>?) ?? {};
+    final masterData = (data?['master_data'] as Map<String, dynamic>?) ?? {};
     final settingsData = (data?['settings'] as Map<String, dynamic>?) ?? {};
     final costingData =
         (data?['inventory_costing'] as Map<String, dynamic>?) ?? {};
 
+    final safety = (data?['safety'] as Map<String, dynamic>?) ?? {};
+    final bool productionLock = safety['production_lock'] == true;
+    final bool isProduction = safety['is_production'] == true;
+    final String? destructiveDisabledReason = productionLock
+        ? 'مقفول على الإنتاج (Production Lock)'
+        : null;
+
+    final int safeBoxTransactions = _toInt(
+      transactions['safe_box_transactions'],
+    );
+
     final int journalEntries = _toInt(transactions['journal_entries']);
+    final int journalEntryLines = _toInt(transactions['journal_entry_lines']);
     final int invoicesCount = _toInt(transactions['invoices']);
+    final int invoiceItems = _toInt(transactions['invoice_items']);
+    final int invoiceKaratLines = _toInt(transactions['invoice_karat_lines']);
+    final int invoicePayments = _toInt(transactions['invoice_payments']);
     final int vouchersCount = _toInt(transactions['vouchers']);
-    final int transactionsTotal =
-        journalEntries + invoicesCount + vouchersCount;
+    final int voucherLines = _toInt(transactions['voucher_lines']);
+    final int employeeBonuses = _toInt(transactions['employee_bonuses']);
+    final int bonusInvoiceLinks = _toInt(transactions['bonus_invoice_links']);
+    final int payrollEntries = _toInt(transactions['payroll_entries']);
+    final int attendanceRecords = _toInt(transactions['attendance_records']);
+    final int officeReservations = _toInt(transactions['office_reservations']);
+    final int weightClosingOrders = _toInt(
+      transactions['weight_closing_orders'],
+    );
+    final int weightClosingExecutions = _toInt(
+      transactions['weight_closing_executions'],
+    );
+
+    final int operationsTotal =
+        journalEntries +
+        journalEntryLines +
+        invoicesCount +
+        invoiceItems +
+        invoiceKaratLines +
+        invoicePayments +
+        vouchersCount +
+        voucherLines +
+        employeeBonuses +
+        bonusInvoiceLinks +
+        payrollEntries +
+        attendanceRecords +
+        officeReservations +
+        weightClosingOrders +
+        weightClosingExecutions;
+
+    final int systemAlerts = _toInt(transactions['system_alerts']);
+    final int auditLogs = _toInt(transactions['audit_logs']);
+    final int oversightTotal = systemAlerts + auditLogs;
 
     final int customersCount = _toInt(customersSuppliers['customers']);
     final int suppliersCount = _toInt(customersSuppliers['suppliers']);
     final int customersSuppliersTotal = customersCount + suppliersCount;
+
+    final int masterTotal =
+        _toInt(masterData['accounts']) +
+        _toInt(masterData['items']) +
+        _toInt(masterData['gold_prices']) +
+        _toInt(masterData['payment_methods']) +
+        _toInt(masterData['safe_boxes']) +
+        _toInt(masterData['employees']) +
+        _toInt(masterData['app_users']) +
+        _toInt(masterData['users']) +
+        _toInt(masterData['branches']) +
+        _toInt(masterData['offices']) +
+        _toInt(masterData['accounting_mappings']) +
+        _toInt(masterData['bonus_rules']);
+
+    final int factoryDataTotal =
+        safeBoxTransactions +
+        operationsTotal +
+        oversightTotal +
+        customersSuppliersTotal;
+    final int fullWipeTotal = factoryDataTotal + masterTotal;
 
     final bool hasSettings = settingsData['has_settings'] == true;
 
@@ -634,6 +746,48 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                       ],
                     ),
                   ),
+
+                  if (productionLock)
+                    Container(
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer.withValues(
+                          alpha: 0.45,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.35,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.lock_outline,
+                            color: theme.colorScheme.primary,
+                            size: 26,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              isProduction
+                                  ? 'نسخة الإنتاج: عمليات التصفير/الحذف التدميرية مقفولة تلقائياً.'
+                                  : 'تم تفعيل Production Lock: عمليات التصفير/الحذف التدميرية مقفولة.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: theme.colorScheme.onPrimaryContainer,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   _buildCostingSummaryCard(theme, costingData),
                   Padding(
                     padding: const EdgeInsets.symmetric(
@@ -641,32 +795,139 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                       vertical: 8,
                     ),
                     child: Text(
-                      'اختر نوع إعادة التهيئة:',
+                      'مستويات التصفير (موصى به):',
                       style: theme.textTheme.titleLarge,
                     ),
                   ),
+
+                  if (auth.isSystemAdmin)
+                    _buildResetCard(
+                      title: 'المستوى 1: تصفير الأرصدة فقط',
+                      description:
+                          'يحذف دفتر الخزائن فقط (SafeBoxTransaction).',
+                      icon: Icons.account_balance_wallet_outlined,
+                      color: theme.colorScheme.primary,
+                      itemCount: safeBoxTransactions,
+                      forceDisabled: productionLock,
+                      disabledReason: destructiveDisabledReason,
+                      onDisabledTap: productionLock
+                          ? _showProductionLockMessage
+                          : null,
+                      onPressed: () => _performReset(
+                        'balances_only',
+                        'تصفير الأرصدة فقط',
+                        'سيتم حذف دفتر الخزائن فقط ($safeBoxTransactions سجل). لا يتم حذف الفواتير أو القيود.',
+                        confirmToken: 'BALANCES',
+                      ),
+                    ),
+
                   _buildResetCard(
-                    title: 'حذف العمليات',
-                    description: 'حذف جميع القيود والفواتير والسندات',
+                    title: 'المستوى 2: حذف العمليات',
+                    description: 'يحذف القيود والفواتير والسندات ونواتجها.',
                     icon: Icons.receipt_long,
                     color: theme.colorScheme.primary,
-                    itemCount: transactionsTotal,
+                    itemCount: operationsTotal,
+                    forceDisabled: productionLock,
+                    disabledReason: destructiveDisabledReason,
+                    onDisabledTap: productionLock
+                        ? _showProductionLockMessage
+                        : null,
                     onPressed: () => _performReset(
                       'transactions',
                       'حذف العمليات',
-                      'سيتم حذف جميع العمليات ($transactionsTotal سجل). ستبقى بيانات العملاء والموردين والحسابات.',
+                      'سيتم حذف العمليات التشغيلية ($operationsTotal سجل). ستبقى شجرة الحسابات والخزائن والموظفين والفروع.',
+                      confirmToken: 'OPS',
                     ),
                   ),
+
                   _buildResetCard(
-                    title: 'حذف العملاء والموردين',
-                    description: 'حذف جميع بيانات العملاء والموردين',
+                    title: 'المستوى 3: مسح الرقابة',
+                    description: 'يحذف التنبيهات + سجل التدقيق (Audit).',
+                    icon: Icons.shield_outlined,
+                    color: theme.colorScheme.secondary,
+                    itemCount: oversightTotal,
+                    forceDisabled: productionLock,
+                    disabledReason: destructiveDisabledReason,
+                    onDisabledTap: productionLock
+                        ? _showProductionLockMessage
+                        : null,
+                    onPressed: () => _performReset(
+                      'oversight_only',
+                      'مسح الرقابة',
+                      'سيتم حذف التنبيهات ($systemAlerts) وسجل التدقيق ($auditLogs).',
+                      confirmToken: 'AUDIT',
+                    ),
+                  ),
+
+                  _buildResetCard(
+                    title: 'المستوى 4: حذف العملاء والموردين',
+                    description: 'يحذف بيانات العملاء/الموردين فقط.',
                     icon: Icons.people_outline,
                     color: theme.colorScheme.secondary,
                     itemCount: customersSuppliersTotal,
+                    forceDisabled: productionLock,
+                    disabledReason: destructiveDisabledReason,
+                    onDisabledTap: productionLock
+                        ? _showProductionLockMessage
+                        : null,
                     onPressed: () => _performReset(
-                      'customers_suppliers',
+                      'customers',
                       'حذف العملاء والموردين',
-                      'سيتم حذف جميع بيانات العملاء ($customersCount) والموردين ($suppliersCount).',
+                      'سيتم حذف العملاء ($customersCount) والموردين ($suppliersCount).',
+                      confirmToken: 'CUSTOMERS',
+                    ),
+                  ),
+
+                  if (auth.isSystemAdmin)
+                    _buildResetCard(
+                      title: 'المستوى 5: Factory Reset (بيانات)',
+                      description:
+                          'يمسح العمليات/الأرصدة/الرقابة + العملاء/الموردين مع إبقاء الهيكل.',
+                      icon: Icons.factory_outlined,
+                      color: theme.colorScheme.error,
+                      itemCount: factoryDataTotal,
+                      forceDisabled: productionLock,
+                      disabledReason: destructiveDisabledReason,
+                      onDisabledTap: productionLock
+                          ? _showProductionLockMessage
+                          : null,
+                      onPressed: () => _performReset(
+                        'factory_data',
+                        'Factory Reset (بيانات)',
+                        'سيتم مسح البيانات التشغيلية والعملاء/الموردين ($factoryDataTotal سجل إجمالي). سيتم الإبقاء على الخزائن/الموظفين/الفروع/الحسابات.',
+                        confirmToken: 'FACTORY',
+                      ),
+                    ),
+
+                  if (auth.isSystemAdmin)
+                    _buildResetCard(
+                      title: 'المستوى 6: Full System Wipe',
+                      description:
+                          'يمسح كل شيء بما فيه الخزائن/الموظفين/الفروع/المكاتب (يستثني الأدمن).',
+                      icon: Icons.delete_forever,
+                      color: theme.colorScheme.error,
+                      itemCount: fullWipeTotal,
+                      forceDisabled: productionLock,
+                      disabledReason: destructiveDisabledReason,
+                      onDisabledTap: productionLock
+                          ? _showProductionLockMessage
+                          : null,
+                      onPressed: () => _performReset(
+                        'full_wipe',
+                        'Full System Wipe',
+                        'سيتم حذف كل شيء نهائياً ($fullWipeTotal سجل إجمالي، تقديري). لا يمكن التراجع عن هذه العملية.',
+                        confirmToken: 'WIPE-ALL',
+                      ),
+                    ),
+
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      'إعدادات (مسموح حتى مع القفل):',
+                      style: theme.textTheme.titleLarge,
                     ),
                   ),
                   _buildResetCard(
@@ -679,33 +940,61 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                       'settings',
                       'إعادة تعيين الإعدادات',
                       'سيتم إعادة تعيين جميع الإعدادات للقيم الافتراضية.',
+                      confirmToken: 'SETTINGS',
                     ),
                   ),
-                  _buildResetCard(
-                    title: 'إعادة تهيئة كاملة (مع الحفاظ على شجرة الحسابات)',
-                    description:
-                        'حذف جميع البيانات التشغيلية مع الحفاظ على شجرة الحسابات',
-                    icon: Icons.delete_sweep,
-                    color: theme.colorScheme.error,
-                    itemCount: 1,
-                    onPressed: () => _performReset(
-                      'all',
-                      'إعادة تهيئة كاملة',
-                      'سيتم حذف جميع البيانات نهائياً مع الحفاظ على شجرة الحسابات. سيؤدي ذلك إلى حذف المستخدمين والبيانات التشغيلية.',
+
+                  if (auth.isSystemAdmin) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        'خيارات قديمة (Legacy):',
+                        style: theme.textTheme.titleLarge,
+                      ),
                     ),
-                  ),
-                  _buildResetCard(
-                    title: 'إعادة تهيئة كاملة (مع حذف شجرة الحسابات)',
-                    description: 'حذف جميع البيانات بما في ذلك شجرة الحسابات',
-                    icon: Icons.delete_forever,
-                    color: theme.colorScheme.error,
-                    itemCount: 1,
-                    onPressed: () => _performReset(
-                      'all_with_accounts',
-                      'إعادة تهيئة كاملة',
-                      'سيتم حذف كل شيء نهائياً من قاعدة البيانات (بما في ذلك شجرة الحسابات). لا يمكن التراجع عن هذه العملية.',
+                    _buildResetCard(
+                      title:
+                          'Legacy: إعادة تهيئة كاملة (مع الحفاظ على شجرة الحسابات)',
+                      description:
+                          'حذف جميع البيانات التشغيلية مع الحفاظ على شجرة الحسابات (يحذف المستخدمين).',
+                      icon: Icons.delete_sweep,
+                      color: theme.colorScheme.error,
+                      itemCount: 1,
+                      forceDisabled: productionLock,
+                      disabledReason: destructiveDisabledReason,
+                      onDisabledTap: productionLock
+                          ? _showProductionLockMessage
+                          : null,
+                      onPressed: () => _performReset(
+                        'all',
+                        'إعادة تهيئة كاملة (Legacy)',
+                        'سيتم حذف جميع البيانات نهائياً مع الحفاظ على شجرة الحسابات. سيؤدي ذلك إلى حذف المستخدمين.',
+                        confirmToken: 'RESET',
+                      ),
                     ),
-                  ),
+                    _buildResetCard(
+                      title: 'Legacy: إعادة تهيئة كاملة (مع حذف شجرة الحسابات)',
+                      description:
+                          'حذف كل شيء بما في ذلك شجرة الحسابات (يحذف المستخدمين).',
+                      icon: Icons.delete_forever,
+                      color: theme.colorScheme.error,
+                      itemCount: 1,
+                      forceDisabled: productionLock,
+                      disabledReason: destructiveDisabledReason,
+                      onDisabledTap: productionLock
+                          ? _showProductionLockMessage
+                          : null,
+                      onPressed: () => _performReset(
+                        'all_with_accounts',
+                        'إعادة تهيئة كاملة (Legacy)',
+                        'سيتم حذف كل شيء نهائياً من قاعدة البيانات (بما في ذلك شجرة الحسابات) وسيؤدي ذلك إلى حذف المستخدمين. لا يمكن التراجع.',
+                        confirmToken: 'WIPE-ALL',
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

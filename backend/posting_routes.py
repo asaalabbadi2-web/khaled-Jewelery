@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from models import (
     db,
     Invoice,
+    InvoicePayment,
     JournalEntry,
     Account,
     Customer,
@@ -86,6 +87,98 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
     )
     if existing:
         return []
+
+
+def _direction_for_invoice_cash(invoice_type: str) -> str:
+    """Map invoice type to cash movement direction (in/out) for safebox ledger."""
+    t = (invoice_type or '').strip()
+    if t == 'بيع':
+        return 'in'
+    if t == 'مرتجع بيع':
+        return 'out'
+    if t in ('شراء من عميل', 'شراء') or ('شراء' in t and 'مورد' in t and 'مرتجع' not in t):
+        return 'out'
+    if t in ('مرتجع شراء', 'مرتجع شراء (مورد)') or ('مرتجع' in t and 'شراء' in t and 'مورد' in t):
+        return 'in'
+    return 'in'
+
+
+def _append_safe_transactions_for_invoice_payments(invoice: Invoice, created_by: str = None):
+    """Append SafeBoxTransaction rows for invoice payments (cash/bank/check ledger).
+
+    Uses InvoicePayment rows and tries to resolve safe_box_id from:
+    1) JSON stored in payment.notes (created by approval gate)
+    2) invoice.safe_box_id
+    3) payment_method.default_safe_box_id
+    """
+    if not invoice or not getattr(invoice, 'id', None):
+        return []
+
+    payments = getattr(invoice, 'payments', None) or []
+    if not payments:
+        return []
+
+    appended = []
+    for payment in payments:
+        # Avoid duplicates
+        existing = (
+            SafeBoxTransaction.query.filter_by(ref_type='invoice_payment', invoice_payment_id=payment.id)
+            .order_by(SafeBoxTransaction.id.desc())
+            .first()
+        )
+        if existing:
+            continue
+
+        pm_obj = None
+        try:
+            pm_obj = PaymentMethod.query.get(getattr(payment, 'payment_method_id', None))
+        except Exception:
+            pm_obj = None
+
+        resolved_safe_box_id = None
+
+        # Try parse JSON notes
+        raw_notes = getattr(payment, 'notes', None)
+        if raw_notes:
+            try:
+                decoded = json.loads(raw_notes) if isinstance(raw_notes, str) else None
+                if isinstance(decoded, dict) and decoded.get('safe_box_id') not in (None, '', False):
+                    resolved_safe_box_id = int(decoded.get('safe_box_id'))
+            except Exception:
+                resolved_safe_box_id = None
+
+        if resolved_safe_box_id is None:
+            resolved_safe_box_id = getattr(invoice, 'safe_box_id', None)
+        if resolved_safe_box_id is None and pm_obj is not None:
+            resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
+
+        if resolved_safe_box_id is None:
+            raise ValueError('missing_safe_box_for_payment')
+
+        safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
+        if not safe_box_obj:
+            raise ValueError('safe_box_not_found')
+
+        amount = float(getattr(payment, 'amount', 0.0) or 0.0)
+        if amount <= 0:
+            continue
+
+        st = SafeBoxTransaction(
+            safe_box_id=resolved_safe_box_id,
+            ref_type='invoice_payment',
+            ref_id=payment.id,
+            invoice_id=invoice.id,
+            invoice_payment_id=payment.id,
+            payment_method_id=getattr(payment, 'payment_method_id', None),
+            direction=_direction_for_invoice_cash(getattr(invoice, 'invoice_type', None)),
+            amount_cash=amount,
+            notes=getattr(payment, 'notes', None),
+            created_by=created_by,
+        )
+        db.session.add(st)
+        appended.append(st)
+
+    return appended
 
     def _to_float(v):
         try:
@@ -1071,6 +1164,170 @@ def post_invoice(invoice_id):
             pass
         
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/invoices/approve-large-discount/<int:invoice_id>', methods=['POST'])
+@require_permission('invoice.post')
+@require_permission('journal.post')
+def approve_large_discount_invoice(invoice_id):
+    """Approve and fully post a large-discount invoice.
+
+    This posts BOTH:
+    - Invoice (is_posted)
+    - The invoice-linked JournalEntry (reference_type='invoice')
+    And appends safebox ledger movements for:
+    - invoice payments (ref_type='invoice_payment')
+    - gold inventory movements (ref_type='invoice_gold')
+    """
+    try:
+        posted_by = g.current_user.username
+
+        invoice = Invoice.query.get(invoice_id)
+        if not invoice:
+            return jsonify({'success': False, 'message': 'الفاتورة غير موجودة'}), 404
+
+        if invoice.is_posted:
+            return jsonify({'success': False, 'message': 'الفاتورة مرحلة بالفعل'}), 400
+
+        entry = (
+            JournalEntry.query.filter_by(reference_type='invoice', reference_id=invoice.id)
+            .filter(JournalEntry.is_deleted == False)
+            .order_by(JournalEntry.id.desc())
+            .first()
+        )
+        if not entry:
+            return jsonify({
+                'success': False,
+                'message': 'لا يوجد قيد مرتبط بهذه الفاتورة لترحيله',
+            }), 400
+
+        if not entry.is_posted:
+            # Validate journal entry balance
+            total_cash_debit = sum(line.cash_debit or 0 for line in entry.lines if not line.is_deleted)
+            total_cash_credit = sum(line.cash_credit or 0 for line in entry.lines if not line.is_deleted)
+            if abs(total_cash_debit - total_cash_credit) > 0.01:
+                return jsonify({
+                    'success': False,
+                    'message': f'القيد غير متوازن (نقد). مدين: {total_cash_debit}, دائن: {total_cash_credit}',
+                }), 400
+
+            for karat in ['18k', '21k', '22k', '24k']:
+                total_debit = sum(getattr(line, f'debit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
+                total_credit = sum(getattr(line, f'credit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
+                if abs(total_debit - total_credit) > 0.001:
+                    return jsonify({
+                        'success': False,
+                        'message': f'القيد غير متوازن (عيار {karat}). مدين: {total_debit}, دائن: {total_credit}',
+                    }), 400
+
+            entry.is_posted = True
+            entry.posted_at = datetime.now()
+            entry.posted_by = posted_by
+
+        # Update invoice paid amount from stored payments
+        try:
+            payments = getattr(invoice, 'payments', None) or []
+            invoice.amount_paid = round(sum(float(p.amount or 0.0) for p in payments), 2)
+        except Exception:
+            pass
+
+        invoice.is_posted = True
+        invoice.posted_at = datetime.now()
+        invoice.posted_by = posted_by
+
+        # Sync invoice status
+        try:
+            total_amount = float(invoice.total or 0.0)
+            paid_amount = float(invoice.amount_paid or 0.0)
+            barter_total_status = float(getattr(invoice, 'barter_total', 0.0) or 0.0)
+            total_settled = paid_amount + barter_total_status
+            eps = 0.01
+            if total_settled <= eps:
+                invoice.status = 'unpaid'
+            elif total_settled >= total_amount - eps:
+                invoice.status = 'paid'
+            else:
+                invoice.status = 'partially_paid'
+        except Exception:
+            pass
+
+        # Append safebox movements
+        _append_safe_transactions_for_invoice_payments(invoice, created_by=posted_by)
+        _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
+
+        # Mark related alert as reviewed
+        try:
+            alert = (
+                SystemAlert.query.filter_by(alert_type='invoice_approval', entity_type='Invoice', entity_id=invoice.id)
+                .order_by(SystemAlert.id.desc())
+                .first()
+            )
+            if alert and not alert.is_reviewed:
+                alert.is_reviewed = True
+                alert.reviewed_at = datetime.now()
+                alert.reviewed_by = posted_by
+                db.session.add(alert)
+        except Exception:
+            pass
+
+        db.session.commit()
+
+        try:
+            AuditLog.log_action(
+                user_name=posted_by,
+                action='approve_large_discount',
+                entity_type='Invoice',
+                entity_id=invoice.id,
+                entity_number=getattr(invoice, 'invoice_number', None),
+                details=json.dumps({
+                    'journal_entry_id': entry.id,
+                    'journal_entry_number': getattr(entry, 'entry_number', None),
+                }, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        return jsonify({
+            'success': True,
+            'message': 'تم اعتماد وترحيل الفاتورة بنجاح',
+            'invoice': invoice.to_dict(),
+            'journal_entry': entry.to_dict(),
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        try:
+            posted_by = g.current_user.username if hasattr(g, 'current_user') else 'النظام'
+            AuditLog.log_action(
+                user_name=posted_by,
+                action='approve_large_discount',
+                entity_type='Invoice',
+                entity_id=invoice_id,
+                success=False,
+                error_message=str(e),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/invoices/approve/<int:invoice_id>', methods=['POST'])
+@require_permission('invoice.post')
+@require_permission('journal.post')
+def approve_invoice(invoice_id):
+    """Generic approval endpoint for invoices that were saved with `approval_required`.
+
+    This is an alias to the existing approval implementation and is kept generic
+    so it can be used for multiple approval reasons (e.g. large_discount, below_cost).
+    """
+    return approve_large_discount_invoice(invoice_id)
 
 
 @posting_bp.route('/invoices/post-batch', methods=['POST'])

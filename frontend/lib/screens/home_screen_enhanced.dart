@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
+import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../providers/quick_actions_provider.dart';
@@ -39,8 +41,6 @@ import 'attendance_screen.dart';
 import 'payroll_report_screen.dart';
 import 'bonus_management_screen.dart';
 import 'safe_boxes_screen.dart';
-import 'safe_boxes_dashboard_screen.dart'; // 🆕 لوحة تحكم خزائن الذهب
-import 'cash_safes_dashboard_screen.dart'; // 🆕 لوحة تحكم الخزائن النقدية
 import 'melting_renewal_screen.dart';
 import 'gold_reservation_screen.dart';
 import 'offices_screen.dart';
@@ -49,6 +49,7 @@ import 'audit_log_screen.dart';
 import 'shift_closing_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
+import 'reports/admin_dashboard_screen.dart';
 import 'printing_center_screen.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
@@ -65,7 +66,8 @@ class HomeScreenEnhanced extends StatefulWidget {
   State<HomeScreenEnhanced> createState() => _HomeScreenEnhancedState();
 }
 
-class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
+class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
+    with SingleTickerProviderStateMixin {
   final ApiService api = ApiService();
 
   // Data
@@ -91,13 +93,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   Timer? _goldPriceAutoRefreshTimer;
   String _goldPriceAutoRefreshFingerprint = '';
 
-  // Summary data
-  Map<String, dynamic> salesSummary = {};
-  Map<String, dynamic> purchaseSummary = {};
-  Map<String, dynamic> inventorySummary = {};
+  // Live market ticker
+  late final AnimationController _marketTickerController;
+  final Map<int, double> _lastMarketPrices = {};
+  final Map<int, double> _marketChangeAbs = {};
+  final Map<int, double> _marketChangePct = {};
+  String _marketTickerText = '';
 
-  // Summary period filter
-  String _summaryPeriod = 'daily'; // 'daily', 'monthly', 'yearly', 'all'
+  // Operations badge (invoice approvals)
+  int _pendingApprovalsCount = 0;
+  Timer? _approvalsAutoRefreshTimer;
 
   // Bottom Navigation
   int _selectedNavIndex = 0;
@@ -137,6 +142,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   void dispose() {
     _goldPriceAutoRefreshTimer?.cancel();
     _goldPriceAutoRefreshTimer = null;
+
+    _approvalsAutoRefreshTimer?.cancel();
+    _approvalsAutoRefreshTimer = null;
+
+    _marketTickerController.dispose();
     super.dispose();
   }
 
@@ -169,67 +179,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     );
   }
 
-  double _parseDouble(dynamic value, {double fallback = 0}) {
-    if (value == null) return fallback;
-    if (value is num) return value.toDouble();
-    if (value is String) return double.tryParse(value) ?? fallback;
-    return fallback;
-  }
-
-  int _parseInt(dynamic value, {int fallback = 0}) {
-    if (value == null) return fallback;
-    if (value is int) return value;
-    if (value is double) return value.round();
-    if (value is String) return int.tryParse(value) ?? fallback;
-    return fallback;
-  }
-
-  Map<String, double> _ensureKaratEntry(
-    Map<int, Map<String, double>> target,
-    int karat,
-  ) {
-    if (!target.containsKey(karat)) {
-      target[karat] = {'weight': 0, 'amount': 0};
-    }
-    return target[karat]!;
-  }
-
-  // تصفية الفواتير حسب الفترة المحددة
-  List _filterInvoicesByPeriod(List allInvoices) {
-    if (_summaryPeriod == 'all') return allInvoices;
-
-    final now = DateTime.now();
-    DateTime startDate;
-
-    switch (_summaryPeriod) {
-      case 'daily':
-        startDate = DateTime(now.year, now.month, now.day);
-        break;
-      case 'monthly':
-        startDate = DateTime(now.year, now.month, 1);
-        break;
-      case 'yearly':
-        startDate = DateTime(now.year, 1, 1);
-        break;
-      default:
-        return allInvoices;
-    }
-
-    return allInvoices.where((inv) {
-      if (inv['date'] == null && inv['created_at'] == null) return false;
-      try {
-        final dateStr = inv['date'] ?? inv['created_at'];
-        final invDate = DateTime.parse(dateStr.toString());
-        return invDate.isAfter(startDate.subtract(const Duration(seconds: 1)));
-      } catch (e) {
-        return false;
-      }
-    }).toList();
-  }
-
   @override
   void initState() {
     super.initState();
+
+    _marketTickerController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 18),
+    )..repeat();
+
     _loadAllData();
   }
 
@@ -251,6 +209,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       debugPrint('🔄 بدء تحميل البيانات...');
       final futures = <Future<void>>[];
       if (auth.isAuthenticated) futures.add(_loadGoldPrice());
+      if (auth.isAuthenticated) futures.add(_loadPendingApprovalsCount());
       if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
       if (auth.hasPermission('items.view')) futures.add(_loadItems());
       if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
@@ -262,10 +221,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       debugPrint(
         '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
       );
-      await _calculateSummaries();
-      debugPrint(
-        '✅ تم حساب الملخصات - مبيعات: ${salesSummary['count']}, مشتريات: ${purchaseSummary['count']}, مخزون: ${inventorySummary['count']}',
-      );
     } catch (e) {
       debugPrint('❌ خطأ في تحميل البيانات: $e');
     } finally {
@@ -273,10 +228,52 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     }
   }
 
+  Future<void> _loadPendingApprovalsCount() async {
+    try {
+      final auth = context.read<AuthProvider>();
+      if (!auth.isAuthenticated) return;
+
+      final result = await api.getSystemAlerts(reviewed: false);
+      final rows = (result['alerts'] as List?) ?? const [];
+
+      int count = 0;
+      for (final row in rows) {
+        if (row is Map) {
+          final alertType = (row['alert_type'] ?? row['type'] ?? '').toString();
+          final entityType = (row['entity_type'] ?? '').toString();
+          if (alertType == 'invoice_approval' ||
+              (entityType == 'Invoice' && alertType.contains('approval'))) {
+            count++;
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _pendingApprovalsCount = count;
+      });
+
+      // Refresh badge periodically while screen is alive.
+      _approvalsAutoRefreshTimer?.cancel();
+      _approvalsAutoRefreshTimer = Timer.periodic(const Duration(seconds: 60), (
+        _,
+      ) async {
+        if (!mounted) return;
+        final auth = context.read<AuthProvider>();
+        if (!auth.isAuthenticated) return;
+        await _loadPendingApprovalsCount();
+      });
+    } catch (e) {
+      // Non-blocking: badge is optional.
+      debugPrint('⚠️ Failed to load approvals badge: $e');
+    }
+  }
+
   Future<void> _loadGoldPrice() async {
     try {
       final response = await api.getGoldPrice();
       if (response['price_usd_per_oz'] != null) {
+        final prevOunce = goldPrice;
         setState(() {
           goldPrice = (response['price_usd_per_oz'] is String)
               ? double.tryParse(response['price_usd_per_oz'])
@@ -286,10 +283,114 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             goldPriceDate = DateTime.parse(response['date']);
           }
         });
+
+        _refreshMarketTicker(prevOuncePrice: prevOunce);
       }
     } catch (e) {
       debugPrint('⚠️ خطأ في تحميل سعر الذهب: $e');
     }
+  }
+
+  void _refreshMarketTicker({double? prevOuncePrice}) {
+    if (!mounted) return;
+    if (goldPrice == null || goldPrice! <= 0) {
+      setState(() {
+        _marketTickerText = widget.isArabic
+            ? 'نبض السوق: سعر الذهب غير متوفر حالياً'
+            : 'Market Pulse: Gold price unavailable';
+        _marketChangePct.clear();
+        _marketChangeAbs.clear();
+        _lastMarketPrices.clear();
+      });
+      return;
+    }
+
+    double pricePerGramForKarat(int karat, double ouncePrice) {
+      // ounce USD -> gram USD, then convert by karat purity.
+      final base = (ouncePrice / 31.1035) * (karat / 24.0);
+      return base * exchangeRate;
+    }
+
+    final current = <int, double>{
+      24: pricePerGramForKarat(24, goldPrice!),
+      21: pricePerGramForKarat(21, goldPrice!),
+      18: pricePerGramForKarat(18, goldPrice!),
+    };
+
+    Map<int, double>? prevSnapshot;
+    if (_lastMarketPrices.isNotEmpty) {
+      prevSnapshot = _lastMarketPrices;
+    } else if (prevOuncePrice != null && prevOuncePrice > 0) {
+      prevSnapshot = <int, double>{
+        24: pricePerGramForKarat(24, prevOuncePrice),
+        21: pricePerGramForKarat(21, prevOuncePrice),
+        18: pricePerGramForKarat(18, prevOuncePrice),
+      };
+    }
+
+    final nextAbs = <int, double>{};
+    final nextChange = <int, double>{};
+    for (final entry in current.entries) {
+      final karat = entry.key;
+      final value = entry.value;
+      final prev = prevSnapshot?[karat];
+      if (prev != null && prev.abs() > 1e-9) {
+        final delta = value - prev;
+        nextAbs[karat] = delta;
+        nextChange[karat] = (delta / prev) * 100.0;
+      }
+    }
+
+    String fmt(double v) => _formatCash(v, includeSymbol: false);
+    String fmtPct(double v) => '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}%';
+
+    String fmtDelta(double v) {
+      final sign = v >= 0 ? '+' : '';
+      return '$sign${fmt(v)}';
+    }
+
+    String arrow(double v) {
+      if (v > 0) return '▲';
+      if (v < 0) return '▼';
+      return '•';
+    }
+
+    String part(int karat) {
+      final p = current[karat] ?? 0.0;
+      final pct = nextChange[karat];
+      final abs = nextAbs[karat];
+
+      final change = (pct == null || abs == null)
+          ? ''
+          : ' (${arrow(abs)} ${fmtDelta(abs)} $currencySymbol • ${fmtPct(pct)})';
+
+      if (widget.isArabic) {
+        return 'عيار $karat: ${fmt(p)} $currencySymbol$change';
+      }
+      return 'K$karat: ${fmt(p)} $currencySymbol$change';
+    }
+
+    setState(() {
+      _lastMarketPrices
+        ..clear()
+        ..addAll(current);
+
+      _marketChangeAbs
+        ..clear()
+        ..addAll(nextAbs);
+      _marketChangePct
+        ..clear()
+        ..addAll(nextChange);
+
+      final header = widget.isArabic ? 'نبض السوق' : 'Market Pulse';
+      _marketTickerText =
+          '$header • ${part(24)}  •  ${part(21)}  •  ${part(18)}';
+
+      // Nudge animation when price updates.
+      if (_marketTickerController.isAnimating == false) {
+        _marketTickerController.repeat();
+      }
+    });
   }
 
   Future<void> _updateGoldPriceNow() async {
@@ -376,172 +477,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     } catch (e) {
       debugPrint('⚠️ خطأ في تحميل الخزائن: $e');
     }
-  }
-
-  Future<void> _calculateSummaries() async {
-    // تصفية الفواتير حسب الفترة المحددة
-    final filteredInvoices = _filterInvoicesByPeriod(invoices);
-
-    // حساب ملخص المبيعات مع التفصيل حسب العيار
-    final salesInvoices = filteredInvoices.where((inv) {
-      final invType = (inv['invoice_type'] ?? inv['transaction_type'] ?? '')
-          .toString()
-          .toLowerCase();
-      return invType == 'sell' || invType == 'بيع' || invType.contains('بيع');
-    }).toList();
-
-    debugPrint(
-      '📊 عدد فواتير المبيعات: ${salesInvoices.length} من أصل ${filteredInvoices.length}',
-    );
-
-    double totalSalesAmount = 0;
-    double totalSalesWeight = 0;
-    Map<int, Map<String, double>> salesByKarat = {
-      18: {'weight': 0, 'amount': 0},
-      21: {'weight': 0, 'amount': 0},
-      22: {'weight': 0, 'amount': 0},
-      24: {'weight': 0, 'amount': 0},
-    };
-
-    for (var inv in salesInvoices) {
-      final invoiceTotal = _parseDouble(
-        inv['total'] ??
-            inv['total_net'] ??
-            inv['net_amount'] ??
-            inv['amount_paid'],
-      );
-      final invoiceWeight = _parseDouble(inv['total_weight']);
-
-      totalSalesAmount += invoiceTotal;
-      totalSalesWeight += invoiceWeight;
-
-      // تفصيل حسب العيار من بنود الفاتورة
-      if (inv['items'] != null && inv['items'] is List) {
-        for (var item in inv['items']) {
-          final karat = _parseInt(item['karat'], fallback: 21);
-          final quantity = _parseDouble(item['quantity'], fallback: 1);
-          final itemWeight = _parseDouble(item['weight']);
-
-          final unitPrice = _parseDouble(item['price']);
-          final net = _parseDouble(item['net']);
-          final tax = _parseDouble(item['tax']);
-          final itemAmount =
-              (unitPrice > 0 ? unitPrice : net + tax) *
-              (quantity == 0 ? 1 : quantity);
-
-          final bucket = _ensureKaratEntry(salesByKarat, karat);
-          bucket['weight'] = (bucket['weight'] ?? 0) + itemWeight;
-          bucket['amount'] = (bucket['amount'] ?? 0) + itemAmount;
-        }
-      }
-    }
-
-    // حساب ملخص المشتريات مع التفصيل حسب العيار
-    final purchaseInvoices = filteredInvoices.where((inv) {
-      final invType = (inv['invoice_type'] ?? inv['transaction_type'] ?? '')
-          .toString()
-          .toLowerCase();
-      return invType == 'buy' ||
-          invType == 'شراء' ||
-          invType == 'شراء من عميل' ||
-          invType.contains('شراء');
-    }).toList();
-
-    debugPrint(
-      '📊 عدد فواتير المشتريات: ${purchaseInvoices.length} من أصل ${filteredInvoices.length}',
-    );
-
-    double totalPurchaseAmount = 0;
-    double totalPurchaseWeight = 0;
-    Map<int, Map<String, double>> purchaseByKarat = {
-      18: {'weight': 0, 'amount': 0},
-      21: {'weight': 0, 'amount': 0},
-      22: {'weight': 0, 'amount': 0},
-      24: {'weight': 0, 'amount': 0},
-    };
-
-    for (var inv in purchaseInvoices) {
-      final invoiceTotal = _parseDouble(
-        inv['total'] ??
-            inv['total_net'] ??
-            inv['net_amount'] ??
-            inv['amount_paid'],
-      );
-      final invoiceWeight = _parseDouble(inv['total_weight']);
-
-      totalPurchaseAmount += invoiceTotal;
-      totalPurchaseWeight += invoiceWeight;
-
-      // تفصيل حسب العيار من بنود الفاتورة
-      if (inv['items'] != null && inv['items'] is List) {
-        for (var item in inv['items']) {
-          final karat = _parseInt(item['karat'], fallback: 21);
-          final quantity = _parseDouble(item['quantity'], fallback: 1);
-          final itemWeight = _parseDouble(item['weight']);
-
-          final unitPrice = _parseDouble(item['price']);
-          final net = _parseDouble(item['net']);
-          final tax = _parseDouble(item['tax']);
-          final itemAmount =
-              (unitPrice > 0 ? unitPrice : net + tax) *
-              (quantity == 0 ? 1 : quantity);
-
-          final bucket = _ensureKaratEntry(purchaseByKarat, karat);
-          bucket['weight'] = (bucket['weight'] ?? 0) + itemWeight;
-          bucket['amount'] = (bucket['amount'] ?? 0) + itemAmount;
-        }
-      }
-    }
-
-    // حساب ملخص المخزون مع التفصيل حسب العيار
-    double totalInventoryWeight = 0;
-    int activeItems = 0;
-    Map<int, Map<String, double>> inventoryByKarat = {
-      18: {'weight': 0, 'count': 0},
-      21: {'weight': 0, 'count': 0},
-      22: {'weight': 0, 'count': 0},
-      24: {'weight': 0, 'count': 0},
-    };
-
-    for (var item in items) {
-      final karat = _parseInt(item['karat'], fallback: 21);
-      final weight = _parseDouble(item['weight']);
-      final stock = _parseDouble(item['stock']);
-      final isAvailable = stock > 0 ? stock : 1;
-
-      if (weight > 0) {
-        totalInventoryWeight += weight * isAvailable;
-      }
-
-      activeItems += 1;
-
-      final bucket = _ensureKaratEntry(inventoryByKarat, karat);
-      bucket['weight'] =
-          (bucket['weight'] ?? 0) + (weight > 0 ? weight * isAvailable : 0);
-      bucket['count'] = (bucket['count'] ?? 0) + isAvailable;
-    }
-
-    setState(() {
-      salesSummary = {
-        'count': salesInvoices.length,
-        'amount': totalSalesAmount,
-        'weight': totalSalesWeight,
-        'byKarat': salesByKarat,
-      };
-
-      purchaseSummary = {
-        'count': purchaseInvoices.length,
-        'amount': totalPurchaseAmount,
-        'weight': totalPurchaseWeight,
-        'byKarat': purchaseByKarat,
-      };
-
-      inventorySummary = {
-        'count': activeItems,
-        'weight': totalInventoryWeight,
-        'byKarat': inventoryByKarat,
-      };
-    });
   }
 
   // Drawer Builder
@@ -1633,72 +1568,314 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Original home screen content
   Widget _buildHomeTabContent(bool isAr) {
-    return RefreshIndicator(
-      onRefresh: _loadAllData,
-      color: AppColors.primaryGold,
-      child: SingleChildScrollView(
-        physics: AlwaysScrollableScrollPhysics(),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      children: [
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _loadAllData,
+            color: AppColors.primaryGold,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 8),
+
+                    // Gold Price Card
+                    _buildGoldPriceCard(),
+
+                    const SizedBox(height: 16),
+
+                    // Operations Center (with badge)
+                    _buildOperationsCenterCard(),
+
+                    const SizedBox(height: 24),
+
+                    // Quick Actions
+                    _buildQuickActions(),
+
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        _buildMarketTickerBar(),
+      ],
+    );
+  }
+
+  Widget _buildMarketTickerBar() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final isArabic = widget.isArabic;
+
+    final bg = isDark
+        ? const Color(0xFF0F1014).withValues(alpha: 0.92)
+        : Colors.white.withValues(alpha: 0.92);
+
+    final textStyle = theme.textTheme.bodySmall?.copyWith(
+      fontFamily: 'Cairo',
+      fontWeight: FontWeight.w600,
+      color: isDark ? Colors.white : Colors.black87,
+    );
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        height: 36,
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: AppColors.primaryGold.withValues(alpha: 0.35),
+            width: 0.8,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.10),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final text = _marketTickerText.isNotEmpty
+                    ? _marketTickerText
+                    : (isArabic
+                          ? 'نبض السوق • جاري التحميل...'
+                          : 'Market Pulse • Loading...');
+
+                final painter = TextPainter(
+                  text: TextSpan(text: text, style: textStyle),
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
+                  maxLines: 1,
+                )..layout();
+                final textWidth = painter.size.width;
+
+                // Seamless marquee: duplicate the text so there are no gaps.
+                // Seamless marquee: repeat enough chunks to cover wide screens.
+                const horizontalPad = 12.0;
+                const gap = 36.0;
+                final decoratedTextWidth = textWidth + (horizontalPad * 2);
+                final cycleWidth = decoratedTextWidth + gap;
+                final viewportWidth = constraints.maxWidth;
+
+                // How many cycles needed to always cover the viewport.
+                final cycles = (viewportWidth / cycleWidth).ceil() + 4;
+
+                final speed = 55.0; // px/sec
+                final seconds = (cycleWidth / speed).clamp(10.0, 22.0);
+                if (_marketTickerController.duration?.inMilliseconds !=
+                    (seconds * 1000).round()) {
+                  _marketTickerController.duration = Duration(
+                    milliseconds: (seconds * 1000).round(),
+                  );
+                  _marketTickerController
+                    ..reset()
+                    ..repeat();
+                }
+
+                return AnimatedBuilder(
+                  animation: _marketTickerController,
+                  builder: (context, _) {
+                    final shift = _marketTickerController.value * cycleWidth;
+
+                    // Arabic: left -> right, English: right -> left.
+                    final baseX = isArabic
+                        ? (-cycleWidth + shift)
+                        : (viewportWidth - shift);
+
+                    Widget chunk() {
+                      return SizedBox(
+                        width: cycleWidth,
+                        child: Row(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: horizontalPad,
+                              ),
+                              child: Text(
+                                text,
+                                style: textStyle,
+                                maxLines: 1,
+                                softWrap: false,
+                                overflow: TextOverflow.visible,
+                              ),
+                            ),
+                            const SizedBox(width: gap),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ClipRect(
+                      child: Stack(
+                        children: List.generate(cycles, (j) {
+                          final i = j - 2; // render a couple cycles offscreen
+                          final dx = baseX + (i * cycleWidth);
+                          return Positioned(
+                            left: dx,
+                            top: 0,
+                            bottom: 0,
+                            child: Center(child: chunk()),
+                          );
+                        }),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOperationsCenterCard() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
+    return _buildGlassCard(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                AdminDashboardScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+      },
+      child: Row(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
             children: [
-              SizedBox(height: 8),
-
-              // Gold Price Card
-              _buildGoldPriceCard(),
-
-              SizedBox(height: 24),
-
-              // Quick Actions
-              _buildQuickActions(),
-
-              SizedBox(height: 24),
-
-              // Summary Cards Section Header with Period Selector
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    'ملخص العمليات الرئيسية',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).textTheme.titleLarge?.color,
-                      fontFamily: 'Cairo',
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGold.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.primaryGold.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Icon(
+                  Icons.dashboard_customize,
+                  color: AppColors.primaryGold,
+                  size: 26,
+                ),
+              ),
+              if (_pendingApprovalsCount > 0)
+                Positioned(
+                  top: -6,
+                  right: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade700,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: (isDark ? Colors.black : Colors.white)
+                            .withValues(alpha: 0.9),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      '$_pendingApprovalsCount',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                  _buildPeriodSelector(),
+                ),
+            ],
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'غرفة العمليات',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _pendingApprovalsCount > 0
+                      ? '$_pendingApprovalsCount فاتورة بانتظار الاعتماد'
+                      : 'متابعة التنبيهات والعمليات الحساسة',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.chevron_left,
+            color: colorScheme.onSurface.withValues(alpha: 0.6),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGlassCard({required Widget child, VoidCallback? onTap}) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = theme.colorScheme.surface;
+
+    final tint = isDark
+        ? surface.withValues(alpha: 0.20)
+        : Colors.white.withValues(alpha: 0.55);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: tint,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.25),
+                  width: 0.9,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+                    blurRadius: 14,
+                    offset: const Offset(0, 8),
+                  ),
                 ],
               ),
-              SizedBox(height: 16),
-
-              // Sales Summary
-              if (context.read<AuthProvider>().hasPermission('invoices.view'))
-                _buildSalesSummaryCard(),
-
-              if (context.read<AuthProvider>().hasPermission('invoices.view'))
-                SizedBox(height: 16),
-
-              // Purchase Summary
-              if (context.read<AuthProvider>().hasPermission('invoices.view'))
-                _buildPurchaseSummaryCard(),
-
-              if (context.read<AuthProvider>().hasPermission('invoices.view'))
-                SizedBox(height: 16),
-
-              // Inventory Summary
-              if (context.read<AuthProvider>().hasPermission('items.view'))
-                _buildInventorySummaryCard(),
-
-              SizedBox(height: 16),
-
-              // Statistics Row
-              _buildStatisticsRow(),
-
-              SizedBox(height: 24),
-            ],
+              child: child,
+            ),
           ),
         ),
       ),
@@ -2105,33 +2282,50 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               ],
             ),
             const SizedBox(height: 12),
-            // عرض الأزرار في صفوف (2 أزرار في كل صف)
-            ...List.generate((activeActions.length / 2).ceil(), (rowIndex) {
-              final startIndex = rowIndex * 2;
-              final endIndex = (startIndex + 2 > activeActions.length)
-                  ? activeActions.length
-                  : startIndex + 2;
+            AnimationLimiter(
+              child: Column(
+                children: [
+                  // عرض الأزرار في صفوف (2 أزرار في كل صف)
+                  ...List.generate((activeActions.length / 2).ceil(), (
+                    rowIndex,
+                  ) {
+                    final startIndex = rowIndex * 2;
+                    final endIndex = (startIndex + 2 > activeActions.length)
+                        ? activeActions.length
+                        : startIndex + 2;
 
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
-                  children: [
-                    for (int i = startIndex; i < endIndex; i++) ...[
-                      Expanded(
-                        child: _buildQuickActionButton(
-                          action: activeActions[i],
-                          theme: theme,
-                        ),
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          for (int i = startIndex; i < endIndex; i++) ...[
+                            Expanded(
+                              child: AnimationConfiguration.staggeredList(
+                                position: i,
+                                duration: const Duration(milliseconds: 420),
+                                child: SlideAnimation(
+                                  verticalOffset: 18.0,
+                                  child: FadeInAnimation(
+                                    child: _buildQuickActionButton(
+                                      action: activeActions[i],
+                                      theme: theme,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (i < endIndex - 1) const SizedBox(width: 12),
+                          ],
+                          // إذا كان هناك زر واحد فقط في الصف، أضف مساحة فارغة
+                          if (endIndex - startIndex == 1)
+                            const Expanded(child: SizedBox()),
+                        ],
                       ),
-                      if (i < endIndex - 1) const SizedBox(width: 12),
-                    ],
-                    // إذا كان هناك زر واحد فقط في الصف، أضف مساحة فارغة
-                    if (endIndex - startIndex == 1)
-                      const Expanded(child: SizedBox()),
-                  ],
-                ),
-              );
-            }),
+                    );
+                  }),
+                ],
+              ),
+            ),
           ],
         );
       },
@@ -2142,48 +2336,31 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     required QuickActionItem action,
     required ThemeData theme,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+    return _buildGlassCard(
+      onTap: () => _handleQuickActionTap(action.route),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: action.getColor().withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppColors.primaryGold.withValues(alpha: 0.18),
+              ),
+            ),
+            child: Icon(action.icon, color: action.getColor(), size: 24),
           ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () => _handleQuickActionTap(action.route),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: action.getColor().withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(action.icon, color: action.getColor(), size: 24),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    action.label,
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              action.label,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -2433,617 +2610,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     }
   }
 
-  Widget _buildSalesSummaryCard() {
-    final count = salesSummary['count'] ?? 0;
-    final amount = salesSummary['amount'] ?? 0.0;
-    final weight = salesSummary['weight'] ?? 0.0;
-    final byKarat =
-        salesSummary['byKarat'] as Map<int, Map<String, double>>? ?? {};
-
-    return _buildSummaryCardWithKarat(
-      title: 'ملخص المبيعات',
-      icon: Icons.trending_up,
-      color: AppColors.success,
-      totalStats: [
-        {
-          'label': 'عدد الفواتير',
-          'value': count.toString(),
-          'icon': Icons.receipt,
-        },
-        {
-          'label': 'إجمالي المبلغ',
-          'value': _formatCash(amount),
-          'icon': Icons.attach_money,
-        },
-        {
-          'label': 'إجمالي الوزن',
-          'value': _formatWeight(weight, decimals: 3),
-          'icon': Icons.scale,
-        },
-      ],
-      karatBreakdown: byKarat,
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => InvoicesListScreen(isArabic: true)),
-        );
-      },
-    );
-  }
-
-  Widget _buildPurchaseSummaryCard() {
-    final count = purchaseSummary['count'] ?? 0;
-    final amount = purchaseSummary['amount'] ?? 0.0;
-    final weight = purchaseSummary['weight'] ?? 0.0;
-    final byKarat =
-        purchaseSummary['byKarat'] as Map<int, Map<String, double>>? ?? {};
-
-    return _buildSummaryCardWithKarat(
-      title: 'ملخص المشتريات',
-      icon: Icons.shopping_bag,
-      color: Color(0xFF9A7D0A), // ذهبي عميق
-      totalStats: [
-        {
-          'label': 'عدد الفواتير',
-          'value': count.toString(),
-          'icon': Icons.receipt_long,
-        },
-        {
-          'label': 'إجمالي المبلغ',
-          'value': _formatCash(amount),
-          'icon': Icons.payments,
-        },
-        {
-          'label': 'إجمالي الوزن',
-          'value': _formatWeight(weight, decimals: 3),
-          'icon': Icons.scale,
-        },
-      ],
-      karatBreakdown: byKarat,
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => InvoicesListScreen(isArabic: true)),
-        );
-      },
-    );
-  }
-
-  // بناء محدد الفترة (يومي/شهري/سنوي/الكل)
-  Widget _buildPeriodSelector() {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.grey[850] : Colors.grey[100],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.primaryGold.withValues(alpha: 0.2),
-          width: 1,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildPeriodButton('يومي', 'daily', Icons.today),
-          _buildPeriodButton('شهري', 'monthly', Icons.calendar_month),
-          _buildPeriodButton('سنوي', 'yearly', Icons.calendar_today),
-          _buildPeriodButton('الكل', 'all', Icons.all_inclusive),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPeriodButton(String label, String period, IconData icon) {
-    final isSelected = _summaryPeriod == period;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _summaryPeriod = period;
-        });
-        _calculateSummaries();
-      },
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? AppColors.primaryGold.withValues(alpha: isDark ? 0.3 : 0.2)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          border: isSelected
-              ? Border.all(color: AppColors.primaryGold, width: 1.5)
-              : null,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 16,
-              color: isSelected
-                  ? AppColors.primaryGold
-                  : (isDark ? Colors.grey[400] : Colors.grey[600]),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontFamily: 'Cairo',
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                color: isSelected
-                    ? AppColors.primaryGold
-                    : (isDark ? Colors.grey[400] : Colors.grey[700]),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInventorySummaryCard() {
-    final count = inventorySummary['count'] ?? 0;
-    final weight = inventorySummary['weight'] ?? 0.0;
-    final byKarat =
-        inventorySummary['byKarat'] as Map<int, Map<String, double>>? ?? {};
-
-    return _buildSummaryCardWithKarat(
-      title: 'ملخص المخزون',
-      icon: Icons.inventory_2,
-      color: AppColors.warning,
-      totalStats: [
-        {
-          'label': 'عدد الأصناف',
-          'value': count.toString(),
-          'icon': Icons.category,
-        },
-        {
-          'label': 'إجمالي الوزن',
-          'value': _formatWeight(weight, decimals: 3),
-          'icon': Icons.scale,
-        },
-      ],
-      karatBreakdown: byKarat,
-      isInventory: true,
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ItemsScreenEnhanced(api: api)),
-        );
-      },
-    );
-  }
-
-  Widget _buildSummaryCardWithKarat({
-    required String title,
-    required IconData icon,
-    required Color color,
-    required List<Map<String, dynamic>> totalStats,
-    required Map<int, Map<String, double>> karatBreakdown,
-    bool isInventory = false,
-    VoidCallback? onTap,
-  }) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
-            blurRadius: 15,
-            offset: Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header
-                Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: isDark ? 0.2 : 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(icon, color: color, size: 28),
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'Cairo',
-                        ),
-                      ),
-                    ),
-                    if (onTap != null)
-                      Icon(Icons.chevron_left, color: theme.hintColor),
-                  ],
-                ),
-
-                SizedBox(height: 16),
-
-                // إجمالي
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: isDark ? 0.1 : 0.05),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.summarize, color: color, size: 18),
-                          SizedBox(width: 8),
-                          Text(
-                            'الإجمالي العام',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: color,
-                              fontFamily: 'Cairo',
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 12),
-                      ...totalStats.map(
-                        (stat) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8.0),
-                          child: Row(
-                            children: [
-                              Icon(
-                                stat['icon'],
-                                color: theme.hintColor,
-                                size: 18,
-                              ),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  stat['label'],
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    fontSize: 13,
-                                    fontFamily: 'Cairo',
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                stat['value'],
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: color,
-                                  fontFamily: 'Cairo',
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                SizedBox(height: 16),
-
-                // تفصيل حسب العيار
-                Row(
-                  children: [
-                    Icon(Icons.diamond, color: theme.iconTheme.color, size: 18),
-                    SizedBox(width: 8),
-                    Text(
-                      'التفصيل حسب العيار',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'Cairo',
-                      ),
-                    ),
-                  ],
-                ),
-
-                SizedBox(height: 12),
-
-                // بطاقات العيارات
-                ...karatBreakdown.entries.map((entry) {
-                  final karat = entry.key;
-                  final data = entry.value;
-                  final weight = data['weight'] ?? 0.0;
-                  final amount = data['amount'];
-                  final count = data['count'];
-
-                  // تجاهل العيارات بدون بيانات
-                  if (weight == 0) return SizedBox.shrink();
-
-                  return Container(
-                    margin: EdgeInsets.only(bottom: 8),
-                    padding: EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withValues(
-                        alpha: isDark ? 0.5 : 1,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: theme.dividerColor.withValues(alpha: 0.5),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _getKaratColor(karat),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'عيار $karat',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              fontFamily: 'Cairo',
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (isInventory && count != null) ...[
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.inventory_2,
-                                      size: 14,
-                                      color: theme.hintColor,
-                                    ),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      '${count.toInt()}',
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(
-                                            fontSize: 12,
-                                            fontFamily: 'Cairo',
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(height: 2),
-                              ],
-                              if (!isInventory && amount != null) ...[
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.payments,
-                                      size: 14,
-                                      color: theme.hintColor,
-                                    ),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      '${amount.toStringAsFixed(2)} ر.س',
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
-                                            fontFamily: 'Cairo',
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(height: 2),
-                              ],
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.scale,
-                                    size: 14,
-                                    color: theme.hintColor,
-                                  ),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    '${weight.toStringAsFixed(3)} جم',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.normal,
-                                      fontFamily: 'Cairo',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Color _getKaratColor(int karat) {
-    switch (karat) {
-      case 18:
-        return Color(0xFFFF6B6B); // أحمر فاتح
-      case 21:
-        return Color(0xFFD4AF37); // ذهبي كلاسيكي
-      case 22:
-        return Color(0xFF4ECDC4); // تركواز
-      case 24:
-        return Color(0xFF9B59B6); // بنفسجي
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Widget _buildStatisticsRow() {
-    final auth = context.read<AuthProvider>();
-    
-    return Row(
-      children: [
-        Expanded(
-          child: _buildStatCard(
-            icon: Icons.people,
-            label: 'العملاء',
-            value: customers.length.toString(),
-            color: AppColors.info,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CustomersScreen(api: api, isArabic: true),
-                ),
-              );
-            },
-          ),
-        ),
-        SizedBox(width: 12),
-        Expanded(
-          child: _buildStatCard(
-            icon: Icons.business,
-            label: 'الموردين',
-            value: suppliers.length.toString(),
-            color: AppColors.success,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => SuppliersScreen(api: api)),
-              );
-            },
-          ),
-        ),
-        if (auth.hasPermission('safe_boxes.view')) ...[
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildStatCard(
-              icon: Icons.account_balance_wallet,
-              label: 'خزائن الذهب',
-              value: safeBoxes.where((s) => s['safe_type'] == 'gold').length.toString(),
-              color: AppColors.primaryGold,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SafeBoxesDashboardScreen()),
-                );
-              },
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _buildStatCard(
-              icon: Icons.payments,
-              label: 'خزائن النقد',
-              value: safeBoxes.where((s) => s['safe_type'] == 'cash').length.toString(),
-              color: Colors.green,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => CashSafesDashboardScreen(api: api)),
-                );
-              },
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildStatCard({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-    VoidCallback? onTap,
-  }) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: isDark ? 0.2 : 0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon, color: color, size: 28),
-                ),
-                SizedBox(height: 12),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                    fontFamily: 'Cairo',
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  label,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontSize: 13,
-                    fontFamily: 'Cairo',
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   String _formatCash(double amount, {bool includeSymbol = true}) {
     final formatter = NumberFormat.currency(
       symbol: includeSymbol ? currencySymbol : '',
@@ -3051,16 +2617,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     );
     final formatted = formatter.format(amount).replaceAll('\u00A0', ' ');
     return includeSymbol ? formatted : formatted.trim();
-  }
-
-  String _formatWeight(
-    double amount, {
-    int? decimals,
-    bool includeUnit = true,
-  }) {
-    final effectiveDecimals = decimals ?? (amount.abs() < 1 ? 3 : 2);
-    final formatted = amount.toStringAsFixed(effectiveDecimals);
-    return includeUnit ? '$formatted جم' : formatted;
   }
 }
 

@@ -35,7 +35,8 @@ String _resolveApiBaseUrl() {
     // http://0.0.0.0:<port>/ which is not a routable destination host.
     // Also, some environments resolve `localhost` to IPv6 ::1 while the
     // backend binds IPv4 only; using 127.0.0.1 avoids that class of issues.
-    final host = (rawHost.isEmpty || rawHost == '0.0.0.0' || rawHost == 'localhost')
+    final host =
+        (rawHost.isEmpty || rawHost == '0.0.0.0' || rawHost == 'localhost')
         ? '127.0.0.1'
         : rawHost;
     final scheme = Uri.base.scheme.isNotEmpty ? Uri.base.scheme : 'http';
@@ -2272,8 +2273,17 @@ class ApiService {
   // System Methods
 
   /// إعادة تهيئة النظام مع دعم خيارات متعددة
-  Future<Map<String, dynamic>> resetSystem({String? resetType}) async {
-    final body = resetType != null ? {'reset_type': resetType} : {};
+  Future<Map<String, dynamic>> resetSystem({
+    String? resetType,
+    String? confirmToken,
+  }) async {
+    final body = <String, dynamic>{};
+    if (resetType != null) {
+      body['reset_type'] = resetType;
+    }
+    if (confirmToken != null && confirmToken.trim().isNotEmpty) {
+      body['confirm'] = confirmToken.trim();
+    }
 
     final response = await _authedPost(
       Uri.parse('$_baseUrl/system/reset'),
@@ -3821,7 +3831,9 @@ class ApiService {
 
   /// ميزان مراجعة الأوزان (مطابقة خزائن الذهب ↔ الحسابات الوزنية المرتبطة)
   /// Endpoint: GET /reports/gold-weight-trial-balance?date=YYYY-MM-DD
-  Future<Map<String, dynamic>> getGoldWeightTrialBalance({DateTime? date}) async {
+  Future<Map<String, dynamic>> getGoldWeightTrialBalance({
+    DateTime? date,
+  }) async {
     final queryParams = <String, String>{};
     if (date != null) {
       // Backend expects date only.
@@ -4090,6 +4102,71 @@ class ApiService {
     } else {
       throw Exception('Failed to unpost invoice: ${response.body}');
     }
+  }
+
+  /// Approve and fully post a large-discount invoice (manager/admin)
+  Future<Map<String, dynamic>> approveLargeDiscountInvoice(
+    int invoiceId,
+  ) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/invoices/approve-large-discount/$invoiceId'),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    if (response.statusCode == 401) {
+      throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
+    }
+    if (response.statusCode == 403) {
+      throw Exception('ليس لديك صلاحية اعتماد وترحيل هذه الفاتورة');
+    }
+
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        parsed = decoded;
+      }
+    } catch (_) {
+      parsed = null;
+    }
+
+    final msg = parsed?['message']?.toString() ?? 'فشل اعتماد وترحيل الفاتورة';
+    throw Exception('$msg (status: ${response.statusCode})');
+  }
+
+  /// Approve and fully post an invoice that requires manager approval.
+  /// This is a generic endpoint (works for below_cost / large_discount ...).
+  Future<Map<String, dynamic>> approveInvoice(int invoiceId) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/invoices/approve/$invoiceId'),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    if (response.statusCode == 401) {
+      throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
+    }
+    if (response.statusCode == 403) {
+      throw Exception('ليس لديك صلاحية اعتماد وترحيل هذه الفاتورة');
+    }
+
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) {
+        parsed = decoded;
+      }
+    } catch (_) {
+      parsed = null;
+    }
+
+    final msg = parsed?['message']?.toString() ?? 'فشل اعتماد وترحيل الفاتورة';
+    throw Exception('$msg (status: ${response.statusCode})');
   }
 
   /// Post a single journal entry
