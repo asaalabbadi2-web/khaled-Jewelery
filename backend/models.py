@@ -1814,6 +1814,16 @@ class Settings(db.Model):
     gold_price_auto_update_mode = db.Column(db.String(20), default='interval')
     gold_price_auto_update_interval_minutes = db.Column(db.Integer, default=60)
 
+    # 🆕 النسخ الاحتياطي التلقائي (على السيرفر)
+    backup_auto_enabled = db.Column(db.Boolean, default=False)
+    # interval | daily
+    backup_auto_mode = db.Column(db.String(20), default='daily')
+    # Stored as "HH:MM" in server local time (used when mode=daily)
+    backup_auto_time = db.Column(db.String(5), default='02:00')
+    backup_auto_interval_minutes = db.Column(db.Integer, default=1440)
+    # Keep last N backups on the server
+    backup_retention_count = db.Column(db.Integer, default=7)
+
     # 🆕 سياسة كلمات المرور (JSON)
     # مثال: {"min_length": 6, "require_numbers": false}
     password_policy = db.Column(db.Text, nullable=True)
@@ -1888,6 +1898,11 @@ class Settings(db.Model):
             'gold_price_auto_update_time': self.gold_price_auto_update_time or '09:00',
             'gold_price_auto_update_mode': (self.gold_price_auto_update_mode or 'interval'),
             'gold_price_auto_update_interval_minutes': int(self.gold_price_auto_update_interval_minutes or 60),
+            'backup_auto_enabled': bool(getattr(self, 'backup_auto_enabled', False)),
+            'backup_auto_mode': (getattr(self, 'backup_auto_mode', None) or 'daily'),
+            'backup_auto_time': (getattr(self, 'backup_auto_time', None) or '02:00'),
+            'backup_auto_interval_minutes': int(getattr(self, 'backup_auto_interval_minutes', 1440) or 1440),
+            'backup_retention_count': int(getattr(self, 'backup_retention_count', 7) or 7),
             'password_policy': policy,
         }
 

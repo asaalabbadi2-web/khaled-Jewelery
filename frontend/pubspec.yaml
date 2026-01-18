@@ -39,6 +39,15 @@ dependencies:
   file_picker: ^10.3.8
   url_launcher: ^6.3.0
 
+  # Cloud backups (Google Drive)
+  google_sign_in: ^6.3.0
+  googleapis: ^13.2.0
+  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+
+  # Backup encryption (AES-256-GCM) + secure key storage
+  cryptography: ^2.7.0
+  flutter_secure_storage: ^9.2.4
+
   barcode: any
   web: ^1.1.1
   flutter_staggered_animations: ^1.1.1
@@ -47,11 +56,14 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   matcher: ^0.12.17
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
   assets:
     - assets/fonts/
+    - assets/KHGL.png
+    - assets/KHWL.png
   fonts:
     - family: Cairo
       fonts:
@@ -70,3 +82,12 @@ flutter:
           weight: 500
         - asset: assets/fonts/Cairo-Thin.ttf
           weight: 100
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  web:
+    generate: true
+  image_path: "assets/KHGL.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true

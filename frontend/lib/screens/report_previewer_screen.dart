@@ -150,7 +150,7 @@ class _ReportPreviewerScreenState extends State<ReportPreviewerScreen> {
               pw.Text(
                 widget.isArabic
                     ? 'نظام نقاط بيع يسر للذهب والمجوهرات'
-                    : 'Khaled Jewelry POS',
+                    : 'Khaled Jewelery POS',
                 style: pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
               ),
             ],

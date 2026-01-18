@@ -203,6 +203,12 @@ def ensure_settings_columns(engine: Engine) -> None:
                     ("gold_price_auto_update_time", "VARCHAR(5)", "'09:00'"),
                     ("gold_price_auto_update_mode", "VARCHAR(20)", "'interval'"),
                     ("gold_price_auto_update_interval_minutes", "INTEGER", "60"),
+                    # Backup/Restore (server-side scheduling)
+                    ("backup_auto_enabled", "BOOLEAN", "0"),
+                    ("backup_auto_mode", "VARCHAR(20)", "'daily'"),
+                    ("backup_auto_time", "VARCHAR(5)", "'02:00'"),
+                    ("backup_auto_interval_minutes", "INTEGER", "1440"),
+                    ("backup_retention_count", "INTEGER", "7"),
                     ("vat_exempt_karats", "TEXT", "NULL"),
                 ],
             )

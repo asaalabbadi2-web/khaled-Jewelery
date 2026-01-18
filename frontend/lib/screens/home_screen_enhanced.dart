@@ -10,6 +10,8 @@ import '../providers/quick_actions_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/quick_action_item.dart';
+import '../widgets/gold_price_ticker_bar.dart';
+import '../widgets/app_logo.dart';
 import 'items_screen_enhanced.dart';
 import 'add_customer_screen.dart';
 import 'add_item_screen_enhanced.dart';
@@ -66,8 +68,7 @@ class HomeScreenEnhanced extends StatefulWidget {
   State<HomeScreenEnhanced> createState() => _HomeScreenEnhancedState();
 }
 
-class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
-    with SingleTickerProviderStateMixin {
+class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   final ApiService api = ApiService();
 
   // Data
@@ -92,13 +93,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   Timer? _goldPriceAutoRefreshTimer;
   String _goldPriceAutoRefreshFingerprint = '';
-
-  // Live market ticker
-  late final AnimationController _marketTickerController;
-  final Map<int, double> _lastMarketPrices = {};
-  final Map<int, double> _marketChangeAbs = {};
-  final Map<int, double> _marketChangePct = {};
-  String _marketTickerText = '';
 
   // Operations badge (invoice approvals)
   int _pendingApprovalsCount = 0;
@@ -145,8 +139,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     _approvalsAutoRefreshTimer?.cancel();
     _approvalsAutoRefreshTimer = null;
-
-    _marketTickerController.dispose();
     super.dispose();
   }
 
@@ -182,12 +174,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   @override
   void initState() {
     super.initState();
-
-    _marketTickerController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 18),
-    )..repeat();
-
     _loadAllData();
   }
 
@@ -273,7 +259,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     try {
       final response = await api.getGoldPrice();
       if (response['price_usd_per_oz'] != null) {
-        final prevOunce = goldPrice;
         setState(() {
           goldPrice = (response['price_usd_per_oz'] is String)
               ? double.tryParse(response['price_usd_per_oz'])
@@ -283,114 +268,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             goldPriceDate = DateTime.parse(response['date']);
           }
         });
-
-        _refreshMarketTicker(prevOuncePrice: prevOunce);
       }
     } catch (e) {
       debugPrint('⚠️ خطأ في تحميل سعر الذهب: $e');
     }
-  }
-
-  void _refreshMarketTicker({double? prevOuncePrice}) {
-    if (!mounted) return;
-    if (goldPrice == null || goldPrice! <= 0) {
-      setState(() {
-        _marketTickerText = widget.isArabic
-            ? 'نبض السوق: سعر الذهب غير متوفر حالياً'
-            : 'Market Pulse: Gold price unavailable';
-        _marketChangePct.clear();
-        _marketChangeAbs.clear();
-        _lastMarketPrices.clear();
-      });
-      return;
-    }
-
-    double pricePerGramForKarat(int karat, double ouncePrice) {
-      // ounce USD -> gram USD, then convert by karat purity.
-      final base = (ouncePrice / 31.1035) * (karat / 24.0);
-      return base * exchangeRate;
-    }
-
-    final current = <int, double>{
-      24: pricePerGramForKarat(24, goldPrice!),
-      21: pricePerGramForKarat(21, goldPrice!),
-      18: pricePerGramForKarat(18, goldPrice!),
-    };
-
-    Map<int, double>? prevSnapshot;
-    if (_lastMarketPrices.isNotEmpty) {
-      prevSnapshot = _lastMarketPrices;
-    } else if (prevOuncePrice != null && prevOuncePrice > 0) {
-      prevSnapshot = <int, double>{
-        24: pricePerGramForKarat(24, prevOuncePrice),
-        21: pricePerGramForKarat(21, prevOuncePrice),
-        18: pricePerGramForKarat(18, prevOuncePrice),
-      };
-    }
-
-    final nextAbs = <int, double>{};
-    final nextChange = <int, double>{};
-    for (final entry in current.entries) {
-      final karat = entry.key;
-      final value = entry.value;
-      final prev = prevSnapshot?[karat];
-      if (prev != null && prev.abs() > 1e-9) {
-        final delta = value - prev;
-        nextAbs[karat] = delta;
-        nextChange[karat] = (delta / prev) * 100.0;
-      }
-    }
-
-    String fmt(double v) => _formatCash(v, includeSymbol: false);
-    String fmtPct(double v) => '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}%';
-
-    String fmtDelta(double v) {
-      final sign = v >= 0 ? '+' : '';
-      return '$sign${fmt(v)}';
-    }
-
-    String arrow(double v) {
-      if (v > 0) return '▲';
-      if (v < 0) return '▼';
-      return '•';
-    }
-
-    String part(int karat) {
-      final p = current[karat] ?? 0.0;
-      final pct = nextChange[karat];
-      final abs = nextAbs[karat];
-
-      final change = (pct == null || abs == null)
-          ? ''
-          : ' (${arrow(abs)} ${fmtDelta(abs)} $currencySymbol • ${fmtPct(pct)})';
-
-      if (widget.isArabic) {
-        return 'عيار $karat: ${fmt(p)} $currencySymbol$change';
-      }
-      return 'K$karat: ${fmt(p)} $currencySymbol$change';
-    }
-
-    setState(() {
-      _lastMarketPrices
-        ..clear()
-        ..addAll(current);
-
-      _marketChangeAbs
-        ..clear()
-        ..addAll(nextAbs);
-      _marketChangePct
-        ..clear()
-        ..addAll(nextChange);
-
-      final header = widget.isArabic ? 'نبض السوق' : 'Market Pulse';
-      _marketTickerText =
-          '$header • ${part(24)}  •  ${part(21)}  •  ${part(18)}';
-
-      // Nudge animation when price updates.
-      if (_marketTickerController.isAnimating == false) {
-        _marketTickerController.repeat();
-      }
-    });
   }
 
   Future<void> _updateGoldPriceNow() async {
@@ -522,7 +403,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 CircleAvatar(
                   radius: 28,
                   backgroundColor: theme.colorScheme.surface,
-                  child: Icon(Icons.workspace_premium, color: gold, size: 34),
+                  child: const AppLogo.gold(width: 34, height: 34),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -530,7 +411,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        isAr ? 'مجوهرات خالد' : 'Khaled Jewelry',
+                        isAr ? 'مجوهرات خالد' : 'Khaled Jewelery',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1358,9 +1239,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         appBar: AppBar(
           title: Row(
             children: [
-              Icon(Icons.workspace_premium, size: 28),
+              AppLogo.matchTextColor(
+                (Theme.of(context).appBarTheme.foregroundColor ??
+                    Theme.of(context).colorScheme.onPrimary),
+                width: 28,
+                height: 28,
+              ),
               const SizedBox(width: 10),
-              Expanded(child: Text(isAr ? 'مجوهرات خالد' : 'Khaled Jewelry')),
+              Expanded(child: Text(isAr ? 'مجوهرات خالد' : 'Khaled Jewelery')),
             ],
           ),
           actions: [
@@ -1609,138 +1495,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   }
 
   Widget _buildMarketTickerBar() {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final isArabic = widget.isArabic;
-
-    final bg = isDark
-        ? const Color(0xFF0F1014).withValues(alpha: 0.92)
-        : Colors.white.withValues(alpha: 0.92);
-
-    final textStyle = theme.textTheme.bodySmall?.copyWith(
-      fontFamily: 'Cairo',
-      fontWeight: FontWeight.w600,
-      color: isDark ? Colors.white : Colors.black87,
-    );
-
-    return SafeArea(
-      top: false,
-      child: Container(
-        height: 36,
-        margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: AppColors.primaryGold.withValues(alpha: 0.35),
-            width: 0.8,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.10),
-              blurRadius: 12,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final text = _marketTickerText.isNotEmpty
-                    ? _marketTickerText
-                    : (isArabic
-                          ? 'نبض السوق • جاري التحميل...'
-                          : 'Market Pulse • Loading...');
-
-                final painter = TextPainter(
-                  text: TextSpan(text: text, style: textStyle),
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  maxLines: 1,
-                )..layout();
-                final textWidth = painter.size.width;
-
-                // Seamless marquee: duplicate the text so there are no gaps.
-                // Seamless marquee: repeat enough chunks to cover wide screens.
-                const horizontalPad = 12.0;
-                const gap = 36.0;
-                final decoratedTextWidth = textWidth + (horizontalPad * 2);
-                final cycleWidth = decoratedTextWidth + gap;
-                final viewportWidth = constraints.maxWidth;
-
-                // How many cycles needed to always cover the viewport.
-                final cycles = (viewportWidth / cycleWidth).ceil() + 4;
-
-                final speed = 55.0; // px/sec
-                final seconds = (cycleWidth / speed).clamp(10.0, 22.0);
-                if (_marketTickerController.duration?.inMilliseconds !=
-                    (seconds * 1000).round()) {
-                  _marketTickerController.duration = Duration(
-                    milliseconds: (seconds * 1000).round(),
-                  );
-                  _marketTickerController
-                    ..reset()
-                    ..repeat();
-                }
-
-                return AnimatedBuilder(
-                  animation: _marketTickerController,
-                  builder: (context, _) {
-                    final shift = _marketTickerController.value * cycleWidth;
-
-                    // Arabic: left -> right, English: right -> left.
-                    final baseX = isArabic
-                        ? (-cycleWidth + shift)
-                        : (viewportWidth - shift);
-
-                    Widget chunk() {
-                      return SizedBox(
-                        width: cycleWidth,
-                        child: Row(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: horizontalPad,
-                              ),
-                              child: Text(
-                                text,
-                                style: textStyle,
-                                maxLines: 1,
-                                softWrap: false,
-                                overflow: TextOverflow.visible,
-                              ),
-                            ),
-                            const SizedBox(width: gap),
-                          ],
-                        ),
-                      );
-                    }
-
-                    return ClipRect(
-                      child: Stack(
-                        children: List.generate(cycles, (j) {
-                          final i = j - 2; // render a couple cycles offscreen
-                          final dx = baseX + (i * cycleWidth);
-                          return Positioned(
-                            left: dx,
-                            top: 0,
-                            bottom: 0,
-                            child: Center(child: chunk()),
-                          );
-                        }),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ),
-      ),
+    final settings = context.watch<SettingsProvider>();
+    return GoldPriceTickerBar(
+      isArabic: widget.isArabic,
+      currencySymbol: settings.currencySymbol,
+      exchangeRate: exchangeRate,
+      refreshInterval: settings.goldPriceTickerRefreshInterval,
     );
   }
 

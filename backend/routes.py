@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-from flask import Blueprint, request, jsonify, g, current_app
+import shutil
+import subprocess
+from flask import Blueprint, request, jsonify, g, current_app, send_file
+import io
+import os
+import json
+import tempfile
+import zipfile
+import sqlite3
+from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, joinedload
 from sqlalchemy import func, or_, and_, case, cast, String
@@ -66,6 +75,297 @@ from auth_decorators import get_current_user, require_permission
 from permissions import ALL_PERMISSIONS
 
 api = Blueprint('api', __name__)
+
+# Public (unauthenticated) endpoints.
+# This blueprint intentionally has no auth `before_request` so it can be used
+# on the login screen.
+public_api = Blueprint('public_api', __name__)
+
+
+def _is_sqlite_database() -> bool:
+    try:
+        return (db.engine.url.get_backend_name() or '').lower().startswith('sqlite')
+    except Exception:
+        return False
+
+
+def _is_postgres_database() -> bool:
+    try:
+        name = (db.engine.url.get_backend_name() or '').lower()
+        return name in {'postgresql', 'postgres'}
+    except Exception:
+        return False
+
+
+def _sqlite_db_path() -> str | None:
+    try:
+        if not _is_sqlite_database():
+            return None
+        path = db.engine.url.database
+        if not path:
+            return None
+        # SQLAlchemy may give relative paths; resolve relative to backend cwd.
+        return os.path.abspath(path)
+    except Exception:
+        return None
+
+
+def _create_sqlite_backup_to_file(dest_path: str) -> None:
+    src_path = _sqlite_db_path()
+    if not src_path or not os.path.exists(src_path):
+        raise FileNotFoundError('SQLite database file not found')
+
+    # Make sure SQLAlchemy releases file locks.
+    try:
+        db.session.remove()
+    except Exception:
+        pass
+    try:
+        db.engine.dispose()
+    except Exception:
+        pass
+
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    # Use SQLite native backup API (safe while DB is in use).
+    src = sqlite3.connect(src_path)
+    try:
+        dst = sqlite3.connect(dest_path)
+        try:
+            src.backup(dst)
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def _pg_tools_available() -> tuple[bool, list[str]]:
+    missing: list[str] = []
+    for tool in ('pg_dump', 'pg_restore', 'psql'):
+        if shutil.which(tool) is None:
+            missing.append(tool)
+    return (len(missing) == 0, missing)
+
+
+def _postgres_conn_parts() -> dict:
+    url = db.engine.url
+    return {
+        'host': url.host,
+        'port': url.port,
+        'user': url.username,
+        'password': url.password,
+        'database': url.database,
+    }
+
+
+def _create_postgres_backup_to_file(dest_path: str) -> None:
+    if not _is_postgres_database():
+        raise RuntimeError('PostgreSQL backend is not active')
+
+    ok, missing = _pg_tools_available()
+    if not ok:
+        raise RuntimeError(f"PostgreSQL tools missing: {', '.join(missing)}")
+
+    parts = _postgres_conn_parts()
+    if not parts.get('database'):
+        raise RuntimeError('PostgreSQL database name is missing')
+
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+    env = os.environ.copy()
+    if parts.get('password'):
+        env['PGPASSWORD'] = str(parts['password'])
+
+    cmd = ['pg_dump', '-Fc', '-f', dest_path]
+    if parts.get('host'):
+        cmd += ['-h', str(parts['host'])]
+    if parts.get('port'):
+        cmd += ['-p', str(parts['port'])]
+    if parts.get('user'):
+        cmd += ['-U', str(parts['user'])]
+    cmd.append(str(parts['database']))
+
+    subprocess.run(cmd, check=True, env=env)
+
+
+def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
+    if not _is_postgres_database():
+        raise RuntimeError('PostgreSQL backend is not active')
+    if not os.path.exists(src_backup_path):
+        raise FileNotFoundError('Backup file not found')
+
+    ok, missing = _pg_tools_available()
+    if not ok:
+        raise RuntimeError(f"PostgreSQL tools missing: {', '.join(missing)}")
+
+    # Ensure we drop connections before restoring.
+    try:
+        db.session.remove()
+    except Exception:
+        pass
+    try:
+        db.engine.dispose()
+    except Exception:
+        pass
+
+    parts = _postgres_conn_parts()
+    if not parts.get('database'):
+        raise RuntimeError('PostgreSQL database name is missing')
+
+    env = os.environ.copy()
+    if parts.get('password'):
+        env['PGPASSWORD'] = str(parts['password'])
+
+    ext = os.path.splitext(src_backup_path)[1].lower()
+    if ext in {'.sql'}:
+        cmd = ['psql']
+        if parts.get('host'):
+            cmd += ['-h', str(parts['host'])]
+        if parts.get('port'):
+            cmd += ['-p', str(parts['port'])]
+        if parts.get('user'):
+            cmd += ['-U', str(parts['user'])]
+        cmd += ['-d', str(parts['database']), '-f', src_backup_path]
+        subprocess.run(cmd, check=True, env=env)
+        return
+
+    # Prefer pg_restore (custom format from pg_dump -Fc)
+    cmd = ['pg_restore', '--clean', '--if-exists', '--no-owner', '--no-privileges']
+    if parts.get('host'):
+        cmd += ['-h', str(parts['host'])]
+    if parts.get('port'):
+        cmd += ['-p', str(parts['port'])]
+    if parts.get('user'):
+        cmd += ['-U', str(parts['user'])]
+    cmd += ['-d', str(parts['database']), src_backup_path]
+
+    subprocess.run(cmd, check=True, env=env)
+
+
+def _restore_sqlite_from_backup_file(src_backup_path: str) -> None:
+    dest_path = _sqlite_db_path()
+    if not dest_path:
+        raise RuntimeError('SQLite destination path is not available')
+    if not os.path.exists(src_backup_path):
+        raise FileNotFoundError('Backup file not found')
+
+    # Ensure we drop connections before restoring.
+    try:
+        db.session.remove()
+    except Exception:
+        pass
+    try:
+        db.engine.dispose()
+    except Exception:
+        pass
+
+
+def _server_backup_dir() -> str:
+    configured = os.getenv('BACKUP_DIR')
+    if configured and configured.strip():
+        return os.path.abspath(os.path.expanduser(configured.strip()))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), 'backups'))
+
+
+def _actor_username() -> str:
+    try:
+        u = getattr(g, 'current_user', None)
+        if u is None:
+            return 'unknown'
+        return (
+            getattr(u, 'username', None)
+            or getattr(u, 'full_name', None)
+            or getattr(u, 'name', None)
+            or 'unknown'
+        )
+    except Exception:
+        return 'unknown'
+
+
+def _append_restore_audit(event: str, success: bool, details: dict | None = None) -> None:
+    try:
+        os.makedirs(_server_backup_dir(), exist_ok=True)
+        path = os.path.join(_server_backup_dir(), 'restore_audit.log')
+        payload = {
+            'ts_utc': datetime.utcnow().isoformat() + 'Z',
+            'event': event,
+            'success': bool(success),
+            'user': _actor_username(),
+            'ip': request.remote_addr,
+            'ua': request.headers.get('User-Agent'),
+            'details': details or {},
+        }
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+    except Exception:
+        # Never break restore flow due to audit log write.
+        pass
+
+
+def _create_pre_restore_snapshot_zip() -> str:
+    created_at = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    backup_dir = _server_backup_dir()
+    os.makedirs(backup_dir, exist_ok=True)
+
+    filename = f'pre-restore-snapshot-{created_at}.zip'
+    out_zip_path = os.path.join(backup_dir, filename)
+
+    if _is_postgres_database():
+        with tempfile.TemporaryDirectory(prefix='yasargold-pre-restore-') as tmpdir:
+            dump_path = os.path.join(tmpdir, 'database.dump')
+            _create_postgres_backup_to_file(dump_path)
+
+            meta = {
+                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'purpose': 'pre_restore_snapshot',
+                'db_backend': 'postgres',
+                'format': 'pg_dump_custom',
+            }
+            meta_path = os.path.join(tmpdir, 'metadata.json')
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            with zipfile.ZipFile(out_zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.write(dump_path, arcname='database.dump')
+                zf.write(meta_path, arcname='metadata.json')
+
+        return out_zip_path
+
+    with tempfile.TemporaryDirectory(prefix='yasargold-pre-restore-') as tmpdir:
+        db_path = os.path.join(tmpdir, 'database.sqlite')
+        _create_sqlite_backup_to_file(db_path)
+
+        meta = {
+            'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+            'purpose': 'pre_restore_snapshot',
+            'db_backend': 'sqlite',
+        }
+        meta_path = os.path.join(tmpdir, 'metadata.json')
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        with zipfile.ZipFile(out_zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(db_path, arcname='database.sqlite')
+            zf.write(meta_path, arcname='metadata.json')
+
+    return out_zip_path
+
+    src = sqlite3.connect(src_backup_path)
+    try:
+        dst = sqlite3.connect(dest_path)
+        try:
+            src.backup(dst)
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    # Dispose again so new requests reconnect cleanly.
+    try:
+        db.engine.dispose()
+    except Exception:
+        pass
 
 
 _PERMISSION_RESOURCE_MAP = {
@@ -1119,6 +1419,67 @@ def update_settings():
             if minutes > 10080:
                 minutes = 10080
             settings.gold_price_auto_update_interval_minutes = minutes
+
+    # 🆕 النسخ الاحتياطي التلقائي (على السيرفر)
+    if 'backup_auto_enabled' in data:
+        raw = data['backup_auto_enabled']
+        if isinstance(raw, bool):
+            settings.backup_auto_enabled = raw
+        elif isinstance(raw, (int, float)):
+            settings.backup_auto_enabled = bool(raw)
+        elif isinstance(raw, str):
+            s = raw.strip().lower()
+            settings.backup_auto_enabled = s in {'1', 'true', 'yes', 'y', 'on'}
+        else:
+            settings.backup_auto_enabled = False
+
+    if 'backup_auto_mode' in data:
+        raw = data['backup_auto_mode']
+        mode = (str(raw).strip().lower() if raw is not None else 'daily')
+        settings.backup_auto_mode = mode if mode in {'interval', 'daily'} else 'daily'
+
+    if 'backup_auto_time' in data:
+        raw = data['backup_auto_time']
+        settings.backup_auto_time = (str(raw).strip() if raw is not None else None)
+
+    if 'backup_auto_interval_minutes' in data:
+        raw = data['backup_auto_interval_minutes']
+        minutes = None
+        try:
+            minutes = int(raw)
+        except Exception:
+            try:
+                minutes = int(str(raw).strip())
+            except Exception:
+                minutes = None
+        if minutes is None:
+            # keep existing value
+            pass
+        else:
+            if minutes < 1:
+                minutes = 1
+            if minutes > 10080:
+                minutes = 10080
+            settings.backup_auto_interval_minutes = minutes
+
+    if 'backup_retention_count' in data:
+        raw = data.get('backup_retention_count')
+        count = None
+        try:
+            count = int(raw)
+        except Exception:
+            try:
+                count = int(str(raw).strip())
+            except Exception:
+                count = None
+        if count is None:
+            pass
+        else:
+            if count < 1:
+                count = 1
+            if count > 365:
+                count = 365
+            settings.backup_retention_count = count
     
     db.session.commit()
     return jsonify(settings.to_dict())
@@ -1832,6 +2193,278 @@ def get_reset_info():
         
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@api.route('/system/backup/download', methods=['GET'])
+@require_permission('system.settings')
+def system_backup_download():
+    """Download a system backup as a ZIP file.
+    Supports SQLite and PostgreSQL.
+    """
+
+    if not (_is_sqlite_database() or _is_postgres_database()):
+        return jsonify({
+            'status': 'error',
+            'message': 'نوع قاعدة البيانات الحالية غير مدعوم للنسخ الاحتياطي من داخل الواجهة.',
+            'error': 'not_supported',
+            'db': (db.engine.url.get_backend_name() if db.engine else None),
+        }), 501
+
+    created_at = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    filename = f'yasargold-backup-{created_at}.zip'
+
+    with tempfile.TemporaryDirectory(prefix='yasargold-backup-') as tmpdir:
+        if _is_postgres_database():
+            db_path = os.path.join(tmpdir, 'database.dump')
+            try:
+                _create_postgres_backup_to_file(db_path)
+            except Exception as exc:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'فشل إنشاء نسخة PostgreSQL: {exc}',
+                    'error': 'backup_failed',
+                }), 500
+
+            meta = {
+                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'db_backend': 'postgres',
+                'format': 'pg_dump_custom',
+            }
+            archive_name = 'database.dump'
+        else:
+            db_path = os.path.join(tmpdir, 'database.sqlite')
+            _create_sqlite_backup_to_file(db_path)
+
+            meta = {
+                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'db_backend': 'sqlite',
+            }
+            archive_name = 'database.sqlite'
+        meta_path = os.path.join(tmpdir, 'metadata.json')
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        zip_path = os.path.join(tmpdir, filename)
+        with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(db_path, arcname=archive_name)
+            zf.write(meta_path, arcname='metadata.json')
+
+        with open(zip_path, 'rb') as f:
+            data = f.read()
+
+    return send_file(
+        io.BytesIO(data),
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+@api.route('/system/backup/restore', methods=['POST'])
+@require_permission('system.settings')
+def system_backup_restore():
+    """Restore a system backup from an uploaded ZIP.
+
+    Safety:
+    - Blocked in production unless ALLOW_DANGEROUS_RESETS=true.
+    - Requires confirm=RESTORE in form data.
+    """
+
+    def _is_production_env() -> bool:
+        env = (
+            os.getenv('YASAR_ENV')
+            or os.getenv('APP_ENV')
+            or os.getenv('ENV')
+            or os.getenv('FLASK_ENV')
+            or ''
+        )
+        return str(env).strip().lower() in {'prod', 'production'}
+
+    def _dangerous_actions_allowed() -> bool:
+        val = os.getenv('ALLOW_DANGEROUS_RESETS')
+        return str(val or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+    if _is_production_env() and not _dangerous_actions_allowed():
+        _append_restore_audit(
+            event='system_backup_restore_blocked',
+            success=False,
+            details={
+                'reason': 'production_lock',
+                'is_production': True,
+                'dangerous_resets_allowed': False,
+            },
+        )
+        return jsonify({
+            'status': 'error',
+            'message': (
+                'هذا الإجراء مقفّل على نسخة الإنتاج (Production Lock). '
+                'فعّل ALLOW_DANGEROUS_RESETS=true إذا كنت متأكدًا.'
+            ),
+            'error': 'production_lock',
+        }), 403
+
+    confirm = (request.form.get('confirm') or '').strip()
+    if confirm != 'RESTORE':
+        _append_restore_audit(
+            event='system_backup_restore_rejected',
+            success=False,
+            details={
+                'reason': 'invalid_confirm',
+                'confirm': confirm,
+            },
+        )
+        return jsonify({
+            'status': 'error',
+            'message': 'تأكيد غير صحيح. ارسل confirm=RESTORE لتنفيذ الاستعادة.',
+        }), 400
+
+    uploaded = request.files.get('file')
+    if uploaded is None:
+        _append_restore_audit(
+            event='system_backup_restore_rejected',
+            success=False,
+            details={
+                'reason': 'missing_file',
+            },
+        )
+        return jsonify({
+            'status': 'error',
+            'message': 'الملف مطلوب (multipart field name: file)',
+        }), 400
+
+    if not _is_sqlite_database():
+        if not _is_postgres_database():
+            _append_restore_audit(
+                event='system_backup_restore_rejected',
+                success=False,
+                details={
+                    'reason': 'not_supported',
+                    'db': (db.engine.url.get_backend_name() if db.engine else None),
+                },
+            )
+            return jsonify({
+                'status': 'error',
+                'message': 'نوع قاعدة البيانات الحالية غير مدعوم للاستعادة من داخل الواجهة.',
+                'error': 'not_supported',
+            }), 501
+
+    with tempfile.TemporaryDirectory(prefix='yasargold-restore-') as tmpdir:
+        zip_path = os.path.join(tmpdir, 'upload.zip')
+        uploaded.save(zip_path)
+
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                if _is_postgres_database():
+                    candidates = [
+                        'database.dump',
+                        'database.backup',
+                        'database.sql',
+                    ]
+                else:
+                    candidates = [
+                        'database.sqlite',
+                        'app.db',
+                        'app.sqlite',
+                    ]
+                member = None
+                for c in candidates:
+                    if c in zf.namelist():
+                        member = c
+                        break
+                if member is None:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'لم يتم العثور على ملف قاعدة البيانات داخل ملف النسخة الاحتياطية.',
+                        'error': 'invalid_backup',
+                    }), 400
+
+                extracted_ext = os.path.splitext(member)[1].lower()
+                extracted_path = os.path.join(
+                    tmpdir,
+                    'restored' + (extracted_ext if extracted_ext else ''),
+                )
+                with zf.open(member) as src, open(extracted_path, 'wb') as dst:
+                    dst.write(src.read())
+        except zipfile.BadZipFile:
+            _append_restore_audit(
+                event='system_backup_restore_failed',
+                success=False,
+                details={
+                    'reason': 'invalid_zip',
+                    'filename': getattr(uploaded, 'filename', None),
+                },
+            )
+            return jsonify({
+                'status': 'error',
+                'message': 'ملف النسخة الاحتياطية غير صالح (ليس ZIP).',
+                'error': 'invalid_zip',
+            }), 400
+
+        # Mandatory: create a pre-restore snapshot on the server file system.
+        try:
+            snapshot_path = _create_pre_restore_snapshot_zip()
+            _append_restore_audit(
+                event='system_backup_restore_snapshot_created',
+                success=True,
+                details={
+                    'snapshot': snapshot_path,
+                    'filename': getattr(uploaded, 'filename', None),
+                },
+            )
+        except Exception as exc:
+            _append_restore_audit(
+                event='system_backup_restore_failed',
+                success=False,
+                details={
+                    'reason': 'snapshot_failed',
+                    'error': str(exc),
+                    'filename': getattr(uploaded, 'filename', None),
+                },
+            )
+            return jsonify({
+                'status': 'error',
+                'message': 'تعذر أخذ نسخة طوارئ (Snapshot) قبل الاستعادة. تم إيقاف العملية للحماية.',
+                'error': 'snapshot_failed',
+            }), 500
+
+        try:
+            if _is_postgres_database():
+                _restore_postgres_from_backup_file(extracted_path)
+            else:
+                _restore_sqlite_from_backup_file(extracted_path)
+        except Exception as exc:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+            _append_restore_audit(
+                event='system_backup_restore_failed',
+                success=False,
+                details={
+                    'reason': 'restore_failed',
+                    'error': str(exc),
+                    'filename': getattr(uploaded, 'filename', None),
+                },
+            )
+            return jsonify({
+                'status': 'error',
+                'message': f'فشل الاستعادة: {exc}',
+                'error': 'restore_failed',
+            }), 500
+
+    _append_restore_audit(
+        event='system_backup_restore_success',
+        success=True,
+        details={
+            'filename': getattr(uploaded, 'filename', None),
+        },
+    )
+
+    return jsonify({
+        'status': 'success',
+        'message': 'تمت الاستعادة بنجاح. قد تحتاج لإعادة تشغيل التطبيق/الخادم لتحديث البيانات.',
+    })
 
 
 @api.route('/accounts/<int:account_id>/statement', methods=['GET'])
@@ -3184,6 +3817,12 @@ def get_gold_price():
         'date': None,
         'error': 'لا يوجد سعر ذهب متاح'
     }), 404
+
+
+# Public endpoint for the login screen (no authentication required).
+@public_api.route('/public/gold_price', methods=['GET'])
+def get_gold_price_public():
+    return get_gold_price()
 
     # Endpoint لتحديث سعر الذهب يدوياً
 @api.route('/gold_price/update', methods=['POST'])

@@ -10,6 +10,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential \
       libpq-dev \
+      postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python deps first (better layer caching)

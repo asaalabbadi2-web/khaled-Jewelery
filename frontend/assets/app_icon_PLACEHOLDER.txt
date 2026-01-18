@@ -1,0 +1,8 @@
+ضع شعار التطبيق هنا باسم:
+- assets/KHGL.png (ذهبي)
+- assets/KHWL.png (أبيض)
+
+- استخدم ملف PNG مربع (يفضل 1024x1024) بخلفية شفافة أو خلفية مناسبة.
+- بعد وضع الملف، شغّل:
+  flutter pub get
+  dart run flutter_launcher_icons

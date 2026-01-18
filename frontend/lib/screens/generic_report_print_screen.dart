@@ -337,7 +337,7 @@ class _GenericReportPrintScreenState extends State<GenericReportPrintScreen> {
               ),
               pw.SizedBox(height: 4),
               pw.Text(
-                widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry',
+                widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelery',
                 style: const pw.TextStyle(fontSize: 12),
               ),
             ],

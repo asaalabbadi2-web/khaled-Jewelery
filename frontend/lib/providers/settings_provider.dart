@@ -16,9 +16,28 @@ class SettingsProvider with ChangeNotifier {
   bool _isLoading = false;
   String? _error;
 
+  static const String _showGoldPriceTickerOnLoginKey =
+      'ui_show_gold_price_ticker_on_login_v1';
+  bool _showGoldPriceTickerOnLogin = false;
+
   Map<String, dynamic> get settings => _settings;
   bool get isLoading => _isLoading;
   String? get error => _error;
+
+  bool get showGoldPriceTickerOnLogin => _showGoldPriceTickerOnLogin;
+
+  Future<void> setShowGoldPriceTickerOnLogin(bool value) async {
+    if (_showGoldPriceTickerOnLogin == value) return;
+    _showGoldPriceTickerOnLogin = value;
+    notifyListeners();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_showGoldPriceTickerOnLoginKey, value);
+    } catch (_) {
+      // Non-blocking: UI preference.
+    }
+  }
 
   // Getters للإعدادات الهامة
   String get currencySymbol => _settings['currency_symbol'] ?? 'ر.س';
@@ -28,6 +47,36 @@ class SettingsProvider with ChangeNotifier {
   bool get taxEnabled => _safeBool(_settings['tax_enabled'], fallback: true);
   double get taxRate => _safeDouble(_settings['tax_rate'], fallback: 0.15);
   double get taxRatePercent => taxRate * 100;
+
+  // Gold price auto-update settings (server-side).
+  bool get goldPriceAutoUpdateEnabled =>
+      _safeBool(_settings['gold_price_auto_update_enabled'], fallback: false);
+
+  String get goldPriceAutoUpdateMode =>
+      (_settings['gold_price_auto_update_mode']?.toString().trim().isNotEmpty ??
+              false)
+          ? _settings['gold_price_auto_update_mode'].toString().trim()
+          : 'interval';
+
+  int get goldPriceAutoUpdateIntervalMinutes => _safeInt(
+        _settings['gold_price_auto_update_interval_minutes'],
+        fallback: 60,
+      );
+
+  /// How often the UI ticker should poll the backend.
+  /// - If auto-update is disabled: no polling (still loads once on mount).
+  /// - If enabled and mode is interval: use the configured interval.
+  /// - If enabled and mode is daily: poll periodically to pick up the daily update.
+  Duration? get goldPriceTickerRefreshInterval {
+    if (!goldPriceAutoUpdateEnabled) return null;
+    final mode = goldPriceAutoUpdateMode;
+    if (mode == 'interval') {
+      final minutes = goldPriceAutoUpdateIntervalMinutes;
+      return Duration(minutes: minutes <= 0 ? 60 : minutes);
+    }
+    // daily (or unknown): poll every 10 minutes.
+    return const Duration(minutes: 10);
+  }
 
   List<int> get vatExemptKarats {
     final raw = _settings['vat_exempt_karats'];
@@ -246,6 +295,8 @@ class SettingsProvider with ChangeNotifier {
     try {
       // Try to load from local storage first
       final prefs = await SharedPreferences.getInstance();
+      _showGoldPriceTickerOnLogin =
+          prefs.getBool(_showGoldPriceTickerOnLoginKey) ?? false;
       final cachedSettings = prefs.getString('app_settings');
 
       if (cachedSettings != null) {

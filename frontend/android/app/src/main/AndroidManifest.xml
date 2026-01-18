@@ -5,7 +5,7 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     
     <application
-        android:label="مجوهرات خالد"
+        android:label="Khaled Jewelery"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

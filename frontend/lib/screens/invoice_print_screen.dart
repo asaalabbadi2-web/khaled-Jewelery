@@ -884,7 +884,7 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     final companyName =
         (_companyName != null && _companyName!.trim().isNotEmpty)
         ? _companyName!.trim()
-        : (_isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry');
+        : (_isArabic ? 'مجوهرات خالد' : 'Khaled Jewelery');
 
     final companyAddress = (_companyAddress ?? '').trim();
     final companyPhone = (_companyPhone ?? '').trim();
@@ -1548,7 +1548,7 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     final companyName =
         (_companyName != null && _companyName!.trim().isNotEmpty)
         ? _companyName!.trim()
-        : (widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry');
+        : (widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelery');
 
     final widgets = <pw.Widget>[];
 

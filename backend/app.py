@@ -27,6 +27,7 @@ try:
 	from flask import Flask, url_for
 	from models import db
 	from routes import api, ensure_weight_closing_support_accounts
+	from routes import public_api
 except ImportError as exc:
 	raise SystemExit(
 		"Missing backend dependencies. Run the backend using the venv:\n"
@@ -141,6 +142,7 @@ if bonus_bp:
 	app.register_blueprint(bonus_bp, url_prefix='/api')  # 🆕 تسجيل bonus routes
 app.register_blueprint(offices_bp)  # 🆕 تسجيل offices routes (has its own prefix /api/offices)
 app.register_blueprint(branches_bp)  # 🆕 تسجيل branches routes (has its own prefix /api/branches)
+app.register_blueprint(public_api, url_prefix='/api')  # 🆕 Public (unauthenticated) API
 app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخيراً)
 # recurring_journal_routes تستخدم نفس api blueprint، لذا لا حاجة لتسجيلها
 
@@ -246,5 +248,12 @@ if __name__ == "__main__":
 		start_gold_price_scheduler(app)
 	except Exception as e:
 		print(f"[WARNING] فشل تشغيل مجدول سعر الذهب: {e}")
+
+	# تفعيل مجدول النسخ الاحتياطي حسب الإعداد
+	try:
+		from backup_scheduler import start_backup_scheduler
+		start_backup_scheduler(app)
+	except Exception as e:
+		print(f"[WARNING] فشل تشغيل مجدول النسخ الاحتياطي: {e}")
 	
 	app.run(host="0.0.0.0", port=port, debug=debug_mode, threaded=True)

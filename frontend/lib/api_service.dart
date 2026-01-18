@@ -302,6 +302,37 @@ class ApiService {
     return response;
   }
 
+  Future<http.Response> _authedMultipartPost(
+    Uri uri, {
+    required Map<String, String> fields,
+    required List<int> fileBytes,
+    required String fileField,
+    required String filename,
+  }) async {
+    Future<http.Response> sendWithToken(String token) async {
+      final request = http.MultipartRequest('POST', uri);
+      request.headers['Authorization'] = 'Bearer $token';
+      request.fields.addAll(fields);
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          fileField,
+          fileBytes,
+          filename: filename,
+        ),
+      );
+      final streamed = await request.send();
+      return http.Response.fromStream(streamed);
+    }
+
+    var token = await _requireAuthToken();
+    var response = await sendWithToken(token);
+    if (response.statusCode == 401) {
+      token = await _refreshAccessTokenFromStorage();
+      response = await sendWithToken(token);
+    }
+    return response;
+  }
+
   String _errorMessageFromResponse(http.Response response) {
     try {
       final decoded = json.decode(utf8.decode(response.bodyBytes));
@@ -1104,6 +1135,20 @@ class ApiService {
     }
   }
 
+  /// Public gold price endpoint (no auth). Useful for the login screen.
+  Future<Map<String, dynamic>> getGoldPricePublic() async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/public/gold_price'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
   Future<Map<String, dynamic>> updateGoldPrice({double? priceUsdPerOz}) async {
     final response = await _authedPost(
       Uri.parse('$_baseUrl/gold_price/update'),
@@ -1117,6 +1162,44 @@ class ApiService {
     } else {
       throw Exception('Failed to update gold price');
     }
+  }
+
+  // ============================================
+  // 💾 Backup / Restore
+  // ============================================
+
+  Future<List<int>> downloadSystemBackupZip() async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/system/backup/download'),
+      headers: const {
+        'Accept': 'application/zip',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> restoreSystemBackupZip({
+    required List<int> zipBytes,
+    required String filename,
+  }) async {
+    final response = await _authedMultipartPost(
+      Uri.parse('$_baseUrl/system/backup/restore'),
+      fields: const {'confirm': 'RESTORE'},
+      fileBytes: zipBytes,
+      fileField: 'file',
+      filename: filename,
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'status': 'success'};
+    }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   // Gold Costing (Moving Average)

@@ -12,6 +12,7 @@ import 'accounting_mapping_screen_enhanced.dart';
 import 'payment_methods_screen_enhanced.dart';
 import 'safe_boxes_screen.dart';
 import 'gold_price_manual_screen_enhanced.dart';
+import 'backup_restore_screen.dart';
 import 'system_reset_screen.dart';
 import 'template_designer_screen.dart';
 import 'weight_closing_settings_screen.dart';
@@ -1248,6 +1249,21 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               label: const Text('تحديث سعر الذهب'),
             ),
             const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('إظهار شريط السعر في شاشة تسجيل الدخول'),
+              subtitle: const Text(
+                'يعرض شريط تحديث سعر الذهب قبل تسجيل الدخول (قد لا يتوفر إذا كان السيرفر يتطلب صلاحيات).',
+              ),
+              value: settingsProvider.showGoldPriceTickerOnLogin,
+              onChanged: (val) async {
+                await settingsProvider.setShowGoldPriceTickerOnLogin(val);
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('تم حفظ الإعداد')));
+              },
+            ),
             const Divider(height: 24),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -1403,6 +1419,33 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               onPressed: _openWeightClosingSettings,
               icon: const Icon(Icons.settings_suggest_outlined),
               label: const Text('فتح إعدادات التسكير'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _buildSectionCard(
+          icon: Icons.backup_outlined,
+          iconColor: _primaryColor,
+          title: 'النسخ الاحتياطي والاستعادة',
+          children: [
+            Text(
+              'قم بتنزيل نسخة احتياطية كملف ZIP، أو استعادة نسخة، أو ضبط النسخ التلقائي على السيرفر.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () {
+                final isArabic =
+                    Localizations.localeOf(context).languageCode == 'ar';
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BackupRestoreScreen(isArabic: isArabic),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('فتح شاشة النسخ الاحتياطي'),
             ),
           ],
         ),
