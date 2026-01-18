@@ -185,7 +185,14 @@ def _create_postgres_backup_to_file(dest_path: str) -> None:
         cmd += ['-U', str(parts['user'])]
     cmd.append(str(parts['database']))
 
-    subprocess.run(cmd, check=True, env=env)
+    try:
+        subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or '').strip()
+        raise RuntimeError(
+            'فشل إنشاء نسخة PostgreSQL عبر pg_dump.'
+            + (f" التفاصيل: {stderr}" if stderr else '')
+        ) from exc
 
 
 def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
@@ -217,7 +224,7 @@ def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
         env['PGPASSWORD'] = str(parts['password'])
 
     ext = os.path.splitext(src_backup_path)[1].lower()
-    if ext in {'.sql'}:
+    def _run_psql() -> None:
         cmd = ['psql']
         if parts.get('host'):
             cmd += ['-h', str(parts['host'])]
@@ -226,7 +233,16 @@ def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
         if parts.get('user'):
             cmd += ['-U', str(parts['user'])]
         cmd += ['-d', str(parts['database']), '-f', src_backup_path]
-        subprocess.run(cmd, check=True, env=env)
+        try:
+            subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or '').strip()
+            raise RuntimeError(
+                'فشل استعادة PostgreSQL عبر psql.' + (f" التفاصيل: {stderr}" if stderr else '')
+            ) from exc
+
+    if ext in {'.sql'}:
+        _run_psql()
         return
 
     # Prefer pg_restore (custom format from pg_dump -Fc)
@@ -239,7 +255,22 @@ def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
         cmd += ['-U', str(parts['user'])]
     cmd += ['-d', str(parts['database']), src_backup_path]
 
-    subprocess.run(cmd, check=True, env=env)
+    try:
+        subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or '').strip()
+
+        # Common case: a plain SQL dump was uploaded but named .dump/.backup.
+        # pg_restore will refuse and instruct to use psql.
+        lower = stderr.lower()
+        if 'text format dump' in lower or 'please use psql' in lower:
+            _run_psql()
+            return
+
+        raise RuntimeError(
+            'فشل استعادة PostgreSQL عبر pg_restore.'
+            + (f" التفاصيل: {stderr}" if stderr else '')
+        ) from exc
 
 
 def _restore_sqlite_from_backup_file(src_backup_path: str) -> None:
