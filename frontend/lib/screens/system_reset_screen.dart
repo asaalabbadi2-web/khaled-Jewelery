@@ -903,7 +903,7 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                     _buildResetCard(
                       title: 'المستوى 6: Full System Wipe',
                       description:
-                          'يمسح كل شيء بما فيه الخزائن/الموظفين/الفروع/المكاتب (يستثني الأدمن).',
+                          'يمسح كل شيء بما فيه الخزائن/الموظفين/الفروع/المكاتب/شجرة الحسابات (يستثني الأدمن).',
                       icon: Icons.delete_forever,
                       color: theme.colorScheme.error,
                       itemCount: fullWipeTotal,
@@ -944,57 +944,7 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                     ),
                   ),
 
-                  if (auth.isSystemAdmin) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Text(
-                        'خيارات قديمة (Legacy):',
-                        style: theme.textTheme.titleLarge,
-                      ),
-                    ),
-                    _buildResetCard(
-                      title:
-                          'Legacy: إعادة تهيئة كاملة (مع الحفاظ على شجرة الحسابات)',
-                      description:
-                          'حذف جميع البيانات التشغيلية مع الحفاظ على شجرة الحسابات (يحذف المستخدمين).',
-                      icon: Icons.delete_sweep,
-                      color: theme.colorScheme.error,
-                      itemCount: 1,
-                      forceDisabled: productionLock,
-                      disabledReason: destructiveDisabledReason,
-                      onDisabledTap: productionLock
-                          ? _showProductionLockMessage
-                          : null,
-                      onPressed: () => _performReset(
-                        'all',
-                        'إعادة تهيئة كاملة (Legacy)',
-                        'سيتم حذف جميع البيانات نهائياً مع الحفاظ على شجرة الحسابات. سيؤدي ذلك إلى حذف المستخدمين.',
-                        confirmToken: 'RESET',
-                      ),
-                    ),
-                    _buildResetCard(
-                      title: 'Legacy: إعادة تهيئة كاملة (مع حذف شجرة الحسابات)',
-                      description:
-                          'حذف كل شيء بما في ذلك شجرة الحسابات (يحذف المستخدمين).',
-                      icon: Icons.delete_forever,
-                      color: theme.colorScheme.error,
-                      itemCount: 1,
-                      forceDisabled: productionLock,
-                      disabledReason: destructiveDisabledReason,
-                      onDisabledTap: productionLock
-                          ? _showProductionLockMessage
-                          : null,
-                      onPressed: () => _performReset(
-                        'all_with_accounts',
-                        'إعادة تهيئة كاملة (Legacy)',
-                        'سيتم حذف كل شيء نهائياً من قاعدة البيانات (بما في ذلك شجرة الحسابات) وسيؤدي ذلك إلى حذف المستخدمين. لا يمكن التراجع.',
-                        confirmToken: 'WIPE-ALL',
-                      ),
-                    ),
-                  ],
+                  // Removed legacy reset options (replaced by Level 6 behavior).
                 ],
               ),
             ),

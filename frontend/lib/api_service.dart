@@ -1395,18 +1395,16 @@ class ApiService {
   Future<Map<String, dynamic>> addAccount(
     Map<String, dynamic> accountData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/accounts'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(accountData),
     );
     if (response.statusCode == 201) {
-      return json.decode(response.body);
-    } else {
-      throw Exception(
-        'Failed to add account: ${utf8.decode(response.bodyBytes)}',
-      );
+      return json.decode(utf8.decode(response.bodyBytes));
     }
+
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<Map<String, dynamic>> getNextAccountNumber(String parentNumber) async {
@@ -1427,7 +1425,7 @@ class ApiService {
     required String accountNumber,
     required String parentAccountNumber,
   }) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/accounts/validate-number'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode({
@@ -1449,21 +1447,21 @@ class ApiService {
   }
 
   Future<void> updateAccount(int id, Map<String, dynamic> accountData) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/accounts/$id'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(accountData),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to update account');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<void> deleteAccount(int id) async {
-    final response = await http.delete(Uri.parse('$_baseUrl/accounts/$id'));
+    final response = await _authedDelete(Uri.parse('$_baseUrl/accounts/$id'));
     if (response.statusCode != 200) {
       // Changed from 204 to 200
-      throw Exception('Failed to delete account');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 

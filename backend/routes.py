@@ -2059,6 +2059,7 @@ def _reset_full_system_wipe():
       1) transactions/operations (invoices/journals/vouchers + SafeBoxTransaction)
       2) associations (customers/suppliers + inventory snapshots)
       3) structure (SafeBox -> Users/Employees (keep admin) -> Branch -> Office)
+            4) chart of accounts (AccountingMapping -> Account)
     """
     try:
         from models import AppUser
@@ -2077,6 +2078,17 @@ def _reset_full_system_wipe():
         try:
             db.session.query(Employee).update({
                 Employee.gold_safe_box_id: None,
+                Employee.cash_safe_box_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        # Settings may reference SafeBox ids; detach before deleting SafeBoxes.
+        try:
+            db.session.query(Settings).update({
+                Settings.main_cash_safe_box_id: None,
+                Settings.sale_gold_safe_box_id: None,
+                Settings.main_scrap_gold_safe_box_id: None,
             }, synchronize_session=False)
         except Exception:
             pass
@@ -2122,6 +2134,26 @@ def _reset_full_system_wipe():
 
         try:
             Office.query.delete()
+        except Exception:
+            pass
+
+        # Level 4: chart of accounts
+        # Must delete mappings first, and null self-referential FKs before deleting accounts.
+        try:
+            AccountingMapping.query.delete()
+        except Exception:
+            pass
+
+        try:
+            db.session.query(Account).update({
+                Account.parent_id: None,
+                Account.memo_account_id: None,
+            }, synchronize_session=False)
+        except Exception:
+            pass
+
+        try:
+            Account.query.delete()
         except Exception:
             pass
 
