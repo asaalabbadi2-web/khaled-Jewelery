@@ -16,6 +16,8 @@ from posting_routes import posting_bp
 app.register_blueprint(posting_bp, url_prefix='/api')
 """
 
+from __future__ import annotations
+
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime, timedelta
 from models import (
@@ -31,6 +33,7 @@ from models import (
     SystemAlert,
     PaymentType,
     PaymentMethod,
+    Employee,
     SafeBox,
     SafeBoxTransaction,
 )
@@ -65,6 +68,209 @@ def _direction_for_invoice_gold(invoice_type: str) -> str:
     # Default: no-op direction is safer as 'out'/'in' both change inventory;
     # but we only create rows when weights exist, so choose 'out' only for explicit sale.
     return 'in'
+
+
+def _get_settings_row() -> Settings | None:
+    try:
+        return Settings.query.first()
+    except Exception:
+        return None
+
+
+def _resolve_employee_for_invoice(invoice: Invoice, for_scrap_purchase: bool = False) -> Employee | None:
+    if not invoice:
+        return None
+
+    # For scrap purchases, prefer explicit scrap holder.
+    if for_scrap_purchase:
+        try:
+            holder_id = getattr(invoice, 'scrap_holder_employee_id', None)
+            if holder_id not in (None, '', False):
+                try:
+                    holder_id = int(holder_id)
+                except Exception:
+                    holder_id = None
+            if holder_id:
+                return Employee.query.get(holder_id)
+        except Exception:
+            pass
+
+    # Fallback: invoice.employee
+    try:
+        emp = getattr(invoice, 'employee', None)
+        if emp and getattr(emp, 'id', None):
+            return emp
+    except Exception:
+        pass
+
+    try:
+        emp_id = getattr(invoice, 'employee_id', None)
+        if emp_id not in (None, '', False):
+            return Employee.query.get(int(emp_id))
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_cash_safe_box_id_for_invoice(
+    *,
+    invoice: Invoice,
+    pm_obj: PaymentMethod | None = None,
+    explicit_safe_box_id: int | None = None,
+) -> int | None:
+    """Resolve cash SafeBox for invoice payments.
+
+    Precedence:
+    1) explicit_safe_box_id
+    2) invoice.safe_box_id
+    3) employee cash safe (if enabled AND payment method is cash)
+    4) payment_method.default_safe_box_id
+    5) settings.main_cash_safe_box_id
+    6) default cash safe
+    """
+    if explicit_safe_box_id:
+        return int(explicit_safe_box_id)
+
+    try:
+        inv_sb = getattr(invoice, 'safe_box_id', None)
+        if inv_sb not in (None, '', 0, '0', False):
+            return int(inv_sb)
+    except Exception:
+        pass
+
+    settings_row = _get_settings_row()
+    emp = _resolve_employee_for_invoice(invoice, for_scrap_purchase=False)
+
+    def _is_cash_payment_method(pm: PaymentMethod | None) -> bool:
+        if pm is None:
+            return False
+        try:
+            pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
+            name = str(getattr(pm, 'name', '') or '').strip()
+            if pt in {'cash'}:
+                return True
+            # Backward-compat: infer from Arabic naming.
+            return 'نقد' in name
+        except Exception:
+            return False
+
+    if bool(getattr(settings_row, 'employee_cash_safes_enabled', False)) and _is_cash_payment_method(pm_obj):
+        try:
+            emp_cash = getattr(emp, 'cash_safe_box_id', None) if emp else None
+            if emp_cash not in (None, '', 0, '0', False):
+                return int(emp_cash)
+        except Exception:
+            pass
+
+    if pm_obj is not None:
+        try:
+            pm_sb = getattr(pm_obj, 'default_safe_box_id', None)
+            if pm_sb not in (None, '', 0, '0', False):
+                return int(pm_sb)
+        except Exception:
+            pass
+
+    try:
+        main_cash = getattr(settings_row, 'main_cash_safe_box_id', None) if settings_row else None
+        if main_cash not in (None, '', 0, '0', False):
+            return int(main_cash)
+    except Exception:
+        pass
+
+    try:
+        sb = SafeBox.get_default_by_type('cash')
+        if sb and sb.id:
+            return int(sb.id)
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_gold_safe_for_invoice(invoice: Invoice, karat: int) -> SafeBox | None:
+    """Resolve gold SafeBox for invoice gold movements.
+
+    Rules requested:
+    - Sale (new): use the configured sale gold safe (ذهب مشغول معروض للبيع)
+    - Sale (scrap): use main scrap safe (صندوق الكسر الرئيسي)
+    - Customer scrap purchase: use employee gold safe if enabled, else main scrap safe
+    - Otherwise: fallback to sale gold safe, then default gold safe
+    """
+    settings_row = _get_settings_row()
+    invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
+    gold_type = (str(getattr(invoice, 'gold_type', '') or '').strip().lower() or 'new')
+
+    is_customer_scrap_purchase = (invoice_type == 'شراء من عميل' and gold_type == 'scrap')
+    is_scrap_sale = (invoice_type in ('بيع', 'مرتجع بيع') and gold_type == 'scrap')
+
+    # Allow explicit invoice.safe_box_id override for gold if it points to an active gold safe.
+    try:
+        inv_sb_id = getattr(invoice, 'safe_box_id', None)
+        if inv_sb_id not in (None, '', 0, '0', False):
+            sb = SafeBox.query.get(int(inv_sb_id))
+            if sb and (sb.safe_type or '').lower() == 'gold' and bool(getattr(sb, 'is_active', True)):
+                return sb
+    except Exception:
+        pass
+
+    # Scrap sale: debit/credit gold inventory should hit main scrap safe (not "sale" safe).
+    if is_scrap_sale:
+        try:
+            scrap_sb_id = getattr(settings_row, 'main_scrap_gold_safe_box_id', None) if settings_row else None
+            if scrap_sb_id not in (None, '', 0, '0', False):
+                sb = SafeBox.query.get(int(scrap_sb_id))
+                if sb and bool(getattr(sb, 'is_active', True)):
+                    return sb
+        except Exception:
+            pass
+
+    if invoice_type == 'بيع' or invoice_type == 'مرتجع بيع':
+        try:
+            sale_sb_id = getattr(settings_row, 'sale_gold_safe_box_id', None) if settings_row else None
+            if sale_sb_id not in (None, '', 0, '0', False):
+                sb = SafeBox.query.get(int(sale_sb_id))
+                if sb and bool(getattr(sb, 'is_active', True)):
+                    return sb
+        except Exception:
+            pass
+
+    if is_customer_scrap_purchase:
+        emp = _resolve_employee_for_invoice(invoice, for_scrap_purchase=True)
+        if bool(getattr(settings_row, 'employee_gold_safes_enabled', False)):
+            try:
+                emp_gold = getattr(emp, 'gold_safe_box_id', None) if emp else None
+                if emp_gold not in (None, '', 0, '0', False):
+                    sb = SafeBox.query.get(int(emp_gold))
+                    if sb and bool(getattr(sb, 'is_active', True)):
+                        return sb
+            except Exception:
+                pass
+
+        try:
+            scrap_sb_id = getattr(settings_row, 'main_scrap_gold_safe_box_id', None) if settings_row else None
+            if scrap_sb_id not in (None, '', 0, '0', False):
+                sb = SafeBox.query.get(int(scrap_sb_id))
+                if sb and bool(getattr(sb, 'is_active', True)):
+                    return sb
+        except Exception:
+            pass
+
+    # Default: try configured sale gold safe
+    try:
+        sale_sb_id = getattr(settings_row, 'sale_gold_safe_box_id', None) if settings_row else None
+        if sale_sb_id not in (None, '', 0, '0', False):
+            sb = SafeBox.query.get(int(sale_sb_id))
+            if sb and bool(getattr(sb, 'is_active', True)):
+                return sb
+    except Exception:
+        pass
+
+    # Last resort: unified gold safe by karat
+    try:
+        return SafeBox.get_gold_safe_by_karat(karat)
+    except Exception:
+        return None
 
 
 def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str = None):
@@ -151,6 +357,14 @@ def _append_safe_transactions_for_invoice_payments(invoice: Invoice, created_by:
             resolved_safe_box_id = getattr(invoice, 'safe_box_id', None)
         if resolved_safe_box_id is None and pm_obj is not None:
             resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
+
+        if resolved_safe_box_id is None:
+            # Feature-toggles fallback: employee cash safe or main cash safe.
+            resolved_safe_box_id = _resolve_cash_safe_box_id_for_invoice(
+                invoice=invoice,
+                pm_obj=pm_obj,
+                explicit_safe_box_id=None,
+            )
 
         if resolved_safe_box_id is None:
             raise ValueError('missing_safe_box_for_payment')
@@ -244,7 +458,7 @@ def _append_safe_transactions_for_invoice_payments(invoice: Invoice, created_by:
         if grams <= 0.0005:
             continue
 
-        sb = SafeBox.get_gold_safe_by_karat(karat)
+        sb = _resolve_gold_safe_for_invoice(invoice, karat)
         if not sb:
             raise Exception(f'لا توجد خزينة ذهب نشطة لعيار {karat}')
 

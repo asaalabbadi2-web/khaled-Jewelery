@@ -1363,6 +1363,27 @@ def update_settings():
     # 🆕 إعدادات إضافية كانت تُرسل من الواجهة دون أن تُحفظ
     if 'allow_manual_invoice_items' in data:
         settings.allow_manual_invoice_items = data['allow_manual_invoice_items']
+
+    # ==========================================
+    # 🆕 Feature Toggles لمسار خزائن الموظفين + خزائن افتراضية
+    # ==========================================
+    if 'employee_cash_safes_enabled' in data:
+        settings.employee_cash_safes_enabled = bool(data.get('employee_cash_safes_enabled'))
+    if 'employee_gold_safes_enabled' in data:
+        settings.employee_gold_safes_enabled = bool(data.get('employee_gold_safes_enabled'))
+
+    # Default SafeBoxes
+    for key in ('main_cash_safe_box_id', 'sale_gold_safe_box_id', 'main_scrap_gold_safe_box_id'):
+        if key in data:
+            raw = data.get(key)
+            if raw in (None, '', 0, '0', False):
+                setattr(settings, key, None)
+            else:
+                try:
+                    setattr(settings, key, int(raw))
+                except Exception:
+                    # Ignore invalid values (keep existing)
+                    pass
     if 'manufacturing_wage_mode' in data:
         settings.manufacturing_wage_mode = data['manufacturing_wage_mode']
     if 'voucher_auto_post' in data:
@@ -4233,6 +4254,58 @@ def add_invoice_payment(invoice_id: int):
     if not pm_obj:
         return jsonify({'error': 'payment_method_not_found'}), 404
 
+    def _fallback_cash_safe_box_id() -> int | None:
+        """Fallback cash SafeBox when none is supplied/configured.
+
+        Precedence:
+        - If Settings.employee_cash_safes_enabled and invoice.employee has cash_safe_box_id -> use it
+        - Else Settings.main_cash_safe_box_id
+        - Else default cash safe
+        """
+        try:
+            settings_row = Settings.query.first()
+        except Exception:
+            settings_row = None
+
+        if bool(getattr(settings_row, 'employee_cash_safes_enabled', False)):
+            try:
+                emp = getattr(invoice, 'employee', None)
+                if not emp and getattr(invoice, 'employee_id', None):
+                    emp = Employee.query.get(int(invoice.employee_id))
+                emp_cash = getattr(emp, 'cash_safe_box_id', None) if emp else None
+                if emp_cash not in (None, '', 0, '0', False):
+                    return int(emp_cash)
+            except Exception:
+                pass
+
+        try:
+            main_cash = getattr(settings_row, 'main_cash_safe_box_id', None) if settings_row else None
+            if main_cash not in (None, '', 0, '0', False):
+                return int(main_cash)
+        except Exception:
+            pass
+
+        try:
+            sb = SafeBox.get_default_by_type('cash')
+            if sb and sb.id:
+                return int(sb.id)
+        except Exception:
+            pass
+
+        return None
+
+    def _is_cash_payment_method(pm: PaymentMethod | None) -> bool:
+        if pm is None:
+            return False
+        try:
+            pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
+            name = str(getattr(pm, 'name', '') or '').strip()
+            if pt in {'cash'}:
+                return True
+            return 'نقد' in name
+        except Exception:
+            return False
+
     # Resolve safe box (single source of truth: PaymentMethod -> SafeBox -> Account)
     resolved_safe_box_id = None
     try:
@@ -4245,8 +4318,21 @@ def add_invoice_payment(invoice_id: int):
     if resolved_safe_box_id is None:
         resolved_safe_box_id = invoice.safe_box_id
 
+    if resolved_safe_box_id is None and _is_cash_payment_method(pm_obj):
+        # When employee cash safes are enabled, we want cash payments to go to the
+        # employee cash safe (or main cash safe) even if the payment method has a default.
+        try:
+            settings_row = Settings.query.first()
+        except Exception:
+            settings_row = None
+        if bool(getattr(settings_row, 'employee_cash_safes_enabled', False)):
+            resolved_safe_box_id = _fallback_cash_safe_box_id()
+
     if resolved_safe_box_id is None:
         resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
+
+    if resolved_safe_box_id is None:
+        resolved_safe_box_id = _fallback_cash_safe_box_id()
 
     if resolved_safe_box_id is None:
         return jsonify({
@@ -5950,6 +6036,47 @@ def add_invoice():
 
         # 🆕 --- 1.5. Create Invoice Payments (وسائل دفع متعددة) ---
         print(f"🟢 Step 2: Creating invoice payments (if any)...")
+
+        def _fallback_cash_safe_box_id() -> int | None:
+            """Fallback cash SafeBox when none is supplied/configured.
+
+            Precedence:
+            - If Settings.employee_cash_safes_enabled and invoice employee has cash_safe_box_id -> use it
+            - Else Settings.main_cash_safe_box_id
+            - Else default cash safe
+            """
+            try:
+                settings_row = Settings.query.first()
+            except Exception:
+                settings_row = None
+
+            if bool(getattr(settings_row, 'employee_cash_safes_enabled', False)):
+                try:
+                    emp = getattr(new_invoice, 'employee', None)
+                    if not emp and getattr(new_invoice, 'employee_id', None):
+                        emp = Employee.query.get(int(new_invoice.employee_id))
+                    emp_cash = getattr(emp, 'cash_safe_box_id', None) if emp else None
+                    if emp_cash not in (None, '', 0, '0', False):
+                        return int(emp_cash)
+                except Exception:
+                    pass
+
+            try:
+                main_cash = getattr(settings_row, 'main_cash_safe_box_id', None) if settings_row else None
+                if main_cash not in (None, '', 0, '0', False):
+                    return int(main_cash)
+            except Exception:
+                pass
+
+            try:
+                sb = SafeBox.get_default_by_type('cash')
+                if sb and sb.id:
+                    return int(sb.id)
+            except Exception:
+                pass
+
+            return None
+
         if payments_data and isinstance(payments_data, list) and len(payments_data) > 0:
             # إنشاء سجل لكل وسيلة دفع
             for payment in payments_data:
@@ -5967,8 +6094,19 @@ def add_invoice():
                     resolved_safe_box_id = None
                 if resolved_safe_box_id is None:
                     resolved_safe_box_id = new_invoice.safe_box_id
+                if resolved_safe_box_id is None and _is_cash_payment_method(pm_obj):
+                    try:
+                        settings_row = Settings.query.first()
+                    except Exception:
+                        settings_row = None
+                    if bool(getattr(settings_row, 'employee_cash_safes_enabled', False)):
+                        resolved_safe_box_id = _fallback_cash_safe_box_id()
+
                 if resolved_safe_box_id is None and pm_obj is not None:
                     resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
+
+                if resolved_safe_box_id is None:
+                    resolved_safe_box_id = _fallback_cash_safe_box_id()
 
                 if resolved_safe_box_id is None:
                     db.session.rollback()
@@ -6068,6 +6206,8 @@ def add_invoice():
             pm_commission_rate = pm_obj.commission_rate if pm_obj else 0.0
 
             resolved_safe_box_id = new_invoice.safe_box_id or (getattr(pm_obj, 'default_safe_box_id', None) if pm_obj else None)
+            if resolved_safe_box_id is None:
+                resolved_safe_box_id = _fallback_cash_safe_box_id()
             if resolved_safe_box_id is None:
                 db.session.rollback()
                 return jsonify({
@@ -6362,7 +6502,9 @@ def add_invoice():
                 except Exception:
                     target_gold_safe_id = None
 
-            if target_gold_safe_id is not None:
+            # NOTE: avoid double-counting; safebox gold movements are applied on posting.
+            # Only record immediate receipt when invoice is already posted at creation time.
+            if target_gold_safe_id is not None and bool(getattr(new_invoice, 'is_posted', False)):
                 try:
                     gold_safe = SafeBox.query.get(target_gold_safe_id)
                     if gold_safe and (gold_safe.safe_type or '').lower() == 'gold' and bool(getattr(gold_safe, 'is_active', True)):
@@ -6388,7 +6530,6 @@ def add_invoice():
                                 )
                             )
                 except Exception:
-                    # Do not fail invoice creation if safebox movement cannot be recorded.
                     pass
 
         # --- 3. Determine Accounts and Journal Entry Logic ---
@@ -13450,6 +13591,9 @@ def create_employee():
         get_employee_department_from_code,
         ensure_employee_group_accounts,
     )
+    from advance_account_helpers import get_or_create_employee_advance_account
+    from employee_gold_safe_helpers import create_employee_gold_safe
+    from employee_cash_safe_helpers import create_employee_cash_safe
     
     data = request.get_json() or {}
 
@@ -13521,6 +13665,11 @@ def create_employee():
         created_by=data.get('created_by'),
     )
 
+    created_gold_safe = None
+    created_gold_safe_account = None
+    created_cash_safe = None
+    created_cash_safe_account = None
+
     # Optional: assign employee gold safe box (NULL/0 => main gold safe)
     if 'gold_safe_box_id' in data:
         raw_gold_safe_id = data.get('gold_safe_box_id')
@@ -13544,8 +13693,68 @@ def create_employee():
 
         employee.gold_safe_box_id = gold_safe_id
 
+    # Optional: assign employee cash safe box (NULL/0 => main cash safe)
+    if 'cash_safe_box_id' in data:
+        raw_cash_safe_id = data.get('cash_safe_box_id')
+        cash_safe_id = None
+        if raw_cash_safe_id not in (None, '', False):
+            try:
+                cash_safe_id = int(raw_cash_safe_id)
+            except Exception:
+                return jsonify({'error': 'cash_safe_box_id must be numeric'}), 400
+            if cash_safe_id == 0:
+                cash_safe_id = None
+
+        if cash_safe_id is not None:
+            sb = SafeBox.query.get(cash_safe_id)
+            if not sb:
+                return jsonify({'error': f'Cash safe box with ID {cash_safe_id} not found'}), 404
+            if (sb.safe_type or '').lower() != 'cash':
+                return jsonify({'error': 'Selected safe box is not a cash safe'}), 400
+            if not bool(getattr(sb, 'is_active', True)):
+                return jsonify({'error': 'Selected cash safe box is not active'}), 400
+
+        employee.cash_safe_box_id = cash_safe_id
+
+    # Optional: auto-create a dedicated employee gold safe if not explicitly provided.
+    # This creates: Account (tracks_weight=True) + SafeBox (gold, karat=None) and links it to employee.
+    auto_create_gold_safe = bool(data.get('auto_create_gold_safe_box', False))
+    if auto_create_gold_safe and (employee.gold_safe_box_id in (None, 0)):
+        try:
+            created_by = data.get('created_by', 'system')
+            created_gold_safe_account, created_gold_safe = create_employee_gold_safe(
+                employee_name=name,
+                employee_code=employee_code,
+                created_by=created_by,
+            )
+            employee.gold_safe_box_id = created_gold_safe.id
+        except Exception as e:
+            return jsonify({'error': f'فشل إنشاء خزينة ذهب للموظف: {str(e)}'}), 500
+
+    # Optional: auto-create a dedicated employee cash safe if not explicitly provided.
+    auto_create_cash_safe = bool(data.get('auto_create_cash_safe_box', False))
+    if auto_create_cash_safe and (getattr(employee, 'cash_safe_box_id', None) in (None, 0)):
+        try:
+            created_by = data.get('created_by', 'system')
+            created_cash_safe_account, created_cash_safe = create_employee_cash_safe(
+                employee_name=name,
+                employee_code=employee_code,
+                created_by=created_by,
+            )
+            employee.cash_safe_box_id = created_cash_safe.id
+        except Exception as e:
+            return jsonify({'error': f'فشل إنشاء خزينة نقدية للموظف: {str(e)}'}), 500
+
     try:
         db.session.add(employee)
+        db.session.flush()  # ensure employee.id is available
+
+        # Optional: auto-create employee advance account (140xxx) at employee creation time.
+        # Default remains off to avoid chart clutter; enable by sending auto_create_advance_account=true.
+        created_advance_account = None
+        if bool(data.get('auto_create_advance_account', False)):
+            created_by = data.get('created_by', 'system')
+            created_advance_account = get_or_create_employee_advance_account(employee.id, created_by)
         db.session.commit()
         
         result = employee.to_dict(include_details=True)
@@ -13554,6 +13763,33 @@ def create_employee():
                 'account_number': auto_created_account.account_number,
                 'account_name': auto_created_account.name
             }
+
+        if created_gold_safe and created_gold_safe_account:
+            result['auto_created_gold_safe_box'] = {
+                'safe_box_id': int(created_gold_safe.id),
+                'safe_box_name': created_gold_safe.name,
+                'account_id': int(created_gold_safe_account.id),
+                'account_number': created_gold_safe_account.account_number,
+                'account_name': created_gold_safe_account.name,
+            }
+
+        if created_cash_safe:
+            result['auto_created_cash_safe_box'] = {
+                'safe_box_id': int(created_cash_safe.id),
+                'safe_box_name': created_cash_safe.name,
+                'account_id': int(created_cash_safe.account_id),
+                'account_number': created_cash_safe_account.account_number if created_cash_safe_account else None,
+                'account_name': created_cash_safe_account.name if created_cash_safe_account else None,
+            }
+
+        if 'created_advance_account' not in result and 'auto_create_advance_account' in data:
+            # Only include when explicitly requested.
+            if created_advance_account:
+                result['auto_created_advance_account'] = {
+                    'account_id': int(created_advance_account.id),
+                    'account_number': created_advance_account.account_number,
+                    'account_name': created_advance_account.name,
+                }
         
         return jsonify(result), 201
     except Exception as e:
@@ -13610,6 +13846,28 @@ def update_employee(employee_id):
                 return jsonify({'error': 'Selected gold safe box is not active'}), 400
 
         employee.gold_safe_box_id = gold_safe_id
+
+    if 'cash_safe_box_id' in data:
+        raw_cash_safe_id = data.get('cash_safe_box_id')
+        cash_safe_id = None
+        if raw_cash_safe_id not in (None, '', False):
+            try:
+                cash_safe_id = int(raw_cash_safe_id)
+            except Exception:
+                return jsonify({'error': 'cash_safe_box_id must be numeric'}), 400
+            if cash_safe_id == 0:
+                cash_safe_id = None
+
+        if cash_safe_id is not None:
+            sb = SafeBox.query.get(cash_safe_id)
+            if not sb:
+                return jsonify({'error': f'Cash safe box with ID {cash_safe_id} not found'}), 404
+            if (sb.safe_type or '').lower() != 'cash':
+                return jsonify({'error': 'Selected safe box is not a cash safe'}), 400
+            if not bool(getattr(sb, 'is_active', True)):
+                return jsonify({'error': 'Selected cash safe box is not active'}), 400
+
+        employee.cash_safe_box_id = cash_safe_id
 
     if 'is_active' in data:
         employee.is_active = bool(data['is_active'])
@@ -16277,7 +16535,12 @@ def list_safe_boxes():
         query = query.filter_by(is_active=is_active.lower() == 'true')
     
     if karat:
-        query = query.filter_by(karat=karat)
+        # For unified gold safes, allow karat-filtered queries to still return
+        # the general (karat=None) safe.
+        if (safe_type or '').strip().lower() == 'gold':
+            query = query.filter((SafeBox.karat == karat) | (SafeBox.karat.is_(None)))
+        else:
+            query = query.filter_by(karat=karat)
     
     safe_boxes = query.order_by(SafeBox.is_default.desc(), SafeBox.name).all()
     
@@ -16320,18 +16583,22 @@ def create_safe_box():
         return jsonify({'error': 'الحساب المحدد غير موجود'}), 404
     
     # التحقق من خزينة الذهب: الحساب يجب أن يدعم تتبع الوزن (tracks_weight=True)
+    karat = None
     if data['safe_type'] == 'gold':
-        # العيار اختياري: إذا حُدد، يجب أن يكون صحيحاً
-        karat = data.get('karat')
-        if karat:
-            try:
-                karat = int(karat)
-            except Exception:
-                return jsonify({'error': 'العيار غير صالح'}), 400
-            if karat not in (18, 21, 22, 24):
-                return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
-        else:
-            karat = None  # خزينة متعددة العيارات
+        # ✅ في النظام الموحّد: خزائن الذهب متعددة العيارات دائماً (karat=None).
+        # نسمح بتمرير karat من العميل للتوافق، لكن نتجاهله افتراضياً.
+        force_karat_specific = (request.args.get('force_karat_specific') or '').strip().lower() == 'true'
+        if force_karat_specific:
+            karat_in = data.get('karat')
+            if karat_in:
+                try:
+                    karat = int(karat_in)
+                except Exception:
+                    return jsonify({'error': 'العيار غير صالح'}), 400
+                if karat not in (18, 21, 22, 24):
+                    return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
+            else:
+                karat = None
 
         tracks_weight = bool(getattr(account, 'tracks_weight', False))
         if not tracks_weight:
@@ -16395,18 +16662,37 @@ def update_safe_box(safe_box_id):
             safe_box.account_id = data['account_id']
         
         if 'karat' in data:
-            # العيار اختياري للخزائن الذهبية
-            karat_value = data['karat']
-            if karat_value:
-                try:
-                    karat_value = int(karat_value)
-                    if karat_value not in (18, 21, 22, 24):
-                        return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
-                except Exception:
-                    return jsonify({'error': 'العيار غير صالح'}), 400
+            # ✅ في النظام الموحّد: خزائن الذهب متعددة العيارات دائماً (karat=None).
+            # نسمح بالوضع القديم فقط عند force_karat_specific=true.
+            effective_type_now = (safe_box.safe_type or '').strip().lower()
+            if effective_type_now == 'gold':
+                force_karat_specific = (request.args.get('force_karat_specific') or '').strip().lower() == 'true'
+                if not force_karat_specific:
+                    safe_box.karat = None
+                else:
+                    karat_value = data['karat']
+                    if karat_value:
+                        try:
+                            karat_value = int(karat_value)
+                            if karat_value not in (18, 21, 22, 24):
+                                return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
+                        except Exception:
+                            return jsonify({'error': 'العيار غير صالح'}), 400
+                    else:
+                        karat_value = None
+                    safe_box.karat = karat_value
             else:
-                karat_value = None
-            safe_box.karat = karat_value
+                karat_value = data['karat']
+                if karat_value:
+                    try:
+                        karat_value = int(karat_value)
+                        if karat_value not in (18, 21, 22, 24):
+                            return jsonify({'error': 'العيار يجب أن يكون 18, 21, 22, أو 24'}), 400
+                    except Exception:
+                        return jsonify({'error': 'العيار غير صالح'}), 400
+                else:
+                    karat_value = None
+                safe_box.karat = karat_value
 
         # ✅ تحقق إضافي: خزنة الذهب تحتاج حساباً يدعم تتبع الوزن
         effective_type = (safe_box.safe_type or '').strip().lower()
@@ -16421,9 +16707,15 @@ def update_safe_box(safe_box_id):
                     'error': 'الحساب المرتبط غير مناسب لخزنة الذهب',
                     'details': 'يجب أن يتتبع الوزن (tracks_weight=True)'
                 }), 400
+
+            # في الوضع الموحّد: امسح العيار دائماً (إلا إذا تم فرض خلاف ذلك عبر query param)
+            force_karat_specific = (request.args.get('force_karat_specific') or '').strip().lower() == 'true'
+            if not force_karat_specific:
+                safe_box.karat = None
         else:
             # لو تغير النوع من ذهب إلى غير ذهب، امسح العيار للحفاظ على الاتساق.
             safe_box.karat = None
+
         
         if 'bank_name' in data:
             safe_box.bank_name = data['bank_name']
@@ -16533,6 +16825,120 @@ def get_gold_safe_box_by_karat(karat):
         return jsonify({'error': f'لا توجد خزينة ذهب لعيار {karat}'}), 404
     
     return jsonify(safe_box.to_dict(include_account=True, include_balance=True))
+
+
+@api.route('/safe-boxes/gold/unify', methods=['POST'])
+@require_permission('safe_boxes.edit')
+def unify_gold_safe_boxes():
+    """Unify legacy karat-specific gold safe boxes into a single multi-karat safe.
+
+    This helps move from the old design (one safe per karat) to the new design
+    (one safe that tracks all karats).
+
+    Body JSON (optional):
+      - target_safe_box_id: int
+      - dry_run: bool (default false)
+
+    Effects when not dry_run:
+      - Ensures target safe has karat=None and is_default=True
+      - Reassigns SafeBoxTransaction/Invoice/PaymentMethod/Employee references
+        from other karat-specific gold safes to target
+      - Deactivates the merged legacy safes
+    """
+
+    data = request.get_json(silent=True) or {}
+    dry_run = bool(data.get('dry_run', False))
+    target_id = data.get('target_safe_box_id')
+
+    if target_id is not None:
+        try:
+            target_id = int(target_id)
+        except Exception:
+            return jsonify({'error': 'invalid_target_safe_box_id'}), 400
+
+    # Pick target
+    target = None
+    if target_id:
+        target = SafeBox.query.get(target_id)
+        if not target:
+            return jsonify({'error': 'target_safe_box_not_found'}), 404
+        if (target.safe_type or '').strip().lower() != 'gold':
+            return jsonify({'error': 'target_safe_box_must_be_gold'}), 400
+    else:
+        target = SafeBox.query.filter_by(safe_type='gold', karat=None, is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+        if not target:
+            target = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+
+    if not target:
+        return jsonify({'error': 'no_gold_safe_boxes_found'}), 404
+
+    legacy = (
+        SafeBox.query
+        .filter(SafeBox.safe_type == 'gold', SafeBox.id != target.id, SafeBox.karat.isnot(None))
+        .all()
+    )
+
+    summary = {
+        'dry_run': dry_run,
+        'target_safe_box_id': int(target.id),
+        'target_name': target.name,
+        'legacy_safe_boxes': [
+            {'id': int(sb.id), 'name': sb.name, 'karat': sb.karat, 'is_active': bool(sb.is_active)}
+            for sb in legacy
+        ],
+        'moved': {
+            'safe_box_transactions': 0,
+            'invoices': 0,
+            'payment_methods': 0,
+            'employees': 0,
+        },
+        'deactivated_safe_boxes': 0,
+    }
+
+    if dry_run:
+        return jsonify({'status': 'ok', 'summary': summary}), 200
+
+    try:
+        # Ensure target is the unified safe
+        target.karat = None
+        target.is_active = True
+
+        # Make it default gold safe (and clear others)
+        SafeBox.query.filter(SafeBox.safe_type == 'gold', SafeBox.id != target.id, SafeBox.is_default == True).update({'is_default': False})
+        target.is_default = True
+
+        for sb in legacy:
+            # Rewire references
+            summary['moved']['safe_box_transactions'] += int(
+                SafeBoxTransaction.query.filter_by(safe_box_id=sb.id).update({'safe_box_id': target.id})
+            )
+            summary['moved']['invoices'] += int(
+                Invoice.query.filter_by(safe_box_id=sb.id).update({'safe_box_id': target.id})
+            )
+            summary['moved']['payment_methods'] += int(
+                PaymentMethod.query.filter_by(default_safe_box_id=sb.id).update({'default_safe_box_id': target.id})
+            )
+            summary['moved']['employees'] += int(
+                Employee.query.filter_by(gold_safe_box_id=sb.id).update({'gold_safe_box_id': target.id})
+            )
+
+            # Deactivate legacy safe
+            sb.is_active = False
+            sb.is_default = False
+            try:
+                note = (sb.notes or '').strip()
+                prefix = 'تم دمجها في خزينة ذهب موحّدة'
+                sb.notes = (note + ('\n' if note else '') + prefix + f' (target_id={target.id})')
+            except Exception:
+                pass
+            summary['deactivated_safe_boxes'] += 1
+
+        db.session.commit()
+        return jsonify({'status': 'ok', 'summary': summary}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @api.route('/safe-boxes/transfer-voucher', methods=['POST'])

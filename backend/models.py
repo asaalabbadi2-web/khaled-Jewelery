@@ -1801,6 +1801,28 @@ class Settings(db.Model):
     # 🆕 السماح بالدفع الجزئي/البيع الآجل عند إنشاء الفواتير
     # عند التعطيل: يجب أن يساوي مجموع الدفعات إجمالي الفاتورة
     allow_partial_invoice_payments = db.Column(db.Boolean, default=False)
+
+    # ==========================================
+    # 🆕 Feature Toggles لمسار خزائن الموظفين
+    # ==========================================
+    # عند التفعيل: تُستخدم خزائن الموظفين (إن كانت مربوطة بالموظف) كمسار افتراضي للنقد/الذهب
+    employee_cash_safes_enabled = db.Column(db.Boolean, default=False)
+    employee_gold_safes_enabled = db.Column(db.Boolean, default=False)
+
+    # ==========================================
+    # 🆕 خزائن افتراضية للنظام (Fallback)
+    # ==========================================
+    # الخزينة النقدية الرئيسية (صندوق المحل)
+    main_cash_safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=True)
+    main_cash_safe_box = db.relationship('SafeBox', foreign_keys=[main_cash_safe_box_id])
+
+    # خزينة الذهب للمعروض للبيع (ذهب مشغول معروض للبيع)
+    sale_gold_safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=True)
+    sale_gold_safe_box = db.relationship('SafeBox', foreign_keys=[sale_gold_safe_box_id])
+
+    # خزينة الذهب للكسر الرئيسية (صندوق الكسر الرئيسي)
+    main_scrap_gold_safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=True)
+    main_scrap_gold_safe_box = db.relationship('SafeBox', foreign_keys=[main_scrap_gold_safe_box_id])
     
     # 🆕 إعدادات السندات
     voucher_auto_post = db.Column(db.Boolean, default=False)  # False = يتطلب اعتماد قبل الترحيل، True = ترحيل تلقائي
@@ -1891,6 +1913,15 @@ class Settings(db.Model):
             'idle_timeout_enabled': bool(getattr(self, 'idle_timeout_enabled', True)),
             'idle_timeout_minutes': int(getattr(self, 'idle_timeout_minutes', 30) or 30),
             'allow_partial_invoice_payments': bool(self.allow_partial_invoice_payments),
+
+            # 🆕 Feature Toggles (مسار خزائن الموظفين)
+            'employee_cash_safes_enabled': bool(getattr(self, 'employee_cash_safes_enabled', False)),
+            'employee_gold_safes_enabled': bool(getattr(self, 'employee_gold_safes_enabled', False)),
+
+            # 🆕 Default SafeBoxes (IDs)
+            'main_cash_safe_box_id': getattr(self, 'main_cash_safe_box_id', None),
+            'sale_gold_safe_box_id': getattr(self, 'sale_gold_safe_box_id', None),
+            'main_scrap_gold_safe_box_id': getattr(self, 'main_scrap_gold_safe_box_id', None),
             'manufacturing_wage_mode': (self.manufacturing_wage_mode or 'expense'),
             'voucher_auto_post': self.voucher_auto_post,
             'weight_closing_settings': json.loads(self.weight_closing_settings) if self.weight_closing_settings else None,
@@ -2318,6 +2349,12 @@ class Employee(db.Model):
         db.ForeignKey('safe_box.id', ondelete='RESTRICT'),
         nullable=True,
     )
+    # خزنة النقد الخاصة بالموظف (اختياري). إذا كانت NULL فهذا يعني استخدام الخزنة النقدية الرئيسية.
+    cash_safe_box_id = db.Column(
+        db.Integer,
+        db.ForeignKey('safe_box.id', ondelete='RESTRICT'),
+        nullable=True,
+    )
     is_active = db.Column(db.Boolean, default=True, index=True, nullable=False)
     notes = db.Column(db.Text, nullable=True)
 
@@ -2327,6 +2364,7 @@ class Employee(db.Model):
 
     account = db.relationship('Account', backref=db.backref('employees', lazy='dynamic'))
     gold_safe_box = db.relationship('SafeBox', foreign_keys=[gold_safe_box_id])
+    cash_safe_box = db.relationship('SafeBox', foreign_keys=[cash_safe_box_id])
 
     def to_dict(self, include_details: bool = False, include_bonuses: bool = False):
         data = {
@@ -2343,6 +2381,7 @@ class Employee(db.Model):
             'termination_date': self.termination_date.isoformat() if self.termination_date else None,
             'account_id': self.account_id,
             'gold_safe_box_id': self.gold_safe_box_id,
+            'cash_safe_box_id': self.cash_safe_box_id,
             'is_active': self.is_active,
             'notes': self.notes,
             'created_by': self.created_by,
@@ -2867,17 +2906,20 @@ class SafeBox(db.Model):
     def get_gold_safe_by_karat(karat):
         """الحصول على خزينة الذهب حسب العيار
         
-        يبحث أولاً عن خزينة محددة بهذا العيار.
-        إذا لم توجد، يعيد أول خزينة عامة (بدون عيار محدد).
+        ✅ سلوك النظام الموحّد (المفضل):
+        - إذا وُجدت خزينة ذهب عامة (karat=None) نشطة، تُستخدم لكل العيارات.
+
+        سلوك التوافق للخلف:
+        - إذا لم توجد خزينة عامة، يبحث عن خزينة محددة بهذا العيار.
         """
-        # محاولة إيجاد خزينة محددة بالعيار
-        specific = SafeBox.query.filter_by(safe_type='gold', karat=karat, is_active=True).first()
-        if specific:
-            return specific
-        
-        # إذا لم توجد، استخدم خزينة ذهب عامة (karat=None)
+        # Prefer a unified multi-karat gold safe when available.
         general = SafeBox.query.filter_by(safe_type='gold', karat=None, is_active=True).first()
-        return general
+        if general:
+            return general
+
+        # Backward compatible behavior: fall back to karat-specific safe.
+        specific = SafeBox.query.filter_by(safe_type='gold', karat=karat, is_active=True).first()
+        return specific
 
 
 # ==========================================

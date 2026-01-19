@@ -117,30 +117,23 @@ def seed_safe_boxes():
                     created_by='system'
                 ))
         
-        # 3. خزائن الذهب (حسب العيار)
-        karats = [18, 21, 22, 24]
-        karat_names = {
-            18: 'صندوق الذهب عيار 18',
-            21: 'صندوق الذهب عيار 21',
-            22: 'صندوق الذهب عيار 22',
-            24: 'صندوق الكسر عيار 24',
-        }
-        
-        for karat in karats:
-            if gold_accounts.get(karat):
-                name = karat_names[karat]
-                if not SafeBox.query.filter_by(name=name).first():
-                    safe_boxes.append(SafeBox(
-                        name=name,
-                        name_en=f'Gold Box {karat}K',
-                        safe_type='gold',
-                        account_id=gold_accounts[karat].id,
-                        karat=karat,
-                        is_active=True,
-                        is_default=(karat == 21),  # عيار 21 هو الافتراضي
-                        notes=f'خزينة الذهب عيار {karat}',
-                        created_by='system'
-                    ))
+        # 3. خزينة الذهب (موحّدة متعددة العيارات)
+        # في النظام الموحّد: خزينة ذهب واحدة تحمل كل العيارات داخل نفس الحساب (tracks_weight=True)
+        gold_account = gold_accounts.get(21) or gold_accounts.get(24) or gold_accounts.get(22) or gold_accounts.get(18)
+        if gold_account:
+            unified_name = 'صندوق الذهب (متعدد العيارات)'
+            if not SafeBox.query.filter_by(safe_type='gold', karat=None).first():
+                safe_boxes.append(SafeBox(
+                    name=unified_name,
+                    name_en='Unified Gold Box',
+                    safe_type='gold',
+                    account_id=gold_account.id,
+                    karat=None,
+                    is_active=True,
+                    is_default=True,
+                    notes='خزينة ذهب واحدة متعددة العيارات (18/21/22/24)',
+                    created_by='system'
+                ))
         
         # حفظ جميع الخزائن
         if safe_boxes:

@@ -210,6 +210,15 @@ def ensure_settings_columns(engine: Engine) -> None:
                     ("backup_auto_interval_minutes", "INTEGER", "1440"),
                     ("backup_retention_count", "INTEGER", "7"),
                     ("vat_exempt_karats", "TEXT", "NULL"),
+
+                    # Employee safebox routing (feature toggles)
+                    ("employee_cash_safes_enabled", "BOOLEAN", "0"),
+                    ("employee_gold_safes_enabled", "BOOLEAN", "0"),
+
+                    # Default safebox ids (nullable)
+                    ("main_cash_safe_box_id", "INTEGER", "NULL"),
+                    ("sale_gold_safe_box_id", "INTEGER", "NULL"),
+                    ("main_scrap_gold_safe_box_id", "INTEGER", "NULL"),
                 ],
             )
         )
@@ -369,6 +378,26 @@ def ensure_employee_gold_safe_columns(engine: Engine) -> None:
                 "employee",
                 [
                     ("gold_safe_box_id", "INTEGER", "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
+def ensure_employee_cash_safe_columns(engine: Engine) -> None:
+    """Ensure employee cash_safe_box_id column exists for legacy databases."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "employee",
+                [
+                    ("cash_safe_box_id", "INTEGER", "NULL"),
                 ],
             )
         )

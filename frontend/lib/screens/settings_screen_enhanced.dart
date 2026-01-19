@@ -7,10 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:printing/printing.dart';
 
 import '../api_service.dart';
+import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
 import 'accounting_mapping_screen_enhanced.dart';
 import 'payment_methods_screen_enhanced.dart';
 import 'safe_boxes_screen.dart';
+import 'chart_of_accounts_screen.dart';
 import 'gold_price_manual_screen_enhanced.dart';
 import 'backup_restore_screen.dart';
 import 'system_reset_screen.dart';
@@ -25,6 +27,8 @@ enum SettingsEntry {
   printerSettings,
   about,
 }
+
+enum _AccountPickFilter { all, weightOnly, nonWeightOnly }
 
 class SettingsScreenEnhanced extends StatefulWidget {
   static const int systemTabIndex = 5;
@@ -104,6 +108,25 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   bool _allowPartialInvoicePayments = false;
 
   bool _voucherAutoPost = false;
+
+  // ---------------------------------------------------------------------------
+  // 🆕 Feature toggles + default safes (employee routing)
+  // ---------------------------------------------------------------------------
+  bool _employeeCashSafesEnabled = false;
+  bool _employeeGoldSafesEnabled = false;
+  int? _mainCashSafeBoxId;
+  int? _saleGoldSafeBoxId;
+  int? _mainScrapGoldSafeBoxId;
+
+  bool _safeBoxesLoaded = false;
+  bool _isLoadingSafeBoxes = false;
+  List<SafeBoxModel> _cashSafeBoxes = const [];
+  List<SafeBoxModel> _goldSafeBoxes = const [];
+
+  bool _accountsLoaded = false;
+  bool _isLoadingAccounts = false;
+  List<Map<String, dynamic>> _allAccounts = const [];
+
 
   bool _printerAutoConnect = true;
   bool _printerShowPreview = false;
@@ -222,6 +245,31 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     try {
       final prefs = await SharedPreferences.getInstance();
       final settings = await _apiService.getSettings();
+
+      // Load safe boxes for selectors (best-effort)
+      List<SafeBoxModel> cashSafes = const [];
+      List<SafeBoxModel> goldSafes = const [];
+      try {
+        final results = await Future.wait<List<SafeBoxModel>>([
+          _apiService.getSafeBoxes(
+            safeType: 'cash',
+            includeAccount: true,
+          ),
+          _apiService.getSafeBoxes(
+            safeType: 'gold',
+            includeAccount: true,
+          ),
+        ]);
+
+        cashSafes = results[0];
+        goldSafes = results[1];
+
+        cashSafes.sort((a, b) => a.name.compareTo(b.name));
+        goldSafes.sort((a, b) => a.name.compareTo(b.name));
+      } catch (_) {
+        cashSafes = const [];
+        goldSafes = const [];
+      }
 
       // Load invoice types (best-effort)
       List<String> invoiceTypes = const [];
@@ -361,6 +409,25 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           fallback: false,
         );
 
+        // 🆕 Feature toggles + default safes
+        _employeeCashSafesEnabled = _safeBool(
+          settings['employee_cash_safes_enabled'],
+          fallback: false,
+        );
+        _employeeGoldSafesEnabled = _safeBool(
+          settings['employee_gold_safes_enabled'],
+          fallback: false,
+        );
+        _mainCashSafeBoxId = _safeNullableInt(settings['main_cash_safe_box_id']);
+        _saleGoldSafeBoxId = _safeNullableInt(settings['sale_gold_safe_box_id']);
+        _mainScrapGoldSafeBoxId = _safeNullableInt(
+          settings['main_scrap_gold_safe_box_id'],
+        );
+
+        _cashSafeBoxes = cashSafes;
+        _goldSafeBoxes = goldSafes;
+        _safeBoxesLoaded = cashSafes.isNotEmpty || goldSafes.isNotEmpty;
+
         _printerAutoConnect = printerAutoConnect;
         _printerShowPreview = printerShowPreview;
         _printerAutoCut = printerAutoCut;
@@ -421,6 +488,13 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'idle_timeout_minutes': _idleTimeoutMinutes,
       'allow_partial_invoice_payments': _allowPartialInvoicePayments,
       'print_template_by_invoice_type': _normalizedPrintTemplateByType(),
+
+      // 🆕 Feature toggles + default safes (employee routing)
+      'employee_cash_safes_enabled': _employeeCashSafesEnabled,
+      'employee_gold_safes_enabled': _employeeGoldSafesEnabled,
+      'main_cash_safe_box_id': _mainCashSafeBoxId,
+      'sale_gold_safe_box_id': _saleGoldSafeBoxId,
+      'main_scrap_gold_safe_box_id': _mainScrapGoldSafeBoxId,
     };
 
     try {
@@ -1000,6 +1074,201 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
         ),
         const SizedBox(height: 20),
         _buildSectionCard(
+          icon: Icons.account_balance_wallet_outlined,
+          iconColor: _primaryColor,
+          title: 'مسار خزائن الموظفين (Feature Toggles)',
+          children: [
+            Text(
+              'يحدد النظام بشكل افتراضي أين تُسجّل حركة النقد/الذهب في فواتير البيع وشراء الكسر: خزائن الموظفين أو الخزائن الرئيسية.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile.adaptive(
+              value: _employeeCashSafesEnabled,
+              onChanged: (value) => setState(() => _employeeCashSafesEnabled = value),
+              title: const Text('تفعيل خزائن الموظفين للنقد'),
+              subtitle: const Text(
+                'عند التفعيل: إذا كانت الفاتورة مرتبطة بموظف لديه خزينة نقدية، تُستخدم كمسار افتراضي للنقد.\n'
+                'عند الإيقاف: يُستخدم الصندوق الرئيسي/الافتراضي.',
+              ),
+              thumbColor: _thumbColorFor(_primaryColor),
+              trackColor: _trackColorFor(_primaryColor),
+            ),
+            SwitchListTile.adaptive(
+              value: _employeeGoldSafesEnabled,
+              onChanged: (value) => setState(() => _employeeGoldSafesEnabled = value),
+              title: const Text('تفعيل خزائن الموظفين للذهب (الكسر)'),
+              subtitle: const Text(
+                'عند التفعيل: في شراء الكسر من العميل، تُضاف الأوزان إلى خزينة الذهب الخاصة بالموظف إن كانت مربوطة.\n'
+                'عند الإيقاف: تُضاف إلى خزينة الكسر الرئيسية.',
+              ),
+              thumbColor: _thumbColorFor(_primaryColor),
+              trackColor: _trackColorFor(_primaryColor),
+            ),
+            const SizedBox(height: 12),
+            if (_isLoadingSafeBoxes)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _primaryColor,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('جار تحميل الخزائن...'),
+                  ],
+                ),
+              ),
+            if (!_safeBoxesLoaded && !_isLoadingSafeBoxes)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'لم يتم تحميل قائمة الخزائن. يمكنك فتح شاشة الخزائن أو إعادة المحاولة.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: _mutedTextColor,
+                      ),
+                ),
+              ),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: _isLoadingSafeBoxes ? null : _reloadSafeBoxes,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('تحديث الخزائن'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => SafeBoxesScreen(api: _apiService),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('فتح الخزائن'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _buildSafeBoxSelector(
+              label: 'الصندوق النقدي الرئيسي (Fallback)',
+              icon: Icons.money,
+              options: _cashSafeBoxes,
+              value: _mainCashSafeBoxId,
+              onChanged: (v) => setState(() => _mainCashSafeBoxId = v),
+              accentColor: _primaryColor,
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: (_isSaving || _isLoadingAccounts)
+                    ? null
+                    : () async {
+                        final picked = await _pickAccountSheet(
+                          title: 'اختر الحساب المرتبط بالصندوق النقدي الرئيسي',
+                          filter: _AccountPickFilter.all,
+                        );
+                        if (picked == null) return;
+                        final id = await _ensureSafeBoxForAccount(
+                          account: picked,
+                          safeType: 'cash',
+                        );
+                        if (!mounted) return;
+                        if (id != null) {
+                          setState(() => _mainCashSafeBoxId = id);
+                          await _reloadSafeBoxes();
+                          _showSnack('تم ربط/إنشاء صندوق نقدي للحساب المختار');
+                        }
+                      },
+                icon: const Icon(Icons.account_tree_outlined),
+                label: const Text('اختيار من الحسابات (بدلاً من الخزائن)'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildSafeBoxSelector(
+              label: 'خزينة ذهب مشغول معروض للبيع (للبيع)',
+              icon: Icons.diamond_outlined,
+              options: _goldSafeBoxes,
+              value: _saleGoldSafeBoxId,
+              onChanged: (v) => setState(() => _saleGoldSafeBoxId = v),
+              accentColor: _primaryColor,
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: (_isSaving || _isLoadingAccounts)
+                    ? null
+                    : () async {
+                        final picked = await _pickAccountSheet(
+                          title: 'اختر حساب ذهب مشغول معروض للبيع',
+                          filter: _AccountPickFilter.all,
+                        );
+                        if (picked == null) return;
+                        final id = await _ensureSafeBoxForAccount(
+                          account: picked,
+                          safeType: 'gold',
+                        );
+                        if (!mounted) return;
+                        if (id != null) {
+                          setState(() => _saleGoldSafeBoxId = id);
+                          await _reloadSafeBoxes();
+                          _showSnack('تم ربط/إنشاء خزينة ذهب للحساب المختار');
+                        }
+                      },
+                icon: const Icon(Icons.account_tree_outlined),
+                label: const Text('اختيار من الحسابات (بدلاً من الخزائن)'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildSafeBoxSelector(
+              label: 'خزينة الكسر الرئيسية (لشراء الكسر)',
+              icon: Icons.diamond,
+              options: _goldSafeBoxes,
+              value: _mainScrapGoldSafeBoxId,
+              onChanged: (v) => setState(() => _mainScrapGoldSafeBoxId = v),
+              accentColor: _primaryColor,
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: (_isSaving || _isLoadingAccounts)
+                    ? null
+                    : () async {
+                        final picked = await _pickAccountSheet(
+                          title: 'اختر حساب صندوق الكسر الرئيسي',
+                          filter: _AccountPickFilter.all,
+                        );
+                        if (picked == null) return;
+                        final id = await _ensureSafeBoxForAccount(
+                          account: picked,
+                          safeType: 'gold',
+                        );
+                        if (!mounted) return;
+                        if (id != null) {
+                          setState(() => _mainScrapGoldSafeBoxId = id);
+                          await _reloadSafeBoxes();
+                          _showSnack('تم ربط/إنشاء خزينة ذهب للحساب المختار');
+                        }
+                      },
+                icon: const Icon(Icons.account_tree_outlined),
+                label: const Text('اختيار من الحسابات (بدلاً من الخزائن)'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _buildSectionCard(
           icon: Icons.account_tree_outlined,
           iconColor: _accentColor,
           title: 'الربط المحاسبي',
@@ -1020,6 +1289,19 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               },
               icon: const Icon(Icons.open_in_new),
               label: const Text('فتح شاشة الربط المحاسبي'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ChartOfAccountsScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.account_tree),
+              label: const Text('فتح شجرة الحسابات (جميع الحسابات)'),
             ),
           ],
         ),
@@ -2067,5 +2349,343 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       color.withValues(alpha: opacity.clamp(0.0, 1.0)),
       _surfaceColor,
     );
+  }
+
+  int? _safeNullableInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    final s = value.toString().trim();
+    if (s.isEmpty) return null;
+    return int.tryParse(s);
+  }
+
+  String _safeBoxLabel(SafeBoxModel sb) {
+    final acct = sb.account?.accountNumber;
+    final inactiveSuffix = sb.isActive ? '' : ' (غير نشطة)';
+    if (acct != null && acct.trim().isNotEmpty) {
+      return '${sb.name}$inactiveSuffix • $acct';
+    }
+    return '${sb.name}$inactiveSuffix';
+  }
+
+  bool _containsSafeId(List<SafeBoxModel> list, int? id) {
+    if (id == null) return false;
+    return list.any((e) => e.id == id);
+  }
+
+  Widget _buildSafeBoxSelector({
+    required String label,
+    required IconData icon,
+    required List<SafeBoxModel> options,
+    required int? value,
+    required ValueChanged<int?> onChanged,
+    Color? accentColor,
+  }) {
+    final items = <DropdownMenuItem<int?>>[
+      const DropdownMenuItem<int?>(
+        value: null,
+        child: Text('— غير محدد —'),
+      ),
+    ];
+
+    if (value != null && !_containsSafeId(options, value)) {
+      items.add(
+        DropdownMenuItem<int?>(
+          value: value,
+          child: Text('معرّف خزينة #$value (غير موجود حالياً)'),
+        ),
+      );
+    }
+
+    for (final sb in options) {
+      final id = sb.id;
+      if (id == null) continue;
+      items.add(
+        DropdownMenuItem<int?>(
+          value: id,
+          child: Text(_safeBoxLabel(sb)),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: _fieldLabelStyle()),
+        const SizedBox(height: 10),
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: DropdownButtonFormField<int?>(
+            value: value,
+            items: items,
+            onChanged: _isSaving ? null : onChanged,
+            isExpanded: true,
+            decoration: _inputDecoration(
+              icon: icon,
+              accentColor: accentColor ?? _primaryColor,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _loadAccountsIfNeeded() async {
+    if (_accountsLoaded || _isLoadingAccounts) return;
+    setState(() {
+      _isLoadingAccounts = true;
+    });
+
+    try {
+      final raw = await _apiService.getAccounts();
+      final parsed = <Map<String, dynamic>>[];
+      for (final row in raw) {
+        if (row is Map<String, dynamic>) {
+          parsed.add(row);
+        } else if (row is Map) {
+          parsed.add(Map<String, dynamic>.from(row));
+        }
+      }
+      parsed.sort((a, b) {
+        final an = (a['account_number'] ?? '').toString();
+        final bn = (b['account_number'] ?? '').toString();
+        return an.compareTo(bn);
+      });
+      if (!mounted) return;
+      setState(() {
+        _allAccounts = parsed;
+        _accountsLoaded = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('تعذر تحميل الحسابات: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingAccounts = false;
+        });
+      }
+    }
+  }
+
+  String _accountLabel(Map<String, dynamic> a) {
+    final number = (a['account_number'] ?? '').toString();
+    final name = (a['name'] ?? '').toString();
+    if (number.isEmpty) return name;
+    if (name.isEmpty) return number;
+    return '$number • $name';
+  }
+
+  int? _accountId(Map<String, dynamic> a) {
+    final v = a['id'];
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    final s = v?.toString().trim();
+    if (s == null || s.isEmpty) return null;
+    return int.tryParse(s);
+  }
+
+  bool _accountTracksWeight(Map<String, dynamic> a) {
+    final v = a['tracks_weight'];
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    if (v is String) return v.toLowerCase() == 'true';
+    return false;
+  }
+
+  Future<Map<String, dynamic>?> _pickAccountSheet({
+    required String title,
+    required _AccountPickFilter filter,
+  }) async {
+    await _loadAccountsIfNeeded();
+
+    final filtered = _allAccounts.where((a) {
+      if (!_accountsLoaded) return false;
+      final isWeight = _accountTracksWeight(a);
+      switch (filter) {
+        case _AccountPickFilter.weightOnly:
+          return isWeight;
+        case _AccountPickFilter.nonWeightOnly:
+          return !isWeight;
+        case _AccountPickFilter.all:
+          return true;
+      }
+      // Should be unreachable, but keep analyzer happy.
+      // ignore: dead_code
+      return true;
+    }).toList();
+
+    if (!mounted) return null;
+    if (filtered.isEmpty) {
+      _showSnack('لا توجد حسابات مناسبة للاختيار', isError: true);
+      return null;
+    }
+
+    return showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final ctrl = TextEditingController();
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            String q = ctrl.text.trim();
+            final visible = filtered.where((a) {
+              if (q.isEmpty) return true;
+              final label = _accountLabel(a);
+              return label.toLowerCase().contains(q.toLowerCase());
+            }).toList();
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 8,
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 6),
+                    Text(
+                      'ملاحظة: سيتم إنشاء خزينة تلقائياً للحساب المختار إذا لم تكن موجودة.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: _mutedTextColor,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: ctrl,
+                      onChanged: (_) => setSheetState(() {}),
+                      decoration: _inputDecoration(
+                        icon: Icons.search,
+                        accentColor: _primaryColor,
+                        label: 'بحث بالرقم أو الاسم',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 420,
+                      child: ListView.separated(
+                        itemCount: visible.length,
+                        separatorBuilder: (_, __) => Divider(
+                          height: 1,
+                          color: _withOpacity(_outlineColor, 0.25),
+                        ),
+                        itemBuilder: (_, i) {
+                          final a = visible[i];
+                          return ListTile(
+                            dense: true,
+                            title: Text(_accountLabel(a)),
+                            onTap: () => Navigator.pop(ctx, a),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<int?> _ensureSafeBoxForAccount({
+    required Map<String, dynamic> account,
+    required String safeType,
+  }) async {
+    final accountId = _accountId(account);
+    if (accountId == null) return null;
+
+    // Soft warning when choosing a weight-tracking account for a cash safe.
+    if (mounted && safeType == 'cash' && _accountTracksWeight(account)) {
+      _showSnack('تنبيه: اخترت حساب وزني لصندوق نقدي. تأكد أن هذا مقصود.', isError: true);
+    }
+
+    // Try existing first.
+    try {
+      final existing = await _apiService.getSafeBoxes(
+        safeType: safeType,
+        includeAccount: true,
+      );
+      final hit = existing.where((sb) => sb.accountId == accountId).toList();
+      if (hit.isNotEmpty && hit.first.id != null) {
+        return hit.first.id;
+      }
+    } catch (_) {
+      // ignore and try create
+    }
+
+    final name = (account['name'] ?? '').toString().trim();
+    final number = (account['account_number'] ?? '').toString().trim();
+    final label = name.isNotEmpty ? name : number;
+
+    final safeName = safeType == 'gold'
+        ? 'خزينة ذهب $label'
+        : 'صندوق $label';
+
+    try {
+      final created = await _apiService.createSafeBox(
+        SafeBoxModel(
+          name: safeName,
+          safeType: safeType,
+          accountId: accountId,
+          isActive: true,
+          isDefault: false,
+        ),
+      );
+      return created.id;
+    } catch (e) {
+      if (mounted) {
+        _showSnack('تعذر إنشاء خزينة للحساب: $e', isError: true);
+      }
+      return null;
+    }
+  }
+
+  Future<void> _reloadSafeBoxes() async {
+    if (_isLoadingSafeBoxes) return;
+    setState(() {
+      _isLoadingSafeBoxes = true;
+    });
+
+    try {
+      final results = await Future.wait<List<SafeBoxModel>>([
+        _apiService.getSafeBoxes(
+          safeType: 'cash',
+          includeAccount: true,
+        ),
+        _apiService.getSafeBoxes(
+          safeType: 'gold',
+          includeAccount: true,
+        ),
+      ]);
+
+      final cashSafes = results[0]..sort((a, b) => a.name.compareTo(b.name));
+      final goldSafes = results[1]..sort((a, b) => a.name.compareTo(b.name));
+
+      if (!mounted) return;
+      setState(() {
+        _cashSafeBoxes = cashSafes;
+        _goldSafeBoxes = goldSafes;
+        _safeBoxesLoaded = cashSafes.isNotEmpty || goldSafes.isNotEmpty;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('تعذر تحديث الخزائن: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingSafeBoxes = false;
+        });
+      }
+    }
   }
 }
