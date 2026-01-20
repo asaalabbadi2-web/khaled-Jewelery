@@ -894,18 +894,33 @@ def _repair_inventory_wage_memo_links():
     - Links 1340 -> 71330 and 1350 -> 71340.
     """
     try:
+        # Some DBs have legacy misnaming where 1320 (22k inventory) was incorrectly
+        # labeled as wage inventory. Fixing the name reduces user-facing duplicates
+        # without affecting account_number-based posting logic.
+        acc_1320 = Account.query.filter_by(account_number='1320').first()
+        renamed_1320 = False
+        if acc_1320 and acc_1320.name and ('أجور' in acc_1320.name and 'مصنعية' in acc_1320.name):
+            acc_1320.name = 'مخزون ذهب عيار 22'
+            db.session.add(acc_1320)
+            renamed_1320 = True
+
         acc_1340 = Account.query.filter_by(account_number='1340').first()
         acc_1350 = Account.query.filter_by(account_number='1350').first()
         memo_71330 = Account.query.filter_by(account_number='71330').first()
+        # Wage inventory memo account may be either the new number (71340) or a legacy one (7340).
         memo_71340 = Account.query.filter_by(account_number='71340').first()
+        memo_7340 = Account.query.filter_by(account_number='7340').first()
+        wage_memo = memo_71340 or memo_7340
 
-        if not (acc_1340 and acc_1350 and memo_71330 and memo_71340):
-            return 0
+        if not (acc_1340 and acc_1350 and memo_71330 and wage_memo):
+            if renamed_1320:
+                db.session.commit()
+            return 1 if renamed_1320 else 0
 
-        changed = 0
+        changed = 1 if renamed_1320 else 0
 
-        # 1) If 1340 is linked to 71340, migrate existing 71340 lines to 71330 (only when safe)
-        if acc_1340.memo_account_id == memo_71340.id:
+        # 1) If 1340 is linked to wage memo (71340 or legacy 7340), migrate existing lines to 71330 (only when safe)
+        if acc_1340.memo_account_id == wage_memo.id:
             lines_71330 = (
                 db.session.query(func.count(JournalEntryLine.id))
                 .filter(JournalEntryLine.account_id == memo_71330.id)
@@ -913,9 +928,9 @@ def _repair_inventory_wage_memo_links():
                 or 0
             )
 
-            lines_71340 = (
+            lines_wage_memo = (
                 db.session.query(func.count(JournalEntryLine.id))
-                .filter(JournalEntryLine.account_id == memo_71340.id)
+                .filter(JournalEntryLine.account_id == wage_memo.id)
                 .scalar()
                 or 0
             )
@@ -923,7 +938,7 @@ def _repair_inventory_wage_memo_links():
             # Safe migration only if 71330 is empty and 71340 has no cash and no non-24k weights.
             non24_count = (
                 db.session.query(func.count(JournalEntryLine.id))
-                .filter(JournalEntryLine.account_id == memo_71340.id)
+                .filter(JournalEntryLine.account_id == wage_memo.id)
                 .filter(
                     (func.coalesce(JournalEntryLine.debit_18k, 0) != 0)
                     | (func.coalesce(JournalEntryLine.credit_18k, 0) != 0)
@@ -938,7 +953,7 @@ def _repair_inventory_wage_memo_links():
 
             cash_count = (
                 db.session.query(func.count(JournalEntryLine.id))
-                .filter(JournalEntryLine.account_id == memo_71340.id)
+                .filter(JournalEntryLine.account_id == wage_memo.id)
                 .filter(
                     (func.coalesce(JournalEntryLine.cash_debit, 0) != 0)
                     | (func.coalesce(JournalEntryLine.cash_credit, 0) != 0)
@@ -947,31 +962,31 @@ def _repair_inventory_wage_memo_links():
                 or 0
             )
 
-            if lines_71340 and lines_71330 == 0 and non24_count == 0 and cash_count == 0:
+            if lines_wage_memo and lines_71330 == 0 and non24_count == 0 and cash_count == 0:
                 migrated = (
                     db.session.query(JournalEntryLine)
-                    .filter(JournalEntryLine.account_id == memo_71340.id)
+                    .filter(JournalEntryLine.account_id == wage_memo.id)
                     .update({JournalEntryLine.account_id: memo_71330.id}, synchronize_session=False)
                     or 0
                 )
                 if migrated:
                     print(
-                        f"✅ Migrated {migrated} memo lines 71340→71330 to fix 24k inventory weight posting"
+                        f"✅ Migrated {migrated} memo lines {wage_memo.account_number}→71330 to fix 24k inventory weight posting"
                     )
                     changed += migrated
-            elif lines_71340 and (non24_count or cash_count or lines_71330):
+            elif lines_wage_memo and (non24_count or cash_count or lines_71330):
                 print(
-                    "⚠️ Detected 1340→71340 mislink but did not migrate memo lines (unsafe conditions). "
-                    "Please review accounts 71330/71340 usage before manual migration."
+                    "⚠️ Detected 1340→wage-memo mislink but did not migrate memo lines (unsafe conditions). "
+                    "Please review accounts 71330 and wage memo usage before manual migration."
                 )
 
             # Link 1340 to correct 24k memo account (71330)
             acc_1340.memo_account_id = memo_71330.id
             changed += 1
 
-        # 2) Ensure wage inventory cash account 1350 links to wage memo 71340
-        if acc_1350.memo_account_id != memo_71340.id:
-            acc_1350.memo_account_id = memo_71340.id
+        # 2) Ensure wage inventory cash account 1350 links to wage memo (prefer 71340 if present)
+        if acc_1350.memo_account_id != wage_memo.id:
+            acc_1350.memo_account_id = wage_memo.id
             changed += 1
 
         if changed:
@@ -995,6 +1010,8 @@ def ensure_weight_closing_support_accounts():
         financial_spec = entry.get('financial') or {}
         memo_spec = entry.get('memo') or {}
 
+        entry_key = entry.get('key')
+
         financial_account = None
         memo_account = None
 
@@ -1014,7 +1031,13 @@ def ensure_weight_closing_support_accounts():
                 created += 1
 
         if memo_spec.get('account_number'):
-            memo_account = Account.query.filter_by(account_number=memo_spec['account_number']).first()
+            # Special case: manufacturing wage memo account has a known legacy number (7340).
+            # If legacy exists, prefer it to avoid creating duplicate-looking accounts.
+            memo_account = None
+            if entry_key == 'manufacturing_wage' and memo_spec['account_number'] == '71340':
+                memo_account = Account.query.filter_by(account_number='71340').first() or Account.query.filter_by(account_number='7340').first()
+            else:
+                memo_account = Account.query.filter_by(account_number=memo_spec['account_number']).first()
             if not memo_account:
                 parent = Account.query.filter_by(account_number=memo_spec.get('parent_number')).first()
                 memo_account = Account(
@@ -14255,6 +14278,149 @@ def create_employee_advance_account(employee_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Failed to create advance account: {str(e)}'}), 500
+
+
+@api.route('/employees/<int:employee_id>/ensure-setup', methods=['POST'])
+@require_permission('employees.edit')
+def ensure_employee_setup(employee_id):
+    """Ensure missing employee artifacts exist (accounts + optional safes).
+
+    Useful for employees created before auto-linking/auto-safe options existed.
+    Idempotent: does not duplicate payables accounts or safes if already linked.
+
+    Payload (all optional):
+      - ensure_personal_account: bool (default true)
+      - ensure_payables_accounts: bool (default true)
+      - ensure_cash_safe: bool (default true)
+      - ensure_gold_safe: bool (default true)
+      - created_by: str
+    """
+
+    from employee_account_helpers import (
+        create_employee_account,
+        ensure_employee_group_accounts,
+        get_or_create_employee_payables_accounts,
+    )
+    from employee_account_naming import employee_personal_account_name
+    from employee_gold_safe_helpers import create_employee_gold_safe, ensure_employee_gold_group_account
+    from employee_cash_safe_helpers import create_employee_cash_safe, ensure_employee_cash_group_account
+
+    data = request.get_json() or {}
+
+    def _boolish(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+        return bool(value)
+
+    created_by = data.get('created_by', 'system')
+    ensure_personal = _boolish(data.get('ensure_personal_account'), default=True)
+    ensure_payables = _boolish(data.get('ensure_payables_accounts'), default=True)
+    ensure_cash_safe = _boolish(data.get('ensure_cash_safe'), default=True)
+    ensure_gold_safe = _boolish(data.get('ensure_gold_safe'), default=True)
+
+    employee = Employee.query.get_or_404(employee_id)
+
+    created = {
+        'linked_personal_account': None,
+        'created_personal_account': None,
+        'created_cash_safe_box': None,
+        'created_gold_safe_box': None,
+        'ensured_payables_accounts': [],
+    }
+
+    try:
+        # Ensure group structure exists when possible.
+        try:
+            ensure_employee_group_accounts(created_by=created_by)
+            ensure_employee_cash_group_account(created_by=created_by)
+            ensure_employee_gold_group_account(created_by=created_by)
+        except Exception:
+            pass
+
+        # 1) Ensure personal account is linked.
+        if ensure_personal and not getattr(employee, 'account_id', None):
+            parent_1700 = Account.query.filter_by(account_number='1700').first()
+            expected_name = employee_personal_account_name(employee.name)
+            existing = None
+            if parent_1700:
+                existing = Account.query.filter_by(parent_id=parent_1700.id, name=expected_name).first()
+            if not existing:
+                # Fallback lookup by name only (in case parent linkage differs in older DBs)
+                existing = Account.query.filter_by(name=expected_name).order_by(Account.id.desc()).first()
+
+            if existing:
+                employee.account_id = existing.id
+                created['linked_personal_account'] = {
+                    'account_id': int(existing.id),
+                    'account_number': existing.account_number,
+                    'account_name': existing.name,
+                }
+            else:
+                acc = create_employee_account(employee_name=employee.name, created_by=created_by)
+                employee.account_id = acc.id
+                created['created_personal_account'] = {
+                    'account_id': int(acc.id),
+                    'account_number': acc.account_number,
+                    'account_name': acc.name,
+                }
+
+        # 2) Ensure payables accounts exist (idempotent).
+        if ensure_payables:
+            payables = get_or_create_employee_payables_accounts(employee.name, created_by=created_by)
+            created['ensured_payables_accounts'] = [
+                {
+                    'account_id': int(a.id),
+                    'account_number': a.account_number,
+                    'account_name': a.name,
+                }
+                for a in payables
+            ]
+
+        # 3) Ensure gold/cash safes (create + link if missing).
+        if ensure_gold_safe and (getattr(employee, 'gold_safe_box_id', None) in (None, 0)):
+            acc, sb = create_employee_gold_safe(
+                employee_name=employee.name,
+                employee_code=getattr(employee, 'employee_code', None),
+                created_by=created_by,
+            )
+            employee.gold_safe_box_id = sb.id
+            created['created_gold_safe_box'] = {
+                'safe_box_id': int(sb.id),
+                'safe_box_name': sb.name,
+                'account_id': int(acc.id),
+                'account_number': acc.account_number,
+                'account_name': acc.name,
+            }
+
+        if ensure_cash_safe and (getattr(employee, 'cash_safe_box_id', None) in (None, 0)):
+            acc, sb = create_employee_cash_safe(
+                employee_name=employee.name,
+                employee_code=getattr(employee, 'employee_code', None),
+                created_by=created_by,
+            )
+            employee.cash_safe_box_id = sb.id
+            created['created_cash_safe_box'] = {
+                'safe_box_id': int(sb.id),
+                'safe_box_name': sb.name,
+                'account_id': int(acc.id),
+                'account_number': acc.account_number,
+                'account_name': acc.name,
+            }
+
+        db.session.commit()
+
+        result = employee.to_dict(include_details=True)
+        result['ensure_setup'] = created
+        return jsonify(result), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to ensure employee setup: {str(e)}'}), 500
 
 
 @api.route('/advances/summary', methods=['GET'])

@@ -2969,6 +2969,36 @@ class ApiService {
     }
   }
 
+  Future<EmployeeModel> ensureEmployeeSetup(
+    int employeeId, {
+    bool ensurePersonalAccount = true,
+    bool ensurePayablesAccounts = true,
+    bool ensureCashSafe = true,
+    bool ensureGoldSafe = true,
+  }) async {
+    final token = await _requireAuthToken();
+    final payload = {
+      'ensure_personal_account': ensurePersonalAccount,
+      'ensure_payables_accounts': ensurePayablesAccounts,
+      'ensure_cash_safe': ensureCashSafe,
+      'ensure_gold_safe': ensureGoldSafe,
+    };
+
+    final response = await http.post(
+      Uri.parse('$_baseUrl/employees/$employeeId/ensure-setup'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(_normalizePayload(payload)),
+    );
+
+    if (response.statusCode == 200) {
+      return EmployeeModel.fromJson(
+        json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
+      );
+    } else {
+      throw Exception(_errorMessageFromResponse(response));
+    }
+  }
+
   Future<void> deleteEmployee(int employeeId) async {
     final token = await _requireAuthToken();
     final response = await http.delete(

@@ -198,6 +198,7 @@ def create_employee_account(employee_name, department='administration', created_
     )
     
     db.session.add(account)
+    db.session.flush()  # ensure account.id is available immediately
     # لا نعمل commit هنا، سيتم في create_employee
     
     return account
@@ -211,27 +212,36 @@ def create_employee_payables_accounts(employee_name: str, created_by: str = 'sys
     - Intended for future payroll/benefits/obligations posting.
     """
 
+    return get_or_create_employee_payables_accounts(employee_name, created_by=created_by)
+
+
+def get_or_create_employee_payables_accounts(employee_name: str, created_by: str = 'system') -> List[Account]:
+    """Idempotently ensure employee-specific payables accounts under 2300/2400/2500."""
+
     ensured = ensure_employee_group_accounts(created_by=created_by)
-    created: List[Account] = []
+    result: List[Account] = []
 
     specs = [
-        ('2300', f'مستحقات رواتب {employee_name}'),
-        ('2400', f'مستحقات مكافآت {employee_name}'),
-        ('2500', f'مستحقات أخرى {employee_name}'),
+        ('2300', 'رواتب'),
+        ('2400', 'مكافآت'),
+        ('2500', 'أخرى'),
     ]
 
-    for parent_num, acc_name in specs:
+    for parent_num, category_ar in specs:
         parent = ensured.get(parent_num) or Account.query.filter_by(account_number=parent_num).first()
         if not parent:
+            continue
+
+        expected_name = employee_payable_account_name(employee_name, category_ar=category_ar)
+        existing = Account.query.filter_by(parent_id=parent.id, name=expected_name).first()
+        if existing:
+            result.append(existing)
             continue
 
         acc_number = get_next_account_number(str(parent.account_number))
         account = Account(
             account_number=str(acc_number),
-            name=employee_payable_account_name(
-                employee_name,
-                category_ar='رواتب' if parent_num == '2300' else 'مكافآت' if parent_num == '2400' else 'أخرى',
-            ),
+            name=expected_name,
             type='liability',
             transaction_type='cash',
             tracks_weight=False,
@@ -239,9 +249,9 @@ def create_employee_payables_accounts(employee_name: str, created_by: str = 'sys
         )
         db.session.add(account)
         db.session.flush()
-        created.append(account)
+        result.append(account)
 
-    return created
+    return result
 
 
 def get_employee_department_from_code(employee_code):

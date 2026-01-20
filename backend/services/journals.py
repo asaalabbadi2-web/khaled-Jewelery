@@ -8,8 +8,13 @@ from flask import current_app
 from dual_system_helpers import create_dual_journal_entry, verify_dual_balance
 from models import Account, JournalEntry, db
 
-DEFAULT_WAGE_INVENTORY_ACCOUNT = ("7525", "مخزون أجور مصنعية (وزن)")
-DEFAULT_WAGE_RELEASE_ACCOUNT = ("7530", "مصاريف تحرير أجور مصنعية (وزن)")
+# Wage inventory memo account is part of the COA support accounts.
+# Some DBs use a legacy number (7340) while newer ones use 71340.
+WAGE_INVENTORY_MEMO_NUMBERS = ("71340", "7340")
+
+# Memo expense account used when releasing wage weight from inventory.
+# IMPORTANT: 7530 is already used by shipping memo expenses in this COA.
+WAGE_RELEASE_MEMO_ACCOUNT = ("7540", "مصاريف تحرير أجور مصنعية وزنية")
 
 
 def _weight_kwargs_for_karat(karat: float | int, weight: float, side: str = "debit") -> dict:
@@ -29,18 +34,28 @@ def _weight_kwargs_for_karat(karat: float | int, weight: float, side: str = "deb
     return {f"{side_name}_{suffix}": round(float(weight), 6)}
 
 
-def _ensure_memo_account(account_data: Tuple[str, str]) -> Account:
+def _resolve_account_by_numbers(numbers: Tuple[str, ...]) -> Account | None:
+    for number in numbers:
+        acc = Account.query.filter_by(account_number=str(number)).first()
+        if acc:
+            return acc
+    return None
+
+
+def _ensure_memo_expense_account(account_data: Tuple[str, str]) -> Account:
     number, name = account_data
     account = Account.query.filter_by(account_number=number).first()
     if account:
         return account
 
+    parent = Account.query.filter_by(account_number='75').first()
     account = Account(
         account_number=number,
         name=name,
-        type="Memo",
+        type="Expense",
         transaction_type="gold",
-        tracks_weight=False,
+        tracks_weight=True,
+        parent_id=parent.id if parent else None,
     )
     db.session.add(account)
     db.session.flush()
@@ -60,8 +75,14 @@ def create_wage_weight_release_journal(weight_grams: float, note: str | None = N
     if weight_value <= 0:
         raise ValueError("weight_grams must be greater than zero")
 
-    wage_inventory_account = _ensure_memo_account(DEFAULT_WAGE_INVENTORY_ACCOUNT)
-    wage_release_account = _ensure_memo_account(DEFAULT_WAGE_RELEASE_ACCOUNT)
+    wage_inventory_account = _resolve_account_by_numbers(WAGE_INVENTORY_MEMO_NUMBERS)
+    if not wage_inventory_account:
+        raise ValueError(
+            "Missing wage inventory memo account. Expected one of: "
+            + ", ".join(WAGE_INVENTORY_MEMO_NUMBERS)
+        )
+
+    wage_release_account = _ensure_memo_expense_account(WAGE_RELEASE_MEMO_ACCOUNT)
 
     description = (note or "Release wage weight").strip()
     now = datetime.utcnow()

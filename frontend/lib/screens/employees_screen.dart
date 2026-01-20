@@ -411,6 +411,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 
   void _showEmployeeDetails(EmployeeModel employee) {
     final isAr = widget.isArabic;
+    var currentEmployee = employee;
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -427,6 +428,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 
         return StatefulBuilder(
           builder: (context, setModalState) {
+            final employee = currentEmployee;
             return Padding(
               padding: const EdgeInsets.all(16),
               child: SingleChildScrollView(
@@ -470,6 +472,50 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                         ),
                       ],
                     ),
+
+                    if (canManageAccounts) ...[
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: () async {
+                          try {
+                            final updated = await widget.api.ensureEmployeeSetup(
+                              employee.id ?? 0,
+                              ensurePersonalAccount: true,
+                              ensurePayablesAccounts: true,
+                              ensureCashSafe: true,
+                              ensureGoldSafe: true,
+                            );
+
+                            // Update list + modal copy
+                            setState(() {
+                              final index = _employees
+                                  .indexWhere((e) => e.id == updated.id);
+                              if (index != -1) {
+                                _employees[index] = updated;
+                              }
+                            });
+
+                            setModalState(() {
+                              currentEmployee = updated;
+                            });
+
+                            _showSnack(
+                              widget.isArabic
+                                  ? 'تم إنشاء/ربط حسابات وخزائن الموظف'
+                                  : 'Employee setup ensured',
+                            );
+                          } catch (e) {
+                            _showSnack(e.toString(), isError: true);
+                          }
+                        },
+                        icon: const Icon(Icons.build_circle),
+                        label: Text(
+                          widget.isArabic
+                              ? 'إصلاح حسابات وخزائن الموظف'
+                              : 'Fix employee accounts & safes',
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     _InfoRow(
                       label: isAr ? 'الرقم الوظيفي' : 'Employee Code',
@@ -866,6 +912,13 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
   bool _loadingGoldSafes = false;
   int _selectedGoldSafeBoxId = 0; // 0 => main
 
+  List<SafeBoxModel> _cashSafes = const [];
+  bool _loadingCashSafes = false;
+  int _selectedCashSafeBoxId = 0; // 0 => main
+
+  bool _autoCreateGoldSafe = false;
+  bool _autoCreateCashSafe = false;
+
   @override
   void initState() {
     super.initState();
@@ -886,13 +939,15 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
     );
     _isActive = employee?.isActive ?? true;
 
-  _selectedGoldSafeBoxId = employee?.goldSafeBoxId ?? 0;
+    _selectedGoldSafeBoxId = employee?.goldSafeBoxId ?? 0;
+    _selectedCashSafeBoxId = employee?.cashSafeBoxId ?? 0;
 
     // ✅ تحميل التواريخ من الموظف الحالي
     _hireDate = employee?.hireDate;
     _terminationDate = employee?.terminationDate;
 
     _loadGoldSafes();
+    _loadCashSafes();
   }
 
   Future<void> _loadGoldSafes() async {
@@ -910,6 +965,24 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
       // Keep the form usable even if safes couldn't load.
     } finally {
       if (mounted) setState(() => _loadingGoldSafes = false);
+    }
+  }
+
+  Future<void> _loadCashSafes() async {
+    setState(() => _loadingCashSafes = true);
+    try {
+      final safes = await widget.api.getSafeBoxes(
+        safeType: 'cash',
+        isActive: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _cashSafes = safes;
+      });
+    } catch (_) {
+      // Keep the form usable even if safes couldn't load.
+    } finally {
+      if (mounted) setState(() => _loadingCashSafes = false);
     }
   }
 
@@ -978,7 +1051,14 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
       'termination_date': _terminationDate?.toIso8601String().split('T').first,
       'is_active': _isActive,
       'gold_safe_box_id': _selectedGoldSafeBoxId,
+      'cash_safe_box_id': _selectedCashSafeBoxId,
     }..removeWhere((key, value) => value == null);
+
+    // Auto-create flags are only supported on create (POST /employees).
+    if (widget.employee == null) {
+      payload['auto_create_gold_safe_box'] = _autoCreateGoldSafe;
+      payload['auto_create_cash_safe_box'] = _autoCreateCashSafe;
+    }
 
     Navigator.of(context).pop(payload);
   }
@@ -1112,6 +1192,80 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                   ),
                   maxLines: 3,
                 ),
+
+                // Cash safe selection + optional auto-create (create only)
+                if (widget.employee == null) ...[
+                  SwitchListTile(
+                    value: _autoCreateCashSafe,
+                    onChanged: (value) {
+                      setState(() {
+                        _autoCreateCashSafe = value;
+                        if (value) {
+                          _selectedCashSafeBoxId = 0; // main (treated as NULL server-side)
+                        }
+                      });
+                    },
+                    title: Text(
+                      isAr
+                          ? 'إنشاء خزنة نقدية خاصة للموظف تلقائياً'
+                          : 'Auto-create dedicated cash safe',
+                    ),
+                  ),
+                ],
+                DropdownButtonFormField<int>(
+                  value: _selectedCashSafeBoxId,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'خزنة النقد' : 'Cash Safe',
+                    prefixIcon: const Icon(Icons.point_of_sale),
+                  ),
+                  items: <DropdownMenuItem<int>>[
+                    DropdownMenuItem(
+                      value: 0,
+                      child: Text(
+                        isAr ? 'الخزنة الرئيسية (افتراضي)' : 'Main (default)',
+                      ),
+                    ),
+                    ..._cashSafes
+                        .where((s) => (s.id ?? 0) > 0)
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s.id!,
+                            child: Text(s.name),
+                          ),
+                        ),
+                  ],
+                  onChanged: (_loadingCashSafes || (widget.employee == null && _autoCreateCashSafe))
+                      ? null
+                      : (value) {
+                          setState(() {
+                            _selectedCashSafeBoxId = value ?? 0;
+                            if ((value ?? 0) > 0) {
+                              _autoCreateCashSafe = false;
+                            }
+                          });
+                        },
+                ),
+                const SizedBox(height: 12),
+
+                // Gold safe selection + optional auto-create (create only)
+                if (widget.employee == null) ...[
+                  SwitchListTile(
+                    value: _autoCreateGoldSafe,
+                    onChanged: (value) {
+                      setState(() {
+                        _autoCreateGoldSafe = value;
+                        if (value) {
+                          _selectedGoldSafeBoxId = 0; // main (treated as NULL server-side)
+                        }
+                      });
+                    },
+                    title: Text(
+                      isAr
+                          ? 'إنشاء خزنة ذهب خاصة للموظف تلقائياً'
+                          : 'Auto-create dedicated gold safe',
+                    ),
+                  ),
+                ],
                 DropdownButtonFormField<int>(
                   value: _selectedGoldSafeBoxId,
                   decoration: InputDecoration(
@@ -1134,11 +1288,14 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                           ),
                         ),
                   ],
-                  onChanged: _loadingGoldSafes
+                  onChanged: (_loadingGoldSafes || (widget.employee == null && _autoCreateGoldSafe))
                       ? null
                       : (value) {
                           setState(() {
                             _selectedGoldSafeBoxId = value ?? 0;
+                            if ((value ?? 0) > 0) {
+                              _autoCreateGoldSafe = false;
+                            }
                           });
                         },
                 ),
