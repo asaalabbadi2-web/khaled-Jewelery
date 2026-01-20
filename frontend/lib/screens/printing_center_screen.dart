@@ -123,25 +123,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     },
   ];
 
-  final List<Map<String, dynamic>> _templateShortcuts = [
-    {
-      'titleAr': 'استديو القوالب',
-      'titleEn': 'Template studio',
-      'descriptionAr': 'قوالب جاهزة بمقاسات طباعة + تصميم قالب جديد',
-      'descriptionEn': 'Ready presets + design new templates',
-      'icon': Icons.auto_awesome_mosaic_outlined,
-      'route': 'studio',
-    },
-    {
-      'titleAr': 'نسخ تلقائي بالبريد الإلكتروني',
-      'titleEn': 'Automated email copies',
-      'descriptionAr': 'اربط القالب بحساب البريد وارسِل نسخ PDF',
-      'descriptionEn': 'Link templates with automated email PDF copies',
-      'icon': Icons.email_outlined,
-      'route': 'automations',
-    },
-  ];
-
   final List<Map<String, dynamic>> _quickActions = [
     {
       'action': 'print_sales_invoice',
@@ -160,12 +141,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       'titleAr': 'ميزان مراجعة',
       'titleEn': 'Trial balance',
       'icon': Icons.balance,
-    },
-    {
-      'action': 'design_template',
-      'titleAr': 'تصميم قالب',
-      'titleEn': 'Design template',
-      'icon': Icons.design_services,
     },
     {
       'action': 'print_single_barcode',
@@ -367,8 +342,8 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           title: Text(isArabic ? 'مركز الطباعة' : 'Printing Center'),
           actions: [
             IconButton(
-              tooltip: isArabic ? 'استديو القوالب' : 'Template studio',
-              icon: const Icon(Icons.view_carousel_outlined),
+              tooltip: isArabic ? 'موزع عناصر الفاتورة' : 'Invoice layout',
+              icon: const Icon(Icons.grid_view_outlined),
               onPressed: () => _openTemplateStudio(isArabic: isArabic),
             ),
             IconButton(
@@ -409,8 +384,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
               _buildAutomationPanel(theme, isArabic),
               const SizedBox(height: 16),
               _buildRecentAndReminders(theme, isArabic),
-              const SizedBox(height: 16),
-              _buildTemplateShortcuts(theme, isArabic),
               const SizedBox(height: 20),
               ...grouped.entries.map(
                 (entry) => _buildCategorySection(
@@ -1853,77 +1826,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     );
   }
 
-  Widget _buildTemplateShortcuts(ThemeData theme, bool isArabic) {
-    return Card(
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildSectionTitle(
-              icon: Icons.design_services,
-              title: isArabic
-                  ? 'القوالب الذكية والإعدادات'
-                  : 'Smart templates & presets',
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: _templateShortcuts.map((template) {
-                return SizedBox(
-                  width: 260,
-                  child: Card(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(18),
-                      onTap: () => _handleTemplateShortcut(template, isArabic),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            CircleAvatar(
-                              backgroundColor: theme.colorScheme.primary
-                                  .withValues(alpha: 0.15),
-                              child: Icon(
-                                template['icon'] as IconData,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              isArabic
-                                  ? template['titleAr'] as String
-                                  : template['titleEn'] as String,
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              isArabic
-                                  ? template['descriptionAr'] as String
-                                  : template['descriptionEn'] as String,
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildCategorySection(
     BuildContext context,
     String category,
@@ -2202,33 +2104,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
   }
 
   Future<void> _handleQuickAction(String action) async {
-    if (action == 'design_template') {
-      _openTemplateStudio(isArabic: widget.isArabic);
-      return;
-    }
     await _handleAction(action);
-  }
-
-  void _handleTemplateShortcut(Map<String, dynamic> shortcut, bool isArabic) {
-    switch (shortcut['route']) {
-      case 'studio':
-        _openTemplateStudio(isArabic: isArabic);
-        break;
-      default:
-        _showSnack(
-          isArabic
-              ? 'سيتم إضافة الربط قريباً'
-              : 'Automation shortcut coming soon',
-        );
-    }
-  }
-
-  void _openTemplateStudio({required bool isArabic}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TemplateStudioScreen(isArabic: isArabic),
-      ),
-    );
   }
 
   Future<void> _showQuickPresetDialog({required bool isArabic}) async {
@@ -2310,6 +2186,14 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     if (presetName != null && presetName.trim().isNotEmpty) {
       await _savePreset(presetName.trim());
     }
+  }
+
+  void _openTemplateStudio({required bool isArabic}) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TemplateStudioScreen(isArabic: isArabic),
+      ),
+    );
   }
 
   Future<void> _handleAction(String action) async {

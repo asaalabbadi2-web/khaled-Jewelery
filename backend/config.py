@@ -85,6 +85,44 @@ ENABLE_REDIS_CACHE = _env_bool('ENABLE_REDIS_CACHE', default=bool(REDIS_URL))
 
 WEIGHT_SUPPORT_ACCOUNTS = [
 	{
+		'key': 'inventory_new',
+		'financial': {
+			'account_number': '1300',
+			'name': 'مخزون ذهب معروض للبيع',
+			'type': 'Asset',
+			'transaction_type': 'cash',
+			'tracks_weight': False,
+			'parent_number': '13',
+		},
+		'memo': {
+			'account_number': '7130000',
+			'name': 'مخزون ذهب معروض للبيع وزني',
+			'type': 'Asset',
+			'transaction_type': 'gold',
+			'tracks_weight': True,
+			'parent_number': '7130',
+		},
+	},
+	{
+		'key': 'inventory_scrap',
+		'financial': {
+			'account_number': '1310',
+			'name': 'مخزون ذهب كسر',
+			'type': 'Asset',
+			'transaction_type': 'cash',
+			'tracks_weight': False,
+			'parent_number': '13',
+		},
+		'memo': {
+			'account_number': '7130001',
+			'name': 'مخزون ذهب كسر وزني',
+			'type': 'Asset',
+			'transaction_type': 'gold',
+			'tracks_weight': True,
+			'parent_number': '7130',
+		},
+	},
+	{
 		'key': 'manufacturing_wage',
 		'financial': {
 			# NOTE: In this chart of accounts, 1350 is the cash wage-inventory account.

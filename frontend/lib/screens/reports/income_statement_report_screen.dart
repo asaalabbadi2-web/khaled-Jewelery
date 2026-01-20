@@ -35,11 +35,9 @@ class _IncomeStatementReportScreenState
   bool _includeUnposted = false;
 
   late NumberFormat _currencyFormat;
-  final NumberFormat _weightFormat = NumberFormat('#,##0.000');
 
   String _currencySymbol = 'ر.س';
   int _currencyDecimals = 2;
-  int _mainKarat = 21;
   String _currencyLocale = 'ar';
   bool _isCurrentLocaleArabic(BuildContext context) {
     final locale = Localizations.localeOf(context);
@@ -82,17 +80,14 @@ class _IncomeStatementReportScreenState
     final settings = Provider.of<SettingsProvider>(context);
     final symbol = settings.currencySymbol;
     final decimals = settings.decimalPlaces;
-    final mainKarat = settings.mainKarat;
     final localeIsArabic = _isCurrentLocaleArabic(context);
     final newCurrencyLocale = localeIsArabic ? 'ar' : 'en';
 
     if (symbol != _currencySymbol ||
         decimals != _currencyDecimals ||
-        mainKarat != _mainKarat ||
         newCurrencyLocale != _currencyLocale) {
       _currencySymbol = symbol;
       _currencyDecimals = decimals;
-      _mainKarat = mainKarat;
       _currencyLocale = newCurrencyLocale;
       _currencyFormat = NumberFormat.currency(
         locale: _currencyLocale,
@@ -173,9 +168,6 @@ class _IncomeStatementReportScreenState
 
   String _formatCurrency(num value) => _currencyFormat.format(value);
 
-  String _formatWeight(num value) =>
-      '${_weightFormat.format(value)} جم (عيار $_mainKarat)';
-
   @override
   Widget build(BuildContext context) {
     final isArabic = _isCurrentLocaleArabic(context);
@@ -240,8 +232,6 @@ class _IncomeStatementReportScreenState
           _buildSummaryCard(isArabic),
           const SizedBox(height: 16),
           _buildFinancialTrendCard(isArabic),
-          const SizedBox(height: 16),
-          _buildWeightTrendCard(isArabic),
           const SizedBox(height: 16),
           _buildSeriesTable(isArabic),
           const SizedBox(height: 16),
@@ -337,7 +327,6 @@ class _IncomeStatementReportScreenState
     }
 
     final netMarginPct = _asDouble(summary['net_margin_pct']);
-    final weightNetMarginPct = _asDouble(summary['weight_net_margin_pct']);
     final manufacturingWage = _asDouble(summary['manufacturing_wage_expense']);
     final operatingExclWage = _asDouble(
       summary['operating_expenses_excl_wage'],
@@ -393,53 +382,6 @@ class _IncomeStatementReportScreenState
       ),
     ];
 
-    final weightMetrics = [
-      _SummaryMetric(
-        label: isArabic ? 'صافي المبيعات (وزني)' : 'Net Revenue (Weight)',
-        value: _formatWeight(_asDouble(summary['weight_revenue'])),
-        icon: Icons.scale,
-        color: Colors.green.shade700,
-      ),
-      _SummaryMetric(
-        label: isArabic ? 'تكلفة المبيعات (وزني)' : 'Cost of Sales (Weight)',
-        value: _formatWeight(_asDouble(summary['weight_cogs'])),
-        icon: Icons.inventory_2,
-        color: Colors.deepOrange.shade400,
-      ),
-      _SummaryMetric(
-        label: isArabic ? 'الربح الإجمالي (وزني)' : 'Gross Profit (Weight)',
-        value: _formatWeight(_asDouble(summary['weight_gross_profit'])),
-        icon: Icons.stacked_line_chart,
-        color: Colors.blue.shade700,
-      ),
-      _SummaryMetric(
-        label: isArabic
-            ? 'أجور المصنعية (وزني)'
-            : 'Manufacturing Wages (Weight)',
-        value: _formatWeight(_asDouble(summary['weight_manufacturing_wage'])),
-        icon: Icons.home_repair_service,
-        color: Colors.brown.shade400,
-      ),
-      _SummaryMetric(
-        label: isArabic ? 'إجمالي المصاريف (وزني)' : 'Total Expenses (Weight)',
-        value: _formatWeight(_asDouble(summary['weight_expenses'])),
-        icon: Icons.receipt_long,
-        color: Colors.deepOrange,
-      ),
-      _SummaryMetric(
-        label: isArabic ? 'صافي الربح (وزني)' : 'Net Profit (Weight)',
-        value: _formatWeight(_asDouble(summary['weight_net_profit'])),
-        icon: Icons.savings,
-        color: Colors.teal.shade700,
-      ),
-      _SummaryMetric(
-        label: isArabic ? 'هامش صافي الربح (وزني)' : 'Net Margin % (Weight)',
-        value: '${weightNetMarginPct.toStringAsFixed(2)}%',
-        icon: Icons.percent,
-        color: Colors.purple.shade300,
-      ),
-    ];
-
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -469,135 +411,9 @@ class _IncomeStatementReportScreenState
                   )
                   .toList(),
             ),
-            const Divider(height: 32),
-            Text(
-              isArabic ? 'المؤشرات الوزنية (ذهب)' : 'Weight Metrics (Gold)',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.amber,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: weightMetrics
-                  .map(
-                    (metric) => SizedBox(
-                      width: 200,
-                      child: _SummaryTile(metric: metric, isArabic: isArabic),
-                    ),
-                  )
-                  .toList(),
-            ),
-            const SizedBox(height: 24),
-            _buildWeightExpenseBreakdown(isArabic, summary),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildWeightExpenseBreakdown(
-    bool isArabic,
-    Map<String, dynamic> summary,
-  ) {
-    final postedWeight = _asDouble(summary['weight_expenses_posted']);
-    final pendingWeight = _asDouble(summary['weight_expenses_pending']);
-    final pendingCash = _asDouble(summary['weight_expenses_pending_cash']);
-    final totalWeight = postedWeight + pendingWeight;
-    final hasPending = pendingWeight.abs() > 0.0001;
-    final hasPendingCash = pendingCash.abs() > 0.01;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          isArabic ? 'تفاصيل المصاريف الوزنية' : 'Weight Expense Details',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: [
-            SizedBox(
-              width: 220,
-              child: _InsightPill(
-                icon: Icons.scale,
-                label: isArabic
-                    ? 'إجمالي المصاريف الوزنية'
-                    : 'Total Weight Expenses',
-                value: _formatWeight(totalWeight),
-                color: Colors.amber.shade800,
-              ),
-            ),
-            SizedBox(
-              width: 220,
-              child: _InsightPill(
-                icon: Icons.verified_outlined,
-                label: isArabic
-                    ? 'مصاريف وزنية مرحلة'
-                    : 'Posted Weight Expenses',
-                value: _formatWeight(postedWeight),
-                color: Colors.teal.shade600,
-              ),
-            ),
-            SizedBox(
-              width: 220,
-              child: _InsightPill(
-                icon: Icons.pending_actions_outlined,
-                label: isArabic
-                    ? 'مصاريف وزنية معلقة'
-                    : 'Pending Weight Expenses',
-                value: _formatWeight(pendingWeight),
-                color: Colors.deepOrange.shade400,
-              ),
-            ),
-            SizedBox(
-              width: 220,
-              child: _InsightPill(
-                icon: Icons.currency_exchange,
-                label: isArabic
-                    ? 'المكافئ النقدي للمعلقة'
-                    : 'Pending Cash Equivalent',
-                value: _formatCurrency(pendingCash),
-                color: Colors.blueGrey.shade600,
-              ),
-            ),
-          ],
-        ),
-        if (hasPending || hasPendingCash)
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.warning_amber_rounded,
-                  color: Colors.orange.shade700,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    isArabic
-                        ? 'لا تزال هناك تسويات وزنية قيد التنفيذ. نفّذ التسويات لإغلاق الفترة بأمان.'
-                        : 'Pending weight settlements need execution before closing the period.',
-                    style: TextStyle(
-                      color: Colors.orange.shade900,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
     );
   }
 
@@ -760,162 +576,6 @@ class _IncomeStatementReportScreenState
     );
   }
 
-  Widget _buildWeightTrendCard(bool isArabic) {
-    final series = List<Map<String, dynamic>>.from(_report?['series'] ?? []);
-    if (series.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    final limited = series.take(12).toList();
-    final spotsRevenue = <FlSpot>[];
-    final spotsExpenses = <FlSpot>[];
-    final spotsNet = <FlSpot>[];
-    double maxValue = 0;
-
-    for (var i = 0; i < limited.length; i++) {
-      final row = limited[i];
-      final netRevenue = _asDouble(row['weight_revenue']);
-      final expenses = _asDouble(row['weight_expenses']);
-      final netProfit = _asDouble(row['weight_net_profit']);
-      spotsRevenue.add(FlSpot(i.toDouble(), netRevenue));
-      spotsExpenses.add(FlSpot(i.toDouble(), expenses));
-      spotsNet.add(FlSpot(i.toDouble(), netProfit));
-      maxValue = math.max(
-        maxValue,
-        math.max(netRevenue.abs(), math.max(expenses.abs(), netProfit.abs())),
-      );
-    }
-
-    if (maxValue == 0) {
-      maxValue = 1;
-    }
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              isArabic ? 'الاتجاه الوزني (ذهب)' : 'Weight Trend (Gold)',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 280,
-              child: LineChart(
-                LineChartData(
-                  minY: -maxValue,
-                  maxY: maxValue,
-                  titlesData: FlTitlesData(
-                    topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                    rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 48,
-                        getTitlesWidget: (value, meta) => Text(
-                          _weightFormat.format(value),
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          final index = value.toInt();
-                          if (index < 0 || index >= limited.length) {
-                            return const SizedBox.shrink();
-                          }
-                          final label =
-                              limited[index]['label']?.toString() ?? '';
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              label,
-                              style: const TextStyle(fontSize: 10),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                  gridData: FlGridData(show: true, drawVerticalLine: false),
-                  borderData: FlBorderData(show: false),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: spotsRevenue,
-                      color: Colors.amber.shade700,
-                      barWidth: 3,
-                      isCurved: true,
-                      dotData: const FlDotData(show: false),
-                      belowBarData: BarAreaData(show: false),
-                    ),
-                    LineChartBarData(
-                      spots: spotsExpenses,
-                      color: Colors.deepOrange,
-                      barWidth: 3,
-                      isCurved: true,
-                      dotData: const FlDotData(show: false),
-                      belowBarData: BarAreaData(show: false),
-                    ),
-                    LineChartBarData(
-                      spots: spotsNet,
-                      color: Colors.teal.shade700,
-                      barWidth: 3,
-                      isCurved: true,
-                      dotData: const FlDotData(show: false),
-                      belowBarData: BarAreaData(show: false),
-                    ),
-                  ],
-                  lineTouchData: LineTouchData(
-                    touchTooltipData: LineTouchTooltipData(
-                      getTooltipItems: (spots) {
-                        return spots.map((spot) {
-                          final label = limited[spot.x.toInt()]['label'];
-                          final value = _formatWeight(spot.y);
-                          return LineTooltipItem(
-                            '$label\n$value',
-                            const TextStyle(color: Colors.white),
-                          );
-                        }).toList();
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              children: [
-                _LegendChip(
-                  color: Colors.amber.shade700,
-                  label: isArabic ? 'صافي المبيعات' : 'Net Revenue',
-                ),
-                _LegendChip(
-                  color: Colors.deepOrange,
-                  label: isArabic ? 'المصاريف' : 'Expenses',
-                ),
-                _LegendChip(
-                  color: Colors.teal.shade700,
-                  label: isArabic ? 'صافي الربح' : 'Net Profit',
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildSeriesTable(bool isArabic) {
     final series = List<Map<String, dynamic>>.from(_report?['series'] ?? []);
     if (series.isEmpty) {
@@ -950,38 +610,6 @@ class _IncomeStatementReportScreenState
                       isArabic ? 'صافي الربح (نقدي)' : 'Net Profit (Cash)',
                     ),
                   ),
-                  DataColumn(
-                    label: Text(
-                      isArabic
-                          ? 'صافي المبيعات (وزني)'
-                          : 'Net Revenue (Weight)',
-                    ),
-                  ),
-                  DataColumn(
-                    label: Text(
-                      isArabic ? 'الوزن المباع الفعلي' : 'Actual Sold Weight',
-                    ),
-                  ),
-                  DataColumn(
-                    label: Text(
-                      isArabic ? 'أجور مصنعية (وزني)' : 'Mfg Wages (Weight)',
-                    ),
-                  ),
-                  DataColumn(
-                    label: Text(
-                      isArabic ? 'مصاريف (مرحلة)' : 'Expenses (Posted)',
-                    ),
-                  ),
-                  DataColumn(
-                    label: Text(
-                      isArabic ? 'مصاريف (معلقة)' : 'Expenses (Pending)',
-                    ),
-                  ),
-                  DataColumn(
-                    label: Text(
-                      isArabic ? 'صافي الربح (وزني)' : 'Net Profit (Weight)',
-                    ),
-                  ),
                 ],
                 rows: series
                     .map(
@@ -1001,42 +629,6 @@ class _IncomeStatementReportScreenState
                           ),
                           DataCell(
                             Text(_formatCurrency(_asDouble(row['net_profit']))),
-                          ),
-                          DataCell(
-                            Text(
-                              _formatWeight(_asDouble(row['weight_revenue'])),
-                            ),
-                          ),
-                          DataCell(
-                            Text(_formatWeight(_asDouble(row['weight_cogs']))),
-                          ),
-                          DataCell(
-                            Text(
-                              _formatWeight(
-                                _asDouble(row['weight_manufacturing_wage']),
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(
-                              _formatWeight(
-                                _asDouble(row['weight_expenses_posted']),
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(
-                              _formatWeight(
-                                _asDouble(row['weight_expenses_pending']),
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(
-                              _formatWeight(
-                                _asDouble(row['weight_net_profit']),
-                              ),
-                            ),
                           ),
                         ],
                       ),
@@ -1107,58 +699,6 @@ class _IncomeStatementReportScreenState
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _InsightPill extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  const _InsightPill({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-        color: color.withValues(alpha: 0.07),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: color),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  label,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -16,8 +16,8 @@ import 'chart_of_accounts_screen.dart';
 import 'gold_price_manual_screen_enhanced.dart';
 import 'backup_restore_screen.dart';
 import 'system_reset_screen.dart';
-import 'template_designer_screen.dart';
 import 'weight_closing_settings_screen.dart';
+import 'template_studio_screen.dart';
 import '../utils.dart';
 
 enum SettingsEntry {
@@ -144,10 +144,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   bool _isLoadingPrinters = false;
   List<Printer> _availablePrinters = const [];
 
-  // 🆕 افتراضي قالب الطباعة حسب نوع الفاتورة
-  List<String> _invoiceTypesForTemplates = const [];
-  Map<String, String> _printTemplateByInvoiceType = const {};
-
   @override
   void initState() {
     super.initState();
@@ -209,34 +205,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       ? 'ر.س'
       : _currencyController.text.trim();
 
-  Map<String, String> _normalizedPrintTemplateByType() {
-    final out = <String, String>{};
-    for (final entry in _printTemplateByInvoiceType.entries) {
-      final key = entry.key.trim();
-      final value = entry.value.trim();
-      if (key.isEmpty) continue;
-      if (value.isEmpty || value == 'auto') continue;
-      out[key] = value;
-    }
-    return out;
-  }
-
-  List<DropdownMenuEntry<String>> _templatePresetEntries() {
-    const options = [
-      DropdownMenuEntry<String>(
-        value: 'auto',
-        label: 'تلقائي (حسب الورق/آخر اختيار)',
-      ),
-      DropdownMenuEntry<String>(value: 'a4_portrait', label: 'A4 (عمودي)'),
-      DropdownMenuEntry<String>(value: 'a5_portrait', label: 'A5 (عمودي)'),
-      DropdownMenuEntry<String>(
-        value: 'thermal_80x200',
-        label: 'حراري 80×200 مم',
-      ),
-    ];
-    return options;
-  }
-
   Future<void> _loadInitialData() async {
     setState(() {
       _isLoading = true;
@@ -271,15 +239,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
         goldSafes = const [];
       }
 
-      // Load invoice types (best-effort)
-      List<String> invoiceTypes = const [];
-      try {
-        final rawTypes = await _apiService.getInvoiceTypes();
-        invoiceTypes = rawTypes.map((e) => e.toString()).toList();
-      } catch (_) {
-        invoiceTypes = const [];
-      }
-
       if (!mounted) return;
 
       final printerAutoConnect = prefs.getBool(_printerAutoConnectKey) ?? true;
@@ -299,22 +258,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           settings['company_tax_number']?.toString() ?? '';
       _invoicePrefixController.text =
           settings['invoice_prefix']?.toString() ?? 'INV';
-
-      Map<String, String> templateByType = const {};
-      try {
-        final raw = settings['print_template_by_invoice_type'];
-        if (raw is Map<String, dynamic>) {
-          templateByType = raw.map(
-            (k, v) => MapEntry(k.toString(), v.toString()),
-          );
-        } else if (raw is Map) {
-          templateByType = Map<String, dynamic>.from(
-            raw,
-          ).map((k, v) => MapEntry(k.toString(), v.toString()));
-        }
-      } catch (_) {
-        templateByType = const {};
-      }
 
       setState(() {
         _isInitialized = true;
@@ -436,8 +379,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             : '80 مم';
         _preferredPrinterName = preferredPrinterName;
 
-        _invoiceTypesForTemplates = invoiceTypes;
-        _printTemplateByInvoiceType = templateByType;
       });
     } catch (error) {
       if (!mounted) return;
@@ -487,7 +428,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'idle_timeout_enabled': _idleTimeoutEnabled,
       'idle_timeout_minutes': _idleTimeoutMinutes,
       'allow_partial_invoice_payments': _allowPartialInvoicePayments,
-      'print_template_by_invoice_type': _normalizedPrintTemplateByType(),
 
       // 🆕 Feature toggles + default safes (employee routing)
       'employee_cash_safes_enabled': _employeeCashSafesEnabled,
@@ -1314,6 +1254,32 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       padding: const EdgeInsets.all(20),
       children: [
         _buildSectionCard(
+          icon: Icons.grid_view_outlined,
+          iconColor: _primaryColor,
+          title: 'موزع عناصر الفاتورة',
+          children: [
+            Text(
+              'تعديل أماكن عناصر الطباعة (العنوان، جدول الأصناف، الإجماليات...) حسب مقاس الورق.\n'
+              'يتم حفظ الإعدادات على نفس الجهاز.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const TemplateStudioScreen(isArabic: true),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('فتح موزع عناصر الفاتورة'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _buildSectionCard(
           icon: Icons.print_outlined,
           iconColor: _primaryColor,
           title: 'إعدادات الطابعة',
@@ -1381,105 +1347,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               onPressed: _showPrinterSetupSheet,
               icon: const Icon(Icons.print_rounded),
               label: const Text('إدارة الطابعات المتاحة'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _buildSectionCard(
-          icon: Icons.receipt_long_outlined,
-          iconColor: _primaryColor,
-          title: 'قوالب الفواتير حسب النوع',
-          children: [
-            Text(
-              'حدد القالب الافتراضي لكل نوع فاتورة. عند اختيار "تلقائي" سيستخدم النظام آخر قالب نشط أو fallback حسب الورق.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 14),
-            if (_invoiceTypesForTemplates.isEmpty)
-              Text(
-                'لم يتم تحميل أنواع الفواتير، سيتم استخدام القائمة الافتراضية عند الحفظ.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            const SizedBox(height: 10),
-            ...(_invoiceTypesForTemplates.isNotEmpty
-                    ? _invoiceTypesForTemplates
-                    : const [
-                        'بيع',
-                        'شراء من عميل',
-                        'مرتجع بيع',
-                        'مرتجع شراء',
-                        'شراء',
-                        'مرتجع شراء (مورد)',
-                      ])
-                .map((type) {
-                  final selected =
-                      (_printTemplateByInvoiceType[type] ?? 'auto');
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            type,
-                            style: Theme.of(context).textTheme.bodyLarge,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        SizedBox(
-                          width: 240,
-                          child: Directionality(
-                            textDirection: TextDirection.rtl,
-                            child: DropdownMenu<String>(
-                              initialSelection: selected,
-                              onSelected: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  final next = Map<String, String>.from(
-                                    _printTemplateByInvoiceType,
-                                  );
-                                  next[type] = value;
-                                  _printTemplateByInvoiceType = next;
-                                });
-                              },
-                              enableSearch: false,
-                              leadingIcon: Icon(
-                                Icons.layers_outlined,
-                                color: _primaryColor,
-                              ),
-                              trailingIcon: const Icon(
-                                Icons.keyboard_arrow_down,
-                              ),
-                              inputDecorationTheme: _dropdownDecoration(
-                                accentColor: _primaryColor,
-                              ),
-                              dropdownMenuEntries: _templatePresetEntries(),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _buildSectionCard(
-          icon: Icons.design_services_outlined,
-          iconColor: const Color(0xFFD4AF37),
-          title: 'مصمم القوالب',
-          children: [
-            Text(
-              'صمم قوالب احترافية مخصصة للفواتير والسندات والقيود وكشوفات الحساب.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _openTemplateDesigner,
-              icon: const Icon(Icons.palette),
-              label: const Text('فتح مصمم القوالب'),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFD4AF37),
-              ),
             ),
           ],
         ),
@@ -1896,13 +1763,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => SystemResetScreen()),
-    );
-  }
-
-  Future<void> _openTemplateDesigner() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const TemplateDesignerScreen()),
     );
   }
 
@@ -2573,7 +2433,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                       height: 420,
                       child: ListView.separated(
                         itemCount: visible.length,
-                        separatorBuilder: (_, __) => Divider(
+                        separatorBuilder: (_, index) => Divider(
                           height: 1,
                           color: _withOpacity(_outlineColor, 0.25),
                         ),

@@ -39,6 +39,24 @@ services:
     volumes:
       - backup_data:/data/backups
 
+  scheduler:
+    image: ghcr.io/${GITHUB_REPOSITORY:-owner/repo}/backend:${IMAGE_TAG:-latest}
+    container_name: yasargold-scheduler
+    env_file: .env.production
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://yasargold:change_me@db:5432/yasargold}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      BYPASS_AUTH_FOR_DEVELOPMENT: "0"
+      YASAR_ENV: ${YASAR_ENV:-production}
+      BACKUP_DIR: ${BACKUP_DIR:-/data/backups}
+      ALLOW_DANGEROUS_RESETS: ${ALLOW_DANGEROUS_RESETS:-false}
+    command: ["python", "backend/run_schedulers.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - backup_data:/data/backups
+
   nginx:
     image: ghcr.io/${GITHUB_REPOSITORY:-owner/repo}/web:${IMAGE_TAG:-latest}
     container_name: yasargold-nginx

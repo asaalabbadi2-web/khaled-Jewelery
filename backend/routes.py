@@ -646,7 +646,13 @@ DEFAULT_WEIGHT_CLOSING_SETTINGS = {
     'shift_close_gold_pure_deficit_threshold_grams': 0.10,
     'order_number_prefix': 'WCO',
     'reservation_code_prefix': 'RES',
-    'inventory_account_id': 1310,  # مخزون ذهب عيار 21
+    # Inventory accounts:
+    # - inventory_new_account_id: inventory for "معروض للبيع" (new/for-sale)
+    # - inventory_scrap_account_id: inventory for "ذهب كسر" (scrap)
+    # Backward-compat: inventory_account_id is treated as scrap inventory when present.
+    'inventory_new_account_id': 1300,
+    'inventory_scrap_account_id': 1310,
+    'inventory_account_id': 1310,
     'cash_account_id': 1100,       # الصندوق
 }
 
@@ -692,6 +698,28 @@ def update_weight_closing_settings():
             0.0,
             float(_coerce_float(payload.get('shift_close_gold_pure_deficit_threshold_grams'), 0.10)),
         )
+
+    def _normalize_account_ref(value):
+        """Accept either account id or account_number-like integer."""
+        if value in (None, '', False):
+            return None
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return None
+
+    # Inventory + cash account IDs
+    for key in (
+        'inventory_new_account_id',
+        'inventory_scrap_account_id',
+        # Backward-compat
+        'inventory_account_id',
+        'cash_account_id',
+    ):
+        if key in payload:
+            v = _normalize_account_ref(payload.get(key))
+            if v is not None and v > 0:
+                merged[key] = v
 
     # Persist
     settings_row = Settings.query.first()
@@ -1005,7 +1033,38 @@ def ensure_weight_closing_support_accounts():
             linked_pairs += 1
 
     if created or linked_pairs:
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as exc:
+            # Race-safe startup: under gunicorn, multiple workers may attempt to
+            # create the same support accounts simultaneously.
+            try:
+                from sqlalchemy.exc import IntegrityError
+            except Exception:
+                IntegrityError = None
+
+            if IntegrityError and isinstance(exc, IntegrityError):
+                db.session.rollback()
+                # Re-resolve and link pairs after the other worker created them.
+                relinked = 0
+                for entry in WEIGHT_SUPPORT_ACCOUNTS:
+                    financial_spec = entry.get('financial') or {}
+                    memo_spec = entry.get('memo') or {}
+                    fin_no = financial_spec.get('account_number')
+                    memo_no = memo_spec.get('account_number')
+                    if not fin_no or not memo_no:
+                        continue
+                    fin_acc = Account.query.filter_by(account_number=fin_no).first()
+                    memo_acc = Account.query.filter_by(account_number=memo_no).first()
+                    if fin_acc and memo_acc and fin_acc.memo_account_id != memo_acc.id:
+                        fin_acc.memo_account_id = memo_acc.id
+                        relinked += 1
+                if relinked:
+                    db.session.commit()
+            else:
+                db.session.rollback()
+                raise
+
         try:
             link_memo_accounts_helper()
         except Exception as exc:
@@ -1100,6 +1159,26 @@ def _get_inventory_account_by_karat(karat: int) -> int:
     Returns:
         int: ID حساب المخزون
     """
+    # ✅ إذا تم توحيد مخزون العيارات في حساب واحد، نعتمد إعداد inventory_account_id
+    # (قد يكون رقم حساب أو account.id حسب بيئة العميل).
+    try:
+        settings = _load_weight_closing_settings() or {}
+        preferred = settings.get('inventory_account_id')
+        if preferred not in (None, '', 0, False):
+            try:
+                preferred_int = int(preferred)
+            except Exception:
+                preferred_int = None
+
+            if preferred_int:
+                acc = Account.query.get(preferred_int)
+                if not acc:
+                    acc = Account.query.filter_by(account_number=str(preferred_int)).first()
+                if acc:
+                    return acc.id
+    except Exception:
+        pass
+
     # استخدام أرقام الحسابات بالترقيم القديم
     karat_to_account = {
         24: '1330',  # مخزون ذهب عيار 24
@@ -1116,7 +1195,72 @@ def _get_inventory_account_by_karat(karat: int) -> int:
     
     # fallback: استخدام الحساب من الإعدادات
     settings = _load_weight_closing_settings()
-    return settings.get('inventory_account_id', 1310)
+    preferred = settings.get('inventory_account_id', 1310)
+    try:
+        preferred_int = int(preferred)
+    except Exception:
+        preferred_int = None
+    if preferred_int:
+        acc = Account.query.get(preferred_int) or Account.query.filter_by(account_number=str(preferred_int)).first()
+        if acc:
+            return acc.id
+    return 1310
+
+
+def _resolve_inventory_account_id_for_invoice(invoice_type: str, gold_type: str) -> int | None:
+    """Resolve the financial inventory account for an invoice context.
+
+    We unify across karats, but we do NOT unify between:
+    - معروض للبيع (new/for-sale)  -> typically 1300
+    - ذهب كسر (scrap)            -> typically 1310
+    """
+
+    inv_type = (invoice_type or '').strip()
+    gt = (str(gold_type or '').strip().lower() or 'new')
+
+    # Determine inventory kind.
+    # - Customer scrap purchase is always "scrap" inventory.
+    # - Sales/purchases can be either depending on gold_type.
+    kind = 'scrap' if gt == 'scrap' else 'new'
+    if inv_type == 'شراء من عميل':
+        kind = 'scrap'
+
+    settings = {}
+    try:
+        settings = _load_weight_closing_settings() or {}
+    except Exception:
+        settings = {}
+
+    preferred_key = 'inventory_scrap_account_id' if kind == 'scrap' else 'inventory_new_account_id'
+    preferred = settings.get(preferred_key)
+
+    # Backward-compat: old setting treated as scrap inventory.
+    if preferred in (None, '', 0, False) and kind == 'scrap':
+        preferred = settings.get('inventory_account_id')
+
+    fallback_number = 1310 if kind == 'scrap' else 1300
+
+    def _resolve(value) -> int | None:
+        if value in (None, '', 0, False):
+            return None
+        try:
+            v = int(str(value).strip())
+        except Exception:
+            return None
+        if v <= 0:
+            return None
+
+        acc = Account.query.get(v)
+        if not acc:
+            acc = Account.query.filter_by(account_number=str(v)).first()
+        return int(acc.id) if acc else None
+
+    resolved = _resolve(preferred)
+    if resolved:
+        return resolved
+
+    # Default: resolve by chart account_number.
+    return _resolve(fallback_number)
 
 
 def _invoice_weight_in_main_karat(invoice: Invoice) -> float:
@@ -6069,6 +6213,19 @@ def add_invoice():
         # 🆕 --- 1.5. Create Invoice Payments (وسائل دفع متعددة) ---
         print(f"🟢 Step 2: Creating invoice payments (if any)...")
 
+        def _is_cash_payment_method(pm) -> bool:
+            """Best-effort check whether a PaymentMethod represents cash."""
+            if pm is None:
+                return False
+            try:
+                pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
+                name = str(getattr(pm, 'name', '') or '').strip()
+                if pt in {'cash'}:
+                    return True
+                return 'نقد' in name
+            except Exception:
+                return False
+
         def _fallback_cash_safe_box_id() -> int | None:
             """Fallback cash SafeBox when none is supplied/configured.
 
@@ -6680,12 +6837,16 @@ def add_invoice():
             commission_acc_id = get_account_id_for_mapping('بيع', 'commission')
             commission_vat_acc_id = get_account_id_for_mapping('بيع', 'commission_vat')
             
-            # حسابات المخزون حسب العيار
+            # حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
             inventory_accounts = {}
-            for karat in ['18', '21', '22', '24']:
-                inv_acc_id = get_account_id_for_mapping('بيع', f'inventory_{karat}k')
-                if inv_acc_id:
-                    inventory_accounts[karat] = inv_acc_id
+            unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
+            if unified_inventory_acc_id:
+                inventory_accounts = {k: unified_inventory_acc_id for k in ['18', '21', '22', '24']}
+            else:
+                for karat in ['18', '21', '22', '24']:
+                    inv_acc_id = get_account_id_for_mapping('بيع', f'inventory_{karat}k')
+                    if inv_acc_id:
+                        inventory_accounts[karat] = inv_acc_id
             
             # ============================================
             # القيد الأول: إثبات الإيراد (المبلغ الكامل)
@@ -7391,12 +7552,16 @@ def add_invoice():
             cash_acc_id = get_account_id_for_mapping('شراء من عميل', 'cash')
             vat_receivable_acc_id = get_account_id_for_mapping('شراء من عميل', 'vat_receivable')
             
-            # حسابات المخزون حسب العيار
+            # حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
             inventory_accounts = {}
-            for karat in ['18', '21', '22', '24']:
-                inv_acc_id = get_account_id_for_mapping('شراء من عميل', f'inventory_{karat}k')
-                if inv_acc_id:
-                    inventory_accounts[karat] = inv_acc_id
+            unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
+            if unified_inventory_acc_id:
+                inventory_accounts = {k: unified_inventory_acc_id for k in ['18', '21', '22', '24']}
+            else:
+                for karat in ['18', '21', '22', '24']:
+                    inv_acc_id = get_account_id_for_mapping('شراء من عميل', f'inventory_{karat}k')
+                    if inv_acc_id:
+                        inventory_accounts[karat] = inv_acc_id
             
             # ✅ الحصول على السعر المباشر للذهب (العيار الرئيسي)
             gold_price_data = get_current_gold_price()
@@ -7593,12 +7758,16 @@ def add_invoice():
             customers_acc_id = get_account_id_for_mapping('مرتجع بيع', 'customers')
             sales_returns_acc_id = get_account_id_for_mapping('مرتجع بيع', 'sales_returns')
             
-            # حسابات المخزون حسب العيار (للتسجيل الصحيح نقداً ووزناً)
+            # حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
             inventory_accounts = {}
-            for karat in ['18', '21', '22', '24']:
-                inv_acc_id = get_account_id_for_mapping('مرتجع بيع', f'inventory_{karat}k')
-                if inv_acc_id:
-                    inventory_accounts[karat] = inv_acc_id
+            unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
+            if unified_inventory_acc_id:
+                inventory_accounts = {k: unified_inventory_acc_id for k in ['18', '21', '22', '24']}
+            else:
+                for karat in ['18', '21', '22', '24']:
+                    inv_acc_id = get_account_id_for_mapping('مرتجع بيع', f'inventory_{karat}k')
+                    if inv_acc_id:
+                        inventory_accounts[karat] = inv_acc_id
             
             total_cost = data.get('total_cost', 0) or (total_cash * 0.8)
             
@@ -7803,12 +7972,16 @@ def add_invoice():
                 if wage_expense_acc_id:
                     _ensure_weight_tracking_account(wage_expense_acc_id)
 
-                # بناء قاموس حسابات المخزون حسب العيار
+                # بناء قاموس حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
                 inventory_accounts = {}
-                for karat in ['18', '21', '22', '24']:
-                    acc_id = _mapping(f'inventory_{karat}k')
-                    if acc_id:
-                        inventory_accounts[karat] = acc_id
+                unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
+                if unified_inventory_acc_id:
+                    inventory_accounts = {k: unified_inventory_acc_id for k in ['18', '21', '22', '24']}
+                else:
+                    for karat in ['18', '21', '22', '24']:
+                        acc_id = _mapping(f'inventory_{karat}k')
+                        if acc_id:
+                            inventory_accounts[karat] = acc_id
 
                 # تحديد حساب المورد (يجب أن يتتبع الوزن دائماً)
                 supplier_account_id = None
@@ -13620,14 +13793,26 @@ def create_employee():
     """إنشاء موظف جديد مع حساب تلقائي"""
     from employee_account_helpers import (
         create_employee_account,
+        create_employee_payables_accounts,
         get_employee_department_from_code,
         ensure_employee_group_accounts,
     )
     from advance_account_helpers import get_or_create_employee_advance_account
-    from employee_gold_safe_helpers import create_employee_gold_safe
-    from employee_cash_safe_helpers import create_employee_cash_safe
+    from employee_gold_safe_helpers import create_employee_gold_safe, ensure_employee_gold_group_account
+    from employee_cash_safe_helpers import create_employee_cash_safe, ensure_employee_cash_group_account
     
     data = request.get_json() or {}
+
+    def _boolish(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+        return bool(value)
 
     name = data.get('name')
     if not name:
@@ -13638,14 +13823,22 @@ def create_employee():
     if Employee.query.filter_by(employee_code=employee_code).first():
         return jsonify({'error': 'كود الموظف مستخدم بالفعل'}), 400
 
+    # Ensure required employee/group accounts exist (defensive on fresh DBs).
+    try:
+        ensure_employee_group_accounts(created_by=data.get('created_by', 'system'))
+        ensure_employee_cash_group_account(created_by=data.get('created_by', 'system'))
+        ensure_employee_gold_group_account(created_by=data.get('created_by', 'system'))
+    except Exception:
+        # Non-fatal: some charts might not have the expected parents.
+        pass
+
     # إنشاء حساب تلقائي للموظف إذا لم يُحدد account_id
     account_id = data.get('account_id')
     auto_created_account = None
     
     if not account_id:
         try:
-            # Ensure required grouping accounts exist on fresh systems.
-            ensure_employee_group_accounts(created_by=data.get('created_by', 'system'))
+            # Group accounts are already ensured above; proceed with creating the employee account.
 
             # تحديد القسم من البيانات المُدخلة أو استخدام الافتراضي
             department_input = data.get('department', '').lower()
@@ -13701,6 +13894,7 @@ def create_employee():
     created_gold_safe_account = None
     created_cash_safe = None
     created_cash_safe_account = None
+    created_payables_accounts = []
 
     # Optional: assign employee gold safe box (NULL/0 => main gold safe)
     if 'gold_safe_box_id' in data:
@@ -13781,6 +13975,15 @@ def create_employee():
         db.session.add(employee)
         db.session.flush()  # ensure employee.id is available
 
+        # Auto-create employee-specific payables accounts under 230/240/250 (detail 2300/2400/2500).
+        # Default: enabled (can be disabled by sending auto_create_payables_accounts=false)
+        if _boolish(data.get('auto_create_payables_accounts'), default=True):
+            try:
+                created_by = data.get('created_by', 'system')
+                created_payables_accounts = create_employee_payables_accounts(name, created_by=created_by)
+            except Exception as exc:
+                return jsonify({'error': f'فشل إنشاء حسابات مستحقات الموظف: {str(exc)}'}), 500
+
         # Optional: auto-create employee advance account (140xxx) at employee creation time.
         # Default remains off to avoid chart clutter; enable by sending auto_create_advance_account=true.
         created_advance_account = None
@@ -13822,6 +14025,16 @@ def create_employee():
                     'account_number': created_advance_account.account_number,
                     'account_name': created_advance_account.name,
                 }
+
+        if created_payables_accounts:
+            result['auto_created_payables_accounts'] = [
+                {
+                    'account_id': int(acc.id),
+                    'account_number': acc.account_number,
+                    'account_name': acc.name,
+                }
+                for acc in created_payables_accounts
+            ]
         
         return jsonify(result), 201
     except Exception as e:
@@ -18448,10 +18661,10 @@ def get_dual_account_statement():
 @require_permission('reports.financial')
 def get_income_statement():
     """
-    قائمة الدخل المزدوجة (income statement) - مالي + وزني
-    تعرض الإيرادات والمصروفات في النظامين:
-    - النظام المالي (4xxx, 5xxx)
-    - النظام الوزني (74xxx, 75xxx)
+    قائمة الدخل (نقدية فقط)
+
+    ملاحظة: تم حذف المؤشرات/الأقسام الوزنية من هذا التقرير لتجنب خلط
+    مؤشرات الوزن مع قائمة الدخل المالية.
     """
     try:
         start_date_str = request.args.get('start_date')
@@ -18462,20 +18675,6 @@ def get_income_statement():
         
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
-
-        # سعر الذهب المباشر (عيار 24) لتحويل النقد إلى وزن عند الحاجة
-        latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
-        live_gold_price_per_gram_24k = 0.0
-        if latest_gold_price and latest_gold_price.price:
-            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
-        if live_gold_price_per_gram_24k <= 0:
-            live_gold_price_per_gram_24k = 400.0  # fallback يمنع القسمة على صفر
-
-        def cash_to_weight(net_cash: float, price_snapshot: float) -> float:
-            price = price_snapshot or live_gold_price_per_gram_24k
-            if price and price > 0:
-                return net_cash / price
-            return 0.0
 
         # جلب قيود اليومية المرحّلة فقط
         entries = db.session.query(JournalEntryLine).join(JournalEntry).filter(
@@ -18502,25 +18701,9 @@ def get_income_statement():
         revenue_ids = {acc.id for acc in revenue_accounts}
         expense_ids = {acc.id for acc in expense_accounts}
         
-        # حسابات النظام الوزني (74xxx, 75xxx)
-        weight_revenue_accounts = db.session.query(Account).filter(
-            Account.account_number.like('74%')
-        ).all()
-        
-        weight_expense_accounts = db.session.query(Account).filter(
-            Account.account_number.like('75%')
-        ).all()
-        
-        weight_revenue_ids = {acc.id for acc in weight_revenue_accounts}
-        weight_expense_ids = {acc.id for acc in weight_expense_accounts}
-        
         # حساب الإيرادات والمصروفات - النظام المالي
         revenues = defaultdict(float)
         expenses = defaultdict(float)
-        
-        # حساب الإيرادات والمصروفات - النظام الوزني
-        revenues_weight = defaultdict(float)
-        expenses_weight = defaultdict(float)
         
         for line in entries:
             # النظام المالي
@@ -18532,14 +18715,6 @@ def get_income_statement():
                 # المصروفات: المدين - الدائن
                 net_amount = line.cash_debit - line.cash_credit
                 expenses[line.account_id] += net_amount
-            
-            # النظام الوزني
-            if line.account_id in weight_revenue_ids:
-                net_weight = line.credit_weight - line.debit_weight
-                revenues_weight[line.account_id] += net_weight
-            elif line.account_id in weight_expense_ids:
-                net_weight = line.debit_weight - line.credit_weight
-                expenses_weight[line.account_id] += net_weight
         
         # بناء التقرير
         revenue_details = []
@@ -18630,105 +18805,8 @@ def get_income_statement():
         gross_profit = total_revenue - total_cogs
         net_income = gross_profit - operating_expenses_total
         
-        # حساب المؤشرات الوزنية
-        total_revenue_weight = sum(revenues_weight.values())
-        total_expense_weight = sum(expenses_weight.values())
-        
-        # ─────────────────────────────────────────────
-        # تكلفة المبيعات الوزنية: من حسابات القيود اليومية (752xx) فقط
-        # COGS weight = sold_weight + (manufacturing_cost_cash / live_gold_price)
-        # ─────────────────────────────────────────────
-        weight_cogs = 0.0
-        
-        # جمع تكلفة المبيعات الوزنية من حسابات 752xx في القيود اليومية المرحلة
-        cogs_weight_accounts = db.session.query(Account).filter(
-            Account.account_number.like('752%')
-        ).all()
-        cogs_weight_ids = {acc.id for acc in cogs_weight_accounts}
-        
-        for line in entries:
-            if line.account_id in cogs_weight_ids:
-                weight_cogs += (line.debit or 0.0) - (line.credit or 0.0)
-        
-        # ─────────────────────────────────────────────
-        # 🔧 FIX: المصنعية لا تُضاف إلى COGS الوزني
-        # 
-        # القاعدة الذهبية:
-        # - المصنعية نقدية فقط (حساب 51 أو 5105)
-        # - لا تظهر في الحسابات الوزنية (لا في القيود ولا في القوائم)
-        # - COGS الوزني = الوزن الفعلي المباع فقط (من 752xx)
-        # 
-        # الكود القديم (معطل):
-        # manufacturing_wage_in_weight = 0.0
-        # if manufacturing_wage_acc_id and manufacturing_wage_amount > 0:
-        #     for line in entries:
-        #         if line.account_id == manufacturing_wage_acc_id:
-        #             net_cash = (line.cash_debit or 0.0) - (line.cash_credit or 0.0)
-        #             if net_cash > 0:
-        #                 price_snapshot = line.gold_price_snapshot or live_gold_price_per_gram_24k
-        #                 if price_snapshot > 0:
-        #                     manufacturing_wage_in_weight += net_cash / price_snapshot
-        #     weight_cogs += manufacturing_wage_in_weight  # ❌ معطل
-        # ─────────────────────────────────────────────
-        
-        # حفظ للعرض فقط (بدون إضافة إلى COGS)
-        manufacturing_wage_in_weight = 0.0
-
-        # ─────────────────────────────────────────────
-        # المصروفات الوزنية الأخرى من حسابات 75xxx (تشغيلية فقط)
-        # 
-        # 📋 قواعد استخدام المصاريف الوزنية (75xxx):
-        # ✅ مسموح: مصاريف مدفوعة بالذهب فعلياً (نادرة جداً)
-        #    مثال: تبادل ذهب مقابل خدمة، هدايا ذهبية، عينات مجانية
-        # 
-        # ❌ ممنوع: تحويل مصاريف نقدية إلى وزن
-        #    مثال خاطئ: "مصروف تسويق" أو "إيجار" بالوزن
-        # 
-        # القاعدة الذهبية:
-        # - إذا دُفع نقداً → يُسجل في 6xxx (نقدي فقط)
-        # - إذا دُفع ذهباً → يُسجل في 75xxx (وزني فقط)
-        # - لا تحويل بينهما إلا للمصنعية (استثناء وحيد)
-        # 
-        # ملاحظات:
-        # - 752xx محسوبة في weight_cogs أعلاه
-        # - المصنعية محسوبة في weight_cogs أيضاً (لا نعيد إضافتها هنا)
-        # - هنا فقط المصاريف التشغيلية الوزنية الأخرى (75xxx غير 752xx)
-        # ─────────────────────────────────────────────
-        weight_operating = 0.0
-        for acc_id, weight in expenses_weight.items():
-            account = db.session.query(Account).get(acc_id)
-            code = account.account_number or ''
-            if code.startswith('752'):
-                # تكلفة المبيعات الوزنية محسوبة في weight_cogs أعلاه
-                continue
-            weight_operating += weight
-
-        # حفظ المصنعية الوزنية للعرض فقط (بدون إضافتها مرة أخرى للمصروفات)
-        # تم حسابها أعلاه باستخدام الأسعار التاريخية من القيود
-        manufacturing_wage_weight = manufacturing_wage_in_weight
-
-        weight_gross_profit = total_revenue_weight - weight_cogs
-        weight_expenses_total = weight_operating  # ❌ لا نضيف manufacturing_wage_weight هنا لأنها داخل COGS
-        weight_net_profit = weight_gross_profit - weight_expenses_total
-        weight_net_profit_grams = weight_net_profit
-        
-        # ─────────────────────────────────────────────
-        # 💰 تقييم الربح الوزني بالقيمة النقدية (لأن النقد يُسكَّر دائماً)
-        # القاعدة: قيمة الربح الوزني = الربح الوزني × السعر الحالي
-        # ─────────────────────────────────────────────
-        weight_net_profit_value = 0.0
-        if weight_net_profit != 0 and live_gold_price_per_gram_24k > 0:
-            # تحويل الربح الوزني (عيار رئيسي) إلى قيمة نقدية
-            # استخدام السعر الحالي للعيار الرئيسي
-            weight_net_profit_value = weight_net_profit * live_gold_price_per_gram_24k
-        
-        weight_expenses_posted = weight_expenses_total
-        weight_expenses_pending = 0.0
-        weight_expenses_pending_cash = 0.0
-        
         # حساب النسب المئوية
         net_margin_pct = (net_income / total_revenue * 100) if total_revenue != 0 else 0.0
-        weight_net_margin_pct = (weight_net_profit / total_revenue_weight * 100) if total_revenue_weight != 0 else 0.0
         
         return jsonify({
             'start_date': start_date_str,
@@ -18743,22 +18821,6 @@ def get_income_statement():
                 'manufacturing_wage_expense': round(manufacturing_wage_amount, 2),
                 'net_profit': round(net_income, 2),
                 'net_margin_pct': round(net_margin_pct, 2),
-                
-                # المؤشرات الوزنية (ذهب)
-                'weight_revenue': round(total_revenue_weight, 6),
-                'weight_revenue': round(total_revenue_weight, 6),
-                'weight_cogs': round(weight_cogs, 6),
-                'weight_gross_profit': round(weight_gross_profit, 6),
-                'weight_manufacturing_wage': round(manufacturing_wage_weight, 6),
-                'weight_expenses': round(weight_expenses_total, 6),
-                'weight_expenses_posted': round(weight_expenses_posted, 6),
-                'weight_expenses_pending': round(weight_expenses_pending, 6),
-                'weight_expenses_pending_cash': round(weight_expenses_pending_cash, 2),
-                'weight_net_profit': round(weight_net_profit, 6),
-                'weight_net_profit_grams': round(weight_net_profit_grams, 6),
-                'weight_net_profit_value': round(weight_net_profit_value, 2),  # 💰 قيمة الربح الوزني بالريال
-                'weight_net_margin_pct': round(weight_net_margin_pct, 2),
-                'gold_price_for_valuation': round(live_gold_price_per_gram_24k, 2),  # السعر المستخدم للتقييم
             },
             'series': [],  # يمكن إضافة بيانات السلاسل الزمنية لاحقاً
             'revenues': {
@@ -18793,8 +18855,7 @@ def get_income_statement():
                 key=lambda x: abs(x.get('amount', 0)),
                 reverse=True
             )[:5],
-            'net_income': round(net_income, 2),
-            'weight_net_profit_grams': round(weight_net_profit_grams, 6)
+            'net_income': round(net_income, 2)
         }), 200
         
     except Exception as e:

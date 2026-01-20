@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'template_designer_screen.dart';
 import 'template_positioning_screen.dart';
 
 class TemplateStudioScreen extends StatelessWidget {
@@ -22,8 +21,6 @@ class TemplateStudioScreen extends StatelessWidget {
         titleEn: 'A4 (Portrait)',
         widthPoints: 595.0,
         heightPoints: 842.0,
-        designerPageSize: 'A4',
-        designerOrientation: 'portrait',
       ),
       _TemplatePreset(
         key: 'a5_portrait',
@@ -31,8 +28,6 @@ class TemplateStudioScreen extends StatelessWidget {
         titleEn: 'A5 (Portrait)',
         widthPoints: 420.0,
         heightPoints: 595.0,
-        designerPageSize: 'A5',
-        designerOrientation: 'portrait',
       ),
       _TemplatePreset(
         key: 'thermal_80x200',
@@ -40,9 +35,6 @@ class TemplateStudioScreen extends StatelessWidget {
         titleEn: 'Thermal 80×200 mm',
         widthPoints: _mmToPoints(80),
         heightPoints: _mmToPoints(200),
-        // Designer does not have thermal presets; use Custom-like via A5 baseline.
-        designerPageSize: 'A5',
-        designerOrientation: 'portrait',
       ),
     ];
   }
@@ -70,24 +62,6 @@ class TemplateStudioScreen extends StatelessWidget {
     );
   }
 
-  void _openDesigner(BuildContext context, _TemplatePreset preset) {
-    _setActivePreset(preset);
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TemplateDesignerScreen(
-          initialPageSize: preset.designerPageSize,
-          initialOrientation: preset.designerOrientation,
-        ),
-      ),
-    );
-  }
-
-  void _openBlankDesigner(BuildContext context) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const TemplateDesignerScreen()));
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -97,7 +71,7 @@ class TemplateStudioScreen extends StatelessWidget {
       textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(isArabic ? 'استديو القوالب' : 'Template Studio'),
+          title: Text(isArabic ? 'موزع عناصر الفاتورة' : 'Invoice Layout'),
         ),
         body: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -133,8 +107,8 @@ class TemplateStudioScreen extends StatelessWidget {
                       const SizedBox(height: 6),
                       Text(
                         isArabic
-                            ? 'اختر مقاساً جاهزاً ثم وزّع العناصر عليه أو افتحه في المصمم.'
-                            : 'Pick a preset size, then position elements or open it in the designer.',
+                            ? 'اختر مقاساً جاهزاً ثم وزّع عناصر الفاتورة عليه.'
+                            : 'Pick a preset size, then position invoice elements.',
                         style: theme.textTheme.bodySmall,
                       ),
                       const SizedBox(height: 14),
@@ -177,21 +151,8 @@ class TemplateStudioScreen extends StatelessWidget {
                                             ),
                                             label: Text(
                                               isArabic
-                                                  ? 'توزيع العناصر'
-                                                  : 'Position elements',
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: OutlinedButton.icon(
-                                            onPressed: () =>
-                                                _openDesigner(context, preset),
-                                            icon: const Icon(
-                                              Icons.design_services_outlined,
-                                            ),
-                                            label: Text(
-                                              isArabic ? 'المصمم' : 'Designer',
+                                                  ? 'توزيع عناصر الفاتورة'
+                                                  : 'Position invoice elements',
                                             ),
                                           ),
                                         ),
@@ -203,48 +164,6 @@ class TemplateStudioScreen extends StatelessWidget {
                             ),
                           );
                         }).toList(),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.design_services_outlined,
-                        color: theme.colorScheme.primary,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isArabic
-                                  ? 'تصميم قالب جديد'
-                                  : 'Design a new template',
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              isArabic
-                                  ? 'استخدم المصمم لإنشاء قالب عندما لا توجد قوالب جاهزة مناسبة.'
-                                  : 'Use the designer when no ready preset fits.',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                      ElevatedButton(
-                        onPressed: () => _openBlankDesigner(context),
-                        child: Text(isArabic ? 'فتح المصمم' : 'Open designer'),
                       ),
                     ],
                   ),
@@ -264,8 +183,6 @@ class _TemplatePreset {
   final String titleEn;
   final double widthPoints;
   final double heightPoints;
-  final String designerPageSize;
-  final String designerOrientation;
 
   const _TemplatePreset({
     required this.key,
@@ -273,7 +190,5 @@ class _TemplatePreset {
     required this.titleEn,
     required this.widthPoints,
     required this.heightPoints,
-    required this.designerPageSize,
-    required this.designerOrientation,
   });
 }

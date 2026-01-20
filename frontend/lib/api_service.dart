@@ -1789,51 +1789,11 @@ class ApiService {
       '$_baseUrl/reports/income_statement',
     ).replace(queryParameters: queryParams);
 
-    Map<String, dynamic> ensureWeightExpenseFields(
-      Map<String, dynamic> payload,
-    ) {
-      payload.putIfAbsent(
-        'weight_expenses_posted',
-        () => payload['weight_expenses'] ?? 0.0,
-      );
-      payload.putIfAbsent('weight_expenses_pending', () => 0.0);
-      payload.putIfAbsent('weight_expenses_pending_cash', () => 0.0);
-      payload.putIfAbsent(
-        'weight_expenses',
-        () => payload['weight_expenses_posted'] ?? 0.0,
-      );
-      payload.putIfAbsent('manufacturing_wage_expense', () => 0.0);
-      payload.putIfAbsent(
-        'operating_expenses_excl_wage',
-        () => payload['operating_expenses'] ?? 0.0,
-      );
-      payload.putIfAbsent(
-        'operating_expenses',
-        () => payload['operating_expenses_excl_wage'] ?? 0.0,
-      );
-      payload.putIfAbsent('weight_net_profit', () => 0.0);
-      return payload;
-    }
-
     final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       final decoded = json.decode(utf8.decode(response.bodyBytes));
       if (decoded is Map<String, dynamic>) {
-        final summary = Map<String, dynamic>.from(decoded['summary'] ?? {});
-        decoded['summary'] = ensureWeightExpenseFields(summary);
-
-        final dynamic rawSeries = decoded['series'];
-        if (rawSeries is List) {
-          decoded['series'] = rawSeries
-              .map(
-                (entry) => ensureWeightExpenseFields(
-                  Map<String, dynamic>.from(entry ?? {}),
-                ),
-              )
-              .toList();
-        }
-
         return decoded;
       }
       return {'summary': {}, 'series': []};

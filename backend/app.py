@@ -34,28 +34,40 @@ except ImportError as exc:
 		"  cd backend && ./venv/bin/python app.py\n"
 		"(or activate the venv first: source backend/venv/bin/activate)"
 	) from exc
-print("DEBUG: Imported api blueprint from routes")  # Debug log
+
+_log_startup_imports = os.getenv('LOG_STARTUP_IMPORTS', '0') in ('1', 'true', 'True')
+if _log_startup_imports:
+	print("DEBUG: Imported api blueprint from routes")
 from payment_methods_routes import payment_methods_api  # 🆕 استيراد payment methods routes
-print("DEBUG: Imported payment_methods_api blueprint")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported payment_methods_api blueprint")
 # استيراد recurring_journal_routes ليتم تسجيل routes على نفس api blueprint
 import recurring_journal_routes  # 🆕 استيراد recurring journal routes
-print("DEBUG: Imported recurring_journal_routes")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported recurring_journal_routes")
 from offices_routes import offices_bp  # 🆕 استيراد offices routes
-print("DEBUG: Imported offices_bp blueprint")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported offices_bp blueprint")
 from branches_routes import branches_bp  # 🆕 استيراد branches routes
-print("DEBUG: Imported branches_bp blueprint")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported branches_bp blueprint")
 from posting_routes import posting_bp  # 🆕 استيراد posting routes
-print("DEBUG: Imported posting_bp blueprint")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported posting_bp blueprint")
 from auth_routes import auth_bp  # 🆕 استيراد auth routes
-print("DEBUG: Imported auth_bp blueprint")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported auth_bp blueprint")
 from permissions_routes import permissions_bp  # 🆕 استيراد permissions routes
-print("DEBUG: Imported permissions_bp blueprint")  # Debug log
+if _log_startup_imports:
+	print("DEBUG: Imported permissions_bp blueprint")
 from setup_routes import setup_bp  # 🆕 Setup wizard routes
-print("DEBUG: Imported setup_bp blueprint")
+if _log_startup_imports:
+	print("DEBUG: Imported setup_bp blueprint")
 bonus_bp = None
 try:
 	from bonus_routes import bonus_bp  # 🆕 استيراد bonus routes
-	print("DEBUG: Imported bonus_bp blueprint")  # Debug log
+	if _log_startup_imports:
+		print("DEBUG: Imported bonus_bp blueprint")
 except ImportError as exc:
 	print(f"[WARNING] Bonus routes disabled: {exc}")
 from schema_guard import (
@@ -78,16 +90,91 @@ from schema_guard import (
 import os
 from flask_cors import CORS
 app = Flask(__name__)
+# Flask secret key (used by some Flask features). Keep separate from JWT secret.
+app.config['SECRET_KEY'] = (os.getenv('FLASK_SECRET_KEY') or os.getenv('SECRET_KEY') or 'yasar-gold-dev-flask-secret').strip()
 # Configure PostgreSQL connection (replace values as needed)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app.db')}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 
-# تفعيل CORS بشكل آمن: السماح فقط للـ localhost (المتصفح) مع دعم credentials
-# تفعيل CORS لجميع المصادر بشكل بسيط وآمن
-CORS(app)
+def _env_str(name: str, default: str = '') -> str:
+	value = os.getenv(name)
+	if value is None:
+		return default
+	return str(value)
+
+
+def _is_production() -> bool:
+	env = (_env_str('YASAR_ENV', '').strip().lower() or _env_str('FLASK_ENV', '').strip().lower())
+	return env in ('prod', 'production')
+
+
+def _parse_cors_origins(raw: str):
+	# Comma-separated list. Examples:
+	# - "http://example.com,https://example.com"
+	# - "*" (dev only)
+	value = (raw or '').strip()
+	if not value:
+		return []
+	if value == '*':
+		return '*'
+	return [o.strip() for o in value.split(',') if o.strip()]
+
+
+def _default_local_cors_origins():
+	# Allow common local dev origins (Flutter web, etc.)
+	# Use regex so any port is accepted.
+	return [
+		r"^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$",
+	]
+
+
+# CORS policy:
+# - Use CORS_ORIGINS to explicitly allow origins (comma-separated), or "*" for dev.
+# - If unset, allow localhost by default so Flutter web can call the API.
+_cors_origins_raw = _env_str('CORS_ORIGINS', '').strip()
+_cors_origins = _parse_cors_origins(_cors_origins_raw)
+if _cors_origins == '*':
+	# Wildcard cannot be combined with credentials.
+	CORS(app, resources={r"/api/.*": {"origins": "*"}})
+elif _cors_origins:
+	CORS(app, resources={r"/api/.*": {"origins": _cors_origins}}, supports_credentials=True)
+else:
+	# Dev-friendly default: allow cross-origin requests.
+	# (Flutter web runs on a different origin/port like http://localhost:8080)
+	CORS(app)
 
 db.init_app(app)
+
+
+@app.after_request
+def _ensure_cors_headers(response):
+	"""Ensure CORS headers exist for Flutter web (dev usage).
+
+	Some environments may have strict/odd CORS settings; this keeps `/api/*`
+	callable from a browser origin (e.g. http://localhost:8080).
+	"""
+	# Debug marker (safe to keep; helps verify proxy/browser issues)
+	response.headers.setdefault('X-Backend-AfterRequest', '1')
+	try:
+		from flask import request
+		origin = request.headers.get('Origin')
+		path = request.path or ''
+		if origin and path.startswith('/api/'):
+			response.headers.setdefault('Access-Control-Allow-Origin', origin)
+			# Ensure caches don't mix origins.
+			response.headers.setdefault('Vary', 'Origin')
+			response.headers.setdefault(
+				'Access-Control-Allow-Headers',
+				'Authorization, Content-Type, Accept',
+			)
+			response.headers.setdefault(
+				'Access-Control-Allow-Methods',
+				'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+			)
+	except Exception:
+		pass
+	return response
 
 # 🔓 تعطيل Authentication مؤقتاً لتطوير Flutter (اختياري)
 @app.before_request
@@ -149,12 +236,33 @@ app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخي
 
 @app.route("/routes")
 def list_routes():
-    output = []
-    for rule in app.url_map.iter_rules():
-        methods = ','.join(rule.methods)
-        line = "{:50s} {:20s} {}".format(rule.endpoint, methods, rule.rule)
-        output.append(line)
-    return "<br>".join(sorted(output))
+	# Disable route listing in production unless explicitly enabled.
+	if _is_production() and os.getenv('ENABLE_ROUTE_LISTING', '0') not in ('1', 'true', 'True'):
+		from flask import jsonify
+		return jsonify({'error': 'Not Found'}), 404
+	output = []
+	for rule in app.url_map.iter_rules():
+		methods = ','.join(rule.methods)
+		line = "{:50s} {:20s} {}".format(rule.endpoint, methods, rule.rule)
+		output.append(line)
+	return "<br>".join(sorted(output))
+
+
+@app.get('/health')
+def healthcheck():
+	from flask import jsonify
+	return jsonify({'status': 'ok', 'env': os.getenv('YASAR_ENV', '')}), 200
+
+
+@app.get('/ready')
+def readinesscheck():
+	from flask import jsonify
+	try:
+		with db.engine.connect() as conn:
+			conn.exec_driver_sql('SELECT 1')
+		return jsonify({'status': 'ready'}), 200
+	except Exception as exc:
+		return jsonify({'status': 'not_ready', 'error': str(exc)}), 503
 
 def create_tables():
 	with app.app_context():
@@ -239,23 +347,9 @@ if __name__ == "__main__":
 	
 	# تفعيل مجدول المكافآت التلقائي
 	try:
-		from bonus_scheduler import start_bonus_scheduler
-		start_bonus_scheduler(app)
+		from schedulers import start_all_schedulers
+		start_all_schedulers(app)
 	except Exception as e:
-		print(f"[WARNING] فشل تشغيل مجدول المكافآت: {e}")
-
-	# تفعيل مجدول تحديث سعر الذهب حسب الإعداد
-	try:
-		from gold_price_scheduler import start_gold_price_scheduler
-		start_gold_price_scheduler(app)
-	except Exception as e:
-		print(f"[WARNING] فشل تشغيل مجدول سعر الذهب: {e}")
-
-	# تفعيل مجدول النسخ الاحتياطي حسب الإعداد
-	try:
-		from backup_scheduler import start_backup_scheduler
-		start_backup_scheduler(app)
-	except Exception as e:
-		print(f"[WARNING] فشل تشغيل مجدول النسخ الاحتياطي: {e}")
+		print(f"[WARNING] فشل تشغيل المجدولات: {e}")
 	
 	app.run(host="0.0.0.0", port=port, debug=debug_mode, threaded=True)

@@ -15,8 +15,10 @@ Implementation (matches the current chart-of-accounts):
 from models import Account, SafeBox, db
 from account_number_generator import get_next_account_number
 
+from typing import Optional
 
-def ensure_employee_gold_group_account(created_by: str = 'system') -> Account | None:
+
+def ensure_employee_gold_group_account(created_by: str = 'system') -> Optional[Account]:
     """Ensure a parent/group account exists for employee gold safes.
 
     Returns:
@@ -58,7 +60,7 @@ def _next_child_number_under_group(group_account: Account) -> str:
     return str(candidate)
 
 
-def create_employee_gold_safe(employee_name: str, created_by: str = 'system', employee_code: str | None = None):
+def create_employee_gold_safe(employee_name: str, created_by: str = 'system', employee_code: Optional[str] = None):
     """Create (Account + SafeBox) for an employee gold custody safe.
 
     Returns:

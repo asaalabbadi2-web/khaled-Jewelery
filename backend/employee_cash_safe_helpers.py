@@ -14,8 +14,10 @@ Implementation (matches the current chart-of-accounts):
 from models import Account, SafeBox, db
 from account_number_generator import get_next_account_number
 
+from typing import Optional
 
-def ensure_employee_cash_group_account(created_by: str = 'system') -> Account | None:
+
+def ensure_employee_cash_group_account(created_by: str = 'system') -> Optional[Account]:
     """Ensure the grouping account for employee cash safes exists (1100001)."""
     group = Account.query.filter_by(account_number='1100001').first()
     if group:
@@ -54,7 +56,7 @@ def _next_child_number_under_group(group_account: Account) -> str:
     return str(candidate)
 
 
-def create_employee_cash_safe(employee_name: str, created_by: str = 'system', employee_code: str | None = None):
+def create_employee_cash_safe(employee_name: str, created_by: str = 'system', employee_code: Optional[str] = None):
     """Create (Account + SafeBox) for an employee cash custody safe.
 
     Returns:

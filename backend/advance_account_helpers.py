@@ -7,6 +7,34 @@
 
 from backend.models import Account, Employee, db
 
+from typing import Optional, Tuple
+
+try:
+    # When imported from within backend package
+    from backend.account_number_generator import get_next_account_number
+except Exception:  # pragma: no cover
+    # When running with backend/ as cwd
+    from account_number_generator import get_next_account_number
+
+
+def _get_advances_parent_account() -> Tuple[Optional[Account], str]:
+    """Return (parent_account, scheme).
+
+    scheme:
+    - '1710' (preferred)
+    - '1400' (legacy)
+    """
+
+    parent = Account.query.filter_by(account_number='1710').first()
+    if parent:
+        return parent, '1710'
+
+    parent = Account.query.filter_by(account_number='1400').first()
+    if parent:
+        return parent, '1400'
+
+    return None, 'none'
+
 def get_next_advance_account_number():
     """
     توليد رقم الحساب التالي لسلفة جديدة
@@ -17,7 +45,12 @@ def get_next_advance_account_number():
     Raises:
         ValueError: إذا تجاوزت السعة المتاحة (10,000 سلفة)
     """
-    # نطاق حسابات السلف: 140000 - 149999
+    parent, scheme = _get_advances_parent_account()
+    if scheme == '1710':
+        # Under 1710 (4 digits) -> 1710000..1710999
+        return get_next_account_number('1710')
+
+    # Legacy: نطاق حسابات السلف: 140000 - 149999
     start_range = 140000
     end_range = 149999
     
@@ -75,11 +108,11 @@ def create_advance_account_for_employee(employee_id, created_by='system'):
         return existing_advance
     
     # التحقق من وجود الحساب التجميعي للسلف
-    parent_account = Account.query.filter_by(account_number='1400').first()
+    parent_account, scheme = _get_advances_parent_account()
     if not parent_account:
         raise ValueError(
-            "الحساب التجميعي للسلف (1400) غير موجود. "
-            "يرجى تشغيل seed_employee_accounts.py أولاً"
+            "الحساب التجميعي للسلف (1710/1400) غير موجود. "
+            "يرجى التأكد من شجرة الحسابات أو إنشاء الحسابات التجميعية أولاً"
         )
     
     # الحصول على رقم الحساب التالي
@@ -87,7 +120,7 @@ def create_advance_account_for_employee(employee_id, created_by='system'):
     
     # إنشاء حساب السلفة
     advance_account = Account(
-        account_number=account_number,
+        account_number=str(account_number),
         name=f"سلفة {employee.name}",
         type='asset',
         transaction_type='cash',
@@ -114,14 +147,21 @@ def get_employee_advance_account(employee_id):
     if not employee:
         return None
     
-    # البحث بالاسم - كل موظف له حساب سلفة واحد باسمه
-    advance_account = Account.query.filter(
+    parent, scheme = _get_advances_parent_account()
+
+    # Preferred scheme: search under 1710 by parent_id + name
+    if scheme == '1710' and parent:
+        return Account.query.filter(
+            Account.parent_id == parent.id,
+            Account.name == f"سلفة {employee.name}",
+        ).first()
+
+    # Legacy scheme: search by numeric range
+    return Account.query.filter(
         Account.account_number >= '140000',
         Account.account_number <= '149999',
-        Account.name == f"سلفة {employee.name}"
+        Account.name == f"سلفة {employee.name}",
     ).first()
-    
-    return advance_account
 
 
 def get_or_create_employee_advance_account(employee_id, created_by='system'):
@@ -198,11 +238,15 @@ def get_all_advances_summary():
     from sqlalchemy import func
     from models import JournalEntryLine
     
-    # جلب جميع حسابات السلف
-    advance_accounts = Account.query.filter(
-        Account.account_number >= '140000',
-        Account.account_number <= '149999'
-    ).all()
+    parent, scheme = _get_advances_parent_account()
+    if scheme == '1710' and parent:
+        advance_accounts = Account.query.filter(Account.parent_id == parent.id).all()
+    else:
+        # Legacy
+        advance_accounts = Account.query.filter(
+            Account.account_number >= '140000',
+            Account.account_number <= '149999'
+        ).all()
     
     summary = []
     total_advances = 0.0

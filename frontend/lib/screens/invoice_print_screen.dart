@@ -59,8 +59,8 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   Future<void>? _pdfFontsLoadFuture;
   bool _pdfFontsReady = false;
 
-  // Template assets must be preloaded outside Printing.onLayout to avoid
-  // platform-channel deadlocks on macOS (SharedPreferences/rootBundle).
+  // Template positioning assets must be preloaded outside Printing.onLayout to
+  // avoid platform-channel deadlocks on macOS (SharedPreferences/rootBundle).
   Map<String, _TemplateRect>? _cachedTemplateLayout;
   Uint8List? _cachedTemplateBackgroundBytes;
   pw.ImageProvider? _cachedTemplateBackgroundImage;
@@ -75,9 +75,6 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   String? _companyTaxNumber;
   Uint8List? _companyLogoBytes;
 
-  // افتراضي القالب حسب نوع الفاتورة (من Settings)
-  Map<String, String> _templateByInvoiceType = const {};
-
   // إعدادات الطباعة الافتراضية
   late bool _showLogo;
   late bool _showAddress;
@@ -87,9 +84,10 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   late String _paperSize;
   late bool _printInColor;
 
+  // Local-only active preset key (used by TemplatePositioningScreen)
   static const String _activePresetKeyStorage = 'template_active_preset_key_v1';
 
-  // Local printer preferences (stored in SharedPreferences by Settings screen).
+  // Local template background is stored in SharedPreferences as base64.
   static const int _maxBackgroundBytes = 2 * 1024 * 1024; // 2MB
 
   String _formatCacheKey(PdfPageFormat format) {
@@ -364,6 +362,7 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     }
   }
 
+
   @override
   void initState() {
     super.initState();
@@ -627,22 +626,6 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     if (!mounted) return;
 
     if (settings != null) {
-      Map<String, String> templateByType = const {};
-      try {
-        final raw = settings['print_template_by_invoice_type'];
-        if (raw is Map<String, dynamic>) {
-          templateByType = raw.map(
-            (k, v) => MapEntry(k.toString(), v.toString()),
-          );
-        } else if (raw is Map) {
-          templateByType = Map<String, dynamic>.from(
-            raw,
-          ).map((k, v) => MapEntry(k.toString(), v.toString()));
-        }
-      } catch (_) {
-        templateByType = const {};
-      }
-
       final logoBase64 = settings['company_logo_base64']?.toString();
       Uint8List? logoBytes;
       if (logoBase64 != null && logoBase64.trim().isNotEmpty) {
@@ -665,7 +648,6 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
         _companyPhone = settings?['company_phone']?.toString();
         _companyTaxNumber = settings?['company_tax_number']?.toString();
         _companyLogoBytes = logoBytes;
-        _templateByInvoiceType = templateByType;
         _invalidatePdfCache();
       });
     }
@@ -737,21 +719,6 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
   }
 
   Future<String?> _resolveTemplatePresetKey() async {
-    // 0) Per-invoice override (if present)
-    final perInvoice = widget.invoice['print_template_preset_key']?.toString();
-    if (perInvoice != null && perInvoice.trim().isNotEmpty) {
-      return perInvoice.trim();
-    }
-
-    // 1) Default by invoice type (from Settings)
-    final invoiceType = widget.invoice['invoice_type']?.toString().trim();
-    if (invoiceType != null && invoiceType.isNotEmpty) {
-      final byType = _templateByInvoiceType[invoiceType]?.trim();
-      if (byType != null && byType.isNotEmpty) {
-        return byType;
-      }
-    }
-
     final fromSettings = widget.printSettings?['templatePresetKey']?.toString();
     if (fromSettings != null && fromSettings.trim().isNotEmpty) {
       return fromSettings.trim();

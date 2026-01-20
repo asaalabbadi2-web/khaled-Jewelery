@@ -1,118 +1,159 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-دوال مساعدة لإنشاء حسابات الموظفين تلقائياً
-يتبع نفس نهج العملاء والموردين
+"""Employee account helpers.
+
+✨ Updated to support a chart-of-accounts structure where employee-related
+accounts live under these grouping numbers:
+
+- 1700: حسابات الموظفين (تفصيلي تحتها)
+- 1710: سلف الموظفين (تفصيلي تحتها)
+- 230/240/250: مجاميع التزامات الموظفين (اختياري إنشاء تفصيلي تحت 2300/2400/2500)
+
+The helpers remain defensive: they create missing grouping accounts when
+possible, without force-changing existing account parents/types.
 """
 
 # استخدم نفس الوحدة التي يهيئها app.py لتفادي إنشاء نسخة SQLAlchemy ثانية
 from models import Account, db
 
+from account_number_generator import get_next_account_number
+
+from typing import Dict, List, Optional, Tuple
+
+
+def _digits_only(value: str) -> str:
+    return ''.join(ch for ch in str(value or '').strip() if ch.isdigit())
+
+
+def _find_existing_parent_by_prefix(account_number: str) -> Optional[Account]:
+    """Try to find a reasonable parent by stripping digits from the end.
+
+    Example: 230 -> 23 -> 2
+    """
+
+    digits = _digits_only(account_number)
+    while len(digits) > 1:
+        digits = digits[:-1]
+        parent = Account.query.filter_by(account_number=digits).first()
+        if parent:
+            return parent
+    return None
+
+
+def _ensure_account(
+    *,
+    account_number: str,
+    name: str,
+    acc_type: str,
+    transaction_type: str,
+    tracks_weight: bool,
+    parent_account: Optional[Account],
+) -> Account:
+    existing = Account.query.filter_by(account_number=str(account_number)).first()
+    if existing:
+        # Keep it non-destructive: only normalize the name if empty.
+        if not (existing.name or '').strip():
+            existing.name = name
+            db.session.flush()
+        return existing
+
+    account = Account(
+        account_number=str(account_number),
+        name=name,
+        type=acc_type,
+        transaction_type=transaction_type,
+        tracks_weight=tracks_weight,
+        parent_id=(parent_account.id if parent_account else None),
+    )
+    db.session.add(account)
+    db.session.flush()
+    return account
+
 
 def ensure_employee_group_accounts(created_by: str = 'system'):
     """Ensure required employee grouping accounts exist.
 
-    This makes employee creation robust on fresh databases where seed scripts
-    have not been executed yet.
+    Primary structure (requested):
+    - 1700: حسابات الموظفين
+    - 1710: سلف الموظفين (prefer as child of 1700 if created here)
+    - 230/240/250: مجاميع التزامات الموظفين
+      - create detail group accounts 2300/2400/2500 for per-employee accounts.
+
+    Legacy compatibility:
+    - Keeps existing 130/13xx and 1400 untouched if present.
     """
-    # الحساب التجميعي الرئيسي
-    main_account = Account.query.filter_by(account_number='130').first()
-    if not main_account:
-        main_account = Account(
-            account_number='130',
+
+    # 1700 - حسابات الموظفين
+    parent_1700 = Account.query.filter_by(account_number='1700').first()
+    if not parent_1700:
+        inferred_parent = _find_existing_parent_by_prefix('1700')
+        parent_1700 = _ensure_account(
+            account_number='1700',
             name='حسابات الموظفين',
-            type='asset',
+            acc_type='asset',
             transaction_type='cash',
-            parent_id=None,
+            tracks_weight=False,
+            parent_account=inferred_parent,
         )
-        db.session.add(main_account)
-        db.session.flush()
 
-    # معالجة تعارض قديم: إذا كان 1300 مستخدمًا كـ "سلف موظفين" ننقله إلى 1400
-    old_advances_account = Account.query.filter_by(account_number='1300').first()
-    if old_advances_account and (old_advances_account.name or '').strip() == 'سلف موظفين':
-        new_advances_account = Account.query.filter_by(account_number='1400').first()
-        if not new_advances_account:
-            old_advances_account.account_number = '1400'
-            old_advances_account.parent_id = None
+    # 1710 - سلف الموظفين (prefer under 1700)
+    parent_1710 = Account.query.filter_by(account_number='1710').first()
+    if not parent_1710:
+        parent_1710 = _ensure_account(
+            account_number='1710',
+            name='سلف الموظفين',
+            acc_type='asset',
+            transaction_type='cash',
+            tracks_weight=False,
+            parent_account=parent_1700,
+        )
 
-    # الحسابات التجميعية الفرعية حسب الأقسام
-    departments = [
-        ('1300', 'موظفو الإدارة'),
-        ('1310', 'موظفو المبيعات'),
-        ('1320', 'موظفو الصيانة'),
-        ('1330', 'موظفو المحاسبة'),
-        ('1340', 'موظفو المستودعات'),
-    ]
+    # 230/240/250 - employee payables/obligations group accounts
+    payables_groups: Dict[str, Tuple[str, str]] = {
+        '230': ('التزامات الموظفين - رواتب', '2300'),
+        '240': ('التزامات الموظفين - مكافآت', '2400'),
+        '250': ('التزامات الموظفين - أخرى', '2500'),
+    }
 
-    for acc_num, name_ar in departments:
-        account = Account.query.filter_by(account_number=acc_num).first()
-        if not account:
-            account = Account(
-                account_number=acc_num,
-                name=name_ar,
-                type='asset',
+    ensured: Dict[str, Account] = {
+        '1700': parent_1700,
+        '1710': parent_1710,
+    }
+
+    for parent_num, (parent_name, detail_num) in payables_groups.items():
+        parent = Account.query.filter_by(account_number=parent_num).first()
+        if not parent:
+            inferred_parent = _find_existing_parent_by_prefix(parent_num)
+            parent = _ensure_account(
+                account_number=parent_num,
+                name=parent_name,
+                acc_type='liability',
                 transaction_type='cash',
-                parent_id=main_account.id,
+                tracks_weight=False,
+                parent_account=inferred_parent,
             )
-            db.session.add(account)
 
-    # حساب السلف التجميعي
-    advances_account = Account.query.filter_by(account_number='1400').first()
-    if not advances_account:
-        advances_account = Account(
-            account_number='1400',
-            name='سلف موظفين',
-            type='asset',
-            transaction_type='cash',
-            parent_id=None,
-        )
-        db.session.add(advances_account)
+        detail = Account.query.filter_by(account_number=detail_num).first()
+        if not detail:
+            detail = _ensure_account(
+                account_number=detail_num,
+                name=parent_name,
+                acc_type='liability',
+                transaction_type='cash',
+                tracks_weight=False,
+                parent_account=parent,
+            )
+
+        ensured[parent_num] = parent
+        ensured[detail_num] = detail
 
     # Keep changes in the current transaction; caller will commit.
     db.session.flush()
+    return ensured
 
-    return main_account
-
-def get_next_employee_account_number(department_code='1300'):
-    """
-    توليد رقم الحساب التالي لموظف جديد ضمن قسم محدد
-    
-    Args:
-        department_code: رقم القسم (1300 للإدارة، 1310 للمبيعات، إلخ)
-    
-    Returns:
-        str: رقم الحساب التالي المتاح (مثل: 130000، 130001...)
-    
-    Raises:
-        ValueError: إذا تجاوزت السعة المتاحة للقسم
-    """
-    # تحديد النطاق بناءً على القسم
-    # مثلاً: إذا كان القسم '1300'، النطاق 130000-130999
-    start_range = int(department_code + '000')
-    end_range = int(department_code + '999')
-    
-    # البحث عن آخر رقم حساب في هذا النطاق
-    last_account = Account.query.filter(
-        Account.account_number >= str(start_range),
-        Account.account_number <= str(end_range)
-    ).order_by(Account.account_number.desc()).first()
-    
-    if last_account:
-        last_number = int(last_account.account_number)
-        next_number = last_number + 1
-    else:
-        # أول موظف في هذا القسم
-        next_number = start_range
-    
-    # تحقق من عدم تجاوز النطاق
-    if next_number > end_range:
-        raise ValueError(
-            f"تجاوزت السعة المتاحة للقسم {department_code}. "
-            f"الحد الأقصى: {end_range - start_range + 1} موظف"
-        )
-    
-    return str(next_number)
+def get_next_employee_account_number(parent_account_number: str = '1700') -> str:
+    """Generate next employee account number under the requested parent."""
+    return get_next_account_number(str(parent_account_number))
 
 
 def create_employee_account(employee_name, department='administration', created_by='system'):
@@ -130,32 +171,16 @@ def create_employee_account(employee_name, department='administration', created_
     Raises:
         ValueError: إذا كان القسم غير صحيح أو تجاوزت السعة
     """
-    # تحديد رمز القسم
-    department_codes = {
-        'administration': '1300',  # موظفو الإدارة
-        'sales': '1310',            # موظفو المبيعات
-        'maintenance': '1320',      # موظفو الصيانة
-        'accounting': '1330',       # موظفو المحاسبة
-        'warehouse': '1340',        # موظفو المستودعات
-    }
-    
-    department_code = department_codes.get(department)
-    if not department_code:
-        raise ValueError(
-            f"قسم غير صحيح: {department}. "
-            f"الأقسام المتاحة: {', '.join(department_codes.keys())}"
-        )
-    
-    # الحصول على رقم الحساب التالي
-    account_number = get_next_employee_account_number(department_code)
-    
-    # التحقق من وجود الحساب التجميعي للقسم
-    parent_account = Account.query.filter_by(account_number=department_code).first()
+    # Primary requested structure: all employee personal accounts under 1700.
+    parent_account = Account.query.filter_by(account_number='1700').first()
     if not parent_account:
-        raise ValueError(
-            f"الحساب التجميعي للقسم {department_code} غير موجود. "
-            "يرجى تشغيل seed_employee_accounts.py أولاً"
-        )
+        # Be defensive on fresh DBs.
+        ensured = ensure_employee_group_accounts(created_by=created_by)
+        parent_account = ensured.get('1700')
+    if not parent_account:
+        raise ValueError('تعذر تحديد/إنشاء الحساب التجميعي للموظفين (1700).')
+
+    account_number = get_next_employee_account_number('1700')
     
     # إنشاء الحساب
     account = Account(
@@ -170,6 +195,44 @@ def create_employee_account(employee_name, department='administration', created_
     # لا نعمل commit هنا، سيتم في create_employee
     
     return account
+
+
+def create_employee_payables_accounts(employee_name: str, created_by: str = 'system') -> List[Account]:
+    """Create employee-specific payables accounts under 2300/2400/2500.
+
+    Notes:
+    - These accounts are not linked to the Employee model directly.
+    - Intended for future payroll/benefits/obligations posting.
+    """
+
+    ensured = ensure_employee_group_accounts(created_by=created_by)
+    created: List[Account] = []
+
+    specs = [
+        ('2300', f'مستحقات رواتب {employee_name}'),
+        ('2400', f'مستحقات مكافآت {employee_name}'),
+        ('2500', f'مستحقات أخرى {employee_name}'),
+    ]
+
+    for parent_num, acc_name in specs:
+        parent = ensured.get(parent_num) or Account.query.filter_by(account_number=parent_num).first()
+        if not parent:
+            continue
+
+        acc_number = get_next_account_number(str(parent.account_number))
+        account = Account(
+            account_number=str(acc_number),
+            name=acc_name,
+            type='liability',
+            transaction_type='cash',
+            tracks_weight=False,
+            parent_id=parent.id,
+        )
+        db.session.add(account)
+        db.session.flush()
+        created.append(account)
+
+    return created
 
 
 def get_employee_department_from_code(employee_code):
@@ -194,6 +257,7 @@ def get_department_summary():
     Returns:
         list: قائمة بمعلومات الأقسام
     """
+    # Legacy summary (kept for backwards compatibility)
     departments = [
         ('1300', 'موظفو الإدارة', 'Administration'),
         ('1310', 'موظفو المبيعات', 'Sales'),
