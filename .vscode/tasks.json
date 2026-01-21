@@ -12,7 +12,7 @@
 		{
 			"label": "Run Backend Server",
 			"type": "shell",
-			"command": "export DATABASE_URL=\"${DATABASE_URL:-sqlite:///app.db}\"; pids=$(lsof -ti tcp:8001 2>/dev/null || true); if [ -n \"$pids\" ]; then echo 'Killing backend (8001)...'; kill -TERM $pids 2>/dev/null || true; sleep 1; kill -KILL $pids 2>/dev/null || true; fi; if [ -x \"${workspaceFolder}/backend/venv/bin/python\" ]; then \"${workspaceFolder}/backend/venv/bin/python\" app.py; else python3 app.py; fi",
+			"command": "export DATABASE_URL=\"${YASARGOLD_DATABASE_URL:-sqlite:///app.db}\"; pids=$(lsof -ti tcp:8001 2>/dev/null || true); if [ -n \"$pids\" ]; then echo 'Killing backend (8001)...'; kill -TERM $pids 2>/dev/null || true; sleep 1; kill -KILL $pids 2>/dev/null || true; fi; if [ -x \"${workspaceFolder}/backend/venv/bin/python\" ]; then \"${workspaceFolder}/backend/venv/bin/python\" app.py; else python3 app.py; fi",
 			"options": {
 				"cwd": "${workspaceFolder}/backend"
 			},
@@ -20,12 +20,13 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Git: Commit & Push",
+			"label": "Restart All Services",
 			"type": "shell",
-			"command": "git add -A && (git diff --cached --quiet || git commit -m \"${input:commitMessage}\") && git push",
+			"command": "export DATABASE_URL=\"${YASARGOLD_DATABASE_URL:-sqlite:///app.db}\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing backend (${PORT})...\"; kill -TERM ${pids} 2>/dev/null || true; for i in $(seq 1 20); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Force killing backend (${PORT})...\"; kill -KILL ${pids} 2>/dev/null || true; fi; fi; echo \"Starting backend...\"; if [ -x \"${workspaceFolder}/backend/venv/bin/python\" ]; then \"${workspaceFolder}/backend/venv/bin/python\" app.py; else python3 app.py; fi",
 			"options": {
-				"cwd": "${workspaceFolder}"
+				"cwd": "${workspaceFolder}/backend"
 			},
+			"isBackground": true,
 			"problemMatcher": []
 		},
 		{
@@ -36,13 +37,19 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Restart All Services",
+			"label": "Sanity: Category Weight Tracking",
 			"type": "shell",
-			"command": "export DATABASE_URL=\"${DATABASE_URL:-sqlite:///app.db}\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing backend (${PORT})...\"; kill -TERM ${pids} 2>/dev/null || true; for i in $(seq 1 20); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Force killing backend (${PORT})...\"; kill -KILL ${pids} 2>/dev/null || true; fi; fi; echo \"Starting backend...\"; if [ -x \"${workspaceFolder}/backend/venv/bin/python\" ]; then \"${workspaceFolder}/backend/venv/bin/python\" app.py; else python3 app.py; fi",
+			"command": "export DATABASE_URL=\"${YASARGOLD_DATABASE_URL:-sqlite:///app.db}\"; cd backend && ( [ -x venv/bin/python ] && PY=venv/bin/python || PY=python3; \"$PY\" devtools/sanity_category_tracking.py )",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Git: Commit & Push",
+			"type": "shell",
+			"command": "git add -A && (git diff --cached --quiet || git commit -m \"${input:commitMessage}\") && git push",
 			"options": {
-				"cwd": "${workspaceFolder}/backend"
+				"cwd": "${workspaceFolder}"
 			},
-			"isBackground": true,
 			"problemMatcher": []
 		}
 	]

@@ -1424,6 +1424,7 @@ class ApiService {
   Future<Map<String, dynamic>> validateAccountNumber({
     required String accountNumber,
     required String parentAccountNumber,
+    int? excludeAccountId,
   }) async {
     final response = await _authedPost(
       Uri.parse('$_baseUrl/accounts/validate-number'),
@@ -1431,6 +1432,7 @@ class ApiService {
       body: json.encode({
         'account_number': accountNumber,
         'parent_account_number': parentAccountNumber,
+        if (excludeAccountId != null) 'exclude_account_id': excludeAccountId,
       }),
     );
 
@@ -2038,6 +2040,78 @@ class ApiService {
         'Failed to load inventory movement report: ${response.body}',
       );
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Category Weight Tracking (جرد الأوزان حسب التصنيف)
+  // ---------------------------------------------------------------------------
+  /// Endpoint: GET /category-weight/balances?safe_box_id=&category_id=
+  Future<List<Map<String, dynamic>>> getCategoryWeightBalances({
+    int? safeBoxId,
+    int? categoryId,
+  }) async {
+    final queryParams = <String, String>{};
+    if (safeBoxId != null) queryParams['safe_box_id'] = safeBoxId.toString();
+    if (categoryId != null) queryParams['category_id'] = categoryId.toString();
+
+    final uri = Uri.parse(
+      '$_baseUrl/category-weight/balances',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
+    final response = await _authedGet(uri);
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessageFromResponse(response));
+    }
+
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (decoded is List) {
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    }
+
+    return const [];
+  }
+
+  /// Endpoint: GET /category-weight/movements?safe_box_id=&category_id=&invoice_id=&limit=
+  Future<List<Map<String, dynamic>>> getCategoryWeightMovements({
+    int? safeBoxId,
+    int? categoryId,
+    int? invoiceId,
+    DateTime? startDate,
+    DateTime? endDate,
+    int limit = 200,
+  }) async {
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+    };
+    if (safeBoxId != null) queryParams['safe_box_id'] = safeBoxId.toString();
+    if (categoryId != null) queryParams['category_id'] = categoryId.toString();
+    if (invoiceId != null) queryParams['invoice_id'] = invoiceId.toString();
+    if (startDate != null) {
+      queryParams['start_date'] = startDate.toIso8601String().split('T').first;
+    }
+    if (endDate != null) {
+      queryParams['end_date'] = endDate.toIso8601String().split('T').first;
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/category-weight/movements',
+    ).replace(queryParameters: queryParams);
+
+    final response = await _authedGet(uri);
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessageFromResponse(response));
+    }
+
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (decoded is List) {
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    }
+
+    return const [];
   }
 
   Future<Map<String, dynamic>> getSalesVsPurchasesTrend({

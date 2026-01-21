@@ -51,6 +51,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   bool _isLoadingItems = false;
   String? _itemsLoadingError;
 
+  // Categories (for category-only invoice lines)
+  List<Map<String, dynamic>> _categories = [];
+  bool _isLoadingCategories = false;
+  String? _categoriesLoadingError;
+
   // Gold Price & Settings
   double _goldPrice24k = 0.0;
 
@@ -1289,6 +1294,102 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         ),
       );
     }
+  }
+
+  Future<void> _ensureCategoriesLoaded() async {
+    if (_isLoadingCategories) return;
+    if (_categories.isNotEmpty) return;
+
+    setState(() {
+      _isLoadingCategories = true;
+      _categoriesLoadingError = null;
+    });
+
+    try {
+      final api = ApiService();
+      final raw = await api.getCategories();
+      final parsed = raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      parsed.sort(
+        (a, b) => ('${a['name'] ?? ''}').compareTo('${b['name'] ?? ''}'),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _categories = parsed;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoadingError = 'فشل تحميل التصنيفات: $e';
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingCategories = false;
+      });
+    }
+  }
+
+  Future<void> _showCategoryLineDialog() async {
+    final allowManualItems = _settingsProvider.allowManualInvoiceItems;
+    if (!allowManualItems) {
+      _showManualItemFeatureGuide();
+      return;
+    }
+
+    await _ensureCategoriesLoaded();
+    if (!mounted) return;
+
+    if (_categories.isEmpty) {
+      _showError(
+        _categoriesLoadingError ??
+            'لا توجد تصنيفات. أنشئ تصنيفاً أولاً من شاشة الأصناف.',
+      );
+      return;
+    }
+
+    final result = await showDialog<Map<String, dynamic>?>(
+      context: context,
+      builder: (dialogContext) => _CategoryLineDialog(
+        categories: _categories,
+        mainKarat: _settingsProvider.mainKarat,
+      ),
+    );
+
+    if (result == null || !mounted) return;
+
+    final categoryId = result['categoryId'] as int?;
+    final categoryName = result['categoryName'] as String? ?? '';
+    final selectedKarat = result['karat'] as int? ?? _settingsProvider.mainKarat;
+    final weight = result['weight'] as double? ?? 0;
+    final wage = result['wage'] as double? ?? 0;
+
+    if (categoryId == null || weight <= 0) return;
+
+    setState(() {
+      _items.add(
+        InvoiceItem(
+          id: null,
+          name: categoryName.isNotEmpty ? categoryName : 'تصنيف',
+          barcode: '',
+          karat: selectedKarat.toDouble(),
+          weight: weight,
+          wage: wage,
+          goldPrice24k: _goldPrice24k,
+          mainKarat: _settingsProvider.mainKarat,
+          taxRate: _settingsProvider.taxRateForKarat(selectedKarat.toDouble()),
+          avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
+          avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
+          categoryId: categoryId,
+          categoryName: categoryName,
+        ),
+      );
+    });
+
+    _recomputeCostingPreview();
   }
 
   Future<void> _showManualItemFeatureGuide() async {
@@ -3611,6 +3712,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     ? _showManualItemDialog
                     : _showManualItemFeatureGuide,
               ),
+              const SizedBox(width: 8),
+              _buildQuickButton(
+                Icons.category,
+                allowManualItems ? AppColors.primaryGold : theme.disabledColor,
+                allowManualItems
+                    ? 'سطر تصنيف'
+                    : 'فعّل من الإعدادات لإضافة سطر تصنيف',
+                allowManualItems
+                    ? _showCategoryLineDialog
+                    : _showManualItemFeatureGuide,
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -5590,6 +5702,8 @@ class InvoiceItem {
   double karat;
   double weight;
   double wage; // أجور المصنعية للجرام الواحد
+  final int? categoryId;
+  final String? categoryName;
   final double goldPrice24k;
   final int mainKarat;
   double taxRate;
@@ -5613,6 +5727,8 @@ class InvoiceItem {
     required this.karat,
     required this.weight,
     required this.wage,
+    this.categoryId,
+    this.categoryName,
     required this.goldPrice24k,
     required this.mainKarat,
     required this.taxRate,
@@ -5698,6 +5814,7 @@ class InvoiceItem {
       'karat': karat,
       'weight': weight,
       'wage': wage,
+      if (categoryId != null) 'category_id': categoryId,
       'cost': cost,
       'profit': profit,
       'net': net,
@@ -5706,6 +5823,581 @@ class InvoiceItem {
       'quantity': 1,
       'calculated_selling_price_per_gram': calculateSellingPricePerGram(),
     };
+  }
+}
+
+// ==================== Category Line Dialog Widget ====================
+class _CategoryLineDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> categories;
+  final int mainKarat;
+
+  const _CategoryLineDialog({
+    required this.categories,
+    required this.mainKarat,
+  });
+
+  @override
+  State<_CategoryLineDialog> createState() => _CategoryLineDialogState();
+}
+
+class _CategoryLineDialogState extends State<_CategoryLineDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _categorySearchController = TextEditingController();
+  final _weightController = TextEditingController(text: '1.0');
+  final _wageController = TextEditingController(text: '0');
+
+  Map<String, dynamic>? _selectedCategory;
+  late int _selectedKarat;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedKarat = widget.mainKarat;
+  }
+
+  @override
+  void dispose() {
+    _categorySearchController.dispose();
+    _weightController.dispose();
+    _wageController.dispose();
+    super.dispose();
+  }
+
+  double _tryParseDouble(String value, double fallback) {
+    final normalized = value.trim().replaceAll(',', '.');
+    return double.tryParse(normalized) ?? fallback;
+  }
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    final categoryId = (_selectedCategory?['id'] is num)
+        ? (_selectedCategory?['id'] as num).toInt()
+        : int.tryParse('${_selectedCategory?['id']}');
+    final categoryName = (_selectedCategory?['name'] ?? '').toString().trim();
+    final weight = _tryParseDouble(_weightController.text, 0);
+    final wage = _tryParseDouble(_wageController.text, 0);
+
+    if (categoryId == null || weight <= 0) return;
+
+    Navigator.pop(context, {
+      'categoryId': categoryId,
+      'categoryName': categoryName,
+      'karat': _selectedKarat,
+      'weight': weight,
+      'wage': wage,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final filtered = _searchQuery.isEmpty
+        ? widget.categories
+        : widget.categories.where((c) {
+            final name = (c['name'] ?? '').toString().trim().toLowerCase();
+            return name.contains(_searchQuery);
+          }).toList();
+
+    final limited = filtered.take(100).toList();
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 550, maxHeight: 680),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFFD4AF37).withValues(alpha: 0.15),
+                      const Color(0xFFD4AF37).withValues(alpha: 0.05),
+                    ],
+                    begin: Alignment.topRight,
+                    end: Alignment.bottomLeft,
+                  ),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD4AF37),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFD4AF37).withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.category,
+                        color: Colors.white,
+                        size: 26,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'إضافة سطر تصنيف',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'اختر تصنيفاً وحدد التفاصيل',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Content
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Search field
+                      TextFormField(
+                        controller: _categorySearchController,
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          labelText: 'ابحث عن التصنيف',
+                          hintText: 'اكتب لتصفية النتائج...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          prefixIcon: const Icon(Icons.search, size: 22),
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
+                        ),
+                        onChanged: (v) {
+                          setState(() {
+                            _searchQuery = v.trim().toLowerCase();
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      // Categories list
+                      FormField<int>(
+                        validator: (_) =>
+                            _selectedCategory == null ? 'الرجاء اختيار تصنيف' : null,
+                        builder: (state) {
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                'التصنيفات المتاحة (${limited.length})',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                height: 220,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.surface,
+                                  border: Border.all(
+                                    color: state.hasError
+                                        ? theme.colorScheme.error
+                                        : theme.dividerColor.withValues(alpha: 0.3),
+                                    width: 1.5,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: limited.isEmpty
+                                    ? Center(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.search_off,
+                                              size: 56,
+                                              color: theme.disabledColor,
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              'لا توجد نتائج',
+                                              style: theme.textTheme.titleMedium
+                                                  ?.copyWith(
+                                                color: theme.disabledColor,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'جرب البحث بكلمة أخرى',
+                                              style: theme.textTheme.bodySmall
+                                                  ?.copyWith(
+                                                color: theme.disabledColor,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        padding: const EdgeInsets.all(8),
+                                        itemCount: limited.length,
+                                        itemBuilder: (_, index) {
+                                          final opt = limited[index];
+                                          final id = (opt['id'] is num)
+                                              ? (opt['id'] as num).toInt()
+                                              : int.tryParse('${opt['id']}');
+                                          final name =
+                                              (opt['name'] ?? '').toString();
+
+                                          final isSelected =
+                                              _selectedCategory != null &&
+                                                  id != null &&
+                                                  ((_selectedCategory?['id']
+                                                          is num)
+                                                      ? (_selectedCategory?['id']
+                                                                  as num)
+                                                              .toInt() ==
+                                                          id
+                                                      : int.tryParse(
+                                                              '${_selectedCategory?['id']}') ==
+                                                          id);
+
+                                          return Padding(
+                                            padding: const EdgeInsets.only(
+                                                bottom: 6),
+                                            child: Material(
+                                              color: Colors.transparent,
+                                              child: InkWell(
+                                                onTap: () {
+                                                  setState(() {
+                                                    _selectedCategory = opt;
+                                                  });
+                                                  state.didChange(id);
+                                                },
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                child: AnimatedContainer(
+                                                  duration: const Duration(
+                                                      milliseconds: 200),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                    horizontal: 14,
+                                                    vertical: 14,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color: isSelected
+                                                        ? const Color(0xFFD4AF37)
+                                                            .withValues(
+                                                                alpha: 0.2)
+                                                        : theme.colorScheme
+                                                            .surfaceContainerHighest
+                                                            .withValues(
+                                                                alpha: 0.3),
+                                                    border: Border.all(
+                                                      color: isSelected
+                                                          ? const Color(
+                                                              0xFFD4AF37)
+                                                          : Colors.transparent,
+                                                      width: 2,
+                                                    ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            10),
+                                                  ),
+                                                  child: Row(
+                                                    children: [
+                                                      Container(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                                6),
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: isSelected
+                                                              ? const Color(
+                                                                      0xFFD4AF37)
+                                                                  .withValues(
+                                                                      alpha: 0.3)
+                                                              : theme.colorScheme
+                                                                  .surface,
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(6),
+                                                        ),
+                                                        child: Icon(
+                                                          Icons.label,
+                                                          size: 18,
+                                                          color: isSelected
+                                                              ? const Color(
+                                                                  0xFFD4AF37)
+                                                              : theme.iconTheme
+                                                                  .color,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 12),
+                                                      Expanded(
+                                                        child: Text(
+                                                          name,
+                                                          style: TextStyle(
+                                                            fontSize: 15,
+                                                            fontWeight:
+                                                                isSelected
+                                                                    ? FontWeight
+                                                                        .bold
+                                                                    : FontWeight
+                                                                        .w500,
+                                                            color: isSelected
+                                                                ? theme
+                                                                    .colorScheme
+                                                                    .onSurface
+                                                                : null,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      if (isSelected)
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .all(2),
+                                                          decoration:
+                                                              const BoxDecoration(
+                                                            color: Color(
+                                                                0xFFD4AF37),
+                                                            shape:
+                                                                BoxShape.circle,
+                                                          ),
+                                                          child: const Icon(
+                                                            Icons.check,
+                                                            color: Colors.white,
+                                                            size: 18,
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                            ),
+                            if (state.hasError) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                state.errorText!,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                      const SizedBox(height: 20),
+                      // Karat, Weight, Wage in a grid
+                      Text(
+                        'تفاصيل الصنف',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        value: _selectedKarat,
+                        decoration: InputDecoration(
+                          labelText: 'العيار',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          prefixIcon: const Icon(Icons.diamond, size: 20),
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                        ),
+                        items: const [18, 21, 22, 24]
+                            .map(
+                              (k) => DropdownMenuItem<int>(
+                                value: k,
+                                child: Text('عيار $k'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() {
+                          _selectedKarat = v ?? _selectedKarat;
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _weightController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'الوزن (جرام)',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                prefixIcon: const Icon(Icons.scale, size: 20),
+                                filled: true,
+                                fillColor: theme.colorScheme.surface,
+                              ),
+                              validator: (v) {
+                                final val = _tryParseDouble(v ?? '', 0);
+                                if (val <= 0) return 'وزن غير صحيح';
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _wageController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'المصنعية/جرام',
+                                hintText: '0',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                prefixIcon: const Icon(Icons.build, size: 20),
+                                filled: true,
+                                fillColor: theme.colorScheme.surface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFD4AF37).withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Icon(
+                                Icons.info_outline,
+                                size: 18,
+                                color: Color(0xFFD4AF37),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'لا يتطلب باركود • يُستخدم للتتبع حسب التصنيف فقط',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontSize: 13,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Actions
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface.withValues(alpha: 0.5),
+                  borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(20),
+                  ),
+                  border: Border(
+                    top: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.2),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close, size: 18),
+                      label: const Text('إلغاء'),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: _submit,
+                      icon: const Icon(Icons.check, size: 20),
+                      label: const Text('إضافة السطر'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD4AF37),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        elevation: 2,
+                        shadowColor:
+                            const Color(0xFFD4AF37).withValues(alpha: 0.4),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

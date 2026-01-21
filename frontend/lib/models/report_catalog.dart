@@ -193,6 +193,20 @@ class ReportCatalog {
             available: true,
           ),
           ReportDescriptor(
+            id: 'category_weight_audit',
+            icon: Icons.category,
+            titleAr: 'جرد الأوزان حسب التصنيف',
+            titleEn: 'Category Weight Audit',
+            descriptionAr:
+                'عرض أرصدة الأوزان بالعيار الرئيسي حسب (الموقع/الخزنة) والتصنيف، مع سجل الحركة.',
+            descriptionEn:
+                'View main-karat weight balances by (location/safe box) and category, with a movement log.',
+            route: 'category_weight_audit',
+            type: ReportType.inventory,
+            available: true,
+            requiresFilters: false,
+          ),
+          ReportDescriptor(
             id: 'low_stock',
             icon: Icons.warning_amber,
             titleAr: 'أصناف منخفضة المخزون',

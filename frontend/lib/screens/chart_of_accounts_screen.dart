@@ -114,6 +114,10 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
         ? editingAccount['parent_id']
         : parentAccount?['id'];
 
+    bool tracksWeight = isEditing
+      ? (editingAccount['tracks_weight'] == true)
+      : (parentAccount != null ? parentAccount['tracks_weight'] == true : false);
+
     final accountNumberController = TextEditingController();
     bool isSuggestingNumber = false;
 
@@ -134,6 +138,8 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
 
         // When adding a child, inherit the parent's type
         type = parentAcc['type'];
+        // Child accounts always inherit tracks_weight from parent
+        tracksWeight = parentAcc['tracks_weight'] == true;
 
         setState(() {
           isSuggestingNumber = true;
@@ -297,6 +303,27 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                             }
                           },
                         ),
+                      const SizedBox(height: 8),
+                      if (parentId == null)
+                        SwitchListTile.adaptive(
+                          contentPadding: EdgeInsets.zero,
+                          value: tracksWeight,
+                          title: const Text('يتتبع الوزن (حساب وزني)'),
+                          subtitle: const Text(
+                            'يمكن تعديلها يدويًا للحسابات الرئيسية فقط',
+                          ),
+                          onChanged: (v) => setState(() => tracksWeight = v),
+                        )
+                      else
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('تتبع الوزن'),
+                          subtitle: Text(
+                            tracksWeight
+                                ? 'يتبع الأب: يتتبع الوزن'
+                                : 'يتبع الأب: لا يتتبع الوزن',
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -328,6 +355,9 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                           .validateAccountNumber(
                             accountNumber: finalAccountNumber,
                             parentAccountNumber: parentNumber,
+                            excludeAccountId: isEditing
+                                ? (editingAccount['id'] as int)
+                                : null,
                           );
                       if (validation['is_valid'] != true) {
                         final message =
@@ -346,6 +376,15 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                       'type': type,
                       'parent_id': parentId,
                     };
+
+                    if (parentId != null) {
+                      final parentAcc = _accounts.firstWhere(
+                        (acc) => acc['id'] == parentId,
+                      );
+                      data['tracks_weight'] = parentAcc['tracks_weight'] == true;
+                    } else {
+                      data['tracks_weight'] = tracksWeight;
+                    }
 
                     if (isEditing) {
                       await ApiService().updateAccount(

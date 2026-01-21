@@ -1201,6 +1201,63 @@ class InvoiceItem(db.Model):
     )
 
 
+class CategoryWeightMovement(db.Model):
+    """Track weight movements by Category and location (gold SafeBox).
+
+    This supports non-coded inventory workflows where stock is tracked by
+    category totals per location (showroom vs employee custody), without
+    requiring per-piece item coding.
+    """
+
+    __tablename__ = 'category_weight_movement'
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id', ondelete='RESTRICT'), nullable=False, index=True)
+    safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id', ondelete='RESTRICT'), nullable=False, index=True)
+
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id', ondelete='SET NULL'), nullable=True, index=True)
+
+    # Optional: preserve traceability to the original line payload by storing a line label.
+    line_label = db.Column(db.String(200), nullable=True)
+
+    invoice_type = db.Column(db.String(50), nullable=True)  # e.g. بيع/شراء/مرتجع...
+    gold_type = db.Column(db.String(20), nullable=True)  # new/scrap
+
+    karat = db.Column(db.Float, nullable=True)
+
+    # Signed delta: + adds to stock, - removes from stock.
+    weight_delta_grams = db.Column(db.Float, nullable=False, default=0.0)
+    weight_delta_main_karat = db.Column(db.Float, nullable=False, default=0.0)
+
+    created_by = db.Column(db.String(100), nullable=True)
+    note = db.Column(db.Text, nullable=True)
+
+    category = db.relationship('Category', foreign_keys=[category_id])
+    safe_box = db.relationship('SafeBox', foreign_keys=[safe_box_id])
+    invoice = db.relationship('Invoice', foreign_keys=[invoice_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'category_id': self.category_id,
+            'category_name': self.category.name if self.category else None,
+            'safe_box_id': self.safe_box_id,
+            'safe_box_name': self.safe_box.name if self.safe_box else None,
+            'invoice_id': self.invoice_id,
+            'invoice_type': self.invoice_type,
+            'gold_type': self.gold_type,
+            'karat': self.karat,
+            'weight_delta_grams': float(self.weight_delta_grams or 0.0),
+            'weight_delta_main_karat': float(self.weight_delta_main_karat or 0.0),
+            'created_by': self.created_by,
+            'line_label': self.line_label,
+            'note': self.note,
+        }
+
+
 class InvoiceKaratLine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False)

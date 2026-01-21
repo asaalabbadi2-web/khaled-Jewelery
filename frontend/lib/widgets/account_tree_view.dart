@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+enum _AccountAction { statement, addChild, edit, delete }
+
 // 1. AccountNode Class
 class AccountNode {
   final Map<String, dynamic> account;
@@ -102,36 +104,92 @@ class AccountTile extends StatelessWidget {
     final account = node.account;
     final bool isLeaf = node.children.isEmpty;
 
-    final tileTitle = Row(
+    PopupMenuItem<_AccountAction> buildItem(
+      _AccountAction action,
+      String label,
+      IconData icon, {
+      Color? color,
+    }) {
+      return PopupMenuItem<_AccountAction>(
+        value: action,
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final tileTitleRow = Row(
       children: [
         Expanded(
-          child: Text('${account['account_number']} - ${account['name']}'),
-        ),
-        IconButton(
-          icon: Icon(
-            Icons.description_outlined,
-            size: 20,
-            color: Theme.of(context).colorScheme.secondary,
+          child: Text(
+            '${account['account_number']} - ${account['name']}',
+            overflow: TextOverflow.ellipsis,
           ),
-          tooltip: 'عرض كشف الحساب',
-          onPressed: () => onAccountTap(account),
         ),
-        IconButton(
-          icon: Icon(Icons.add_circle_outline, size: 20, color: Colors.green),
-          tooltip: 'إضافة حساب فرعي',
-          onPressed: () => onAddChild(account),
-        ),
-        IconButton(
-          icon: Icon(Icons.edit_outlined, size: 20),
-          tooltip: 'تعديل الحساب',
-          onPressed: () => onEdit(account),
-        ),
-        IconButton(
-          icon: Icon(Icons.delete_outline, size: 20, color: Colors.redAccent),
-          tooltip: 'حذف الحساب',
-          onPressed: () => onDelete(account['id']),
+        PopupMenuButton<_AccountAction>(
+          tooltip: 'خيارات',
+          onSelected: (action) {
+            switch (action) {
+              case _AccountAction.statement:
+                onAccountTap(account);
+                break;
+              case _AccountAction.addChild:
+                onAddChild(account);
+                break;
+              case _AccountAction.edit:
+                onEdit(account);
+                break;
+              case _AccountAction.delete:
+                onDelete(account['id']);
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            buildItem(
+              _AccountAction.statement,
+              'عرض كشف الحساب',
+              Icons.description_outlined,
+              color: Theme.of(context).colorScheme.secondary,
+            ),
+            buildItem(
+              _AccountAction.addChild,
+              'إضافة حساب فرعي',
+              Icons.add_circle_outline,
+              color: Colors.green,
+            ),
+            buildItem(
+              _AccountAction.edit,
+              'تعديل الحساب',
+              Icons.edit_outlined,
+            ),
+            buildItem(
+              _AccountAction.delete,
+              'حذف الحساب',
+              Icons.delete_outline,
+              color: Colors.redAccent,
+            ),
+          ],
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Icon(Icons.more_vert, size: 20),
+          ),
         ),
       ],
+    );
+
+    final tileTitle = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () => onEdit(account),
+      child: tileTitleRow,
     );
 
     if (isLeaf) {

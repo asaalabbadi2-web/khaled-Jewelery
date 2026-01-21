@@ -68,6 +68,10 @@ from dual_system_helpers import (
 from services.journals import create_wage_weight_release_journal
 from services.weight_execution import list_weight_profiles, resolve_weight_profile
 from gold_costing_service import GoldCostingService
+from category_weight_tracking import (
+    get_category_weight_balances,
+    record_category_weight_movements_for_invoice_payload,
+)
 from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import pstdev
@@ -3976,6 +3980,63 @@ def delete_category(category_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+@api.route('/category-weight/balances', methods=['GET'])
+@require_permission('items.view')
+def category_weight_balances():
+    """Return category-weight balances grouped by gold SafeBox (location)."""
+    safe_box_id = request.args.get('safe_box_id', type=int)
+    category_id = request.args.get('category_id', type=int)
+    return jsonify(get_category_weight_balances(safe_box_id=safe_box_id, category_id=category_id))
+
+
+@api.route('/category-weight/movements', methods=['GET'])
+@require_permission('items.view')
+def category_weight_movements():
+    """Return recent category-weight movement history (supports filters)."""
+    from models import CategoryWeightMovement
+
+    safe_box_id = request.args.get('safe_box_id', type=int)
+    category_id = request.args.get('category_id', type=int)
+    invoice_id = request.args.get('invoice_id', type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    limit = request.args.get('limit', default=200, type=int)
+
+    try:
+        start_dt = None
+        end_dt = None
+
+        if start_date:
+            start_value = _parse_iso_date(start_date, 'start_date')
+            start_dt = datetime.combine(start_value, datetime.min.time())
+
+        if end_date:
+            end_value = _parse_iso_date(end_date, 'end_date')
+            end_dt = datetime.combine(end_value, datetime.min.time()) + timedelta(days=1)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    if limit is None or limit <= 0:
+        limit = 200
+    limit = min(limit, 1000)
+
+    q = CategoryWeightMovement.query
+    if safe_box_id:
+        q = q.filter(CategoryWeightMovement.safe_box_id == safe_box_id)
+    if category_id:
+        q = q.filter(CategoryWeightMovement.category_id == category_id)
+    if invoice_id:
+        q = q.filter(CategoryWeightMovement.invoice_id == invoice_id)
+
+    if start_dt:
+        q = q.filter(CategoryWeightMovement.created_at >= start_dt)
+    if end_dt:
+        q = q.filter(CategoryWeightMovement.created_at < end_dt)
+
+    q = q.order_by(CategoryWeightMovement.created_at.desc()).limit(limit)
+    return jsonify([row.to_dict() for row in q.all()])
 
 # Endpoint لجلب سعر الذهب الحالي
 @api.route('/gold_price', methods=['GET'])
@@ -8873,6 +8934,17 @@ def add_invoice():
 
         print(f"✅ Committing transaction...")
 
+        # 📦 Category-weight tracking (by location / gold SafeBox)
+        # We do this only for posted invoices to avoid counting approval-required drafts.
+        try:
+            record_category_weight_movements_for_invoice_payload(
+                invoice_id=new_invoice.id,
+                items_payload=(data.get('items') if isinstance(data, dict) else None),
+            )
+        except Exception as exc:
+            # Do not block posting for tracking failures.
+            print(f"⚠️ Category weight tracking skipped: {exc}")
+
         # Audit: large discount (sales)
         try:
             if str(invoice_type).strip() == 'بيع' and total_gross_cash > 0 and total_discount_cash > 0:
@@ -9340,7 +9412,8 @@ def validate_account_number_api():
     Body:
         {
             "account_number": "110000",
-            "parent_account_number": "1100"
+            "parent_account_number": "1100",
+            "exclude_account_id": 123
         }
         
     Returns:
@@ -9352,6 +9425,11 @@ def validate_account_number_api():
         data = request.get_json(silent=True) or {}
         account_number = (data.get('account_number') or '').strip()
         parent_account_number = (data.get('parent_account_number') or '').strip()
+        exclude_account_id = data.get('exclude_account_id')
+        try:
+            exclude_account_id = int(exclude_account_id) if exclude_account_id is not None else None
+        except Exception:
+            exclude_account_id = None
         
         if not account_number or not parent_account_number:
             return jsonify({
@@ -9359,7 +9437,11 @@ def validate_account_number_api():
                 'message': 'يجب تقديم رقم الحساب ورقم الحساب الأب'
             }), 400
         
-        result = validate_account_number(account_number, parent_account_number)
+        result = validate_account_number(
+            account_number,
+            parent_account_number,
+            exclude_account_id=exclude_account_id,
+        )
         return jsonify(result), 200
         
     except Exception as e:
@@ -9411,6 +9493,7 @@ def add_account():
 
     # If creating a child account, enforce numbering rules via generator
     parent_id = data.get('parent_id')
+    parent_account = None
     if parent_id is not None:
         parent_account = Account.query.get(parent_id)
         if not parent_account:
@@ -9421,6 +9504,12 @@ def add_account():
         validation = validate_account_number(account_number, parent_account.account_number)
         if not validation.get('is_valid'):
             return jsonify({'error': validation.get('message', 'رقم الحساب غير صالح')}), 400
+
+    # Inherit tracks_weight from parent for child accounts unless explicitly provided.
+    if parent_account is not None and 'tracks_weight' not in data:
+        tracks_weight_value = bool(parent_account.tracks_weight)
+    else:
+        tracks_weight_value = bool(data.get('tracks_weight', False))
     
     # إنشاء الحساب الأساسي
     new_account = Account(
@@ -9432,7 +9521,7 @@ def add_account():
         bank_name=data.get('bank_name'),
         account_number_external=data.get('account_number_external'),
         account_type=data.get('account_type'),
-        tracks_weight=data.get('tracks_weight', False)
+        tracks_weight=tracks_weight_value,
     )
     db.session.add(new_account)
     db.session.flush()
@@ -9483,6 +9572,12 @@ def update_account(id):
     # 🆕 تحديث tracks_weight
     if 'tracks_weight' in data:
         account.tracks_weight = bool(data['tracks_weight'])
+
+    # Enforce inheritance: child accounts always follow parent's tracks_weight
+    if account.parent_id is not None:
+        parent = Account.query.get(account.parent_id)
+        if parent is not None:
+            account.tracks_weight = bool(parent.tracks_weight)
     
     db.session.commit()
     return jsonify(account.to_dict())

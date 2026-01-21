@@ -115,6 +115,19 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
       return;
     }
 
+    int accountNumberAsInt(Map<String, dynamic> acc) {
+      final raw = (acc['account_number'] ?? '').toString().trim();
+      return int.tryParse(raw) ?? 0;
+    }
+
+    // Keep a stable ordering for browsing/suggestions.
+    final accountsSorted = List<Map<String, dynamic>>.from(accounts)
+      ..sort((a, b) => accountNumberAsInt(a).compareTo(accountNumberAsInt(b)));
+
+    bool tracksWeight(Map<String, dynamic> acc) => acc['tracks_weight'] == true;
+
+    // Keep tracksWeight helper for validation and picker.
+
     String accountLabelFor(Map<String, dynamic> acc) {
       final name = (acc['name'] ?? '').toString();
       final number = (acc['account_number'] ?? '').toString();
@@ -123,7 +136,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
 
     String initialAccountLabel = '';
     if (selectedAccountId != null) {
-      final match = accounts
+      final match = accountsSorted
           .where((a) => a['id'] == selectedAccountId)
           .cast<Map<String, dynamic>>()
           .toList();
@@ -134,6 +147,27 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
     final linkedAccountController = TextEditingController(
       text: initialAccountLabel,
     );
+
+    Future<void> openAccountPicker() async {
+      final picked = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (_) => _AccountPickerDialog(
+          isArabic: isAr,
+          accounts: accountsSorted,
+          initialAccountId: selectedAccountId,
+          requireTracksWeight: selectedType == 'gold',
+          allowShowAllWhenTracksRequired: true,
+          initialQuery: linkedAccountController.text,
+        ),
+      );
+
+      if (picked != null) {
+        setState(() {
+          selectedAccountId = picked['id'] as int?;
+          linkedAccountController.text = accountLabelFor(picked);
+        });
+      }
+    }
 
     await showDialog(
       context: context,
@@ -209,84 +243,36 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                   const SizedBox(height: 12),
 
                   // الحساب المرتبط
-                  Autocomplete<Map<String, dynamic>>(
-                    initialValue: TextEditingValue(text: initialAccountLabel),
-                    optionsBuilder: (TextEditingValue textEditingValue) {
-                      final query = textEditingValue.text.trim().toLowerCase();
-                      if (query.isEmpty) {
-                        return const Iterable<Map<String, dynamic>>.empty();
-                      }
-                      final selectable = selectedType == 'gold'
-                          ? accounts.where((acc) {
-                            // خزنة الذهب يجب أن ترتبط بحساب يتتبع الوزن
-                            final tracks = acc['tracks_weight'] == true;
-                            return tracks;
-                            })
-                          : accounts;
-
-                      return selectable.where((acc) {
-                        final label = accountLabelFor(acc).toLowerCase();
-                        return label.contains(query);
-                      });
-                    },
-                    displayStringForOption: (opt) => accountLabelFor(opt),
-                    fieldViewBuilder:
-                        (
-                          context,
-                          textEditingController,
-                          focusNode,
-                          onFieldSubmitted,
-                        ) {
-                          // Keep controller in sync for edit mode display.
-                          if (linkedAccountController.text.isNotEmpty &&
-                              textEditingController.text.isEmpty) {
-                            textEditingController.text =
-                                linkedAccountController.text;
-                          }
-                          return TextField(
-                            controller: textEditingController,
-                            focusNode: focusNode,
-                            decoration: InputDecoration(
-                              labelText: isAr
-                                  ? 'الحساب المرتبط * (ابحث بالاسم/الرقم)'
-                                  : 'Linked Account * (search by name/number)',
-                              helperText: selectedType == 'gold'
-                                  ? (isAr
-                                        ? 'اختر حساباً يتتبع الوزن (tracks_weight=true)'
-                                        : 'Choose an account that tracks weight (tracks_weight=true)')
-                                  : null,
-                              border: const OutlineInputBorder(),
-                            ),
-                          );
-                        },
-                    onSelected: (selection) {
-                      setDialogState(() {
-                        selectedAccountId = selection['id'] as int?;
-                      });
-                    },
-                    optionsViewBuilder: (context, onSelected, options) {
-                      return Align(
-                        alignment: Alignment.topLeft,
-                        child: Material(
-                          elevation: 4,
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 320),
-                            child: ListView.builder(
-                              padding: EdgeInsets.zero,
-                              itemCount: options.length,
-                              itemBuilder: (context, index) {
-                                final opt = options.elementAt(index);
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(accountLabelFor(opt)),
-                                  onTap: () => onSelected(opt),
-                                );
-                              },
-                            ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: linkedAccountController,
+                          readOnly: true,
+                          onTap: openAccountPicker,
+                          decoration: InputDecoration(
+                            labelText: isAr
+                                ? 'الحساب المرتبط *'
+                                : 'Linked Account *',
+                            hintText: isAr
+                                ? 'اضغط للاختيار (بحث/فلترة)'
+                                : 'Tap to select (search/filter)',
+                            helperText: selectedType == 'gold'
+                                ? (isAr
+                                      ? 'يجب اختيار حساب يتتبع الوزن (tracks_weight=true)'
+                                      : 'Must choose tracks_weight=true')
+                                : null,
+                            border: const OutlineInputBorder(),
                           ),
                         ),
-                      );
-                    },
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        onPressed: openAccountPicker,
+                        icon: const Icon(Icons.search),
+                        tooltip: isAr ? 'اختيار حساب' : 'Pick account',
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
 
@@ -445,6 +431,24 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                     isError: true,
                   );
                   return;
+                }
+
+                if (selectedType == 'gold') {
+                  final selectedAcc = accountsSorted
+                      .where((a) => a['id'] == selectedAccountId)
+                      .cast<Map<String, dynamic>>()
+                      .toList();
+                  final tracks =
+                      selectedAcc.isNotEmpty && tracksWeight(selectedAcc.first);
+                  if (!tracks) {
+                    _showSnack(
+                      isAr
+                          ? 'لخزنة الذهب يجب اختيار حساب يتتبع الوزن (tracks_weight=true)'
+                          : 'Gold safe boxes require a weight-tracking account (tracks_weight=true)',
+                      isError: true,
+                    );
+                    return;
+                  }
                 }
 
                 final newSafeBox = SafeBoxModel(
@@ -890,6 +894,277 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
             onPressed: () => _showAddEditDialog(),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AccountPickerDialog extends StatefulWidget {
+  final bool isArabic;
+  final List<Map<String, dynamic>> accounts;
+  final int? initialAccountId;
+  final bool requireTracksWeight;
+  final bool allowShowAllWhenTracksRequired;
+  final String? initialQuery;
+
+  const _AccountPickerDialog({
+    required this.isArabic,
+    required this.accounts,
+    required this.initialAccountId,
+    required this.requireTracksWeight,
+    required this.allowShowAllWhenTracksRequired,
+    this.initialQuery,
+  });
+
+  @override
+  State<_AccountPickerDialog> createState() => _AccountPickerDialogState();
+}
+
+class _AccountPickerDialogState extends State<_AccountPickerDialog> {
+  late final TextEditingController _searchController;
+  bool _showAll = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController(text: widget.initialQuery ?? '');
+    _showAll = !widget.requireTracksWeight;
+    _searchController.addListener(() {
+      if (!mounted) return;
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  bool _tracksWeight(Map<String, dynamic> acc) => acc['tracks_weight'] == true;
+
+  String _labelFor(Map<String, dynamic> acc) {
+    final name = (acc['name'] ?? '').toString();
+    final number = (acc['account_number'] ?? '').toString();
+    return '$name ($number)';
+  }
+
+  bool _matchesQuery(Map<String, dynamic> acc, String q) {
+    final label = _labelFor(acc).toLowerCase();
+    if (label.contains(q)) return true;
+
+    // If user types digits, prioritize account number matching.
+    final digitsOnly = q.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digitsOnly.isNotEmpty) {
+      final number = (acc['account_number'] ?? '').toString();
+      return number.contains(digitsOnly) || number.startsWith(digitsOnly);
+    }
+
+    return false;
+  }
+
+  List<Map<String, dynamic>> _filtered() {
+    final q = _searchController.text.trim().toLowerCase();
+
+    final base = (widget.requireTracksWeight && !_showAll)
+        ? widget.accounts.where(_tracksWeight)
+        : widget.accounts;
+
+    if (q.isEmpty) {
+      // Initial browsing list.
+      return base.take(200).toList(growable: false);
+    }
+
+    final matches = base.where((a) => _matchesQuery(a, q)).toList();
+    // Keep list bounded for performance on web.
+    if (matches.length > 500) {
+      return matches.take(500).toList(growable: false);
+    }
+    return matches;
+  }
+
+  String _t(String ar, String en) => widget.isArabic ? ar : en;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final rows = _filtered();
+
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment:
+                widget.isArabic ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _t('اختيار الحساب المرتبط', 'Select Linked Account'),
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                      textAlign: widget.isArabic ? TextAlign.right : TextAlign.left,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                    tooltip: _t('إغلاق', 'Close'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  hintText: _t(
+                    'ابحث بالاسم أو رقم الحساب...',
+                    'Search by name or account number...',
+                  ),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (widget.requireTracksWeight)
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _t(
+                          'ملاحظة: خزنة الذهب يجب ربطها بحساب tracks_weight=true',
+                          'Note: Gold safe boxes must link to tracks_weight=true',
+                        ),
+                        style: TextStyle(color: Colors.grey.shade700),
+                        textAlign:
+                            widget.isArabic ? TextAlign.right : TextAlign.left,
+                      ),
+                    ),
+                    if (widget.allowShowAllWhenTracksRequired)
+                      Switch.adaptive(
+                        value: _showAll,
+                        onChanged: (v) => setState(() => _showAll = v),
+                      ),
+                    if (widget.allowShowAllWhenTracksRequired)
+                      Text(
+                        _t('عرض الكل', 'Show all'),
+                        style: TextStyle(color: Colors.grey.shade800),
+                      ),
+                  ],
+                ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _t(
+                        'النتائج: ${rows.length}',
+                        'Results: ${rows.length}',
+                      ),
+                      style: TextStyle(color: Colors.grey.shade700),
+                      textAlign:
+                          widget.isArabic ? TextAlign.right : TextAlign.left,
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _searchController.clear(),
+                    icon: const Icon(Icons.clear),
+                    label: Text(_t('مسح', 'Clear')),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: rows.isEmpty
+                    ? Center(
+                        child: Text(
+                          _t('لا توجد نتائج', 'No results'),
+                          style: TextStyle(color: Colors.grey.shade600),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: rows.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (_, index) {
+                          final acc = rows[index];
+                          final id = acc['id'] is int
+                              ? acc['id'] as int
+                              : int.tryParse('${acc['id']}');
+                          final isSelected =
+                              widget.initialAccountId != null &&
+                              id == widget.initialAccountId;
+                          final subtitle = widget.requireTracksWeight
+                              ? (_tracksWeight(acc)
+                                    ? _t('يتتبع الوزن', 'Tracks weight')
+                                    : _t('لا يتتبع الوزن', 'Does not track weight'))
+                              : null;
+
+                          return ListTile(
+                            dense: true,
+                            selected: isSelected,
+                            title: Text(
+                              _labelFor(acc),
+                              textAlign:
+                                  widget.isArabic ? TextAlign.right : TextAlign.left,
+                            ),
+                            subtitle: subtitle == null
+                                ? null
+                                : Text(
+                                    subtitle,
+                                    textAlign: widget.isArabic
+                                        ? TextAlign.right
+                                        : TextAlign.left,
+                                    style: TextStyle(
+                                      color: _tracksWeight(acc)
+                                          ? Colors.green.shade700
+                                          : Colors.red.shade700,
+                                    ),
+                                  ),
+                            trailing: widget.requireTracksWeight && !_tracksWeight(acc)
+                                ? Icon(Icons.warning_amber,
+                                    color: Colors.red.shade600)
+                                : null,
+                            onTap: () {
+                              // When gold safe box requires tracks_weight, allow browsing all
+                              // but prevent selecting an invalid account.
+                              if (widget.requireTracksWeight && !_tracksWeight(acc)) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      _t(
+                                        'لا يمكن اختيار هذا الحساب لخزنة الذهب لأنه لا يتتبع الوزن.',
+                                        'Cannot select for gold safe box (tracks_weight=false).',
+                                      ),
+                                    ),
+                                    backgroundColor: Colors.red.shade700,
+                                  ),
+                                );
+                                return;
+                              }
+                              Navigator.pop<Map<String, dynamic>>(context, acc);
+                            },
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(_t('إلغاء', 'Cancel')),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

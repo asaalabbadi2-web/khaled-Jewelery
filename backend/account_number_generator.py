@@ -7,6 +7,8 @@ Account Number Generator - مولد أرقام الحسابات التلقائي
 - الترقيم مع التباعد (للحسابات العادية)
 """
 
+from typing import Optional
+
 from models import Account, db
 
 
@@ -221,7 +223,11 @@ def suggest_account_number_with_validation(parent_account_number: str) -> dict:
         }
 
 
-def validate_account_number(account_number: str, parent_account_number: str) -> dict:
+def validate_account_number(
+    account_number: str,
+    parent_account_number: str,
+    exclude_account_id: Optional[int] = None,
+) -> dict:
     """
     التحقق من صحة رقم حساب مقترح
     
@@ -243,9 +249,9 @@ def validate_account_number(account_number: str, parent_account_number: str) -> 
     if not acc_digits or not parent_digits:
         return {'is_valid': False, 'message': 'رقم الحساب غير صالح'}
 
-    # تحقق من أن الرقم غير مستخدم
+    # تحقق من أن الرقم غير مستخدم (مع استثناء الحساب الحالي عند التعديل)
     existing = Account.query.filter_by(account_number=acc_digits).first()
-    if existing:
+    if existing and (exclude_account_id is None or existing.id != exclude_account_id):
         return {
             'is_valid': False,
             'message': f'رقم الحساب {acc_digits} مستخدم بالفعل'
