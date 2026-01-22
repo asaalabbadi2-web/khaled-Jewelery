@@ -4,6 +4,7 @@ class Category {
   final int? id;
   final String name;
   final String? description;
+  final String? karat;  // 🆕 عيار افتراضي للتصنيف
   final DateTime? createdAt;
   final int? itemsCount;
 
@@ -11,6 +12,7 @@ class Category {
     this.id,
     required this.name,
     this.description,
+    this.karat,
     this.createdAt,
     this.itemsCount,
   });
@@ -21,6 +23,7 @@ class Category {
       id: json['id'],
       name: json['name'] ?? '',
       description: json['description'],
+      karat: json['karat'],  // 🆕
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : null,
@@ -30,7 +33,12 @@ class Category {
 
   /// تحويل Category إلى JSON
   Map<String, dynamic> toJson() {
-    return {'id': id, 'name': name, 'description': description};
+    return {
+      'id': id,
+      'name': name,
+      'description': description,
+      'karat': karat,  // 🆕
+    };
   }
 
   /// نسخة معدلة من التصنيف
@@ -38,6 +46,7 @@ class Category {
     int? id,
     String? name,
     String? description,
+    String? karat,
     DateTime? createdAt,
     int? itemsCount,
   }) {
@@ -45,6 +54,7 @@ class Category {
       id: id ?? this.id,
       name: name ?? this.name,
       description: description ?? this.description,
+      karat: karat ?? this.karat,  // 🆕
       createdAt: createdAt ?? this.createdAt,
       itemsCount: itemsCount ?? this.itemsCount,
     );

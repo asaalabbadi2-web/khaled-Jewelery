@@ -3952,7 +3952,8 @@ def create_category():
         
         category = Category(
             name=data['name'],
-            description=data.get('description')
+            description=data.get('description'),
+            karat=data.get('karat')  # 🆕 عيار افتراضي للتصنيف
         )
         
         db.session.add(category)
@@ -3985,6 +3986,9 @@ def update_category(category_id):
         
         if 'description' in data:
             category.description = data['description']
+        
+        if 'karat' in data:  # 🆕 تحديث العيار
+            category.karat = data['karat']
         
         db.session.commit()
         return jsonify(category.to_dict())

@@ -1231,6 +1231,7 @@ class _CategoriesManagementDialogState
   Future<void> _addCategory() async {
     final nameController = TextEditingController();
     final descController = TextEditingController();
+    final karatController = TextEditingController();
 
     final result = await showDialog<bool>(
       context: context,
@@ -1246,6 +1247,16 @@ class _CategoriesManagementDialogState
                 border: OutlineInputBorder(),
               ),
               autofocus: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: karatController,
+              decoration: const InputDecoration(
+                labelText: 'العيار الافتراضي (اختياري)',
+                border: OutlineInputBorder(),
+                hintText: '18 أو 21 أو 22 أو 24',
+              ),
+              keyboardType: TextInputType.number,
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1277,6 +1288,7 @@ class _CategoriesManagementDialogState
         final response = await widget.api.addCategory({
           'name': nameController.text,
           'description': descController.text,
+          'karat': karatController.text.isNotEmpty ? karatController.text : null,
         });
         final newCategory = Category.fromJson(response);
         setState(() {
@@ -1307,6 +1319,7 @@ class _CategoriesManagementDialogState
   Future<void> _editCategory(Category category) async {
     final nameController = TextEditingController(text: category.name);
     final descController = TextEditingController(text: category.description);
+    final karatController = TextEditingController(text: category.karat ?? '');
 
     final result = await showDialog<bool>(
       context: context,
@@ -1321,6 +1334,16 @@ class _CategoriesManagementDialogState
                 labelText: 'اسم التصنيف *',
                 border: OutlineInputBorder(),
               ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: karatController,
+              decoration: const InputDecoration(
+                labelText: 'العيار الافتراضي (اختياري)',
+                border: OutlineInputBorder(),
+                hintText: '18 أو 21 أو 22 أو 24',
+              ),
+              keyboardType: TextInputType.number,
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1352,6 +1375,7 @@ class _CategoriesManagementDialogState
         final response = await widget.api.updateCategory(category.id!, {
           'name': nameController.text,
           'description': descController.text,
+          'karat': karatController.text.isNotEmpty ? karatController.text : null,
         });
         final updatedCategory = Category.fromJson(response);
         setState(() {

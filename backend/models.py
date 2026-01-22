@@ -674,6 +674,7 @@ class Category(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
     description = db.Column(db.String(200))
+    karat = db.Column(db.String(10), nullable=True)  # 🆕 عيار افتراضي للتصنيف
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # العلاقة مع الأصناف
@@ -684,6 +685,7 @@ class Category(db.Model):
             'id': self.id,
             'name': self.name,
             'description': self.description,
+            'karat': self.karat,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'items_count': len(self.items)
         }

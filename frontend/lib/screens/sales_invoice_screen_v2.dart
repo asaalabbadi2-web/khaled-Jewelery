@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';  // 🆕 للـ FilteringTextInputFormatter
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
@@ -1056,9 +1057,28 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       // الاستمرار باستخدام السعر الحالي في حال فشل التحديث
     }
 
-    // تحويل آمن للقيم
+    // 🆕 محاولة جلب العيار من التصنيف إذا كان موجوداً
     double karat = _parseDouble(itemData['karat']);
-    if (karat <= 0) karat = settings.mainKarat.toDouble();
+    final categoryId = _parseInt(itemData['category_id']);
+    if (karat <= 0) {
+      // إذا لم يكن للصنف عيار، نحاول استخدام عيار التصنيف
+      if (categoryId != null) {
+        try {
+          await _ensureCategoriesLoaded();
+          final category = _categories.firstWhere(
+            (c) => _parseInt(c['id']) == categoryId,
+            orElse: () => <String, dynamic>{},
+          );
+          if (category.isNotEmpty && category['karat'] != null) {
+            karat = _parseDouble(category['karat']);
+          }
+        } catch (_) {
+          // في حالة الفشل، نستخدم العيار الافتراضي
+        }
+      }
+      // إذا لم ينجح أي من ما سبق، استخدم العيار الافتراضي
+      if (karat <= 0) karat = settings.mainKarat.toDouble();
+    }
 
     double wage = _parseDouble(itemData['wage']);
 
@@ -1069,6 +1089,23 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     if (!mounted) return;
 
     final itemId = _parseInt(itemData['id']);
+    String? categoryName = itemData['category_name'] as String?;
+    if ((categoryName == null || categoryName.trim().isEmpty) &&
+        categoryId != null) {
+      try {
+        await _ensureCategoriesLoaded();
+        final category = _categories.firstWhere(
+          (c) => _parseInt(c['id']) == categoryId,
+          orElse: () => <String, dynamic>{},
+        );
+        final resolvedName = (category['name'] ?? '').toString().trim();
+        if (resolvedName.isNotEmpty) {
+          categoryName = resolvedName;
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
 
     setState(() {
       _items.add(
@@ -1079,6 +1116,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           karat: karat,
           weight: weight, // استخدام الوزن الفعلي من قاعدة البيانات
           wage: wage,
+          categoryId: categoryId,
+          categoryName: categoryName,
           goldPrice24k: _goldPrice24k,
           mainKarat: settings.mainKarat,
           taxRate: settings.taxRateForKarat(karat),
@@ -1102,6 +1141,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final formKey = GlobalKey<FormState>();
     final nameController = TextEditingController();
     final barcodeController = TextEditingController();
+    final countController = TextEditingController(text: '1');  // 🆕 عدد القطع
     final weightController = TextEditingController(text: '1.0');
     final wageController = TextEditingController(text: '0');
     final totalController = TextEditingController();
@@ -1168,6 +1208,27 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           labelText: 'الباركود / رقم الصنف (اختياري)',
                           prefixIcon: Icon(Icons.qr_code_2),
                         ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: countController,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'العدد (الكمية)',
+                          prefixIcon: Icon(Icons.numbers),
+                          helperText: 'عدد القطع لهذا الصنف',
+                        ),
+                        validator: (value) {
+                          final count = int.tryParse(value ?? '');
+                          if (count == null || count < 1) {
+                            return 'أدخل عدداً صحيحاً أكبر من صفر';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<int>(
@@ -1273,6 +1334,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         tryParseOptionalDouble(weightController.text) ?? 0;
                     final wage =
                         tryParseOptionalDouble(wageController.text) ?? 0;
+                    final count = int.tryParse(countController.text) ?? 1;  // 🆕
                     final manualTotal = tryParseOptionalDouble(
                       totalController.text,
                     );
@@ -1283,6 +1345,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       'karat': selectedKarat.toDouble(),
                       'weight': weight,
                       'wage': wage,
+                      'count': count,  // 🆕
                       'total_with_tax': manualTotal,
                     });
                   },
@@ -1306,6 +1369,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       karat: _parseDouble(manualData['karat']),
       weight: _parseDouble(manualData['weight']),
       wage: _parseDouble(manualData['wage']),
+      count: manualData['count'] as int? ?? 1,  // 🆕
       goldPrice24k: _goldPrice24k,
       mainKarat: _settingsProvider.mainKarat,
       taxRate: _settingsProvider.taxRateForKarat(
@@ -5747,6 +5811,7 @@ class InvoiceItem {
   final double goldPrice24k;
   final int mainKarat;
   double taxRate;
+  int count;  // 🆕 عدد القطع لهذا الصنف
   double _avgGoldCostPerMainGram;
   double _avgManufacturingCostPerMainGram;
 
@@ -5769,6 +5834,7 @@ class InvoiceItem {
     required this.wage,
     this.categoryId,
     this.categoryName,
+    this.count = 1,  // 🆕 افتراضي عدد 1
     required this.goldPrice24k,
     required this.mainKarat,
     required this.taxRate,
@@ -5860,7 +5926,7 @@ class InvoiceItem {
       'net': net,
       'tax': tax,
       'price': totalWithTax, // الـ backend يتوقع 'price' بدلاً من 'total'
-      'quantity': 1,
+      'quantity': count,  // 🆕 عدد فعلي
       'calculated_selling_price_per_gram': calculateSellingPricePerGram(),
     };
   }
@@ -5928,6 +5994,14 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
       'weight': weight,
       'wage': wage,
     });
+  }
+
+  int? _tryParseCategoryKarat(Map<String, dynamic> category) {
+    final raw = category['karat'];
+    final parsed = int.tryParse('${raw ?? ''}');
+    if (parsed == null) return null;
+    if (const [18, 21, 22, 24].contains(parsed)) return parsed;
+    return null;
   }
 
   @override
@@ -6138,6 +6212,11 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                 onTap: () {
                                                   setState(() {
                                                     _selectedCategory = opt;
+                                                    final categoryKarat =
+                                                        _tryParseCategoryKarat(opt);
+                                                    if (categoryKarat != null) {
+                                                      _selectedKarat = categoryKarat;
+                                                    }
                                                   });
                                                   state.didChange(id);
                                                 },
