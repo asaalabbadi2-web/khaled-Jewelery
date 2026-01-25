@@ -12,6 +12,7 @@ from models import (
     Account,
     PaymentMethod,
     PaymentType,
+    Invoice,
     InvoicePayment,
     PAYMENT_METHOD_ALLOWED_INVOICE_TYPES,
     SafeBox,
@@ -941,33 +942,43 @@ def delete_payment_method(id):
             return jsonify({'error': 'وسيلة الدفع غير موجودة'}), 404
         
         # نسمح بالحذف الفعلي إذا لم تُستخدم في أي دفعة فاتورة
-        used_count = 0
+        used_payments = 0
+        used_invoices = 0
         try:
-            used_count = InvoicePayment.query.filter_by(
+            used_payments = InvoicePayment.query.filter_by(
                 payment_method_id=payment_method.id
             ).count()
         except Exception:
-            used_count = 0
+            used_payments = 0
 
-        if used_count == 0:
+        try:
+            used_invoices = Invoice.query.filter_by(
+                payment_method_id=payment_method.id
+            ).count()
+        except Exception:
+            used_invoices = 0
+
+        if used_payments == 0 and used_invoices == 0:
             db.session.delete(payment_method)
             db.session.commit()
             return jsonify({
-                'message': 'تم حذف وسيلة الدفع بنجاح (غير مرتبطة بدفعات)',
+                'message': 'تم حذف وسيلة الدفع بنجاح (غير مرتبطة بعمليات)',
                 'deleted': True,
                 'deactivated': False,
-                'used_in_invoices': used_count,
+                'used_in_invoices': used_invoices,
+                'used_in_payments': used_payments,
             }), 200
 
-        # إن كانت مستخدمة، نعطلها بدلاً من الحذف لتفادي قيود FK ولحفظ التاريخ
+        # إن كانت مستخدمة في دفعات/فواتير، نعطلها لتفادي قيود FK ولحفظ التاريخ
         payment_method.is_active = False
         db.session.commit()
 
         return jsonify({
-            'message': 'تم تعطيل وسيلة الدفع لأنها مستخدمة في فواتير سابقة',
+            'message': 'تم تعطيل وسيلة الدفع لأنها مستخدمة في عمليات سابقة',
             'deleted': False,
             'deactivated': True,
-            'used_in_invoices': used_count,
+            'used_in_invoices': used_invoices,
+            'used_in_payments': used_payments,
             'payment_method': payment_method.to_dict(),
         }), 200
         
