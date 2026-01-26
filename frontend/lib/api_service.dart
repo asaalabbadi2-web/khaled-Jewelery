@@ -3962,22 +3962,34 @@ class ApiService {
     return <SafeBoxModel>[];
   }
 
-  /// إنشاء سند تحويل بين الخزائن (ذهب فقط) وتحديث الـ Ledger فوراً.
+  /// إنشاء سند تحويل بين الخزائن (ذهب أو نقدي) وتحديث الـ Ledger فوراً.
   /// Endpoint: POST /safe-boxes/transfer-voucher
   ///
   /// ملاحظة: هذه الدالة لا تؤثر على أي شاشة/تدفق ما لم يتم استدعاؤها.
   Future<Map<String, dynamic>> createSafeBoxTransferVoucher({
     required int fromSafeBoxId,
     required int toSafeBoxId,
-    required Map<String, double> weights,
+    Map<String, double>? weights,
+    double? amountCash,
     String? notes,
     DateTime? date,
     String? approvedBy,
   }) async {
+    final hasWeights = weights != null && weights.isNotEmpty;
+    final hasCash = amountCash != null && amountCash > 0;
+
+    if (hasWeights && hasCash) {
+      throw ArgumentError('Provide either weights or amountCash, not both');
+    }
+    if (!hasWeights && !hasCash) {
+      throw ArgumentError('Provide weights (gold) or amountCash (cash)');
+    }
+
     final payload = <String, dynamic>{
       'from_safe_box_id': fromSafeBoxId,
       'to_safe_box_id': toSafeBoxId,
-      'weights': weights,
+      if (hasWeights) 'weights': weights,
+      if (hasCash) 'amount_cash': amountCash,
       if (notes != null) 'notes': notes,
       if (date != null) 'date': date.toIso8601String(),
       if (approvedBy != null) 'approved_by': approvedBy,

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
-import 'gold_safe_transfer_screen.dart';
+import 'safe_transfer_screen.dart';
 import 'safe_boxes_screen.dart';
 
 /// لوحة تحكم متقدمة لمراقبة خزائن الذهب
@@ -95,13 +95,15 @@ class _SafeBoxesDashboardScreenState extends State<SafeBoxesDashboardScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => GoldSafeTransferScreen(
+                  builder: (_) => SafeTransferScreen(
                     api: _api,
+                    isArabic: true,
+                    initialMode: 'gold',
                   ),
                 ),
               ).then((_) => _loadDashboardData());
             },
-            tooltip: 'تحويل ذهب',
+            tooltip: 'تحويل',
           ),
           // زر إدارة الخزائن
           IconButton(
@@ -479,70 +481,109 @@ final hasLowBalance = (safe.weightBalance?['18'] ?? 0) < 10 &&
                 topRight: Radius.circular(14),
               ),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: safe.isActive
-                        ? AppColors.primaryGold.withValues(alpha: 0.2)
-                        : Colors.grey.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.account_balance_wallet,
-                    color: safe.isActive ? AppColors.primaryGold : Colors.grey,
-                    size: 28,
-                  ),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: safe.isActive
+                            ? AppColors.primaryGold.withValues(alpha: 0.2)
+                            : Colors.grey.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        Icons.account_balance_wallet,
+                        color: safe.isActive ? AppColors.primaryGold : Colors.grey,
+                        size: 28,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            safe.name,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : Colors.grey[900],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                safe.isActive ? Icons.check_circle : Icons.cancel,
+                                size: 16,
+                                color: safe.isActive ? Colors.green : Colors.grey,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                safe.isActive ? 'نشط' : 'غير نشط',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: safe.isActive ? Colors.green : Colors.grey,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (hasLowBalance && safe.isActive) ...[
+                                const SizedBox(width: 12),
+                                Icon(
+                                  Icons.warning,
+                                  size: 16,
+                                  color: Colors.orange,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'رصيد منخفض',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.orange,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(height: 12),
+                // عرض الوزن الإجمالي بالعيار الرئيسي (21) قبل التوسيع
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGold.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: AppColors.primaryGold.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        safe.name,
+                        'الإجمالي (عيار رئيسي)',
                         style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white : Colors.grey[900],
+                          fontSize: 12,
+                          color: isDark ? Colors.grey[300] : Colors.grey[700],
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            safe.isActive ? Icons.check_circle : Icons.cancel,
-                            size: 16,
-                            color: safe.isActive ? Colors.green : Colors.grey,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            safe.isActive ? 'نشط' : 'غير نشط',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: safe.isActive ? Colors.green : Colors.grey,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (hasLowBalance && safe.isActive) ...[
-                            const SizedBox(width: 12),
-                            Icon(
-                              Icons.warning,
-                              size: 16,
-                              color: Colors.orange,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'رصيد منخفض',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.orange,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ],
+                      const SizedBox(width: 8),
+                      Text(
+                        '${(safe.totalWeightMainKarat ?? 0).toStringAsFixed(3)} جم',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primaryGold,
+                        ),
                       ),
                     ],
                   ),

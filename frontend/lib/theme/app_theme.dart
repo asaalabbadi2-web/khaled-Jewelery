@@ -22,6 +22,24 @@ class AppColors {
   static const Color karat22 = Color(0xFF4ECDC4); // تركواز
   static const Color karat24 = Color(0xFF9B59B6); // بنفسجي
 
+  static Color karatColorFor(dynamic karatOrKey) {
+    final s = (karatOrKey ?? '').toString();
+    final digits = s.replaceAll(RegExp(r'[^0-9]'), '');
+    final k = int.tryParse(digits.isNotEmpty ? digits : s) ?? 21;
+    switch (k) {
+      case 18:
+        return karat18;
+      case 21:
+        return karat21;
+      case 22:
+        return karat22;
+      case 24:
+        return karat24;
+      default:
+        return primaryGold;
+    }
+  }
+
   // ألوان الفواتير - للتفريق البصري بين أنواع الفواتير
   static const Color invoiceSaleNew = Color(
     0xFF2E7D32,

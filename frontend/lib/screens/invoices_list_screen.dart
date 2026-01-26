@@ -32,7 +32,7 @@ class InvoicesListScreen extends StatefulWidget {
   State<InvoicesListScreen> createState() => _InvoicesListScreenState();
 }
 
-class _InvoicesListScreenState extends State<InvoicesListScreen> {
+class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   List<dynamic> _invoices = [];
   List<dynamic> _filteredInvoices = [];
@@ -42,6 +42,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   int _itemsRevisionSnapshot = 0;
   VoidCallback? _itemsRevisionListener;
 
+  // Tab controller
+  late TabController _tabController;
+  static const List<String> _tabTypes = ['بيع', 'شراء', 'مرتجع'];
+  static const List<String> _tabTypesEn = ['Sales', 'Purchase', 'Returns'];
+
   // Filters
   String _searchQuery = '';
   String _selectedInvoiceType = 'all';
@@ -49,19 +54,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   DateTimeRange? _dateRange;
   String _sortBy = 'date';
   bool _sortAscending = false;
-
-  // Summary selector (stats only)
-  String _summaryInvoiceType = 'all';
-
-  // Statistics
-  final Map<String, dynamic> _statistics = {
-    'total_invoices': 0,
-    'total_amount': 0.0,
-    'paid_amount': 0.0,
-    'unpaid_amount': 0.0,
-    'vat_total': 0.0,
-    'sold_weight_total': 0.0,
-  };
 
   static const Map<String, String> _invoicePrefixLookup = {
     'بيع': 'SELL',
@@ -84,6 +76,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      if (!mounted) return;
+      setState(() {
+        // Rebuild to refresh statistics header/cards when tab changes.
+      });
+    });
     _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
     _itemsRevisionListener = () {
       _cachedItems = null;
@@ -95,6 +94,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     if (_itemsRevisionListener != null) {
       DataSyncBus.itemsRevision.removeListener(_itemsRevisionListener!);
     }
@@ -118,7 +118,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       setState(() {
         _invoices = invoices;
         _applyFilters();
-        _calculateStatistics();
       });
     } catch (e) {
       if (mounted) {
@@ -358,119 +357,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     } catch (e) {
       debugPrint('❌ خطأ في تطبيق الفلاتر: $e');
       _filteredInvoices = _invoices;
-    }
-  }
-
-  void _calculateStatistics() {
-    try {
-      final source = _filteredInvoices;
-      final summarySource = _summaryInvoiceType == 'all'
-          ? source
-          : source.where((inv) {
-              final invoiceType = (inv['invoice_type'] ?? '').toString().trim();
-              return invoiceType == _summaryInvoiceType;
-            }).toList();
-
-      _statistics['total_invoices'] = summarySource.length;
-
-      _statistics['total_amount'] = summarySource.fold(0.0, (sum, invoice) {
-        try {
-          final normalized = _normalizeStatus(
-            (invoice['status'] ?? '').toString(),
-          );
-          if (normalized == 'cancelled') return sum;
-          return sum + ((invoice['total'] ?? 0) as num).toDouble();
-        } catch (e) {
-          debugPrint('⚠️ خطأ في حساب الإجمالي: $e');
-          return sum;
-        }
-      });
-
-      _statistics['paid_amount'] = summarySource.fold(0.0, (sum, invoice) {
-        try {
-          final normalized = _normalizeStatus(
-            (invoice['status'] ?? '').toString(),
-          );
-          if (normalized == 'cancelled') return sum;
-
-          final total = _tryParseDouble(invoice['total']);
-          final paidCash = _tryParseDouble(
-            invoice['amount_paid'] ?? invoice['total_payments_amount'],
-          );
-          final barterTotal = _tryParseDouble(invoice['barter_total']);
-          final hasTotalSettledKey = invoice.containsKey('total_settled_amount');
-          final totalSettled = hasTotalSettledKey
-              ? _tryParseDouble(invoice['total_settled_amount'])
-              : (paidCash + barterTotal);
-          final paidClamped = totalSettled.clamp(0.0, total);
-          return sum + paidClamped;
-        } catch (e) {
-          debugPrint('⚠️ خطأ في حساب المدفوع: $e');
-          return sum;
-        }
-      });
-
-      _statistics['unpaid_amount'] = summarySource.fold(0.0, (sum, invoice) {
-        try {
-          final normalized = _normalizeStatus(
-            (invoice['status'] ?? '').toString(),
-          );
-          if (normalized == 'cancelled') return sum;
-
-          final total = _tryParseDouble(invoice['total']);
-          final paidCash = _tryParseDouble(
-            invoice['amount_paid'] ?? invoice['total_payments_amount'],
-          );
-          final barterTotal = _tryParseDouble(invoice['barter_total']);
-          final hasTotalSettledKey = invoice.containsKey('total_settled_amount');
-          final totalSettled = hasTotalSettledKey
-              ? _tryParseDouble(invoice['total_settled_amount'])
-              : (paidCash + barterTotal);
-          final remaining = (total - totalSettled).clamp(0.0, double.infinity);
-          return sum + remaining;
-        } catch (e) {
-          debugPrint('⚠️ خطأ في حساب المتبقي: $e');
-          return sum;
-        }
-      });
-
-      _statistics['vat_total'] = summarySource.fold(0.0, (sum, invoice) {
-        try {
-          final normalized = _normalizeStatus(
-            (invoice['status'] ?? '').toString(),
-          );
-          if (normalized == 'cancelled') return sum;
-          return sum + _tryParseDouble(invoice['total_tax']);
-        } catch (e) {
-          debugPrint('⚠️ خطأ في حساب الضريبة: $e');
-          return sum;
-        }
-      });
-
-      _statistics['sold_weight_total'] = summarySource.fold(0.0, (
-        sum,
-        invoice,
-      ) {
-        try {
-          final normalized = _normalizeStatus(
-            (invoice['status'] ?? '').toString(),
-          );
-          if (normalized == 'cancelled') return sum;
-          return sum + _extractInvoiceTotalWeight(invoice);
-        } catch (e) {
-          debugPrint('⚠️ خطأ في حساب وزن المبيعات: $e');
-          return sum;
-        }
-      });
-    } catch (e) {
-      debugPrint('❌ خطأ في حساب الإحصائيات: $e');
-      // قيم افتراضية في حالة الخطأ
-      _statistics['total_invoices'] = 0;
-      _statistics['total_amount'] = 0.0;
-      _statistics['paid_amount'] = 0.0;
-      _statistics['unpaid_amount'] = 0.0;
-      _statistics['vat_total'] = 0.0;
-      _statistics['sold_weight_total'] = 0.0;
     }
   }
 
@@ -768,6 +654,151 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     }
   }
 
+  List<dynamic> _getInvoicesForTabFromList(String tabType, List<dynamic> source) {
+    if (source.isEmpty) return [];
+
+    final normalizedLabel = tabType.trim().toLowerCase();
+    final isSalesTab = tabType == 'بيع' || normalizedLabel == 'sales';
+    final isPurchaseTab = tabType == 'شراء' || normalizedLabel == 'purchase';
+    final isReturnsTab = tabType == 'مرتجع' || normalizedLabel == 'returns';
+
+    bool isReturnInvoiceType(String type) {
+      final t = type.trim();
+      if (t.isEmpty) return false;
+      final lower = t.toLowerCase();
+      return t.contains('مرتجع') || lower.contains('return');
+    }
+
+    bool isSalesInvoiceType(String type) {
+      final t = type.trim();
+      if (t.isEmpty) return false;
+      if (isReturnInvoiceType(t)) return false;
+      final lower = t.toLowerCase();
+      return t.contains('بيع') || lower == 'sell' || lower.contains('sale');
+    }
+
+    bool isPurchaseInvoiceType(String type) {
+      final t = type.trim();
+      if (t.isEmpty) return false;
+      if (isReturnInvoiceType(t)) return false;
+      final lower = t.toLowerCase();
+      return t.contains('شراء') || lower == 'buy' || lower.contains('purchase');
+    }
+
+    return source.where((inv) {
+      final type = (inv['invoice_type'] ?? '').toString();
+      if (isReturnsTab) return isReturnInvoiceType(type);
+      if (isPurchaseTab) return isPurchaseInvoiceType(type);
+      if (isSalesTab) return isSalesInvoiceType(type);
+      return false;
+    }).toList();
+  }
+
+  // Calculate stats for the current tab (respects active filters)
+  Map<String, dynamic> _getTabStatistics(String tabType) {
+    final tabInvoices = _getInvoicesForTabFromList(tabType, _filteredInvoices);
+    final stats = <String, dynamic>{
+      'total_invoices': 0,
+      'total_amount': 0.0,
+      'paid_amount': 0.0,
+      'unpaid_amount': 0.0,
+      'vat_total': 0.0,
+      'sold_weight_total': 0.0,
+    };
+
+    if (tabInvoices.isEmpty) return stats;
+
+    try {
+      stats['total_invoices'] = tabInvoices.length;
+
+      stats['total_amount'] = tabInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+          return sum + ((invoice['total'] ?? 0) as num).toDouble();
+        } catch (e) {
+          return sum;
+        }
+      });
+
+      stats['paid_amount'] = tabInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+
+          final total = _tryParseDouble(invoice['total']);
+          final paidCash = _tryParseDouble(
+            invoice['amount_paid'] ?? invoice['total_payments_amount'],
+          );
+          final barterTotal = _tryParseDouble(invoice['barter_total']);
+          final hasTotalSettledKey = invoice.containsKey('total_settled_amount');
+          final totalSettled = hasTotalSettledKey
+              ? _tryParseDouble(invoice['total_settled_amount'])
+              : (paidCash + barterTotal);
+          final paidClamped = totalSettled.clamp(0.0, total);
+          return sum + paidClamped;
+        } catch (e) {
+          return sum;
+        }
+      });
+
+      stats['unpaid_amount'] = tabInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+
+          final total = _tryParseDouble(invoice['total']);
+          final paidCash = _tryParseDouble(
+            invoice['amount_paid'] ?? invoice['total_payments_amount'],
+          );
+          final barterTotal = _tryParseDouble(invoice['barter_total']);
+          final hasTotalSettledKey = invoice.containsKey('total_settled_amount');
+          final totalSettled = hasTotalSettledKey
+              ? _tryParseDouble(invoice['total_settled_amount'])
+              : (paidCash + barterTotal);
+          final remaining = (total - totalSettled).clamp(0.0, double.infinity);
+          return sum + remaining;
+        } catch (e) {
+          return sum;
+        }
+      });
+
+      stats['vat_total'] = tabInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+          return sum + _tryParseDouble(invoice['total_tax']);
+        } catch (e) {
+          return sum;
+        }
+      });
+
+      stats['sold_weight_total'] = tabInvoices.fold(0.0, (sum, invoice) {
+        try {
+          final normalized = _normalizeStatus(
+            (invoice['status'] ?? '').toString(),
+          );
+          if (normalized == 'cancelled') return sum;
+          return sum + _extractInvoiceTotalWeight(invoice);
+        } catch (e) {
+          return sum;
+        }
+      });
+    } catch (e) {
+      debugPrint('❌ خطأ في حساب إحصائيات التبويب: $e');
+    }
+
+    return stats;
+  }
+
   void _showSnackBar(String message, {required bool isError}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -785,7 +816,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
       _selectedStatus = 'all';
       _dateRange = null;
       _applyFilters();
-      _calculateStatistics();
     });
   }
 
@@ -796,6 +826,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final colorScheme = theme.colorScheme;
     final primary = colorScheme.primary;
     final scaffoldBackground = theme.scaffoldBackgroundColor;
+    final tabLabels = isAr ? _tabTypes : _tabTypesEn;
+    final tabIcons = [Icons.shopping_bag, Icons.shopping_cart, Icons.undo];
 
     return Directionality(
       textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
@@ -815,6 +847,23 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
               tooltip: isAr ? 'إزالة الفلاتر' : 'Clear Filters',
             ),
           ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(50),
+            child: TabBar(
+              controller: _tabController,
+              isScrollable: false,
+              labelColor: primary,
+              unselectedLabelColor: colorScheme.onSurface.withValues(alpha: 0.6),
+              indicatorColor: primary,
+              indicatorSize: TabBarIndicatorSize.label,
+              tabs: List.generate(tabLabels.length, (index) {
+                return Tab(
+                  icon: Icon(tabIcons[index]),
+                  text: tabLabels[index],
+                );
+              }),
+            ),
+          ),
         ),
         body: Column(
           children: [
@@ -824,7 +873,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
             // Filters Section
             _buildFiltersSection(),
 
-            // Invoices List
+            // TabBarView
             Expanded(
               child: _isLoading
                   ? Center(
@@ -832,9 +881,21 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                         valueColor: AlwaysStoppedAnimation<Color>(primary),
                       ),
                     )
-                  : _filteredInvoices.isEmpty
-                  ? _buildEmptyState()
-                  : _buildInvoicesList(),
+                  : TabBarView(
+                      controller: _tabController,
+                      children: List.generate(tabLabels.length, (index) {
+                        final tabInvoices = _getInvoicesForTabFromList(
+                          tabLabels[index],
+                          _filteredInvoices,
+                        );
+                        
+                        if (tabInvoices.isEmpty) {
+                          return _buildEmptyState();
+                        }
+                        
+                        return _buildTabContent(tabInvoices);
+                      }),
+                    ),
             ),
           ],
         ),
@@ -849,6 +910,33 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     );
   }
 
+  // Build content for each tab
+  Widget _buildTabContent(List<dynamic> tabInvoices) {
+    if (tabInvoices.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadInvoices,
+      color: Theme.of(context).colorScheme.primary,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: tabInvoices.length,
+        itemBuilder: (context, index) {
+          try {
+            final invoice = tabInvoices[index];
+            return _buildInvoiceCard(invoice);
+          } catch (e, stackTrace) {
+            debugPrint('❌ خطأ في بناء بطاقة الفاتورة $index: $e');
+            debugPrint('Stack: $stackTrace');
+            return SizedBox.shrink();
+          }
+        },
+      ),
+    );
+  }
+
   Widget _buildStatisticsSection() {
     final isAr = widget.isArabic;
     final theme = Theme.of(context);
@@ -858,6 +946,15 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
     final statsBackground = colorScheme.surfaceContainerHighest.withValues(
       alpha: isDark ? 0.35 : 0.2,
     );
+
+    // Get current tab type
+    final tabLabels = isAr ? _tabTypes : _tabTypesEn;
+    final currentTabType = _tabController.index < tabLabels.length 
+        ? tabLabels[_tabController.index] 
+        : tabLabels[0];
+    
+    // Get statistics for current tab
+    final tabStats = _getTabStatistics(currentTabType);
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -879,7 +976,20 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   ),
                 ),
               ),
-              _buildSummaryTypeDropdown(isAr),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  currentTabType,
+                  style: textTheme.labelMedium?.copyWith(
+                    color: colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -892,7 +1002,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                   child: _buildStatCard(
                     icon: Icons.receipt_long,
                     title: isAr ? 'إجمالي الفواتير' : 'Total Invoices',
-                    value: _statistics['total_invoices'].toString(),
+                    value: tabStats['total_invoices'].toString(),
                     highlightColor: Colors.blue,
                   ),
                 ),
@@ -905,7 +1015,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     value: NumberFormat(
                       '#,##0',
                       isAr ? 'ar' : 'en',
-                    ).format(_statistics['total_amount']),
+                    ).format(tabStats['total_amount']),
                     highlightColor: colorScheme.primary,
                   ),
                 ),
@@ -918,7 +1028,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     value: NumberFormat(
                       '#,##0',
                       isAr ? 'ar' : 'en',
-                    ).format(_statistics['paid_amount']),
+                    ).format(tabStats['paid_amount']),
                     highlightColor: Colors.green,
                   ),
                 ),
@@ -931,7 +1041,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     value: NumberFormat(
                       '#,##0',
                       isAr ? 'ar' : 'en',
-                    ).format(_statistics['unpaid_amount']),
+                    ).format(tabStats['unpaid_amount']),
                     highlightColor: Colors.orange,
                   ),
                 ),
@@ -944,7 +1054,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     value: NumberFormat(
                       '#,##0.00',
                       isAr ? 'ar' : 'en',
-                    ).format(_statistics['vat_total']),
+                    ).format(tabStats['vat_total']),
                     highlightColor: colorScheme.tertiary,
                   ),
                 ),
@@ -957,7 +1067,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     value: NumberFormat(
                       '#,##0.###',
                       isAr ? 'ar' : 'en',
-                    ).format(_statistics['sold_weight_total']),
+                    ).format(tabStats['sold_weight_total']),
                     highlightColor: colorScheme.secondary,
                   ),
                 ),
@@ -965,55 +1075,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildSummaryTypeDropdown(bool isArabic) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final textTheme = theme.textTheme;
-    final items = _buildInvoiceTypeItems(isArabic);
-
-    final hasMatch = items.any((item) => item['value'] == _summaryInvoiceType);
-    final fallbackValue = items.isNotEmpty
-        ? (items.first['value'] ?? _summaryInvoiceType)
-        : _summaryInvoiceType;
-    final effectiveValue = hasMatch ? _summaryInvoiceType : fallbackValue;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-      decoration: BoxDecoration(
-        color: colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.15)),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: effectiveValue,
-          isDense: true,
-          icon: Icon(
-            Icons.arrow_drop_down,
-            color: colorScheme.onSurface.withValues(alpha: 0.7),
-          ),
-          dropdownColor: theme.cardTheme.color ?? colorScheme.surface,
-          style: textTheme.bodySmall?.copyWith(color: colorScheme.onSurface),
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() {
-              _summaryInvoiceType = value;
-              _calculateStatistics();
-            });
-          },
-          items: items
-              .map(
-                (item) => DropdownMenuItem<String>(
-                  value: item['value']!,
-                  child: Text(item['label']!, overflow: TextOverflow.ellipsis),
-                ),
-              )
-              .toList(),
-        ),
       ),
     );
   }
@@ -1135,7 +1196,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     setState(() {
                       _searchQuery = value;
                       _applyFilters();
-                      _calculateStatistics();
                     });
                   },
                 ),
@@ -1184,7 +1244,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     setState(() {
                       _dateRange = picked;
                       _applyFilters();
-                      _calculateStatistics();
                     });
                   }
                 },
@@ -1208,7 +1267,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     setState(() {
                       _selectedInvoiceType = value;
                       _applyFilters();
-                      _calculateStatistics();
                     });
                   },
                 ),
@@ -1226,7 +1284,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     setState(() {
                       _selectedStatus = value;
                       _applyFilters();
-                      _calculateStatistics();
                     });
                   },
                 ),
@@ -1252,7 +1309,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
                     setState(() {
                       _sortBy = value;
                       _applyFilters();
-                      _calculateStatistics();
                     });
                   },
                 ),
@@ -1401,34 +1457,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> {
           }).toList(),
           onChanged: onChanged,
         ),
-      ),
-    );
-  }
-
-  Widget _buildInvoicesList() {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return RefreshIndicator(
-      onRefresh: _loadInvoices,
-      color: colorScheme.primary,
-      backgroundColor: colorScheme.surface,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _filteredInvoices.length,
-        // Performance optimizations
-        addAutomaticKeepAlives: false,
-        addRepaintBoundaries: true,
-        cacheExtent: 500,
-        itemBuilder: (context, index) {
-          try {
-            final invoice = _filteredInvoices[index];
-            return _buildInvoiceCard(invoice);
-          } catch (e, stackTrace) {
-            debugPrint('❌ خطأ في بناء بطاقة الفاتورة $index: $e');
-            debugPrint('Stack: $stackTrace');
-            return SizedBox.shrink();
-          }
-        },
       ),
     );
   }

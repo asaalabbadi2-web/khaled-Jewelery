@@ -18387,18 +18387,23 @@ def unify_gold_safe_boxes():
 @api.route('/safe-boxes/transfer-voucher', methods=['POST'])
 @require_permission('safe_boxes.edit')
 def create_safe_box_transfer_voucher():
-    """Create a gold safe-box transfer voucher and update the SafeBox ledger immediately.
+    """Create a safe-box transfer voucher and update the SafeBox ledger immediately.
 
-    This is the execution tool for moving employee custody (gold safe) back to central safe.
+    Supports:
+    - Gold transfer between gold safes (weights by karat)
+    - Cash transfer between non-gold safes (cash/bank/check/clearing) using amount_cash
 
     Body JSON:
-      - from_safe_box_id: int (required)
-      - to_safe_box_id: int (required)
-      - weights: {"24k": float, "22k": float, "21k": float, "18k": float} (optional)
-        OR weight_24k/weight_22k/weight_21k/weight_18k (optional)
-      - date: ISO datetime (optional)
-      - notes: str (optional)
-      - created_by / approved_by: str (optional)
+        - from_safe_box_id: int (required)
+        - to_safe_box_id: int (required)
+        - Gold mode:
+                - weights: {"24k": float, "22k": float, "21k": float, "18k": float} (optional)
+                    OR weight_24k/weight_22k/weight_21k/weight_18k (optional)
+        - Cash mode:
+                - amount_cash: float (required)  (alias: amount)
+        - date: ISO datetime (optional)
+        - notes: str (optional)
+        - created_by / approved_by: str (optional)
 
     Result: creates an approved adjustment Voucher + JournalEntry + SafeBoxTransaction rows (out/in).
     """
@@ -18422,65 +18427,107 @@ def create_safe_box_transfer_voucher():
     from_safe = SafeBox.query.get_or_404(from_safe_box_id)
     to_safe = SafeBox.query.get_or_404(to_safe_box_id)
 
-    if (from_safe.safe_type or '').strip() != 'gold' or (to_safe.safe_type or '').strip() != 'gold':
-        return jsonify({'error': 'transfer_requires_gold_safe_boxes'}), 400
+    from_type = (from_safe.safe_type or '').strip().lower()
+    to_type = (to_safe.safe_type or '').strip().lower()
 
     if not bool(getattr(from_safe, 'is_active', True)) or not bool(getattr(to_safe, 'is_active', True)):
         return jsonify({'error': 'safe_box_inactive'}), 400
 
-    weights = data.get('weights') or {}
+    # Prevent mixing gold transfer with cash transfer in a single request.
+    if ('gold' in {from_type, to_type}) and not (from_type == 'gold' and to_type == 'gold'):
+        return jsonify({'error': 'cannot_mix_gold_and_cash_safe_boxes'}), 400
+
     def _f(v):
         try:
             return float(v or 0.0)
         except Exception:
             return 0.0
 
-    w_24 = _f(weights.get('24k') if isinstance(weights, dict) else None)
-    w_22 = _f(weights.get('22k') if isinstance(weights, dict) else None)
-    w_21 = _f(weights.get('21k') if isinstance(weights, dict) else None)
-    w_18 = _f(weights.get('18k') if isinstance(weights, dict) else None)
+    is_gold_transfer = (from_type == 'gold' and to_type == 'gold')
 
-    # Allow alternate flat fields
-    if w_24 == 0.0:
-        w_24 = _f(data.get('weight_24k'))
-    if w_22 == 0.0:
-        w_22 = _f(data.get('weight_22k'))
-    if w_21 == 0.0:
-        w_21 = _f(data.get('weight_21k'))
-    if w_18 == 0.0:
-        w_18 = _f(data.get('weight_18k'))
+    # ------------------------------------------------------------------
+    # Gold transfer (weights)
+    # ------------------------------------------------------------------
+    if is_gold_transfer:
+        weights = data.get('weights') or {}
 
-    for v in (w_24, w_22, w_21, w_18):
-        if v < 0:
-            return jsonify({'error': 'negative_weight_not_allowed'}), 400
+        w_24 = _f(weights.get('24k') if isinstance(weights, dict) else None)
+        w_22 = _f(weights.get('22k') if isinstance(weights, dict) else None)
+        w_21 = _f(weights.get('21k') if isinstance(weights, dict) else None)
+        w_18 = _f(weights.get('18k') if isinstance(weights, dict) else None)
 
-    if (w_24 + w_22 + w_21 + w_18) <= 0:
-        return jsonify({'error': 'no_weights_provided'}), 400
+        # Allow alternate flat fields
+        if w_24 == 0.0:
+            w_24 = _f(data.get('weight_24k'))
+        if w_22 == 0.0:
+            w_22 = _f(data.get('weight_22k'))
+        if w_21 == 0.0:
+            w_21 = _f(data.get('weight_21k'))
+        if w_18 == 0.0:
+            w_18 = _f(data.get('weight_18k'))
 
-    # Compute current source balance from ledger and enforce sufficiency.
-    q = SafeBoxTransaction.query.filter_by(safe_box_id=from_safe_box_id)
-    w_in = {
-        '18k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_18k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
-        '21k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_21k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
-        '22k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_22k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
-        '24k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_24k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
-    }
-    w_out = {
-        '18k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_18k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
-        '21k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_21k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
-        '22k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_22k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
-        '24k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_24k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
-    }
-    w_bal = {k: float(w_in.get(k, 0.0)) - float(w_out.get(k, 0.0)) for k in ['18k', '21k', '22k', '24k']}
-    eps = 1e-6
-    if (w_24 - (w_bal.get('24k', 0.0) or 0.0)) > eps:
-        return jsonify({'error': 'insufficient_balance_24k', 'available': round(w_bal.get('24k', 0.0), 3)}), 400
-    if (w_22 - (w_bal.get('22k', 0.0) or 0.0)) > eps:
-        return jsonify({'error': 'insufficient_balance_22k', 'available': round(w_bal.get('22k', 0.0), 3)}), 400
-    if (w_21 - (w_bal.get('21k', 0.0) or 0.0)) > eps:
-        return jsonify({'error': 'insufficient_balance_21k', 'available': round(w_bal.get('21k', 0.0), 3)}), 400
-    if (w_18 - (w_bal.get('18k', 0.0) or 0.0)) > eps:
-        return jsonify({'error': 'insufficient_balance_18k', 'available': round(w_bal.get('18k', 0.0), 3)}), 400
+        for v in (w_24, w_22, w_21, w_18):
+            if v < 0:
+                return jsonify({'error': 'negative_weight_not_allowed'}), 400
+
+        if (w_24 + w_22 + w_21 + w_18) <= 0:
+            return jsonify({'error': 'no_weights_provided'}), 400
+
+        # Compute current source balance from ledger and enforce sufficiency.
+        q = SafeBoxTransaction.query.filter_by(safe_box_id=from_safe_box_id)
+        w_in = {
+            '18k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_18k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+            '21k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_21k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+            '22k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_22k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+            '24k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_24k), 0.0)).filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0),
+        }
+        w_out = {
+            '18k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_18k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+            '21k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_21k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+            '22k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_22k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+            '24k': float(q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.weight_24k), 0.0)).filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0),
+        }
+        w_bal = {k: float(w_in.get(k, 0.0)) - float(w_out.get(k, 0.0)) for k in ['18k', '21k', '22k', '24k']}
+        eps = 1e-6
+        if (w_24 - (w_bal.get('24k', 0.0) or 0.0)) > eps:
+            return jsonify({'error': 'insufficient_balance_24k', 'available': round(w_bal.get('24k', 0.0), 3)}), 400
+        if (w_22 - (w_bal.get('22k', 0.0) or 0.0)) > eps:
+            return jsonify({'error': 'insufficient_balance_22k', 'available': round(w_bal.get('22k', 0.0), 3)}), 400
+        if (w_21 - (w_bal.get('21k', 0.0) or 0.0)) > eps:
+            return jsonify({'error': 'insufficient_balance_21k', 'available': round(w_bal.get('21k', 0.0), 3)}), 400
+        if (w_18 - (w_bal.get('18k', 0.0) or 0.0)) > eps:
+            return jsonify({'error': 'insufficient_balance_18k', 'available': round(w_bal.get('18k', 0.0), 3)}), 400
+
+    # ------------------------------------------------------------------
+    # Cash transfer (amount_cash)
+    # ------------------------------------------------------------------
+    else:
+        amount_cash = _f(data.get('amount_cash') or data.get('amount') or data.get('cash_amount'))
+        if amount_cash <= 0:
+            return jsonify({'error': 'amount_cash_required'}), 400
+
+        if amount_cash < 0:
+            return jsonify({'error': 'negative_amount_not_allowed'}), 400
+
+        # Compute current source cash balance from ledger and enforce sufficiency.
+        q = SafeBoxTransaction.query.filter_by(safe_box_id=from_safe_box_id)
+        cash_in = float(
+            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(SafeBoxTransaction.direction == 'in')
+            .scalar() or 0.0
+        )
+        cash_out = float(
+            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(SafeBoxTransaction.direction == 'out')
+            .scalar() or 0.0
+        )
+        cash_bal = cash_in - cash_out
+        eps = 1e-6
+        if (amount_cash - cash_bal) > eps:
+            return jsonify({'error': 'insufficient_cash_balance', 'available': round(float(cash_bal), 2)}), 400
+
+        # Reuse existing variables to minimize changes below.
+        w_24 = w_22 = w_21 = w_18 = 0.0
 
     created_by = (data.get('approved_by') or data.get('created_by') or 'system')
     notes = (data.get('notes') or '').strip() or None
@@ -18490,29 +18537,45 @@ def create_safe_box_transfer_voucher():
     except Exception:
         return jsonify({'error': 'invalid_date'}), 400
 
-    # Build balanced gold account lines (credit from_safe.account, debit to_safe.account)
-    def _line(account_id: int, *, line_type: str, karat: int, amount: float):
-        return VoucherAccountLine(
-            account_id=account_id,
-            line_type=line_type,
-            amount_type='gold',
-            amount=float(amount),
-            karat=float(karat),
-        )
-
     lines = []
-    if w_24 > 0:
-        lines.append(_line(to_safe.account_id, line_type='debit', karat=24, amount=w_24))
-        lines.append(_line(from_safe.account_id, line_type='credit', karat=24, amount=w_24))
-    if w_22 > 0:
-        lines.append(_line(to_safe.account_id, line_type='debit', karat=22, amount=w_22))
-        lines.append(_line(from_safe.account_id, line_type='credit', karat=22, amount=w_22))
-    if w_21 > 0:
-        lines.append(_line(to_safe.account_id, line_type='debit', karat=21, amount=w_21))
-        lines.append(_line(from_safe.account_id, line_type='credit', karat=21, amount=w_21))
-    if w_18 > 0:
-        lines.append(_line(to_safe.account_id, line_type='debit', karat=18, amount=w_18))
-        lines.append(_line(from_safe.account_id, line_type='credit', karat=18, amount=w_18))
+    if is_gold_transfer:
+        # Build balanced gold account lines (credit from_safe.account, debit to_safe.account)
+        def _line(account_id: int, *, line_type: str, karat: int, amount: float):
+            return VoucherAccountLine(
+                account_id=account_id,
+                line_type=line_type,
+                amount_type='gold',
+                amount=float(amount),
+                karat=float(karat),
+            )
+
+        if w_24 > 0:
+            lines.append(_line(to_safe.account_id, line_type='debit', karat=24, amount=w_24))
+            lines.append(_line(from_safe.account_id, line_type='credit', karat=24, amount=w_24))
+        if w_22 > 0:
+            lines.append(_line(to_safe.account_id, line_type='debit', karat=22, amount=w_22))
+            lines.append(_line(from_safe.account_id, line_type='credit', karat=22, amount=w_22))
+        if w_21 > 0:
+            lines.append(_line(to_safe.account_id, line_type='debit', karat=21, amount=w_21))
+            lines.append(_line(from_safe.account_id, line_type='credit', karat=21, amount=w_21))
+        if w_18 > 0:
+            lines.append(_line(to_safe.account_id, line_type='debit', karat=18, amount=w_18))
+            lines.append(_line(from_safe.account_id, line_type='credit', karat=18, amount=w_18))
+    else:
+        # Cash transfer: debit to_safe, credit from_safe.
+        amount_cash = float(amount_cash)
+        lines.append(VoucherAccountLine(
+            account_id=to_safe.account_id,
+            line_type='debit',
+            amount_type='cash',
+            amount=amount_cash,
+        ))
+        lines.append(VoucherAccountLine(
+            account_id=from_safe.account_id,
+            line_type='credit',
+            amount_type='cash',
+            amount=amount_cash,
+        ))
 
     try:
         # Generate voucher number with collision guard (rare)
@@ -18530,9 +18593,13 @@ def create_safe_box_transfer_voucher():
             voucher_type='adjustment',
             date=voucher_dt,
             party_type=None,
-            description=f"تحويل خزنة ذهب: {from_safe.name} → {to_safe.name}",
-            amount_cash=0.0,
-            amount_gold=float(w_24 + w_22 + w_21 + w_18),
+            description=(
+                f"تحويل خزنة ذهب: {from_safe.name} → {to_safe.name}"
+                if is_gold_transfer
+                else f"تحويل خزنة: {from_safe.name} → {to_safe.name}"
+            ),
+            amount_cash=(0.0 if is_gold_transfer else float(amount_cash)),
+            amount_gold=(float(w_24 + w_22 + w_21 + w_18) if is_gold_transfer else 0.0),
             reference_type='manual',
             reference_number=None,
             notes=notes,
@@ -18571,12 +18638,16 @@ def create_safe_box_transfer_voucher():
             'transfer': {
                 'from_safe_box_id': from_safe.id,
                 'to_safe_box_id': to_safe.id,
-                'weights': {
-                    '24k': round(float(w_24), 3),
-                    '22k': round(float(w_22), 3),
-                    '21k': round(float(w_21), 3),
-                    '18k': round(float(w_18), 3),
-                },
+                'type': ('gold' if is_gold_transfer else 'cash'),
+                **({'amount_cash': round(float(amount_cash), 2)} if not is_gold_transfer else {}),
+                **({
+                    'weights': {
+                        '24k': round(float(w_24), 3),
+                        '22k': round(float(w_22), 3),
+                        '21k': round(float(w_21), 3),
+                        '18k': round(float(w_18), 3),
+                    },
+                } if is_gold_transfer else {}),
             },
         }), 201
     except ValueError as e:
@@ -18750,6 +18821,8 @@ def _create_clearing_settlement_voucher(
 
     commission_vat_account = None
     if fee_vat > 0:
+        # Prefer a dedicated account for VAT on commissions; if not configured,
+        # fall back to the generic VAT receivable (input VAT) account.
         commission_vat_account_id = (
             commission_vat_account_id
             or get_account_id_for_mapping('بيع', 'commission_vat')
@@ -18757,6 +18830,15 @@ def _create_clearing_settlement_voucher(
         )
         if commission_vat_account_id:
             commission_vat_account = Account.query.get(commission_vat_account_id)
+
+        if not commission_vat_account:
+            fallback_vat_id = (
+                get_account_id_for_mapping('بيع', 'vat_receivable')
+                or _get_default_account_id('vat_receivable')
+            )
+            if fallback_vat_id:
+                commission_vat_account = Account.query.get(fallback_vat_id)
+
         if not commission_vat_account:
             raise ValueError('commission_vat_account_not_found')
 

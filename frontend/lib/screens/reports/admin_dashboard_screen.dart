@@ -1576,7 +1576,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     final anyExpanded = _expandedVaultSafeBoxId != null;
     // Give cards enough vertical room to avoid RenderFlex overflow.
-    final listHeight = anyExpanded ? _s(240) : _s(132);
+    final listHeight = anyExpanded ? _s(240) : _s(148);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1730,35 +1730,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         ? totalMain
         : (hasWeightBreakdown ? totalMainFallback() : 0.0);
 
-    Color mainKaratChipColor(int karat) {
-      switch (karat) {
-        case 18:
-          return AppColors.karat18;
-        case 21:
-          return AppColors.karat21;
-        case 22:
-          return AppColors.karat22;
-        case 24:
-          return AppColors.karat24;
-        default:
-          return AppColors.primaryGold;
-      }
-    }
+    final physicalTotal = hasWeightBreakdown ? (w18 + w21 + w22 + w24) : 0.0;
 
     IconData icon;
     Color color;
     String subtitle;
     double primaryValue;
     String Function(double) primaryFormatter;
+    String? primaryCaption;
 
     switch (safeType) {
       case 'gold':
         icon = Icons.auto_awesome;
         color = AppColors.primaryGold;
-        // Always show the main-karat equivalent total for gold safes.
-        primaryValue = (totalMainEffective > 0 ? totalMainEffective : goldBalance);
+        // Collapsed: show main-karat equivalent (dynamic main karat).
+        // Expanded: show physical total across all karats.
+        primaryValue = isExpanded ? physicalTotal : totalMainEffective;
         primaryFormatter = _formatWeight;
         subtitle = isArabic ? 'ذهب' : 'Gold';
+        primaryCaption = isExpanded
+            ? (isArabic
+                ? 'إجمالي فعلي (جميع العيارات)'
+                : 'Physical total (all karats)')
+            : (isArabic
+                ? 'مكافئ العيار الرئيسي (${displayMainKarat}k)'
+                : 'Main karat equivalent (${displayMainKarat}k)');
         break;
       case 'bank':
         icon = Icons.account_balance;
@@ -1809,14 +1805,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   buildDetailChip('22k', _formatWeight(w22), chipColor: AppColors.karat22),
                   buildDetailChip('21k', _formatWeight(w21), chipColor: AppColors.karat21),
                   buildDetailChip('18k', _formatWeight(w18), chipColor: AppColors.karat18),
-                  if ((w18.abs() + w21.abs() + w22.abs() + w24.abs()) > 0)
-                    buildDetailChip(
-                      isArabic
-                          ? 'إجمالي (محول لعيار $displayMainKarat)'
-                          : 'Total (converted to ${displayMainKarat}k)',
-                      _formatWeight(totalMainEffective),
-                      chipColor: mainKaratChipColor(displayMainKarat),
-                    ),
                 ],
               )
             : Wrap(
@@ -2003,6 +1991,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                           ),
                           if (!isExpanded) const Spacer(),
                           SizedBox(height: _s(10)),
+                          if (primaryCaption != null) ...[
+                            Text(
+                              primaryCaption,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontSize: _s(10.5),
+                                color: theme.hintColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            SizedBox(height: _s(6)),
+                          ],
                           _AnimatedValueText(
                             value: primaryValue,
                             formatter: primaryFormatter,
@@ -2248,12 +2249,6 @@ class _SafeBoxHeroDetailsScreenState extends State<_SafeBoxHeroDetailsScreen> {
     return double.tryParse(v?.toString() ?? '') ?? 0.0;
   }
 
-  int _asInt(dynamic v) {
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    return int.tryParse(v?.toString() ?? '') ?? 0;
-  }
-
   double _sbWeight(Map<String, dynamic> sb, String key) {
     final wb = sb['weight_balance'];
     if (wb is Map) {
@@ -2325,16 +2320,12 @@ class _SafeBoxHeroDetailsScreenState extends State<_SafeBoxHeroDetailsScreen> {
     final name = _safeBox['name'] ?? '-';
     final safeType = _safeBox['safe_type'] ?? 'cash';
     final cashBalance = _asDouble(_safeBox['balance_cash']);
-    final goldBalance = _asDouble(_safeBox['balance_gold_21k']);
     final hasActivity = _safeBox['has_recent_activity'] == true;
 
     final w18 = _sbWeight(_safeBox, '18k');
     final w21 = _sbWeight(_safeBox, '21k');
     final w22 = _sbWeight(_safeBox, '22k');
     final w24 = _sbWeight(_safeBox, '24k');
-    final totalMain = _asDouble(_safeBox['total_weight_main_karat']);
-    final mainKaratFromApi = _asInt(_safeBox['main_karat']);
-    final displayMainKarat = mainKaratFromApi > 0 ? mainKaratFromApi : 21;
 
     IconData icon;
     Color color;
@@ -2502,17 +2493,10 @@ class _SafeBoxHeroDetailsScreenState extends State<_SafeBoxHeroDetailsScreen> {
                     spacing: _s(context, 10),
                     runSpacing: _s(context, 10),
                     children: [
-                      buildDetailChip('24k', _weightFmt(w24)),
-                      buildDetailChip('22k', _weightFmt(w22)),
-                      buildDetailChip('21k', _weightFmt(w21)),
-                      buildDetailChip('18k', _weightFmt(w18)),
-                      buildDetailChip(
-                        widget.isArabic
-                            ? 'إجمالي (محول لعيار $displayMainKarat)'
-                            : 'Total (converted to ${displayMainKarat}k)',
-                        _weightFmt(totalMain > 0 ? totalMain : goldBalance),
-                        chipColor: AppColors.primaryGold,
-                      ),
+                      buildDetailChip('24k', _weightFmt(w24), chipColor: AppColors.karat24),
+                      buildDetailChip('22k', _weightFmt(w22), chipColor: AppColors.karat22),
+                      buildDetailChip('21k', _weightFmt(w21), chipColor: AppColors.karat21),
+                      buildDetailChip('18k', _weightFmt(w18), chipColor: AppColors.karat18),
                     ],
                   )
                 else

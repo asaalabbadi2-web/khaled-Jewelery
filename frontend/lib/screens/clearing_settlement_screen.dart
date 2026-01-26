@@ -40,7 +40,12 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
   bool _autoCalcFee = true;
   bool _updatingFee = false;
-  bool _feeAlreadyAppliedInInvoice = true;
+  bool _feeAlreadyAppliedInInvoice = false;
+
+  // VAT settings (used for journal preview; backend is source of truth)
+  bool _taxEnabled = true;
+  double _taxRate = 0.15;
+  bool _settingsLoaded = false;
 
   List<SafeBoxModel> _safeBoxes = <SafeBoxModel>[];
   List<Map<String, dynamic>> _accounts = <Map<String, dynamic>>[];
@@ -94,6 +99,32 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
           .whereType<Map<String, dynamic>>()
           .map((m) => m)
           .toList();
+
+      // Load settings for VAT rate (best-effort)
+      bool taxEnabled = true;
+      double taxRate = 0.15;
+      bool settingsLoaded = false;
+      try {
+        final settings = await _api.getSettings();
+        final rawEnabled = settings['tax_enabled'];
+        final rawRate = settings['tax_rate'];
+        taxEnabled = (rawEnabled is bool)
+            ? rawEnabled
+            : (rawEnabled?.toString().toLowerCase() == 'true');
+        double parsedRate = 0.15;
+        if (rawRate is num) {
+          parsedRate = rawRate.toDouble();
+        } else {
+          parsedRate = double.tryParse(rawRate?.toString() ?? '') ?? 0.15;
+        }
+        if (parsedRate > 1.0) parsedRate = parsedRate / 100.0;
+        if (parsedRate < 0) parsedRate = parsedRate.abs();
+        taxRate = parsedRate;
+        settingsLoaded = true;
+      } catch (_) {
+        // ignore, keep defaults
+        settingsLoaded = false;
+      }
 
       SafeBoxModel? defaultClearing;
       SafeBoxModel? defaultBank;
@@ -169,13 +200,16 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
         _accounts = accounts;
         _clearingSafe = defaultClearing;
         _bankSafe = defaultBank;
+        _taxEnabled = taxEnabled;
+        _taxRate = taxRate;
+        _settingsLoaded = settingsLoaded;
         _loading = false;
       });
 
       // Apply default fee policy based on the selected clearing safe (if it maps to a payment method).
       _applyFeePolicyFromClearingSafe();
 
-      // Default policy: fee is already applied at invoice time, so don't double-deduct here.
+      // If policy indicates fee was already applied at invoice time, disable fee inputs to avoid double-deduction.
       if (_feeAlreadyAppliedInInvoice) {
         setState(() {
           _autoCalcFee = false;
@@ -228,6 +262,236 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
   String _formatMoney(double v) {
     return v.toStringAsFixed(2);
+  }
+
+  double _round2(double v) => double.tryParse(v.toStringAsFixed(2)) ?? v;
+
+  String _accountNameById(int accountId) {
+    for (final a in _accounts) {
+      final rawId = a['id'];
+      final id = rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
+      if (id != null && id == accountId) {
+        final name = (a['name'] ?? '').toString();
+        final number = (a['account_number'] ?? a['accountNumber'] ?? '').toString();
+        if (number.isNotEmpty) return '$number - $name';
+        return name;
+      }
+    }
+    return 'حساب #$accountId';
+  }
+
+  double _computeFeeVat(double fee) {
+    if (_feeAlreadyAppliedInInvoice) return 0.0;
+    if (!_taxEnabled) return 0.0;
+    if (fee <= 0) return 0.0;
+    return _round2(fee * _taxRate);
+  }
+
+  List<Map<String, dynamic>> _buildJournalPreviewLines({
+    required double gross,
+    required double fee,
+    required double feeVat,
+    required double net,
+  }) {
+    final lines = <Map<String, dynamic>>[];
+
+    final bank = _bankSafe;
+    final clearing = _clearingSafe;
+
+    if (bank != null && net > 0) {
+      lines.add({
+        'side': 'debit',
+        'label': 'مدين',
+        'account': '${bank.name} — ${_accountNameById(bank.accountId)}',
+        'amount': _round2(net),
+      });
+    }
+
+    if (fee > 0) {
+      final feeAccName = (_feeAccount?['name'] ?? '').toString();
+      lines.add({
+        'side': 'debit',
+        'label': 'مدين',
+        'account': feeAccName.isNotEmpty ? feeAccName : 'مصروف العمولة (غير محدد)',
+        'amount': _round2(fee),
+      });
+    }
+
+    if (feeVat > 0) {
+      lines.add({
+        'side': 'debit',
+        'label': 'مدين',
+        'account': 'ضريبة عمولة التحصيل (commission_vat / vat_receivable)',
+        'amount': _round2(feeVat),
+      });
+    }
+
+    if (clearing != null) {
+      lines.add({
+        'side': 'credit',
+        'label': 'دائن',
+        'account': '${clearing.name} — ${_accountNameById(clearing.accountId)}',
+        'amount': _round2(gross),
+      });
+    }
+
+    return lines;
+  }
+
+  Future<bool> _confirmJournalPreview({
+    required double gross,
+    required double fee,
+    required double feeVat,
+    required double net,
+  }) async {
+    final lines = _buildJournalPreviewLines(
+      gross: gross,
+      fee: fee,
+      feeVat: feeVat,
+      net: net,
+    );
+
+    final debitTotal = _round2(lines
+        .where((l) => l['side'] == 'debit')
+        .fold<double>(0.0, (sum, l) => sum + (l['amount'] as double? ?? 0.0)));
+    final creditTotal = _round2(lines
+        .where((l) => l['side'] == 'credit')
+        .fold<double>(0.0, (sum, l) => sum + (l['amount'] as double? ?? 0.0)));
+
+    final isBalanced = (debitTotal - creditTotal).abs() <= 0.02;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('ملخص القيد قبل الحفظ'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: theme.AppColors.primaryGold.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('الإجمالي: ${_formatMoney(gross)}'),
+                      Text('العمولة: ${_formatMoney(fee)}'),
+                      if (feeVat > 0)
+                        Text(
+                          'ضريبة العمولة: ${_formatMoney(feeVat)}'
+                          '${_settingsLoaded ? '' : ' (تقديري)'}',
+                        ),
+                      Text('الصافي إلى البنك: ${_formatMoney(net)}'),
+                      const SizedBox(height: 6),
+                      Text(
+                        _feeAlreadyAppliedInInvoice
+                            ? 'ملاحظة: العمولة محسوبة في الفاتورة (لن تُخصم هنا).'
+                            : 'ملاحظة: سيتم تسجيل العمولة أثناء التسوية.',
+                        style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text('سطور القيد:', style: TextStyle(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                ...lines.map((l) {
+                  final side = (l['label'] ?? '').toString();
+                  final account = (l['account'] ?? '').toString();
+                  final amount = (l['amount'] as double? ?? 0.0);
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: (side == 'مدين'
+                                    ? theme.AppColors.success
+                                    : theme.AppColors.error)
+                                .withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            side,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: side == 'مدين'
+                                  ? theme.AppColors.success
+                                  : theme.AppColors.error,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            account,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          _formatMoney(amount),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'إجمالي المدين: ${_formatMoney(debitTotal)}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'إجمالي الدائن: ${_formatMoney(creditTotal)}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  isBalanced ? 'القيد متوازن ✅' : 'تنبيه: القيد غير متوازن ⚠️',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: isBalanced ? theme.AppColors.success : theme.AppColors.error,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: theme.AppColors.primaryGold,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('تأكيد الحفظ'),
+          ),
+        ],
+      ),
+    );
+
+    return confirmed ?? false;
   }
 
   Future<void> _pickDate() async {
@@ -343,7 +607,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     final gross = _parseAmount(_grossController.text);
     final fee = _feeAlreadyAppliedInInvoice ? 0.0 : _parseAmount(_feeController.text);
-    final net = gross - fee;
+    final feeVat = _computeFeeVat(fee);
+    final net = gross - fee - feeVat;
 
     final availableClearing = _clearingSafe?.cashBalance ?? 0.0;
 
@@ -375,6 +640,15 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       _showSnack('اختر حساب مصروف العمولة', error: true);
       return;
     }
+
+    // Journal preview confirmation before saving
+    final ok = await _confirmJournalPreview(
+      gross: gross,
+      fee: fee,
+      feeVat: feeVat,
+      net: net,
+    );
+    if (!ok) return;
 
     setState(() => _submitting = true);
 
@@ -415,6 +689,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
               const SizedBox(height: 8),
               Text('الإجمالي: ${_formatMoney(gross)}'),
               Text('العمولة: ${_formatMoney(fee)}'),
+              if (feeVat > 0) Text('ضريبة العمولة: ${_formatMoney(feeVat)}'),
               Text('الصافي: ${_formatMoney(net)}'),
             ],
           ),
@@ -468,7 +743,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     final gross = _parseAmount(_grossController.text);
     final fee = _feeAlreadyAppliedInInvoice ? 0.0 : _parseAmount(_feeController.text);
-    final net = gross - fee;
+    final feeVat = _computeFeeVat(fee);
+    final net = gross - fee - feeVat;
 
     final availableClearing = _clearingSafe?.cashBalance ?? 0.0;
     final exceedsAvailable =
@@ -490,8 +766,18 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                     _SummaryCard(
                       gross: gross,
                       fee: fee,
+                      feeVat: feeVat,
                       net: net,
                     ),
+                    if (feeVat > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          'ملاحظة: الصافي محسوب بعد خصم ضريبة العمولة (${(_taxRate * 100).toStringAsFixed(0)}%)'
+                          '${_settingsLoaded ? '' : ' (قد تختلف حسب الإعدادات)'}',
+                          style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                        ),
+                      ),
                     const SizedBox(height: 12),
                     Card(
                       child: Padding(
@@ -817,11 +1103,13 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 class _SummaryCard extends StatelessWidget {
   final double gross;
   final double fee;
+  final double feeVat;
   final double net;
 
   const _SummaryCard({
     required this.gross,
     required this.fee,
+    required this.feeVat,
     required this.net,
   });
 
@@ -921,6 +1209,16 @@ class _SummaryCard extends StatelessWidget {
                 metric('الصافي', net),
               ],
             ),
+            if (feeVat > 0) ...[
+              const SizedBox(height: 10),
+              Text(
+                'ضريبة العمولة: ${feeVat.toStringAsFixed(2)} SAR',
+                style: themeData.textTheme.bodyMedium?.copyWith(
+                  color: Colors.grey.shade800,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ],
         ),
       ),

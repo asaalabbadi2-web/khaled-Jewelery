@@ -89,13 +89,13 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
   Color _karatAccentColor(int karat, {required bool isDark}) {
     switch (karat) {
       case 24:
-        return AppColors.primaryGold;
+        return AppColors.karat24;
       case 22:
-        return isDark ? const Color(0xFFFFCC80) : const Color(0xFFEF6C00);
+        return AppColors.karat22;
       case 21:
-        return isDark ? const Color(0xFF4DD0E1) : const Color(0xFF00796B);
+        return AppColors.karat21;
       case 18:
-        return isDark ? const Color(0xFF90CAF9) : const Color(0xFF1565C0);
+        return AppColors.karat18;
       default:
         return AppColors.primaryGold;
     }

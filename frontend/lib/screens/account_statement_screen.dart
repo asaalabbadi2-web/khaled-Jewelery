@@ -1729,10 +1729,16 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Widget _buildKaratChip(String label, double debit, double credit) {
+    final base = app_theme.AppColors.karatColorFor(label);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Chip(
-      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+      backgroundColor: base.withValues(alpha: isDark ? 0.20 : 0.12),
+      shape: StadiumBorder(
+        side: BorderSide(color: base.withValues(alpha: isDark ? 0.55 : 0.35)),
+      ),
       label: Text(
         '$label • مدين ${debit.toStringAsFixed(3)} / دائن ${credit.toStringAsFixed(3)}',
+        style: TextStyle(color: base, fontWeight: FontWeight.w700),
       ),
     );
   }

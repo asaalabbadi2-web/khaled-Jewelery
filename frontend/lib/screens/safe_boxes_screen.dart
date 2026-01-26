@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import 'clearing_settlement_screen.dart';
-import 'gold_safe_transfer_screen.dart';
+import 'safe_transfer_screen.dart';
 
 class SafeBoxesScreen extends StatefulWidget {
   final ApiService api;
@@ -914,27 +914,28 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // زر تحويل الذهب (يظهر فقط عند عرض خزائن الذهب)
-          if (_filterType == 'gold' || (_filterType == 'all' && _safeBoxes.any((s) => s.safeType == 'gold')))
+          // زر التحويل (يدعم الذهب + النقدي/البنكي وغيرها)
+          if (_safeBoxes.length >= 2)
             FloatingActionButton.extended(
-              heroTag: 'transfer_gold',
+              heroTag: 'transfer_any',
               icon: const Icon(Icons.swap_horiz),
-              label: Text(isAr ? 'تحويل ذهب' : 'Transfer Gold'),
+              label: Text(isAr ? 'تحويل' : 'Transfer'),
               backgroundColor: Colors.orange.shade700,
               onPressed: () {
+                final initialMode = (_filterType == 'gold' || _filterType == 'all') ? 'gold' : 'cash';
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => GoldSafeTransferScreen(
+                    builder: (context) => SafeTransferScreen(
                       api: widget.api,
                       isArabic: isAr,
+                      initialMode: initialMode,
                     ),
                   ),
-                ).then((_) => _loadSafeBoxes()); // تحديث القائمة بعد العودة
+                ).then((_) => _loadSafeBoxes());
               },
             ),
-          if (_filterType == 'gold' || (_filterType == 'all' && _safeBoxes.any((s) => s.safeType == 'gold')))
-            const SizedBox(height: 12),
+          if (_safeBoxes.length >= 2) const SizedBox(height: 12),
           // زر إضافة خزينة
           FloatingActionButton.extended(
             heroTag: 'add_safe',

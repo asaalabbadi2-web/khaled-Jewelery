@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "exported_at": "2026-01-26T00:34:35.863481",
+  "count": 17,
+  "accounts": [
+    {
+      "account_number": "1300",
+      "name": "مخزون ذهب معروض للبيع",
+      "type": "Asset",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "1310",
+      "name": "مخزون ذهب كسر",
+      "type": "Asset",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "1350",
+      "name": "مخزون أجور مصنعية",
+      "type": "Asset",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "1500",
+      "name": "ضريبة القيمة المضافة (مدفوعة)",
+      "type": "Asset",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "1501",
+      "name": "ضريبة عمولات نقاط البيع (مدفوعة)",
+      "type": "Asset",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "2210",
+      "name": "ضريبة القيمة المضافة المستحقة",
+      "type": "Liability",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "3600",
+      "name": "فروقات تقييم الذهب",
+      "type": "Equity",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "5110",
+      "name": "مصاريف نظافة",
+      "type": "Expense",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "5120",
+      "name": "مصاريف صهر",
+      "type": "Expense",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "5130",
+      "name": "مصاريف شحن وتغليف",
+      "type": "Expense",
+      "transaction_type": "cash",
+      "tracks_weight": false,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "7130000",
+      "name": "مخزون ذهب معروض للبيع وزني",
+      "type": "Asset",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "7130001",
+      "name": "مخزون ذهب كسر وزني",
+      "type": "Asset",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "71340",
+      "name": "مخزون أجور مصنعية وزني",
+      "type": "Asset",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "7510",
+      "name": "مصاريف نظافة وزنية",
+      "type": "Expense",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "7520",
+      "name": "مصاريف صهر وزنية",
+      "type": "Expense",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "7530",
+      "name": "مصاريف شحن وزنية",
+      "type": "Expense",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    },
+    {
+      "account_number": "7600",
+      "name": "فروقات تقييم وزنية",
+      "type": "Equity",
+      "transaction_type": "gold",
+      "tracks_weight": true,
+      "parent_account_number": null,
+      "is_active": true
+    }
+  ]
+}

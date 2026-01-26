@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../api_service.dart';
+import '../../theme/app_theme.dart';
 
 class EmployeeScrapLedgerReportScreen extends StatefulWidget {
   final ApiService api;
@@ -157,12 +158,6 @@ class _EmployeeScrapLedgerReportScreenState
     return int.tryParse(digits);
   }
 
-  double _karatT(int karat) {
-    // Normalize to [0..1] for the range 18k..24k
-    final clamped = karat.clamp(18, 24);
-    return (clamped - 18) / 6.0;
-  }
-
   Widget _buildKaratWeightChip({
     required ThemeData theme,
     required String karatKey,
@@ -173,18 +168,11 @@ class _EmployeeScrapLedgerReportScreenState
       return Chip(label: Text('$karatKey: ${_fmtWeight(weightValue)}'));
     }
 
-    final t = _karatT(karat);
-    final bgAlpha = theme.brightness == Brightness.dark
-        ? (0.18 + (0.24 * t))
-        : (0.10 + (0.20 * t));
-    final borderAlpha = theme.brightness == Brightness.dark
-        ? (0.28 + (0.30 * t))
-        : (0.18 + (0.24 * t));
-
-    final bgColor = theme.colorScheme.primary.withValues(alpha: bgAlpha);
-    final borderColor = theme.colorScheme.primary.withValues(
-      alpha: borderAlpha,
-    );
+    final base = AppColors.karatColorFor(karat);
+    final bgAlpha = theme.brightness == Brightness.dark ? 0.20 : 0.12;
+    final borderAlpha = theme.brightness == Brightness.dark ? 0.55 : 0.35;
+    final bgColor = base.withValues(alpha: bgAlpha);
+    final borderColor = base.withValues(alpha: borderAlpha);
 
     return Chip(
       backgroundColor: bgColor,
@@ -195,7 +183,7 @@ class _EmployeeScrapLedgerReportScreenState
       label: Text(
         '$karatKey: ${_fmtWeight(weightValue)}',
         style: theme.textTheme.bodySmall?.copyWith(
-          color: theme.colorScheme.onSurface,
+          color: base,
           fontWeight: FontWeight.w700,
         ),
       ),
