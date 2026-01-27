@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../utils/arabic_number_formatter.dart';
+import '../widgets/account_picker_sheet.dart';
 
 // --- Data Models ---
 class JournalLine {
@@ -792,6 +793,11 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         return aNum.compareTo(bNum);
       });
 
+    final sortedAccountsTyped = sortedAccounts
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+
     return Expanded(
       child: Column(
         children: [
@@ -821,7 +827,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                 }
 
                 final line = _lines[index];
-                final isSelectedAccountValid = sortedAccounts.any(
+                final isSelectedAccountValid = sortedAccountsTyped.any(
                   (acc) => acc['id'] == line.accountId,
                 );
 
@@ -839,87 +845,31 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(
-                              child: DropdownButtonFormField<int>(
-                                initialValue: isSelectedAccountValid
+                              child: AccountPickerFormField(
+                                context: context,
+                                accounts: sortedAccountsTyped,
+                                value: isSelectedAccountValid
                                     ? line.accountId
                                     : null,
-                                isExpanded: true,
-                                hint: const Text('اختر حساب فرعي'),
-                                items: sortedAccounts
-                                    .map<DropdownMenuItem<int>>((account) {
-                                      final accountNumber =
-                                          account['account_number']
-                                              ?.toString() ??
-                                          '';
-                                      final accountName =
-                                          account['name']?.toString() ?? '';
-                                      return DropdownMenuItem<int>(
-                                        value: account['id'],
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                '$accountNumber - $accountName',
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ),
-                                            Text(
-                                              _transactionTypeLabel(
-                                                account['transaction_type'],
-                                              ),
-                                              style: TextStyle(
-                                                color: Colors.grey.shade600,
-                                                fontSize: 11,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    })
-                                    .toList(),
-                                onChanged: (value) =>
-                                    _onAccountChanged(line, value),
-                                decoration: InputDecoration(
-                                  labelText: 'الحساب',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    vertical: 10,
-                                    horizontal: 12,
-                                  ),
-                                  helperText: sortedAccounts.isEmpty
-                                      ? null
-                                      : 'يمكنك كتابة رقم الحساب أو استخدام زر البحث المتقدم',
-                                  helperStyle: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey.shade500,
-                                  ),
-                                ),
+                                labelText: 'الحساب',
+                                hintText: 'اختر حساب فرعي',
+                                title: 'اختيار حساب',
+                                isArabic: true,
+                                enabled: sortedAccountsTyped.isNotEmpty,
+                                helperText: sortedAccountsTyped.isEmpty
+                                    ? null
+                                    : 'ابحث بالرقم/الاسم + فلترة (نقدي/ذهبي)',
+                                showTransactionTypeFilter: true,
+                                showTracksWeightFilter: false,
                                 validator: (value) {
                                   if (line.hasValues && value == null) {
                                     return 'حساب غير صالح أو رئيسي';
                                   }
                                   return null;
                                 },
+                                onChanged: (value) =>
+                                    _onAccountChanged(line, value),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              icon: Icon(
-                                Icons.manage_search,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              tooltip: 'بحث متقدم عن الحساب',
-                              onPressed: sortedAccounts.isEmpty
-                                  ? null
-                                  : () => _showAccountSelectionDialog(
-                                      sortedAccounts,
-                                      line,
-                                    ),
                             ),
                             IconButton(
                               icon: Icon(
@@ -1391,128 +1341,6 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  String _transactionTypeLabel(dynamic transactionType) {
-    switch (transactionType) {
-      case 'cash':
-        return 'نقدي';
-      case 'gold':
-        return 'ذهبي';
-      case 'both':
-      default:
-        return 'مختلط';
-    }
-  }
-
-  void _showAccountSelectionDialog(List<dynamic> accounts, JournalLine line) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        final mediaQuery = MediaQuery.of(dialogContext);
-        List<dynamic> filtered = List<dynamic>.from(accounts);
-
-        return StatefulBuilder(
-          builder: (context, setState) {
-            void filterAccounts(String query) {
-              final normalized = query.trim().toLowerCase();
-              if (normalized.isEmpty) {
-                setState(() => filtered = List<dynamic>.from(accounts));
-              } else {
-                setState(() {
-                  filtered = accounts.where((account) {
-                    final accountNumber =
-                        account['account_number']?.toString().toLowerCase() ??
-                        '';
-                    final accountName =
-                        account['name']?.toString().toLowerCase() ?? '';
-                    return accountNumber.contains(normalized) ||
-                        accountName.contains(normalized);
-                  }).toList();
-                });
-              }
-            }
-
-            return AlertDialog(
-              title: const Text('البحث عن حساب'),
-              content: SizedBox(
-                width: mediaQuery.size.width * 0.85,
-                height: mediaQuery.size.height * 0.6,
-                child: Column(
-                  children: [
-                    TextField(
-                      autofocus: true,
-                      decoration: const InputDecoration(
-                        hintText: 'ادخل رقم الحساب أو اسمه',
-                        prefixIcon: Icon(Icons.search),
-                      ),
-                      onChanged: filterAccounts,
-                    ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'لا توجد حسابات مطابقة للبحث',
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: filtered.length,
-                              itemBuilder: (context, index) {
-                                final account = filtered[index];
-                                final accountNumber =
-                                    account['account_number']?.toString() ?? '';
-                                final accountName =
-                                    account['name']?.toString() ?? '';
-                                final badgeColor = Theme.of(
-                                  dialogContext,
-                                ).colorScheme.secondary.withValues(alpha: 0.15);
-                                final badgeText = accountNumber.length > 2
-                                    ? accountNumber.substring(
-                                        accountNumber.length - 2,
-                                      )
-                                    : accountNumber;
-
-                                return ListTile(
-                                  leading: CircleAvatar(
-                                    backgroundColor: badgeColor,
-                                    child: Text(
-                                      badgeText,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  title: Text('$accountNumber - $accountName'),
-                                  subtitle: Text(
-                                    _transactionTypeLabel(
-                                      account['transaction_type'],
-                                    ),
-                                  ),
-                                  onTap: () {
-                                    _onAccountChanged(line, account['id']);
-                                    Navigator.of(dialogContext).pop();
-                                  },
-                                );
-                              },
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('إغلاق'),
-                ),
-              ],
-            );
-          },
-        );
-      },
     );
   }
 }

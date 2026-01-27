@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../api_service.dart';
+import '../widgets/account_picker_sheet.dart';
 import '../providers/settings_provider.dart';
 
 /// شاشة دفتر الأستاذ المطورة - النسخة 2
@@ -120,29 +121,21 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
                   'الحساب:',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                DropdownButton<int?>(
-                  isExpanded: true,
+                AccountPickerFormField(
+                  context: context,
+                  accounts: _accounts
+                      .whereType<Map>()
+                      .map((e) => Map<String, dynamic>.from(e))
+                      .toList(growable: false),
                   value: tempAccountId,
-                  hint: const Text('جميع الحسابات'),
-                  items: [
-                    const DropdownMenuItem<int?>(
-                      value: null,
-                      child: Text('جميع الحسابات'),
-                    ),
-                    ..._accounts.map(
-                      (acc) => DropdownMenuItem<int?>(
-                        value: acc['id'],
-                        child: Text(
-                          '${acc['account_number']} - ${acc['name']}',
-                        ),
-                      ),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setDialogState(() {
-                      tempAccountId = value;
-                    });
-                  },
+                  isArabic: true,
+                  labelText: 'الحساب',
+                  hintText: 'جميع الحسابات',
+                  title: 'اختيار حساب',
+                  allowClear: true,
+                  onChanged: (v) => setDialogState(() {
+                    tempAccountId = v;
+                  }),
                 ),
                 const SizedBox(height: 16),
 

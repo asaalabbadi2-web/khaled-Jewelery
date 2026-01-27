@@ -651,57 +651,101 @@ def create_dual_entry_with_memo(
 
 def link_memo_accounts_helper():
     """
-    ربط الحسابات المالية بحسابات المذكرة الموازية
-    يتم تشغيلها مرة واحدة بعد إنشاء شجرة الحسابات
+        ربط الحسابات المالية بحسابات المذكرة الموازية.
+
+        IMPORTANT:
+        There are two supported linking strategies:
+        1) Explicit mappings from WEIGHT_SUPPORT_ACCOUNTS (authoritative for special accounts).
+        2) Generic fallback mapping: memo_number = '7' + financial.account_number.
+
+        This helper is intentionally conservative:
+        - It will only *link* accounts when both sides already exist.
+        - It will not create new accounts.
+        - It will not overwrite an already-correct explicit support mapping.
     """
     from flask import current_app
     from models import Account
     
     db = current_app.extensions['sqlalchemy']
     
-    # الربط الأساسي: (حساب مالي, حساب مذكرة)
-    mappings = [
-        # النقدية والبنوك
-        ('1100', '7100'),   # الصندوق ← → الصندوق الوزني
-        ('1110', '7110'),   # البنك ← → بنك وزني
-        
-        # العملاء
-        ('1200', '7200'),   # عملاء بيع ← → عملاء بيع وزني
-        
-        # المخزون
-        ('1300', '7300'),   # مخزون عيار 18 ← → مخزون وزني 18
-        ('1310', '7310'),   # مخزون عيار 21 ← → مخزون وزني 21
-        ('1320', '7320'),   # مخزون عيار 22 ← → مخزون وزني 22
-        ('1330', '7330'),   # مخزون عيار 24 ← → مخزون وزني 24
-        
-        # الإيرادات
-        ('40', '7400'),     # إيرادات بيع ← → إيرادات بيع وزنية
-        
-        # التكاليف
-        ('50', '7500'),     # تكلفة المبيعات ← → تكلفة مبيعات وزنية
-    ]
+    def digits_only(value: str) -> str:
+        return ''.join(ch for ch in str(value or '').strip() if ch.isdigit())
 
-    # دمج الحسابات الداعمة المعرفة في الإعدادات دون تكرار
-    seen_pairs = set(mappings)
-    for entry in WEIGHT_SUPPORT_ACCOUNTS:
-        financial_code = (entry.get('financial') or {}).get('account_number')
-        memo_code = (entry.get('memo') or {}).get('account_number')
-        if financial_code and memo_code:
-            pair = (financial_code, memo_code)
-            if pair not in seen_pairs:
-                mappings.append(pair)
-                seen_pairs.add(pair)
-    
+    def desired_memo_number(financial_number: str):
+        digits = digits_only(financial_number)
+        if not digits:
+            return None
+        return f"7{digits}"
+
     count = 0
-    for financial_acc_number, memo_acc_number in mappings:
-        financial_acc = db.session.query(Account).filter_by(account_number=financial_acc_number).first()
-        memo_acc = db.session.query(Account).filter_by(account_number=memo_acc_number).first()
-        
-        if financial_acc and memo_acc:
+    changed = False
+
+    # 1) Apply explicit support mappings first.
+    explicit_fin_to_memo: dict[str, str] = {}
+    try:
+        for entry in WEIGHT_SUPPORT_ACCOUNTS:
+            fin = digits_only((entry.get('financial') or {}).get('account_number'))
+            memo = digits_only((entry.get('memo') or {}).get('account_number'))
+            if fin and memo:
+                explicit_fin_to_memo[fin] = memo
+    except Exception:
+        explicit_fin_to_memo = {}
+
+    for fin_no, memo_no in sorted(explicit_fin_to_memo.items()):
+        financial_acc = db.session.query(Account).filter_by(account_number=fin_no).first()
+        memo_acc = db.session.query(Account).filter_by(account_number=memo_no).first()
+        if not financial_acc or not memo_acc:
+            continue
+        if memo_acc.transaction_type != 'gold' or not bool(memo_acc.tracks_weight):
+            continue
+        if financial_acc.memo_account_id != memo_acc.id:
             financial_acc.memo_account_id = memo_acc.id
+            changed = True
             count += 1
-    
-    db.session.commit()
+        if memo_acc.memo_account_id != financial_acc.id:
+            memo_acc.memo_account_id = financial_acc.id
+            changed = True
+
+    # 2) Generic fallback for any other already-linked financial accounts (repair common mislinks).
+    candidates: set[str] = set()
+    try:
+        linked = db.session.query(Account).filter(Account.memo_account_id.isnot(None)).all()
+        for acc in linked:
+            if acc and acc.account_number:
+                fin_no = digits_only(acc.account_number)
+                if fin_no and not fin_no.startswith('7') and fin_no not in explicit_fin_to_memo:
+                    candidates.add(fin_no)
+    except Exception:
+        candidates = set()
+
+    for fin_no in sorted(candidates):
+        financial_acc = db.session.query(Account).filter_by(account_number=fin_no).first()
+        if not financial_acc:
+            continue
+
+        memo_no = desired_memo_number(fin_no)
+        if not memo_no:
+            continue
+
+        memo_acc = db.session.query(Account).filter_by(account_number=memo_no).first()
+        if not memo_acc:
+            continue
+
+        if memo_acc.transaction_type != 'gold' or not bool(memo_acc.tracks_weight):
+            continue
+
+        if financial_acc.memo_account_id != memo_acc.id:
+            financial_acc.memo_account_id = memo_acc.id
+            changed = True
+            count += 1
+
+        if memo_acc.memo_account_id != financial_acc.id:
+            memo_acc.memo_account_id = financial_acc.id
+            changed = True
+
+    if changed:
+        db.session.commit()
+
     print(f"✓ تم ربط {count} حساب مالي بحسابات المذكرة")
     return count
 

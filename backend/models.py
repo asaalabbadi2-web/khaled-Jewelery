@@ -210,10 +210,25 @@ class Account(db.Model):
         # التحقق من عدم وجود الحساب مسبقاً
         existing = Account.query.filter_by(account_number=parallel_number).first()
         if existing:
-            # ربط الحساب الموجود
+            # Ensure existing account matches the intended parallel semantics.
+            existing.transaction_type = parallel_type
+            existing.tracks_weight = bool(parallel_tracks_weight)
+
+            # ربط الحساب الموجود (مع ربط عكسي لضمان سهولة التنقل)
             if self.transaction_type == 'cash':
+                # financial -> memo
                 self.memo_account_id = existing.id
-                db.session.flush()
+                existing.memo_account_id = self.id
+            else:
+                # memo -> financial
+                existing.memo_account_id = self.id
+                self.memo_account_id = existing.id
+
+            # Keep parenting mirrored when possible.
+            if parallel_parent_id and existing.parent_id != parallel_parent_id:
+                existing.parent_id = parallel_parent_id
+
+            db.session.flush()
             return existing
         
         # إنشاء الحساب الموازي
@@ -233,10 +248,12 @@ class Account(db.Model):
         if self.transaction_type == 'cash':
             # الحساب الأصلي مالي → الموازي وزني
             self.memo_account_id = parallel_account.id
+            parallel_account.memo_account_id = self.id
         else:
             # الحساب الأصلي وزني → الموازي مالي
             # نربط الحساب المالي (الموازي) بالحساب الوزني (الأصلي)
             parallel_account.memo_account_id = self.id
+            self.memo_account_id = parallel_account.id
         
         db.session.flush()
         

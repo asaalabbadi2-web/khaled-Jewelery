@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../api_service.dart';
+import '../widgets/account_picker_sheet.dart';
 import 'journal_entry_form.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
@@ -1269,6 +1270,11 @@ class _FilterDialogState extends State<_FilterDialog> {
         return aNum.compareTo(bNum);
       });
 
+    final accountsForPicker = sortedAccounts
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+
     return AlertDialog(
       backgroundColor: colorScheme.surface,
       title: Text(
@@ -1316,71 +1322,16 @@ class _FilterDialogState extends State<_FilterDialog> {
               ),
             ),
             SizedBox(height: 8),
-            DropdownButtonFormField<int>(
-              initialValue: _selectedAccountId,
-              dropdownColor: colorScheme.surface,
-              style: theme.textTheme.bodyMedium,
-              decoration: InputDecoration(
-                hintText: isAr
-                    ? 'جميع الحسابات (اكتب رقم الحساب للبحث السريع)'
-                    : 'All Accounts (Type account number for quick search)',
-                hintStyle: theme.textTheme.bodySmall?.copyWith(
-                  color: hintColor,
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: gold),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: gold, width: 2),
-                ),
-              ),
-              items: [
-                DropdownMenuItem<int>(
-                  value: null,
-                  child: Text(
-                    isAr ? 'جميع الحسابات' : 'All Accounts',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: hintColor,
-                    ),
-                  ),
-                ),
-                // ترتيب الحسابات أبجدياً حسب رقم الحساب وإظهار تفاصيل إضافية
-                ...sortedAccounts.map<DropdownMenuItem<int>>((account) {
-                  return DropdownMenuItem<int>(
-                    value: account['id'],
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 300),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '${account['account_number']} - ${account['name']}',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            account['transaction_type'] == 'cash'
-                                ? (isAr ? 'حساب نقدي' : 'Cash Account')
-                                : account['transaction_type'] == 'gold'
-                                ? (isAr ? 'حساب ذهبي' : 'Gold Account')
-                                : (isAr ? 'حساب مختلط' : 'Mixed Account'),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: hintColor,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
-              ],
-              onChanged: (value) {
-                setState(() => _selectedAccountId = value);
-              },
+            AccountPickerFormField(
+              context: context,
+              accounts: accountsForPicker,
+              value: _selectedAccountId,
+              isArabic: isAr,
+              labelText: isAr ? 'الحساب' : 'Account',
+              hintText: isAr ? 'جميع الحسابات' : 'All Accounts',
+              title: isAr ? 'اختيار حساب' : 'Select Account',
+              allowClear: true,
+              onChanged: (v) => setState(() => _selectedAccountId = v),
             ),
             SizedBox(height: 16),
 

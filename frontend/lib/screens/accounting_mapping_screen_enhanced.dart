@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart';
+import '../widgets/account_picker_sheet.dart';
 
 class AccountingMappingScreenEnhanced extends StatefulWidget {
   const AccountingMappingScreenEnhanced({super.key});
@@ -845,50 +846,81 @@ class _AccountingMappingScreenEnhancedState
                 ],
               ),
               const SizedBox(height: 16),
-              DropdownButtonFormField<int>(
-                key: ValueKey(
-                  '${operationType}_${accountKey}_${mappedAccountId ?? 'null'}',
-                ),
-                initialValue: mappedAccountId,
-                decoration: InputDecoration(
-                  labelText: 'اختر الحساب المحاسبي',
-                  labelStyle: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  filled: true,
-                  fillColor: _blendOnSurface(color, _isDark ? 0.18 : 0.08),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: color, width: 2),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _blendOnSurface(color, 0.3)),
-                  ),
-                ),
-                icon: Icon(Icons.arrow_drop_down, color: color),
-                isExpanded: true,
-                items: _accounts.map((account) {
-                  return DropdownMenuItem<int>(
-                    value: account['id'] as int?,
-                    child: Text(
-                      _accountLabel(account),
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _strongTextColor,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      key: ValueKey(
+                        '${operationType}_${accountKey}_${mappedAccountId ?? 'null'}',
                       ),
+                      initialValue: mappedAccountId,
+                      decoration: InputDecoration(
+                        labelText: 'اختر الحساب المحاسبي',
+                        labelStyle: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        filled: true,
+                        fillColor: _blendOnSurface(color, _isDark ? 0.18 : 0.08),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: color, width: 2),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: _blendOnSurface(color, 0.3)),
+                        ),
+                      ),
+                      icon: Icon(Icons.arrow_drop_down, color: color),
+                      isExpanded: true,
+                      items: _accounts.map((account) {
+                        return DropdownMenuItem<int>(
+                          value: account['id'] as int?,
+                          child: Text(
+                            _accountLabel(account),
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _strongTextColor,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        _updateMapping(operationType, accountKey, value);
+                      },
                     ),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  _updateMapping(operationType, accountKey, value);
-                },
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'بحث/فلترة الحسابات',
+                    icon: Icon(Icons.manage_search, color: color),
+                    onPressed: _accounts.isEmpty
+                        ? null
+                        : () async {
+                            final picked = await showAccountPickerBottomSheet(
+                              context: context,
+                              accounts: _accounts,
+                              title: 'اختيار حساب',
+                              isArabic: true,
+                              selectedId: mappedAccountId,
+                            );
+                            if (!mounted || picked == null) return;
+                            final raw = picked['id'];
+                            final id = raw is int
+                                ? raw
+                                : (raw is num
+                                    ? raw.toInt()
+                                    : int.tryParse('${raw ?? ''}'));
+                            if (id == null) return;
+                            _updateMapping(operationType, accountKey, id);
+                          },
+                  ),
+                ],
               ),
               if (hasMapping) ...[
                 const SizedBox(height: 12),

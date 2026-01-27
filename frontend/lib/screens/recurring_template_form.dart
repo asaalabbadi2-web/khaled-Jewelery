@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/arabic_number_formatter.dart';
+import '../widgets/account_picker_sheet.dart';
 
 /// شاشة إضافة/تعديل قالب قيد دوري
 class RecurringTemplateFormScreen extends StatefulWidget {
@@ -40,7 +41,7 @@ class _RecurringTemplateFormScreenState
   String _selectedFrequency = 'monthly';
   bool _isActive = true;
   bool _autoCreate = true;
-  List<dynamic> _accounts = [];
+  List<Map<String, dynamic>> _accounts = [];
   List<RecurringTemplateLine> _lines = [];
   bool _isLoading = false;
 
@@ -109,7 +110,10 @@ class _RecurringTemplateFormScreenState
       final accounts = await _apiService.getAccounts();
       if (mounted) {
         setState(() {
-          _accounts = accounts;
+          _accounts = accounts
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: false);
         });
       }
     } catch (e) {
@@ -673,34 +677,30 @@ class _RecurringTemplateFormScreenState
               ],
             ),
             SizedBox(height: 8),
-            DropdownButtonFormField<int>(
-              initialValue: line.accountId,
-              decoration: InputDecoration(
-                labelText: 'الحساب *',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+            Row(
+              children: [
+                Expanded(
+                  child: AccountPickerFormField(
+                    context: context,
+                    accounts: _accounts,
+                    value: line.accountId,
+                    labelText: 'الحساب *',
+                    hintText: 'اختر حساب',
+                    title: 'اختيار حساب',
+                    isArabic: true,
+                    helperText: _accounts.isEmpty
+                        ? null
+                        : 'ابحث بالرقم/الاسم + فلترة (نقدي/ذهبي)',
+                    showTransactionTypeFilter: true,
+                    showTracksWeightFilter: false,
+                    onChanged: (value) {
+                      setState(() {
+                        line.accountId = value;
+                      });
+                    },
+                  ),
                 ),
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-              ),
-              items: _accounts
-                  .map(
-                    (acc) => DropdownMenuItem<int>(
-                      value: acc['id'],
-                      child: Text(
-                        '${acc['number']} - ${acc['name']}',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                setState(() {
-                  line.accountId = value;
-                });
-              },
+              ],
             ),
             SizedBox(height: 8),
             Row(

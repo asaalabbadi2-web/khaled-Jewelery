@@ -10330,11 +10330,18 @@ def add_account():
         if not validation.get('is_valid'):
             return jsonify({'error': validation.get('message', 'رقم الحساب غير صالح')}), 400
 
-    # Inherit tracks_weight from parent for child accounts unless explicitly provided.
-    if parent_account is not None and 'tracks_weight' not in data:
-        tracks_weight_value = bool(parent_account.tracks_weight)
-    else:
-        tracks_weight_value = bool(data.get('tracks_weight', False))
+    # Enforce dual-chart convention by numbering:
+    # - Financial accounts: NOT starting with '7' => transaction_type='cash', tracks_weight=False
+    # - Memo accounts: starting with '7' => transaction_type='gold', tracks_weight=True
+    is_memo_account = account_number.startswith('7')
+    desired_transaction_type = 'gold' if is_memo_account else 'cash'
+    desired_tracks_weight = True if is_memo_account else False
+
+    # If a parent exists, ensure numbering is consistent with the parent's chart.
+    if parent_account is not None:
+        parent_is_memo = str(parent_account.account_number or '').startswith('7')
+        if parent_is_memo != is_memo_account:
+            return jsonify({'error': 'رقم الحساب يجب أن يتبع نفس مخطط الأب (مالي/مذكرة)'}), 400
     
     # إنشاء الحساب الأساسي
     new_account = Account(
@@ -10342,11 +10349,11 @@ def add_account():
         name=data['name'],
         type=data['type'],
         parent_id=parent_id,
-        transaction_type=data.get('transaction_type', 'both'),
+        transaction_type=desired_transaction_type,
         bank_name=data.get('bank_name'),
         account_number_external=data.get('account_number_external'),
         account_type=data.get('account_type'),
-        tracks_weight=tracks_weight_value,
+        tracks_weight=bool(desired_tracks_weight),
     )
     db.session.add(new_account)
     db.session.flush()
@@ -10379,12 +10386,16 @@ def add_account():
 @api.route('/accounts/<int:id>', methods=['PUT'])
 def update_account(id):
     account = Account.query.get_or_404(id)
-    data = request.json
-    account.account_number = data.get('account_number', account.account_number)
+    data = request.get_json(silent=True) or {}
+
+    if 'account_number' in data and data.get('account_number') is not None:
+        raw_account_number = str(data.get('account_number', '')).strip()
+        normalized = ''.join(ch for ch in raw_account_number if ch.isdigit())
+        if normalized:
+            account.account_number = normalized
     account.name = data.get('name', account.name)
     account.type = data.get('type', account.type)
     account.parent_id = data.get('parent_id', account.parent_id)
-    account.transaction_type = data.get('transaction_type', account.transaction_type)
     
     # 🆕 تحديث معلومات البنك
     if 'bank_name' in data:
@@ -10394,14 +10405,18 @@ def update_account(id):
     if 'account_type' in data:
         account.account_type = data['account_type']
     
-    # 🆕 تحديث tracks_weight
-    if 'tracks_weight' in data:
-        account.tracks_weight = bool(data['tracks_weight'])
+    # Enforce dual-chart convention by numbering.
+    is_memo_account = str(account.account_number or '').startswith('7')
+    account.transaction_type = 'gold' if is_memo_account else 'cash'
+    account.tracks_weight = True if is_memo_account else False
 
-    # Enforce inheritance: child accounts always follow parent's tracks_weight
+    # Enforce inheritance: child accounts always follow parent's chart.
     if account.parent_id is not None:
         parent = Account.query.get(account.parent_id)
         if parent is not None:
+            parent_is_memo = str(parent.account_number or '').startswith('7')
+            if parent_is_memo != is_memo_account:
+                return jsonify({'error': 'لا يمكن نقل الحساب بين المالي والمذكرة عبر parent_id'}), 400
             account.tracks_weight = bool(parent.tracks_weight)
     
     db.session.commit()

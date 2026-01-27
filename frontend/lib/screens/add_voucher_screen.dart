@@ -9,6 +9,7 @@ import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 import 'voucher_preview_screen.dart';
 import '../utils.dart';
+import '../widgets/account_picker_sheet.dart';
 
 /// نموذج لسطر حساب في السند
 class AccountLineModel {
@@ -187,8 +188,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           customer?['account_id'] ?? customer?['account_category_id'],
         );
         partyAccountId ??= _customersAggregateAccountId;
-        if (partyAccountId == null && _customersAggregateAccountNumber != null) {
-          partyAccountId = _findAccountIdByNumber(_customersAggregateAccountNumber!);
+        if (partyAccountId == null &&
+            _customersAggregateAccountNumber != null) {
+          partyAccountId = _findAccountIdByNumber(
+            _customersAggregateAccountNumber!,
+          );
         }
       } else if (_partyType == 'supplier' && _selectedSupplierId != null) {
         final supplier = _findById(_suppliers, _selectedSupplierId);
@@ -196,8 +200,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           supplier?['account_id'] ?? supplier?['account_category_id'],
         );
         partyAccountId ??= _suppliersAggregateAccountId;
-        if (partyAccountId == null && _suppliersAggregateAccountNumber != null) {
-          partyAccountId = _findAccountIdByNumber(_suppliersAggregateAccountNumber!);
+        if (partyAccountId == null &&
+            _suppliersAggregateAccountNumber != null) {
+          partyAccountId = _findAccountIdByNumber(
+            _suppliersAggregateAccountNumber!,
+          );
         }
       } else if (_partyType == 'employee' && _selectedEmployeeId != null) {
         final emp = _findEmployeeById(_selectedEmployeeId);
@@ -390,17 +397,20 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         includeBalance: true,
       );
 
-        final aggregate = (appConfig['aggregate_accounts'] as Map?)
-          ?.map((k, v) => MapEntry(k.toString(), v));
-        final customersAgg = (aggregate?['customers'] as Map?)
-          ?.map((k, v) => MapEntry(k.toString(), v));
-        final suppliersAgg = (aggregate?['suppliers'] as Map?)
-          ?.map((k, v) => MapEntry(k.toString(), v));
+      final aggregate = (appConfig['aggregate_accounts'] as Map?)?.map(
+        (k, v) => MapEntry(k.toString(), v),
+      );
+      final customersAgg = (aggregate?['customers'] as Map?)?.map(
+        (k, v) => MapEntry(k.toString(), v),
+      );
+      final suppliersAgg = (aggregate?['suppliers'] as Map?)?.map(
+        (k, v) => MapEntry(k.toString(), v),
+      );
 
-        final customersAggId = _coerceAccountId(customersAgg?['account_id']);
-        final customersAggNumber = customersAgg?['account_number']?.toString();
-        final suppliersAggId = _coerceAccountId(suppliersAgg?['account_id']);
-        final suppliersAggNumber = suppliersAgg?['account_number']?.toString();
+      final customersAggId = _coerceAccountId(customersAgg?['account_id']);
+      final customersAggNumber = customersAgg?['account_number']?.toString();
+      final suppliersAggId = _coerceAccountId(suppliersAgg?['account_id']);
+      final suppliersAggNumber = suppliersAgg?['account_number']?.toString();
 
       setState(() {
         _customers = customers
@@ -456,9 +466,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         }
         // الوضع الافتراضي (نقد/شيكات/بنك)
         return sb.safeType == 'cash' ||
-          sb.safeType == 'bank' ||
-          sb.safeType == 'clearing' ||
-          sb.safeType == 'check';
+            sb.safeType == 'bank' ||
+            sb.safeType == 'clearing' ||
+            sb.safeType == 'check';
       }).toList();
 
       return filteredSafes
@@ -1296,7 +1306,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   labelText: 'العميل *',
                   border: const OutlineInputBorder(),
                   helperText: _customersAggregateAccountNumber != null
-                    ? 'سيتم القيد على الحساب التجميعي للعملاء ($_customersAggregateAccountNumber)'
+                      ? 'سيتم القيد على الحساب التجميعي للعملاء ($_customersAggregateAccountNumber)'
                       : 'سيتم القيد على الحساب التجميعي للعملاء',
                 ),
                 items: _customers.map<DropdownMenuItem<int>>((customer) {
@@ -1318,7 +1328,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   labelText: 'المورد *',
                   border: const OutlineInputBorder(),
                   helperText: _suppliersAggregateAccountNumber != null
-                    ? 'سيتم القيد على الحساب التجميعي للموردين ($_suppliersAggregateAccountNumber)'
+                      ? 'سيتم القيد على الحساب التجميعي للموردين ($_suppliersAggregateAccountNumber)'
                       : 'سيتم القيد على الحساب التجميعي للموردين',
                 ),
                 items: _suppliers.map<DropdownMenuItem<int>>((supplier) {
@@ -1358,29 +1368,23 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 },
               ),
             if (_partyType == 'other')
-              DropdownButtonFormField<int>(
-                initialValue: _selectedOtherAccountId,
-                decoration: const InputDecoration(
-                  labelText: 'الحساب *',
-                  border: OutlineInputBorder(),
-                  helperText: 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
-                ),
-                items: _accounts
-                    .where((acc) {
-                      final accNum = acc['account_number'].toString();
-                      return accNum.startsWith('5') ||
-                          accNum.startsWith('4') ||
-                          accNum.startsWith('140');
-                    })
-                    .map<DropdownMenuItem<int>>((account) {
-                      return DropdownMenuItem<int>(
-                        value: account['id'],
-                        child: Text(
-                          '${account['account_number']} - ${account['name']}',
-                        ),
-                      );
-                    })
-                    .toList(),
+              AccountPickerFormField(
+                context: context,
+                accounts: _accounts,
+                value: _selectedOtherAccountId,
+                labelText: 'الحساب *',
+                hintText: 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
+                title: 'اختيار حساب',
+                isArabic: true,
+                helperText: 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
+                predicate: (a) {
+                  final accNum = accountNumberOf(a);
+                  return accNum.startsWith('5') ||
+                      accNum.startsWith('4') ||
+                      accNum.startsWith('140');
+                },
+                showTransactionTypeFilter: true,
+                showTracksWeightFilter: false,
                 onChanged: (value) {
                   setState(() {
                     _selectedOtherAccountId = value;
@@ -2224,8 +2228,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
         // Fallback to configured aggregate account (from /app-config).
         partyAccountId ??= _customersAggregateAccountId;
-        if (partyAccountId == null && _customersAggregateAccountNumber != null) {
-          partyAccountId = _findAccountIdByNumber(_customersAggregateAccountNumber!);
+        if (partyAccountId == null &&
+            _customersAggregateAccountNumber != null) {
+          partyAccountId = _findAccountIdByNumber(
+            _customersAggregateAccountNumber!,
+          );
         }
         // Final fallback for older servers/configs.
         partyAccountId ??= _findAccountIdByNumber('1100');
@@ -2252,8 +2259,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
         // Fallback to configured aggregate account (from /app-config).
         partyAccountId ??= _suppliersAggregateAccountId;
-        if (partyAccountId == null && _suppliersAggregateAccountNumber != null) {
-          partyAccountId = _findAccountIdByNumber(_suppliersAggregateAccountNumber!);
+        if (partyAccountId == null &&
+            _suppliersAggregateAccountNumber != null) {
+          partyAccountId = _findAccountIdByNumber(
+            _suppliersAggregateAccountNumber!,
+          );
         }
         // Final fallback for older servers/configs: prefer 220 then 211.
         partyAccountId ??= _findAccountIdByNumber('220');
@@ -2640,8 +2650,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     : _findSafeByAccountId(_coerceAccountId(acc['id']));
                 if (safe != null &&
                     (safe.safeType == 'cash' ||
-                      safe.safeType == 'bank' ||
-                      safe.safeType == 'clearing')) {
+                        safe.safeType == 'bank' ||
+                        safe.safeType == 'clearing')) {
                   _ensureSafeLedgerBalanceLoaded(safe);
                 }
               },
@@ -2654,8 +2664,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 if (safe == null) return const SizedBox.shrink();
                 if (safe.id == null) return const SizedBox.shrink();
                 if (!(safe.safeType == 'cash' ||
-                  safe.safeType == 'bank' ||
-                  safe.safeType == 'clearing')) {
+                    safe.safeType == 'bank' ||
+                    safe.safeType == 'clearing')) {
                   return const SizedBox.shrink();
                 }
 

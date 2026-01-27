@@ -6,6 +6,7 @@ import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart' as theme;
 import '../utils.dart';
+import '../widgets/account_picker_sheet.dart';
 import '../widgets/safe_box_picker_dialog.dart';
 
 class ClearingSettlementScreen extends StatefulWidget {
@@ -19,7 +20,8 @@ class ClearingSettlementScreen extends StatefulWidget {
   });
 
   @override
-  State<ClearingSettlementScreen> createState() => _ClearingSettlementScreenState();
+  State<ClearingSettlementScreen> createState() =>
+      _ClearingSettlementScreenState();
 }
 
 class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
@@ -27,9 +29,15 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
   final TextEditingController _grossController = TextEditingController();
   final TextEditingController _feeController = TextEditingController(text: '0');
-  final TextEditingController _rateController = TextEditingController(text: '0');
-  final TextEditingController _fixedFeeController = TextEditingController(text: '0');
-  final TextEditingController _txCountController = TextEditingController(text: '1');
+  final TextEditingController _rateController = TextEditingController(
+    text: '0',
+  );
+  final TextEditingController _fixedFeeController = TextEditingController(
+    text: '0',
+  );
+  final TextEditingController _txCountController = TextEditingController(
+    text: '1',
+  );
   final TextEditingController _referenceController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
@@ -272,7 +280,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       final id = rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
       if (id != null && id == accountId) {
         final name = (a['name'] ?? '').toString();
-        final number = (a['account_number'] ?? a['accountNumber'] ?? '').toString();
+        final number = (a['account_number'] ?? a['accountNumber'] ?? '')
+            .toString();
         if (number.isNotEmpty) return '$number - $name';
         return name;
       }
@@ -312,7 +321,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       lines.add({
         'side': 'debit',
         'label': 'مدين',
-        'account': feeAccName.isNotEmpty ? feeAccName : 'مصروف العمولة (غير محدد)',
+        'account': feeAccName.isNotEmpty
+            ? feeAccName
+            : 'مصروف العمولة (غير محدد)',
         'amount': _round2(fee),
       });
     }
@@ -351,12 +362,16 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       net: net,
     );
 
-    final debitTotal = _round2(lines
-        .where((l) => l['side'] == 'debit')
-        .fold<double>(0.0, (sum, l) => sum + (l['amount'] as double? ?? 0.0)));
-    final creditTotal = _round2(lines
-        .where((l) => l['side'] == 'credit')
-        .fold<double>(0.0, (sum, l) => sum + (l['amount'] as double? ?? 0.0)));
+    final debitTotal = _round2(
+      lines
+          .where((l) => l['side'] == 'debit')
+          .fold<double>(0.0, (sum, l) => sum + (l['amount'] as double? ?? 0.0)),
+    );
+    final creditTotal = _round2(
+      lines
+          .where((l) => l['side'] == 'credit')
+          .fold<double>(0.0, (sum, l) => sum + (l['amount'] as double? ?? 0.0)),
+    );
 
     final isBalanced = (debitTotal - creditTotal).abs() <= 0.02;
 
@@ -375,7 +390,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                   decoration: BoxDecoration(
                     color: theme.AppColors.primaryGold.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                    border: Border.all(
+                      color: Colors.black.withValues(alpha: 0.06),
+                    ),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -393,13 +410,19 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                         _feeAlreadyAppliedInInvoice
                             ? 'ملاحظة: العمولة محسوبة في الفاتورة (لن تُخصم هنا).'
                             : 'ملاحظة: سيتم تسجيل العمولة أثناء التسوية.',
-                        style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text('سطور القيد:', style: TextStyle(fontWeight: FontWeight.w800)),
+                const Text(
+                  'سطور القيد:',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 8),
                 ...lines.map((l) {
                   final side = (l['label'] ?? '').toString();
@@ -411,12 +434,16 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
-                            color: (side == 'مدين'
-                                    ? theme.AppColors.success
-                                    : theme.AppColors.error)
-                                .withValues(alpha: 0.12),
+                            color:
+                                (side == 'مدين'
+                                        ? theme.AppColors.success
+                                        : theme.AppColors.error)
+                                    .withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
@@ -467,7 +494,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                   isBalanced ? 'القيد متوازن ✅' : 'تنبيه: القيد غير متوازن ⚠️',
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
-                    color: isBalanced ? theme.AppColors.success : theme.AppColors.error,
+                    color: isBalanced
+                        ? theme.AppColors.success
+                        : theme.AppColors.error,
                   ),
                 ),
               ],
@@ -510,7 +539,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       context: context,
       builder: (_) => SafeBoxPickerDialog(
         safeBoxes: _safeBoxes,
-        selectedSafeBoxId: (type == 'clearing') ? _clearingSafe?.id : _bankSafe?.id,
+        selectedSafeBoxId: (type == 'clearing')
+            ? _clearingSafe?.id
+            : _bankSafe?.id,
         filterSafeType: type,
         excludeGold: true,
       ),
@@ -541,7 +572,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     Map<String, dynamic>? matched;
     for (final pm in _paymentMethods) {
       final rawSbId = pm['default_safe_box_id'];
-      final sbId = rawSbId is int ? rawSbId : int.tryParse(rawSbId?.toString() ?? '');
+      final sbId = rawSbId is int
+          ? rawSbId
+          : int.tryParse(rawSbId?.toString() ?? '');
       if (sbId != null && sbId == clearingId) {
         matched = pm;
         break;
@@ -550,7 +583,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     if (matched == null) return;
 
-    final timing = (matched['commission_timing']?.toString().trim().toLowerCase() ?? 'invoice');
+    final timing =
+        (matched['commission_timing']?.toString().trim().toLowerCase() ??
+        'invoice');
     final shouldTreatAsAlreadyApplied = timing != 'settlement';
 
     if (_feeAlreadyAppliedInInvoice == shouldTreatAsAlreadyApplied) return;
@@ -571,9 +606,14 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
   }
 
   Future<void> _pickFeeAccount() async {
-    final selected = await showDialog<Map<String, dynamic>>(
+    final selected = await showAccountPickerBottomSheet(
       context: context,
-      builder: (_) => _AccountPickerDialog(accounts: _accounts, selectedId: _feeAccount?['id'] as int?),
+      accounts: _accounts,
+      title: 'اختيار حساب مصروف العمولة',
+      isArabic: true,
+      selectedId: _feeAccount?['id'] as int?,
+      showTransactionTypeFilter: true,
+      showTracksWeightFilter: false,
     );
 
     if (!mounted || selected == null) return;
@@ -584,7 +624,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: error ? theme.AppColors.error : theme.AppColors.success,
+        backgroundColor: error
+            ? theme.AppColors.error
+            : theme.AppColors.success,
       ),
     );
   }
@@ -606,7 +648,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     }
 
     final gross = _parseAmount(_grossController.text);
-    final fee = _feeAlreadyAppliedInInvoice ? 0.0 : _parseAmount(_feeController.text);
+    final fee = _feeAlreadyAppliedInInvoice
+        ? 0.0
+        : _parseAmount(_feeController.text);
     final feeVat = _computeFeeVat(fee);
     final net = gross - fee - feeVat;
 
@@ -663,7 +707,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
         referenceNumber: _referenceController.text.trim().isEmpty
             ? null
             : _referenceController.text.trim(),
-        notes: _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
+        notes: _notesController.text.trim().isEmpty
+            ? null
+            : _notesController.text.trim(),
         description: _descriptionController.text.trim().isEmpty
             ? null
             : _descriptionController.text.trim(),
@@ -672,7 +718,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       final voucher = res['voucher'];
       String voucherNumber = '';
       if (voucher is Map<String, dynamic>) {
-        voucherNumber = (voucher['voucher_number'] ?? voucher['voucherNumber'] ?? '').toString();
+        voucherNumber =
+            (voucher['voucher_number'] ?? voucher['voucherNumber'] ?? '')
+                .toString();
       }
 
       if (!mounted) return;
@@ -742,13 +790,15 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     final isLight = themeData.brightness == Brightness.light;
 
     final gross = _parseAmount(_grossController.text);
-    final fee = _feeAlreadyAppliedInInvoice ? 0.0 : _parseAmount(_feeController.text);
+    final fee = _feeAlreadyAppliedInInvoice
+        ? 0.0
+        : _parseAmount(_feeController.text);
     final feeVat = _computeFeeVat(fee);
     final net = gross - fee - feeVat;
 
     final availableClearing = _clearingSafe?.cashBalance ?? 0.0;
     final exceedsAvailable =
-      availableClearing > 0 && gross > (availableClearing + 0.01);
+        availableClearing > 0 && gross > (availableClearing + 0.01);
 
     return Scaffold(
       appBar: AppBar(
@@ -759,343 +809,361 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : (_error != null)
-              ? _ErrorState(message: _error!, onRetry: _load)
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _SummaryCard(
-                      gross: gross,
-                      fee: fee,
-                      feeVat: feeVat,
-                      net: net,
-                    ),
-                    if (feeVat > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          'ملاحظة: الصافي محسوب بعد خصم ضريبة العمولة (${(_taxRate * 100).toStringAsFixed(0)}%)'
-                          '${_settingsLoaded ? '' : ' (قد تختلف حسب الإعدادات)'}',
-                          style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                        ),
-                      ),
-                    const SizedBox(height: 12),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'الخزائن',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 10),
-                            _PickerTile(
-                              title: 'خزينة المستحقات (Clearing)',
-                              value: _clearingSafe?.name,
-                              icon: Icons.swap_horiz,
-                              trailing: (_clearingSafe == null)
-                                  ? null
-                                  : Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: theme.AppColors.primaryGold
-                                            .withValues(alpha: 0.18),
-                                        borderRadius:
-                                            BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        _formatMoney(availableClearing),
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ),
-                              onTap: () => _pickSafeBox(type: 'clearing'),
-                            ),
-                            const SizedBox(height: 8),
-                            _PickerTile(
-                              title: 'خزينة البنك',
-                              value: _bankSafe?.name,
-                              icon: Icons.account_balance,
-                              onTap: () => _pickSafeBox(type: 'bank'),
-                            ),
-                          ],
-                        ),
+          ? _ErrorState(message: _error!, onRetry: _load)
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _SummaryCard(gross: gross, fee: fee, feeVat: feeVat, net: net),
+                if (feeVat > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'ملاحظة: الصافي محسوب بعد خصم ضريبة العمولة (${(_taxRate * 100).toStringAsFixed(0)}%)'
+                      '${_settingsLoaded ? '' : ' (قد تختلف حسب الإعدادات)'}',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'المبالغ',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _grossController,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              inputFormatters: [NormalizeNumberFormatter()],
-                              decoration: InputDecoration(
-                                labelText: 'الإجمالي (Gross)',
-                                prefixIcon: const Icon(Icons.payments_outlined),
-                                border: const OutlineInputBorder(),
-                                helperText: (_clearingSafe == null)
-                                    ? null
-                                    : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
-                                errorText: exceedsAvailable
-                                    ? 'الإجمالي يتجاوز الرصيد المتاح'
-                                    : null,
-                              ),
-                              onChanged: (_) {
-                                setState(() {});
-                                _recomputeFeeIfNeeded();
-                              },
-                            ),
-                            const SizedBox(height: 10),
-
-                            SwitchListTile.adaptive(
-                              value: _feeAlreadyAppliedInInvoice,
-                              onChanged: (v) {
-                                setState(() {
-                                  _feeAlreadyAppliedInInvoice = v;
-                                  if (v) {
-                                    _autoCalcFee = false;
-                                    _rateController.text = '0';
-                                    _fixedFeeController.text = '0';
-                                    _txCountController.text = '1';
-                                    _feeController.text = '0';
-                                    _feeAccount = null;
-                                  } else {
-                                    _autoCalcFee = true;
-                                  }
-                                });
-                                _recomputeFeeIfNeeded();
-                              },
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('العمولة محسوبة في الفاتورة (لا تخصم مرة أخرى)'),
-                              subtitle: Text(
-                                _feeAlreadyAppliedInInvoice
-                                    ? 'سيتم تحويل كامل المبلغ من خزينة المستحقات إلى خزينة البنك بدون خصم عمولة هنا.'
-                                    : 'سيتم احتساب/تسجيل العمولة أثناء التسوية (قد يخصمها البنك عند الإيداع).',
-                                style: TextStyle(color: Colors.grey.shade700),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-
-                            SwitchListTile.adaptive(
-                              value: _autoCalcFee,
-                              onChanged: _feeAlreadyAppliedInInvoice
-                                  ? null
-                                  : (v) {
-                                      setState(() => _autoCalcFee = v);
-                                      _recomputeFeeIfNeeded();
-                                    },
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('احتساب العمولة تلقائياً (نسبة + مبلغ ثابت)'),
-                              subtitle: Text(
-                                _autoCalcFee
-                                    ? 'سيتم احتساب العمولة تلقائياً وإرسالها كـ fee_amount'
-                                    : 'يمكنك إدخال العمولة يدوياً',
-                                style: TextStyle(color: Colors.grey.shade700),
-                              ),
-                            ),
-                            if (_autoCalcFee && !_feeAlreadyAppliedInInvoice)
-                              Column(
-                                children: [
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _rateController,
-                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                          inputFormatters: [NormalizeNumberFormatter()],
-                                          enabled: !_feeAlreadyAppliedInInvoice,
-                                          decoration: const InputDecoration(
-                                            labelText: 'نسبة العمولة %',
-                                            prefixIcon: Icon(Icons.percent),
-                                            border: OutlineInputBorder(),
-                                          ),
-                                          onChanged: (_) {
-                                            setState(() {});
-                                            _recomputeFeeIfNeeded();
-                                          },
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _fixedFeeController,
-                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                          inputFormatters: [NormalizeNumberFormatter()],
-                                          enabled: !_feeAlreadyAppliedInInvoice,
-                                          decoration: const InputDecoration(
-                                            labelText: 'مبلغ ثابت/عملية',
-                                            prefixIcon: Icon(Icons.attach_money),
-                                            border: OutlineInputBorder(),
-                                          ),
-                                          onChanged: (_) {
-                                            setState(() {});
-                                            _recomputeFeeIfNeeded();
-                                          },
-                                        ),
-                                      ),
-                                    ],
+                  ),
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'الخزائن',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 10),
+                        _PickerTile(
+                          title: 'خزينة المستحقات (Clearing)',
+                          value: _clearingSafe?.name,
+                          icon: Icons.swap_horiz,
+                          trailing: (_clearingSafe == null)
+                              ? null
+                              : Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
                                   ),
-                                  const SizedBox(height: 10),
-                                  TextField(
-                                    controller: _txCountController,
-                                    keyboardType: TextInputType.number,
-                                    inputFormatters: [NormalizeNumberFormatter()],
-                                    enabled: !_feeAlreadyAppliedInInvoice,
-                                    decoration: const InputDecoration(
-                                      labelText: 'عدد العمليات',
-                                      prefixIcon: Icon(Icons.confirmation_number_outlined),
-                                      border: OutlineInputBorder(),
+                                  decoration: BoxDecoration(
+                                    color: theme.AppColors.primaryGold
+                                        .withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    _formatMoney(availableClearing),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
                                     ),
-                                    onChanged: (_) {
-                                      setState(() {});
-                                      _recomputeFeeIfNeeded();
-                                    },
+                                  ),
+                                ),
+                          onTap: () => _pickSafeBox(type: 'clearing'),
+                        ),
+                        const SizedBox(height: 8),
+                        _PickerTile(
+                          title: 'خزينة البنك',
+                          value: _bankSafe?.name,
+                          icon: Icons.account_balance,
+                          onTap: () => _pickSafeBox(type: 'bank'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'المبالغ',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _grossController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [NormalizeNumberFormatter()],
+                          decoration: InputDecoration(
+                            labelText: 'الإجمالي (Gross)',
+                            prefixIcon: const Icon(Icons.payments_outlined),
+                            border: const OutlineInputBorder(),
+                            helperText: (_clearingSafe == null)
+                                ? null
+                                : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
+                            errorText: exceedsAvailable
+                                ? 'الإجمالي يتجاوز الرصيد المتاح'
+                                : null,
+                          ),
+                          onChanged: (_) {
+                            setState(() {});
+                            _recomputeFeeIfNeeded();
+                          },
+                        ),
+                        const SizedBox(height: 10),
+
+                        SwitchListTile.adaptive(
+                          value: _feeAlreadyAppliedInInvoice,
+                          onChanged: (v) {
+                            setState(() {
+                              _feeAlreadyAppliedInInvoice = v;
+                              if (v) {
+                                _autoCalcFee = false;
+                                _rateController.text = '0';
+                                _fixedFeeController.text = '0';
+                                _txCountController.text = '1';
+                                _feeController.text = '0';
+                                _feeAccount = null;
+                              } else {
+                                _autoCalcFee = true;
+                              }
+                            });
+                            _recomputeFeeIfNeeded();
+                          },
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text(
+                            'العمولة محسوبة في الفاتورة (لا تخصم مرة أخرى)',
+                          ),
+                          subtitle: Text(
+                            _feeAlreadyAppliedInInvoice
+                                ? 'سيتم تحويل كامل المبلغ من خزينة المستحقات إلى خزينة البنك بدون خصم عمولة هنا.'
+                                : 'سيتم احتساب/تسجيل العمولة أثناء التسوية (قد يخصمها البنك عند الإيداع).',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        SwitchListTile.adaptive(
+                          value: _autoCalcFee,
+                          onChanged: _feeAlreadyAppliedInInvoice
+                              ? null
+                              : (v) {
+                                  setState(() => _autoCalcFee = v);
+                                  _recomputeFeeIfNeeded();
+                                },
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text(
+                            'احتساب العمولة تلقائياً (نسبة + مبلغ ثابت)',
+                          ),
+                          subtitle: Text(
+                            _autoCalcFee
+                                ? 'سيتم احتساب العمولة تلقائياً وإرسالها كـ fee_amount'
+                                : 'يمكنك إدخال العمولة يدوياً',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                        ),
+                        if (_autoCalcFee && !_feeAlreadyAppliedInInvoice)
+                          Column(
+                            children: [
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _rateController,
+                                      keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
+                                      inputFormatters: [
+                                        NormalizeNumberFormatter(),
+                                      ],
+                                      enabled: !_feeAlreadyAppliedInInvoice,
+                                      decoration: const InputDecoration(
+                                        labelText: 'نسبة العمولة %',
+                                        prefixIcon: Icon(Icons.percent),
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      onChanged: (_) {
+                                        setState(() {});
+                                        _recomputeFeeIfNeeded();
+                                      },
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _fixedFeeController,
+                                      keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
+                                      inputFormatters: [
+                                        NormalizeNumberFormatter(),
+                                      ],
+                                      enabled: !_feeAlreadyAppliedInInvoice,
+                                      decoration: const InputDecoration(
+                                        labelText: 'مبلغ ثابت/عملية',
+                                        prefixIcon: Icon(Icons.attach_money),
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      onChanged: (_) {
+                                        setState(() {});
+                                        _recomputeFeeIfNeeded();
+                                      },
+                                    ),
                                   ),
                                 ],
-                              )
-                            else
+                              ),
+                              const SizedBox(height: 10),
                               TextField(
-                                controller: _feeController,
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                controller: _txCountController,
+                                keyboardType: TextInputType.number,
                                 inputFormatters: [NormalizeNumberFormatter()],
                                 enabled: !_feeAlreadyAppliedInInvoice,
                                 decoration: const InputDecoration(
-                                  labelText: 'العمولة (Fee)',
-                                  prefixIcon: Icon(Icons.percent),
+                                  labelText: 'عدد العمليات',
+                                  prefixIcon: Icon(
+                                    Icons.confirmation_number_outlined,
+                                  ),
                                   border: OutlineInputBorder(),
                                 ),
-                                onChanged: (_) => setState(() {}),
+                                onChanged: (_) {
+                                  setState(() {});
+                                  _recomputeFeeIfNeeded();
+                                },
                               ),
+                            ],
+                          )
+                        else
+                          TextField(
+                            controller: _feeController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            inputFormatters: [NormalizeNumberFormatter()],
+                            enabled: !_feeAlreadyAppliedInInvoice,
+                            decoration: const InputDecoration(
+                              labelText: 'العمولة (Fee)',
+                              prefixIcon: Icon(Icons.percent),
+                              border: OutlineInputBorder(),
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
 
-                            if (_autoCalcFee && !_feeAlreadyAppliedInInvoice)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 10),
-                                child: TextField(
-                                  controller: _feeController,
-                                  readOnly: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'العمولة المحتسبة (Fee)',
-                                    prefixIcon: Icon(Icons.calculate_outlined),
-                                    border: OutlineInputBorder(),
-                                  ),
+                        if (_autoCalcFee && !_feeAlreadyAppliedInInvoice)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: TextField(
+                              controller: _feeController,
+                              readOnly: true,
+                              decoration: const InputDecoration(
+                                labelText: 'العمولة المحتسبة (Fee)',
+                                prefixIcon: Icon(Icons.calculate_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 10),
+                        _PickerTile(
+                          title: 'حساب مصروف العمولة',
+                          value: _feeAccount == null
+                              ? null
+                              : '${_feeAccount?['account_number'] ?? ''} - ${_feeAccount?['name'] ?? ''}',
+                          icon: Icons.receipt_long,
+                          onTap: () {
+                            if (_feeAlreadyAppliedInInvoice) return;
+                            _pickFeeAccount();
+                          },
+                          trailing: _feeAccount == null
+                              ? null
+                              : IconButton(
+                                  tooltip: 'مسح',
+                                  onPressed: _feeAlreadyAppliedInInvoice
+                                      ? null
+                                      : () =>
+                                            setState(() => _feeAccount = null),
+                                  icon: const Icon(Icons.close),
                                 ),
-                              ),
-                            const SizedBox(height: 10),
-                            _PickerTile(
-                              title: 'حساب مصروف العمولة',
-                              value: _feeAccount == null
-                                  ? null
-                                  : '${_feeAccount?['account_number'] ?? ''} - ${_feeAccount?['name'] ?? ''}',
-                              icon: Icons.receipt_long,
-                              onTap: () {
-                                if (_feeAlreadyAppliedInInvoice) return;
-                                _pickFeeAccount();
-                              },
-                              trailing: _feeAccount == null
-                                  ? null
-                                  : IconButton(
-                                      tooltip: 'مسح',
-                                      onPressed: _feeAlreadyAppliedInInvoice
-                                          ? null
-                                          : () => setState(() => _feeAccount = null),
-                                      icon: const Icon(Icons.close),
-                                    ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'ملاحظة: يلزم تحديد حساب مصروف العمولة فقط إذا كانت العمولة > 0',
-                              style: TextStyle(color: Colors.grey.shade700),
-                            ),
-                          ],
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'بيانات إضافية',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 10),
-                            _PickerTile(
-                              title: 'تاريخ التسوية',
-                              value:
-                                  '${_settlementDate.year}-${_settlementDate.month.toString().padLeft(2, '0')}-${_settlementDate.day.toString().padLeft(2, '0')}',
-                              icon: Icons.event,
-                              onTap: _pickDate,
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _referenceController,
-                              decoration: const InputDecoration(
-                                labelText: 'رقم مرجعي (اختياري)',
-                                prefixIcon: Icon(Icons.tag),
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _descriptionController,
-                              decoration: const InputDecoration(
-                                labelText: 'وصف (اختياري)',
-                                prefixIcon: Icon(Icons.notes),
-                                border: OutlineInputBorder(),
-                              ),
-                              maxLines: 2,
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _notesController,
-                              decoration: const InputDecoration(
-                                labelText: 'ملاحظات (اختياري)',
-                                prefixIcon: Icon(Icons.sticky_note_2_outlined),
-                                border: OutlineInputBorder(),
-                              ),
-                              maxLines: 2,
-                            ),
-                          ],
+                        const SizedBox(height: 6),
+                        Text(
+                          'ملاحظة: يلزم تحديد حساب مصروف العمولة فقط إذا كانت العمولة > 0',
+                          style: TextStyle(color: Colors.grey.shade700),
                         ),
-                      ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    FilledButton.icon(
-                      onPressed: _submitting ? null : _submit,
-                      icon: _submitting
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.check_circle_outline),
-                      label: Text(_submitting ? 'جارٍ الحفظ...' : 'تنفيذ التسوية'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: theme.AppColors.primaryGold,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'بيانات إضافية',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 10),
+                        _PickerTile(
+                          title: 'تاريخ التسوية',
+                          value:
+                              '${_settlementDate.year}-${_settlementDate.month.toString().padLeft(2, '0')}-${_settlementDate.day.toString().padLeft(2, '0')}',
+                          icon: Icons.event,
+                          onTap: _pickDate,
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _referenceController,
+                          decoration: const InputDecoration(
+                            labelText: 'رقم مرجعي (اختياري)',
+                            prefixIcon: Icon(Icons.tag),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _descriptionController,
+                          decoration: const InputDecoration(
+                            labelText: 'وصف (اختياري)',
+                            prefixIcon: Icon(Icons.notes),
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 2,
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _notesController,
+                          decoration: const InputDecoration(
+                            labelText: 'ملاحظات (اختياري)',
+                            prefixIcon: Icon(Icons.sticky_note_2_outlined),
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 2,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: _submitting ? null : _submit,
+                  icon: _submitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.check_circle_outline),
+                  label: Text(_submitting ? 'جارٍ الحفظ...' : 'تنفيذ التسوية'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: theme.AppColors.primaryGold,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -1154,7 +1222,10 @@ class _SummaryCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: chipColor(value).withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(99),
@@ -1269,7 +1340,9 @@ class _PickerTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    (value == null || value!.trim().isEmpty) ? 'اضغط للاختيار' : value!,
+                    (value == null || value!.trim().isEmpty)
+                        ? 'اضغط للاختيار'
+                        : value!,
                     style: themeData.textTheme.bodyMedium?.copyWith(
                       color: (value == null || value!.trim().isEmpty)
                           ? Colors.grey.shade700
@@ -1281,7 +1354,10 @@ class _PickerTile extends StatelessWidget {
                 ],
               ),
             ),
-            if (trailing != null) trailing! else const Icon(Icons.chevron_right),
+            if (trailing != null)
+              trailing!
+            else
+              const Icon(Icons.chevron_right),
           ],
         ),
       ),
@@ -1303,7 +1379,11 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: theme.AppColors.error),
+            const Icon(
+              Icons.error_outline,
+              size: 48,
+              color: theme.AppColors.error,
+            ),
             const SizedBox(height: 10),
             Text(
               message,
@@ -1319,128 +1399,6 @@ class _ErrorState extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _AccountPickerDialog extends StatefulWidget {
-  final List<Map<String, dynamic>> accounts;
-  final int? selectedId;
-
-  const _AccountPickerDialog({required this.accounts, this.selectedId});
-
-  @override
-  State<_AccountPickerDialog> createState() => _AccountPickerDialogState();
-}
-
-class _AccountPickerDialogState extends State<_AccountPickerDialog> {
-  final TextEditingController _search = TextEditingController();
-  String _q = '';
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
-  List<Map<String, dynamic>> _filtered() {
-    final q = _q.trim().toLowerCase();
-    final items = widget.accounts.where((a) {
-      final numStr = (a['account_number'] ?? '').toString().toLowerCase();
-      final name = (a['name'] ?? '').toString().toLowerCase();
-      final nameEn = (a['name_en'] ?? '').toString().toLowerCase();
-      if (q.isEmpty) return true;
-      return numStr.contains(q) || name.contains(q) || nameEn.contains(q);
-    }).toList();
-
-    items.sort((a, b) {
-      final an = (a['account_number'] ?? '').toString();
-      final bn = (b['account_number'] ?? '').toString();
-      return an.compareTo(bn);
-    });
-
-    return items;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filtered = _filtered();
-
-    return AlertDialog(
-      title: const Text('اختيار حساب'),
-      content: SizedBox(
-        width: 560,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-                hintText: 'ابحث برقم الحساب/الاسم',
-                suffixIcon: _q.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () => setState(() {
-                          _q = '';
-                          _search.clear();
-                        }),
-                        icon: const Icon(Icons.close),
-                      ),
-                border: const OutlineInputBorder(),
-              ),
-              onChanged: (v) => setState(() => _q = v),
-            ),
-            const SizedBox(height: 10),
-            if (filtered.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'لا توجد نتائج',
-                  style: TextStyle(color: Colors.grey.shade600),
-                ),
-              )
-            else
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: filtered.length,
-                  separatorBuilder: (context, index) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final a = filtered[index];
-                    final id = a['id'] as int?;
-                    final selected = (id != null && id == widget.selectedId);
-                    final number = (a['account_number'] ?? '').toString();
-                    final name = (a['name'] ?? '').toString();
-
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: selected
-                            ? theme.AppColors.primaryGold.withValues(alpha: 0.18)
-                            : Colors.grey.shade200,
-                        child: Icon(
-                          Icons.account_tree_outlined,
-                          color: selected ? theme.AppColors.darkGold : Colors.grey.shade700,
-                        ),
-                      ),
-                      title: Text('$number - $name'),
-                      trailing: selected
-                          ? Icon(Icons.check_circle, color: theme.AppColors.darkGold)
-                          : null,
-                      onTap: () => Navigator.pop(context, a),
-                    );
-                  },
-                ),
-              ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('إلغاء'),
-        ),
-      ],
     );
   }
 }
