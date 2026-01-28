@@ -16,7 +16,13 @@ COPY frontend /app
 # Compile-time API base URL for the web app (ApiService reads dart-define API_BASE_URL)
 ARG API_BASE_URL=/api
 
-RUN flutter build web --release --no-tree-shake-icons --dart-define=API_BASE_URL=${API_BASE_URL}
+# Compile-time Google OAuth Web Client ID for google_sign_in_web
+# (used by GoogleDriveBackupService on web)
+ARG GOOGLE_WEB_CLIENT_ID=
+
+RUN flutter build web --release --no-tree-shake-icons \
+	--dart-define=API_BASE_URL=${API_BASE_URL} \
+	--dart-define=GOOGLE_WEB_CLIENT_ID=${GOOGLE_WEB_CLIENT_ID}
 
 # 2) Serve with nginx
 FROM nginx:1.27-alpine

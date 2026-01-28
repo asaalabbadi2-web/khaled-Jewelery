@@ -4,6 +4,7 @@ import 'package:frontend/providers/settings_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../theme/app_theme.dart';
 import '../utils/arabic_number_formatter.dart';
 import '../widgets/account_picker_sheet.dart';
 
@@ -831,63 +832,11 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                   (acc) => acc['id'] == line.accountId,
                 );
 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  elevation: 2,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: Column(
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: AccountPickerFormField(
-                                context: context,
-                                accounts: sortedAccountsTyped,
-                                value: isSelectedAccountValid
-                                    ? line.accountId
-                                    : null,
-                                labelText: 'الحساب',
-                                hintText: 'اختر حساب فرعي',
-                                title: 'اختيار حساب',
-                                isArabic: true,
-                                enabled: sortedAccountsTyped.isNotEmpty,
-                                helperText: sortedAccountsTyped.isEmpty
-                                    ? null
-                                    : 'ابحث بالرقم/الاسم + فلترة (نقدي/ذهبي)',
-                                showTransactionTypeFilter: true,
-                                showTracksWeightFilter: false,
-                                validator: (value) {
-                                  if (line.hasValues && value == null) {
-                                    return 'حساب غير صالح أو رئيسي';
-                                  }
-                                  return null;
-                                },
-                                onChanged: (value) =>
-                                    _onAccountChanged(line, value),
-                              ),
-                            ),
-                            IconButton(
-                              icon: Icon(
-                                Icons.delete,
-                                color: Colors.red.shade400,
-                              ),
-                              onPressed: () => _removeLine(index),
-                              padding: const EdgeInsets.all(12),
-                              constraints: const BoxConstraints(),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        _buildCashInputFields(line),
-                        _buildGoldInputFields(line),
-                      ],
-                    ),
-                  ),
+                return _buildJournalLineCard(
+                  index: index,
+                  line: line,
+                  accounts: sortedAccountsTyped,
+                  isSelectedAccountValid: isSelectedAccountValid,
                 );
               },
             ),
@@ -895,6 +844,253 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
           const SizedBox(height: 8),
         ],
       ),
+    );
+  }
+
+  Widget _buildJournalLineCard({
+    required int index,
+    required JournalLine line,
+    required List<Map<String, dynamic>> accounts,
+    required bool isSelectedAccountValid,
+  }) {
+    final theme = Theme.of(context);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 14),
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.lightGold.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: AppColors.darkGold.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Text(
+                    '${index + 1}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.darkGold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'سطر ${index + 1}',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'حذف السطر',
+                  icon: Icon(Icons.delete_outline, color: Colors.red.shade400),
+                  onPressed: () => _removeLine(index),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Divider(height: 1, color: Colors.grey.shade300),
+            const SizedBox(height: 10),
+
+            Text(
+              'الحساب',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Colors.grey.shade700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            AccountPickerFormField(
+              context: context,
+              accounts: accounts,
+              value: isSelectedAccountValid ? line.accountId : null,
+              labelText: 'اختر الحساب',
+              hintText: 'اختر حساب فرعي',
+              title: 'اختيار حساب',
+              isArabic: true,
+              enabled: accounts.isNotEmpty,
+              helperText: accounts.isEmpty
+                  ? null
+                  : 'ابحث بالرقم/الاسم + فلترة (نقدي/ذهبي)',
+              showTransactionTypeFilter: true,
+              showTracksWeightFilter: false,
+              validator: (value) {
+                if (line.hasValues && value == null) {
+                  return 'حساب غير صالح أو رئيسي';
+                }
+                return null;
+              },
+              onChanged: (value) => _onAccountChanged(line, value),
+            ),
+            const SizedBox(height: 12),
+
+            Divider(height: 1, color: Colors.grey.shade300),
+            const SizedBox(height: 12),
+
+            _buildCashSection(line),
+            const SizedBox(height: 10),
+            _buildGoldSection(line, index: index),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCashSection(JournalLine line) {
+    final theme = Theme.of(context);
+
+    final content = _buildCashInputFields(line);
+    if (content is SizedBox) return content;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.payments_outlined, size: 18, color: Colors.blueGrey),
+              const SizedBox(width: 8),
+              Text(
+                'القيم النقدية',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          content,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGoldSection(JournalLine line, {required int index}) {
+    final theme = Theme.of(context);
+    final hasAnyGoldValue = line.hasGoldValues;
+    final shouldDelayDisplay =
+        !widget.isEditMode && line.accountId == null && !hasAnyGoldValue;
+    if (shouldDelayDisplay) {
+      return const SizedBox.shrink();
+    }
+
+    // Keep gold compact by default; expand when there are values or in edit mode.
+    final initialExpanded = widget.isEditMode || hasAnyGoldValue;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.lightGold.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.darkGold.withValues(alpha: 0.18)),
+      ),
+      child: Theme(
+        data: theme.copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: PageStorageKey<String>('je_line_gold_$index'),
+          initiallyExpanded: initialExpanded,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          leading: Icon(Icons.diamond_outlined, color: AppColors.darkGold),
+          title: Text(
+            'تفاصيل الذهب',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: Colors.grey.shade800,
+            ),
+          ),
+          subtitle: Text(
+            'فعّل العيارات المطلوبة ثم أدخل الوزن',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          children: [
+            _buildGoldToggleRow(line),
+            const SizedBox(height: 8),
+            _buildGoldKaratRows(line),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGoldKaratRows(JournalLine line) {
+    final theme = Theme.of(context);
+    final hintStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+
+    final karatRows = <Widget>[];
+    for (final karat in _supportedKarats) {
+      if (!line.isGoldKaratEnabled(karat)) continue;
+
+      final debitValue =
+          double.tryParse(line.goldDebitControllers[karat]!.text) ?? 0.0;
+      final creditValue =
+          double.tryParse(line.goldCreditControllers[karat]!.text) ?? 0.0;
+
+      karatRows.add(
+        Padding(
+          padding: const EdgeInsets.only(top: 8.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildGoldAmountField(
+                  controller: line.goldDebitControllers[karat]!,
+                  karat: karat,
+                  isDebit: true,
+                  highlight: debitValue > 0.0,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildGoldAmountField(
+                  controller: line.goldCreditControllers[karat]!,
+                  karat: karat,
+                  isDebit: false,
+                  highlight: creditValue > 0.0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (karatRows.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          'قم بتفعيل العيارات المطلوبة لإدخال الأوزان.',
+          style: hintStyle,
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: karatRows,
     );
   }
 
@@ -974,89 +1170,6 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     );
   }
 
-  Widget _buildGoldInputFields(JournalLine line) {
-    // ✅ تم إلغاء منطق الإخفاء بناءً على نوع الحساب
-    // جميع الحسابات (نقدية وذهبية) يمكنها استخدام حقول الذهب
-    final hasAnyGoldValue = line.hasGoldValues;
-
-    final shouldDelayDisplay =
-        !widget.isEditMode && line.accountId == null && !hasAnyGoldValue;
-    if (shouldDelayDisplay) {
-      return const SizedBox.shrink();
-    }
-
-    final karatRows = <Widget>[];
-
-    // Render a row per karat. Toggles are shown horizontally at the top-left
-    // of the gold section; each enabled karat renders a full debit+credit row.
-    for (final karat in _supportedKarats) {
-      if (!line.isGoldKaratEnabled(karat)) continue;
-
-      final debitValue =
-          double.tryParse(line.goldDebitControllers[karat]!.text) ?? 0.0;
-      final creditValue =
-          double.tryParse(line.goldCreditControllers[karat]!.text) ?? 0.0;
-
-      karatRows.add(
-        Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: _buildGoldAmountField(
-                  controller: line.goldDebitControllers[karat]!,
-                  karat: karat,
-                  isDebit: true,
-                  highlight: debitValue > 0.0,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildGoldAmountField(
-                  controller: line.goldCreditControllers[karat]!,
-                  karat: karat,
-                  isDebit: false,
-                  highlight: creditValue > 0.0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final theme = Theme.of(context);
-    final hintStyle = theme.textTheme.bodySmall?.copyWith(
-      color: theme.colorScheme.onSurfaceVariant,
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 8.0),
-          child: Text(
-            'تفاصيل الذهب:',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4.0),
-          child: _buildGoldToggleRow(line),
-        ),
-        if (karatRows.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              'قم بتفعيل العيارات المطلوبة لإدخال الأوزان.',
-              style: hintStyle,
-            ),
-          )
-        else
-          ...karatRows,
-      ],
-    );
-  }
 
   Widget _buildGoldToggleRow(JournalLine line) {
     final theme = Theme.of(context);

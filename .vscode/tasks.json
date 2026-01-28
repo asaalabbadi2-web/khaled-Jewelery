@@ -32,7 +32,7 @@
 		{
 			"label": "Run Flutter Web",
 			"type": "shell",
-			"command": "cd frontend && flutter run -d chrome --web-hostname 0.0.0.0 --web-port=8080",
+			"command": "cd frontend && flutter run -d web-server --web-hostname=127.0.0.1 --web-port=8080 --dart-define=GOOGLE_WEB_CLIENT_ID=${env:GOOGLE_WEB_CLIENT_ID}",
 			"isBackground": true,
 			"problemMatcher": []
 		},

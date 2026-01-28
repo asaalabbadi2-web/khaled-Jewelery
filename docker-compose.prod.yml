@@ -62,6 +62,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         API_BASE_URL: /api
+        GOOGLE_WEB_CLIENT_ID: ${GOOGLE_WEB_CLIENT_ID:-}
     container_name: yasargold-nginx
     env_file: .env.production
     ports:

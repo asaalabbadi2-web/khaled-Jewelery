@@ -1,13 +1,27 @@
 import 'dart:async';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
 
+import '../src/google_signin_client_id.dart';
+
 class GoogleDriveBackupService {
+  static const String _webClientIdFromDefine = String.fromEnvironment(
+    'GOOGLE_WEB_CLIENT_ID',
+  );
+
+  static String? _resolveWebClientId() {
+    if (!kIsWeb) return null;
+    if (_webClientIdFromDefine.trim().isNotEmpty) {
+      return _webClientIdFromDefine.trim();
+    }
+    return readGoogleSignInClientIdFromMeta();
+  }
+
   GoogleDriveBackupService()
       : _googleSignIn = GoogleSignIn(
+          clientId: _resolveWebClientId(),
           scopes: const <String>[drive.DriveApi.driveFileScope],
         );
 
@@ -18,6 +32,14 @@ class GoogleDriveBackupService {
   Stream<GoogleSignInAccount?> get onUserChanged => _googleSignIn.onCurrentUserChanged;
 
   Future<GoogleSignInAccount?> signIn() async {
+    if (kIsWeb && (_resolveWebClientId()?.isEmpty ?? true)) {
+      throw StateError(
+        'ClientID غير مضبوط للويب.\n'
+        'لحل المشكلة: مرّر OAuth Client ID عبر\n'
+        '--dart-define=GOOGLE_WEB_CLIENT_ID=...\n'
+        'أو أضِف meta tag باسم google-signin-client_id في web/index.html.',
+      );
+    }
     // Attempt silent sign-in first.
     final existing = await _googleSignIn.signInSilently();
     if (existing != null) return existing;
