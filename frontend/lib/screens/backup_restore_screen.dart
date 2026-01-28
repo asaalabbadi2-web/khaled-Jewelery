@@ -34,6 +34,10 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   String? _driveStatus;
   int _driveListVersion = 0;
 
+  bool _serverDriveBusy = false;
+  String? _serverDriveStatus;
+  int _serverDriveListVersion = 0;
+
   bool _encryptForCloud = true;
   bool _useDeviceKeyForCloud = false;
 
@@ -442,11 +446,29 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _driveStatus = 'فشل تسجيل الدخول: $e';
+        _driveStatus = _formatDriveSignInError(e);
       });
     } finally {
       if (mounted) setState(() => _driveBusy = false);
     }
+  }
+
+  String _formatDriveSignInError(Object error) {
+    final s = error.toString();
+
+    // Common web setup issues
+    if (s.contains('ClientID') && (s.contains('not set') || s.contains('غير مضبوط'))) {
+      return 'فشل تسجيل الدخول: Client ID غير مضبوط للويب.\n'
+          'تأكد من إعداد OAuth Web Client ID وربطه مع التطبيق.';
+    }
+
+    // Google People API disabled (google_sign_in_web fetches basic profile via People API)
+    if (s.contains('people.googleapis.com') || s.contains('People API') || s.contains('SERVICE_DISABLED')) {
+      return 'فشل تسجيل الدخول: خدمات Google غير مفعّلة في مشروعك.\n'
+          'فعّل Google People API (وأيضًا Google Drive API) من Google Cloud Console ثم انتظر دقائق وجرّب مرة أخرى.';
+    }
+
+    return 'فشل تسجيل الدخول: $error';
   }
 
   Future<void> _driveSignOut() async {
@@ -526,6 +548,147 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       });
     } finally {
       if (mounted) setState(() => _driveBusy = false);
+    }
+  }
+
+  Future<void> _serverDriveUpload() async {
+    if (_serverDriveBusy || _busy) return;
+    setState(() {
+      _serverDriveBusy = true;
+      _serverDriveStatus = null;
+    });
+
+    try {
+      final res = await _api.uploadSystemBackupToDriveServerSide();
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = res['message']?.toString() ?? 'تم رفع النسخة إلى Drive (على السيرفر).';
+        _serverDriveListVersion++;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = 'فشل الرفع (على السيرفر): $e';
+      });
+    } finally {
+      if (mounted) setState(() => _serverDriveBusy = false);
+    }
+  }
+
+  Future<void> _downloadFromServerDrive(String fileId, String? name) async {
+    if (_serverDriveBusy || _busy) return;
+    setState(() {
+      _serverDriveBusy = true;
+      _serverDriveStatus = null;
+    });
+    try {
+      final bytes = await _api.downloadDriveBackupServerSide(fileId);
+      final filename = (name == null || name.trim().isEmpty)
+          ? 'drive-backup-$fileId.zip'
+          : name.trim();
+
+      if (kIsWeb) {
+        web_io.downloadBytes(
+          filename,
+          Uint8List.fromList(bytes),
+          'application/octet-stream',
+        );
+        if (!mounted) return;
+        setState(() {
+          _serverDriveStatus = 'تم تنزيل الملف من Drive (على السيرفر).';
+        });
+        return;
+      }
+
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: 'حفظ الملف من Google Drive',
+        fileName: filename,
+        type: FileType.custom,
+        allowedExtensions: const ['zip', 'ygbak'],
+      );
+      if (savePath == null || savePath.trim().isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _serverDriveStatus = 'تم إلغاء الحفظ.';
+        });
+        return;
+      }
+      final file = File(savePath);
+      await file.writeAsBytes(bytes, flush: true);
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = 'تم حفظ الملف: ${file.path}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = 'فشل تنزيل الملف: $e';
+      });
+    } finally {
+      if (mounted) setState(() => _serverDriveBusy = false);
+    }
+  }
+
+  Future<void> _restoreFromServerDrive(String fileId, String? name) async {
+    if (_serverDriveBusy || _busy) return;
+
+    final auth = context.read<AuthProvider>();
+    if (!_canRestore(isSystemAdmin: auth.isSystemAdmin)) {
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = _restoreBlockedReason(isSystemAdmin: auth.isSystemAdmin);
+      });
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('استعادة من Google Drive (على السيرفر)'),
+          content: Text(
+            'سيتم تنزيل النسخة من Drive عبر السيرفر ثم استبدال بيانات النظام.\n\n'
+            'الملف: ${name ?? fileId}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('متابعة'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _serverDriveBusy = true;
+      _serverDriveStatus = null;
+    });
+
+    try {
+      final bytes = await _api.downloadDriveBackupServerSide(fileId);
+      final filename = (name ?? 'drive-backup.zip').toString();
+      final res = await _api.restoreSystemBackupZip(
+        zipBytes: bytes,
+        filename: filename,
+      );
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = res['message']?.toString() ?? 'تمت الاستعادة.';
+        _serverDriveListVersion++;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _serverDriveStatus = 'فشل الاستعادة (من Drive على السيرفر): $e';
+      });
+    } finally {
+      if (mounted) setState(() => _serverDriveBusy = false);
     }
   }
 
@@ -768,6 +931,89 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
             subtitle:
                 'يدعم رفع النسخة الاحتياطية واستعادتها من داخل التطبيق. (يتطلب إعداد Google Sign-In للمشروع).',
             children: [
+              _CardSection(
+                title: 'Google Drive (على السيرفر - Service Account)',
+                subtitle:
+                    'يرفع النسخة من السيرفر مباشرةً إلى Drive بدون تسجيل دخول Google في المتصفح. مناسب للإنتاج على IP محلي.',
+                children: [
+                  FilledButton.icon(
+                    onPressed: (_serverDriveBusy || _busy) ? null : _serverDriveUpload,
+                    icon: const Icon(Icons.cloud_upload_outlined),
+                    label: Text(_serverDriveBusy ? 'جاري...' : 'رفع نسخة احتياطية الآن (على السيرفر)'),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _serverDriveBusy
+                        ? null
+                        : () {
+                            setState(() {
+                              _serverDriveStatus = null;
+                              _serverDriveListVersion++;
+                            });
+                          },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('تحديث القائمة/الحالة (على السيرفر)'),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_serverDriveStatus != null)
+                    Text(
+                      _serverDriveStatus!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  const SizedBox(height: 12),
+                  FutureBuilder<List<Map<String, dynamic>>>(
+                    key: ValueKey(_serverDriveListVersion),
+                    future: _api.listDriveBackupsServerSide(pageSize: 10),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Text('جاري تحميل قائمة النسخ (على السيرفر)...');
+                      }
+                      if (snapshot.hasError) {
+                        return Text('تعذر تحميل القائمة (على السيرفر): ${snapshot.error}');
+                      }
+                      final files = snapshot.data ?? const <Map<String, dynamic>>[];
+                      if (files.isEmpty) {
+                        return const Text('لا توجد نسخ على Drive بعد.');
+                      }
+
+                      return Column(
+                        children: files
+                            .where((f) => (f['id']?.toString() ?? '').isNotEmpty)
+                            .map((f) {
+                              final id = f['id'].toString();
+                              final title = (f['name']?.toString() ?? id).trim();
+                              final subtitle = (f['createdTime']?.toString() ?? '').trim();
+                              return ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.cloud_done_outlined),
+                                title: Text(title),
+                                subtitle: subtitle.isEmpty ? null : Text(subtitle),
+                                trailing: Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    OutlinedButton(
+                                      onPressed: (_serverDriveBusy || _busy)
+                                          ? null
+                                          : () => _downloadFromServerDrive(id, f['name']?.toString()),
+                                      child: const Text('تنزيل'),
+                                    ),
+                                    FilledButton(
+                                      onPressed: (_serverDriveBusy || _busy || !canRestore)
+                                          ? null
+                                          : () => _restoreFromServerDrive(id, f['name']?.toString()),
+                                      child: const Text('استعادة'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            })
+                            .toList(),
+                      );
+                    },
+                  ),
+                ],
+              ),
+              const Divider(height: 24),
               if (kIsWeb)
                 Text(
                   'على الويب قد يتطلب إعداد OAuth خاص بالويب (Client ID) وربما قيود إضافية حسب بيئة النشر.',

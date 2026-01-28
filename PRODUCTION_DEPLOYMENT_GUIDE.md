@@ -17,6 +17,47 @@ Target: Linux VPS + Docker Compose + PostgreSQL + migrations + small maintenance
    - In CI/CD, build/push the Docker images.
    - On the server, you will `pull` and `up -d` the updated images.
 
+### Optional: Google Drive Backups via Service Account
+If you want server-side Google Drive backups (works on IP-only / HTTP deployments without browser OAuth):
+
+1. **Create a Google Service Account**:
+   - Go to Google Cloud Console → IAM & Admin → Service Accounts
+   - Create a new Service Account
+   - Enable **Google Drive API** for the project
+   - Create a JSON key and download it
+
+2. **Create a dedicated Drive folder**:
+   - In Google Drive, create a folder for backups (e.g., "YasarGold Backups")
+   - Share the folder with the Service Account email (give Editor permissions)
+   - Copy the folder ID from the URL (e.g., `https://drive.google.com/drive/folders/1abc...xyz` → `1abc...xyz`)
+
+3. **Configure on the server**:
+   - Create a `secrets/` directory in your project root:
+     ```bash
+     mkdir -p secrets
+     chmod 700 secrets
+     ```
+   - Place the Service Account JSON key:
+     ```bash
+     cp ~/google_drive_sa.json ./secrets/google_drive_sa.json
+     chmod 400 ./secrets/google_drive_sa.json
+     ```
+   - Add to `.env.production`:
+     ```bash
+     GOOGLE_DRIVE_BACKUP_FOLDER_ID=1abc...xyz
+     GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE=/run/secrets/google_drive_sa.json
+     ```
+
+4. **Important security notes**:
+   - Keep the Service Account JSON file secure (read-only, restricted access)
+   - Never commit it to git (already in `.gitignore`)
+   - Backups uploaded via Service Account are **not end-to-end encrypted** by default
+   - For E2EE, continue using rclone with crypt (see `BACKUP_RESTORE_GUIDE.md`)
+
+After setup:
+- The backend will expose Drive backup endpoints: `/api/system/backup/drive/*`
+- Users with `system.backup` or `system.settings` permission can use the UI to upload/list/download backups
+
 ## 2) First-time start (staging first recommended)
 1. Start DB + backend + nginx:
    - `docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build`

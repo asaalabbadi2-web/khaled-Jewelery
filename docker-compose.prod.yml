@@ -30,11 +30,15 @@ services:
       BACKUP_DIR: ${BACKUP_DIR:-/data/backups}
       # Keep this OFF by default; enable only during a controlled maintenance window.
       ALLOW_DANGEROUS_RESETS: ${ALLOW_DANGEROUS_RESETS:-false}
+      # Optional: Google Drive backups via Service Account (no browser OAuth)
+      GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE: ${GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE:-/run/secrets/google_drive_sa.json}
+      GOOGLE_DRIVE_BACKUP_FOLDER_ID: ${GOOGLE_DRIVE_BACKUP_FOLDER_ID:-}
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - backup_data:/data/backups
+      - ./secrets/google_drive_sa.json:/run/secrets/google_drive_sa.json:ro
 
   scheduler:
     build:
@@ -49,12 +53,15 @@ services:
       YASAR_ENV: ${YASAR_ENV:-production}
       BACKUP_DIR: ${BACKUP_DIR:-/data/backups}
       ALLOW_DANGEROUS_RESETS: ${ALLOW_DANGEROUS_RESETS:-false}
+      GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE: ${GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE:-/run/secrets/google_drive_sa.json}
+      GOOGLE_DRIVE_BACKUP_FOLDER_ID: ${GOOGLE_DRIVE_BACKUP_FOLDER_ID:-}
     command: ["python", "backend/run_schedulers.py"]
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - backup_data:/data/backups
+      - ./secrets/google_drive_sa.json:/run/secrets/google_drive_sa.json:ro
 
   nginx:
     build:

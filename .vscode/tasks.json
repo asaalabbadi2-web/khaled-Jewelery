@@ -6,6 +6,12 @@
 			"type": "promptString",
 			"description": "Commit message",
 			"default": "chore: updates"
+		},
+		{
+			"id": "googleWebClientId",
+			"type": "promptString",
+			"description": "Google OAuth Web Client ID (for Drive backup on web). Leave empty to disable Drive sign-in.",
+			"default": ""
 		}
 	],
 	"tasks": [
@@ -32,7 +38,7 @@
 		{
 			"label": "Run Flutter Web",
 			"type": "shell",
-			"command": "cd frontend && flutter run -d web-server --web-hostname=127.0.0.1 --web-port=8080 --dart-define=GOOGLE_WEB_CLIENT_ID=${env:GOOGLE_WEB_CLIENT_ID}",
+			"command": "cd frontend && flutter run -d web-server --web-hostname=127.0.0.1 --web-port=8080 --dart-define=GOOGLE_WEB_CLIENT_ID=${input:googleWebClientId}",
 			"isBackground": true,
 			"problemMatcher": []
 		},

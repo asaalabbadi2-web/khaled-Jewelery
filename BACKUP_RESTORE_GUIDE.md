@@ -109,6 +109,48 @@ Notes:
 - If your Postgres runs in Docker, you can still use this script by pointing `DATABASE_URL` to the Postgres service (or install PostgreSQL client tools on the host).
 - Keep `.env.production` and any rclone credentials on the server only.
 
+### Option E: Google Drive (server-side) via Service Account (works on IP-only / HTTP deployments)
+This repo also supports uploading/listing/downloading backups to Google Drive **from the backend** using a Google **Service Account**.
+
+Why this exists:
+- If you run the UI from a local IP (example: `http://192.168.x.x`), browser OAuth flows can be hard/impossible to use reliably.
+- Service Account mode avoids browser sign-in completely; Google Drive is accessed server-to-server.
+
+Security note:
+- This mode is **not end-to-end encrypted** by default (unlike `rclone crypt`). If you require E2EE, keep using Option D (or add encryption before upload).
+
+#### Setup (one-time)
+1) In Google Cloud Console:
+- Create a Service Account.
+- Enable **Google Drive API** for the project.
+- Create a JSON key and download it.
+
+2) In Google Drive:
+- Create a folder dedicated to backups.
+- Share that folder with the Service Account email (Editor).
+- Copy the folder id from the URL and set it as `GOOGLE_DRIVE_BACKUP_FOLDER_ID`.
+
+3) On the server (Docker Compose production recommended):
+- Put the JSON key at `./secrets/google_drive_sa.json` (or any secure path).
+- Ensure the backend container can read it read-only.
+
+Required environment variables for the backend:
+- `GOOGLE_DRIVE_BACKUP_FOLDER_ID` (required)
+- One of:
+  - `GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE=/run/secrets/google_drive_sa.json`
+  - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON={...raw json...}`
+
+#### How to use
+- From the app UI: go to Backup/Restore screen → "Google Drive (على السيرفر - Service Account)".
+- Or via API (requires an authenticated user with `system.backup` or `system.settings`):
+  - `GET /api/system/backup/drive/status`
+  - `POST /api/system/backup/drive/upload`
+  - `GET /api/system/backup/drive/list`
+  - `GET /api/system/backup/drive/download/<file_id>`
+
+Restore safety:
+- The existing restore endpoint is still protected in production (see `ALLOW_DANGEROUS_RESETS`).
+
 ## Suggested schedule (baseline)
 - Hourly: PostgreSQL dump (or every 30–60 minutes depending on RPO)
 - Daily: Full dump + offsite upload

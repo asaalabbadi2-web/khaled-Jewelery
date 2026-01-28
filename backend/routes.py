@@ -77,7 +77,7 @@ from category_weight_tracking import (
 from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import pstdev
-from auth_decorators import get_current_user, require_permission
+from auth_decorators import get_current_user, require_permission, require_any_permission
 from permissions import ALL_PERMISSIONS
 
 api = Blueprint('api', __name__)
@@ -2721,6 +2721,192 @@ def system_backup_download():
         mimetype='application/zip',
         as_attachment=True,
         download_name=filename,
+    )
+
+
+def _drive_sa_available() -> bool:
+    # Minimal check; actual validation happens in the service module.
+    if (os.getenv('GOOGLE_DRIVE_BACKUP_FOLDER_ID') or '').strip() == '':
+        return False
+    if (os.getenv('GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON') or '').strip():
+        return True
+    if (os.getenv('GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE') or '').strip():
+        return True
+    return False
+
+
+@api.route('/system/backup/drive/status', methods=['GET'])
+@require_any_permission('system.backup', 'system.settings')
+def system_backup_drive_status():
+    """Return whether server-side Google Drive backups are configured."""
+    return jsonify({
+        'enabled': bool(_drive_sa_available()),
+        'folder_id_set': bool((os.getenv('GOOGLE_DRIVE_BACKUP_FOLDER_ID') or '').strip()),
+        'sa_json_set': bool((os.getenv('GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON') or '').strip()),
+        'sa_file_set': bool((os.getenv('GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE') or '').strip()),
+    })
+
+
+@api.route('/system/backup/drive/upload', methods=['POST'])
+@require_any_permission('system.backup', 'system.settings')
+def system_backup_drive_upload():
+    """Create a fresh system backup ZIP on the server and upload it to Google Drive.
+
+    Uses a Google Service Account configured via env vars.
+    """
+    if not _drive_sa_available():
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_not_configured',
+            'message': (
+                'Google Drive (Service Account) غير مُعد على السيرفر. '
+                'اضبط GOOGLE_DRIVE_BACKUP_FOLDER_ID و GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE/JSON.'
+            ),
+        }), 400
+
+    if not (_is_sqlite_database() or _is_postgres_database()):
+        return jsonify({
+            'status': 'error',
+            'message': 'نوع قاعدة البيانات الحالية غير مدعوم للنسخ الاحتياطي.',
+            'error': 'not_supported',
+            'db': (db.engine.url.get_backend_name() if db.engine else None),
+        }), 501
+
+    try:
+        from google_drive_service_account import upload_bytes
+    except Exception as exc:
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_dependency_missing',
+            'message': f'تعذر تحميل مكتبات Google Drive على السيرفر: {exc}',
+        }), 500
+
+    created_at = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    filename = f'yasargold-backup-{created_at}.zip'
+
+    with tempfile.TemporaryDirectory(prefix='yasargold-backup-') as tmpdir:
+        if _is_postgres_database():
+            db_path = os.path.join(tmpdir, 'database.dump')
+            try:
+                _create_postgres_backup_to_file(db_path)
+            except Exception as exc:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'فشل إنشاء نسخة PostgreSQL: {exc}',
+                    'error': 'backup_failed',
+                }), 500
+
+            meta = {
+                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'db_backend': 'postgres',
+                'format': 'pg_dump_custom',
+            }
+            archive_name = 'database.dump'
+        else:
+            db_path = os.path.join(tmpdir, 'database.sqlite')
+            _create_sqlite_backup_to_file(db_path)
+
+            meta = {
+                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'db_backend': 'sqlite',
+            }
+            archive_name = 'database.sqlite'
+
+        meta_path = os.path.join(tmpdir, 'metadata.json')
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        zip_path = os.path.join(tmpdir, filename)
+        with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(db_path, arcname=archive_name)
+            zf.write(meta_path, arcname='metadata.json')
+
+        with open(zip_path, 'rb') as f:
+            data = f.read()
+
+    try:
+        info = upload_bytes(filename=filename, content=data, mime_type='application/zip')
+    except Exception as exc:
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_upload_failed',
+            'message': f'فشل رفع النسخة إلى Google Drive: {exc}',
+        }), 500
+
+    return jsonify({
+        'status': 'success',
+        'message': 'تم رفع النسخة إلى Google Drive (Service Account).',
+        'file': {
+            'id': info.id,
+            'name': info.name,
+            'mimeType': info.mimeType,
+            'createdTime': info.createdTime,
+            'size': info.size,
+        },
+    })
+
+
+@api.route('/system/backup/drive/list', methods=['GET'])
+@require_any_permission('system.backup', 'system.settings')
+def system_backup_drive_list():
+    if not _drive_sa_available():
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_not_configured',
+            'message': 'Google Drive (Service Account) غير مُعد على السيرفر.',
+        }), 400
+
+    try:
+        from google_drive_service_account import list_backups
+        files = list_backups(page_size=int(request.args.get('page_size') or 20))
+    except Exception as exc:
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_list_failed',
+            'message': f'فشل جلب قائمة النسخ من Google Drive: {exc}',
+        }), 500
+
+    return jsonify({
+        'status': 'success',
+        'files': [
+            {
+                'id': f.id,
+                'name': f.name,
+                'mimeType': f.mimeType,
+                'createdTime': f.createdTime,
+                'size': f.size,
+            }
+            for f in files
+        ],
+    })
+
+
+@api.route('/system/backup/drive/download/<string:file_id>', methods=['GET'])
+@require_any_permission('system.backup', 'system.settings')
+def system_backup_drive_download(file_id: str):
+    if not _drive_sa_available():
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_not_configured',
+            'message': 'Google Drive (Service Account) غير مُعد على السيرفر.',
+        }), 400
+
+    try:
+        from google_drive_service_account import download_bytes
+        data, info = download_bytes(file_id)
+    except Exception as exc:
+        return jsonify({
+            'status': 'error',
+            'error': 'drive_download_failed',
+            'message': f'فشل تنزيل الملف من Google Drive: {exc}',
+        }), 500
+
+    name = (info.name or f'{file_id}.zip').strip() or f'{file_id}.zip'
+    return send_file(
+        io.BytesIO(data),
+        mimetype=(info.mimeType or 'application/octet-stream'),
+        as_attachment=True,
+        download_name=name,
     )
 
 

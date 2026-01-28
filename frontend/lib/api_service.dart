@@ -1237,6 +1237,60 @@ class ApiService {
     throw Exception(_errorMessageFromResponse(response));
   }
 
+  // ============================================
+  // ☁️ Server-side Google Drive (Service Account)
+  // ============================================
+
+  Future<Map<String, dynamic>> getDriveBackupStatus() async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/system/backup/drive/status'),
+    );
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> uploadSystemBackupToDriveServerSide() async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/system/backup/drive/upload'),
+      headers: const {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({}),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'status': 'success'};
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<List<Map<String, dynamic>>> listDriveBackupsServerSide({int pageSize = 20}) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/system/backup/drive/list?page_size=$pageSize'),
+    );
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map && decoded['files'] is List) {
+        return List<Map<String, dynamic>>.from(decoded['files'] as List);
+      }
+      return <Map<String, dynamic>>[];
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<List<int>> downloadDriveBackupServerSide(String fileId) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/system/backup/drive/download/$fileId'),
+      headers: const {'Accept': 'application/octet-stream'},
+    );
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
   // Gold Costing (Moving Average)
   Future<Map<String, dynamic>> getGoldCostingSnapshot() async {
     final response = await _authedGet(Uri.parse('$_baseUrl/gold-costing'));
