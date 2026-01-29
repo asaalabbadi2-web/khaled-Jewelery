@@ -94,11 +94,12 @@ class BackupScheduler:
 
     def _create_backup_zip(self) -> Path | None:
         # Import lazily to avoid circular imports.
-        from routes import _is_sqlite_database, _create_sqlite_backup_to_file
-
-        if not _is_sqlite_database():
-            print("[BackupScheduler] Skipping: only SQLite backups are supported right now")
-            return None
+        from routes import (
+            _create_postgres_backup_to_file,
+            _create_sqlite_backup_to_file,
+            _is_postgres_database,
+            _is_sqlite_database,
+        )
 
         backup_dir = self._backup_dir()
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -107,20 +108,30 @@ class BackupScheduler:
         filename = f"yasargold-backup-{created_at}.zip"
         zip_path = backup_dir / filename
 
-        tmp_db_path = backup_dir / f".tmp-{created_at}.sqlite"
+        is_pg = _is_postgres_database()
+        is_sqlite = _is_sqlite_database()
+        if not (is_pg or is_sqlite):
+            print("[BackupScheduler] Skipping: unsupported DB backend")
+            return None
+
+        tmp_db_path = backup_dir / (f".tmp-{created_at}.dump" if is_pg else f".tmp-{created_at}.sqlite")
         try:
-            _create_sqlite_backup_to_file(str(tmp_db_path))
+            if is_pg:
+                _create_postgres_backup_to_file(str(tmp_db_path))
+            else:
+                _create_sqlite_backup_to_file(str(tmp_db_path))
 
             import json
             import zipfile
 
             meta = {
                 "created_at_utc": datetime.utcnow().isoformat() + "Z",
-                "db_backend": "sqlite",
+                "db_backend": "postgres" if is_pg else "sqlite",
+                "format": "pg_dump_custom" if is_pg else "sqlite_file",
             }
 
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.write(tmp_db_path, arcname="database.sqlite")
+                zf.write(tmp_db_path, arcname=("database.dump" if is_pg else "database.sqlite"))
                 zf.writestr("metadata.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
             return zip_path

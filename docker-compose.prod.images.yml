@@ -38,6 +38,9 @@ services:
         condition: service_healthy
     volumes:
       - backup_data:/data/backups
+      # Optional: bind-mount external disk/folder for backups (Windows example: D:/YasarGoldBackups)
+      # Uncomment and set your path:
+      # - "D:/YasarGoldBackups:/data/backups"
 
   scheduler:
     image: ghcr.io/${GITHUB_REPOSITORY:-owner/repo}/backend:${IMAGE_TAG:-latest}
@@ -56,6 +59,8 @@ services:
         condition: service_healthy
     volumes:
       - backup_data:/data/backups
+      # Optional: bind-mount external disk/folder for backups (same as backend)
+      # - "D:/YasarGoldBackups:/data/backups"
 
   nginx:
     image: ghcr.io/${GITHUB_REPOSITORY:-owner/repo}/web:${IMAGE_TAG:-latest}
