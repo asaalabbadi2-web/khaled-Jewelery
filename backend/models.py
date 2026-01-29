@@ -157,6 +157,7 @@ class Account(db.Model):
         - رقم الحساب الوزني = 7 + رقم الحساب المالي
         - رقم الحساب المالي يُستخرج بحذف 7 من البداية
         - اسم الحساب الموازي = اسم الحساب الأصلي + "وزني" أو يُحذف "وزني"
+        - يُنشأ في نفس الموقع بالشجرة (parent موازي يُنشأ تلقائيًا)
         
         Returns:
             Account: الحساب الموازي المُنشأ
@@ -173,12 +174,18 @@ class Account(db.Model):
             parallel_type = 'gold'
             parallel_tracks_weight = True
             
-            # إيجاد الحساب الأب الموازي
+            # إيجاد/إنشاء الحساب الأب الموازي
             parallel_parent_id = None
             if self.parent_id:
                 parent_account = Account.query.get(self.parent_id)
-                if parent_account and parent_account.memo_account_id:
-                    parallel_parent_id = parent_account.memo_account_id
+                if parent_account:
+                    # إذا الأب المالي ما عنده memo مربوط، ننشئ واحد له
+                    if not parent_account.memo_account_id:
+                        parent_parallel = parent_account.create_parallel_account()
+                        if parent_parallel:
+                            parallel_parent_id = parent_parallel.id
+                    else:
+                        parallel_parent_id = parent_account.memo_account_id
         
         elif self.transaction_type == 'gold':
             # إنشاء حساب مالي موازي
@@ -192,7 +199,7 @@ class Account(db.Model):
             parallel_type = 'cash'
             parallel_tracks_weight = False
             
-            # إيجاد الحساب الأب الموازي
+            # إيجاد/إنشاء الحساب الأب الموازي
             parallel_parent_id = None
             if self.parent_id:
                 parent_account = Account.query.get(self.parent_id)
@@ -203,6 +210,11 @@ class Account(db.Model):
                     ).first()
                     if financial_parent:
                         parallel_parent_id = financial_parent.id
+                    else:
+                        # إذا الأب الوزني ما عنده حساب مالي مربوط، ننشئ واحد له
+                        parent_parallel = parent_account.create_parallel_account()
+                        if parent_parallel:
+                            parallel_parent_id = parent_parallel.id
         
         else:
             return None
