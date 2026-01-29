@@ -2413,25 +2413,25 @@ def _reset_full_system_wipe():
     # Level 1 + 2
     _reset_factory_data()
 
-    # Helper: safely execute delete with transaction recovery on failure
+    # Helper: safely execute delete with a savepoint (prevents global rollback in PostgreSQL)
     def safe_delete(model_class, filter_condition=None):
         try:
-            if filter_condition is not None:
-                model_class.query.filter(filter_condition).delete(synchronize_session=False)
-            else:
-                model_class.query.delete(synchronize_session=False)
-            db.session.flush()  # Flush to catch constraint violations early
+            with db.session.begin_nested():
+                if filter_condition is not None:
+                    model_class.query.filter(filter_condition).delete(synchronize_session=False)
+                else:
+                    model_class.query.delete(synchronize_session=False)
+                db.session.flush()  # Flush to catch constraint violations early
         except Exception as e:
-            db.session.rollback()  # Critical: reset transaction on failure in PostgreSQL
             print(f"⚠️ Failed to delete {model_class.__name__}: {e}")
 
-    # Helper: safely execute update with transaction recovery on failure
+    # Helper: safely execute update with a savepoint (prevents global rollback)
     def safe_update(query_obj, values):
         try:
-            query_obj.update(values, synchronize_session=False)
-            db.session.flush()  # Flush to catch constraint violations early
+            with db.session.begin_nested():
+                query_obj.update(values, synchronize_session=False)
+                db.session.flush()  # Flush to catch constraint violations early
         except Exception as e:
-            db.session.rollback()  # Critical: reset transaction on failure
             print(f"⚠️ Failed to update: {e}")
 
     # Inventory costing snapshots/config
