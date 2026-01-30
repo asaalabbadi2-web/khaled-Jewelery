@@ -6,6 +6,8 @@ enum AccountTransactionFilter { all, cash, gold, both }
 
 enum AccountTracksWeightFilter { all, weightOnly, nonWeightOnly }
 
+enum AccountLeafFilter { all, leafOnly }
+
 String accountNumberOf(Map<String, dynamic> account) {
   final v =
       account['account_number'] ??
@@ -70,6 +72,7 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
   AccountPredicate? predicate,
   bool showTransactionTypeFilter = true,
   bool showTracksWeightFilter = false,
+  bool showLeafOnlyFilter = false,
 }) {
   return showModalBottomSheet<Map<String, dynamic>>(
     context: context,
@@ -80,6 +83,20 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
       final searchCtrl = TextEditingController(text: initialQuery ?? '');
       AccountTransactionFilter txFilter = AccountTransactionFilter.all;
       AccountTracksWeightFilter weightFilter = AccountTracksWeightFilter.all;
+      AccountLeafFilter leafFilter = AccountLeafFilter.all;
+
+      int? toInt(dynamic v) {
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        if (v is String) return int.tryParse(v);
+        return int.tryParse('${v ?? ''}');
+      }
+
+      final parentIds = <int>{
+        for (final a in accounts)
+          if (toInt(a['parent_id'] ?? a['parentId']) != null)
+            toInt(a['parent_id'] ?? a['parentId'])!,
+      };
 
       List<Map<String, dynamic>> applyFilters(String q) {
         final query = q.trim().toLowerCase();
@@ -113,6 +130,15 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
           }
         }
 
+        bool leafOk(Map<String, dynamic> a) {
+          if (!showLeafOnlyFilter) return true;
+          if (leafFilter == AccountLeafFilter.all) return true;
+          final id = toInt(a['id']);
+          if (id == null) return true;
+          // leafOnly: exclude any account that appears as a parent_id.
+          return !parentIds.contains(id);
+        }
+
         bool queryOk(Map<String, dynamic> a) {
           if (query.isEmpty) return true;
           final numStr = accountNumberOf(a).toLowerCase();
@@ -135,6 +161,7 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
           if (predicate != null && !predicate(a)) continue;
           if (!txOk(a)) continue;
           if (!weightOk(a)) continue;
+          if (!leafOk(a)) continue;
           if (!queryOk(a)) continue;
           result.add(a);
         }
@@ -305,6 +332,37 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
                             onTap: () => setSheetState(() {
                               weightFilter =
                                   AccountTracksWeightFilter.nonWeightOnly;
+                            }),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (showLeafOnlyFilter) ...[
+                    Align(
+                      alignment: isArabic
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          chip(
+                            selected: leafFilter == AccountLeafFilter.all,
+                            label: isArabic ? 'كل الحسابات' : 'All accounts',
+                            onTap: () => setSheetState(() {
+                              leafFilter = AccountLeafFilter.all;
+                            }),
+                          ),
+                          chip(
+                            selected:
+                                leafFilter == AccountLeafFilter.leafOnly,
+                            label: isArabic
+                                ? 'حسابات فرعية فقط'
+                                : 'Leaf accounts only',
+                            onTap: () => setSheetState(() {
+                              leafFilter = AccountLeafFilter.leafOnly;
                             }),
                           ),
                         ],

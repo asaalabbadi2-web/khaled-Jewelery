@@ -849,77 +849,85 @@ class _AccountingMappingScreenEnhancedState
               Row(
                 children: [
                   Expanded(
-                    child: DropdownButtonFormField<int>(
-                      key: ValueKey(
-                        '${operationType}_${accountKey}_${mappedAccountId ?? 'null'}',
-                      ),
-                      initialValue: mappedAccountId,
-                      decoration: InputDecoration(
-                        labelText: 'اختر الحساب المحاسبي',
-                        labelStyle: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        filled: true,
-                        fillColor: _blendOnSurface(color, _isDark ? 0.18 : 0.08),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: color, width: 2),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: _blendOnSurface(color, 0.3)),
-                        ),
-                      ),
-                      icon: Icon(Icons.arrow_drop_down, color: color),
-                      isExpanded: true,
-                      items: _accounts.map((account) {
-                        return DropdownMenuItem<int>(
-                          value: account['id'] as int?,
-                          child: Text(
-                            _accountLabel(account),
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: _strongTextColor,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: _accounts.isEmpty
+                          ? null
+                          : () async {
+                              final picked = await showAccountPickerBottomSheet(
+                                context: context,
+                                accounts: _accounts,
+                                title: 'اختيار حساب',
+                                isArabic: true,
+                                selectedId: mappedAccountId,
+                                showTransactionTypeFilter: true,
+                                showTracksWeightFilter: true,
+                                showLeafOnlyFilter: true,
+                              );
+                              if (!mounted || picked == null) return;
+                              final raw = picked['id'];
+                              final id = raw is int
+                                  ? raw
+                                  : (raw is num
+                                      ? raw.toInt()
+                                      : int.tryParse('${raw ?? ''}'));
+                              if (id == null) return;
+                              _updateMapping(operationType, accountKey, id);
+                            },
+                      child: InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: 'الحساب المحاسبي',
+                          labelStyle: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w600,
                           ),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        _updateMapping(operationType, accountKey, value);
-                      },
+                          filled: true,
+                          fillColor:
+                              _blendOnSurface(color, _isDark ? 0.18 : 0.08),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: color, width: 2),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                BorderSide(color: _blendOnSurface(color, 0.3)),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                mappedAccountId == null
+                                    ? 'اضغط للاختيار / بحث'
+                                    : _getAccountName(mappedAccountId),
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: _strongTextColor,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(Icons.manage_search, color: color),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton(
-                    tooltip: 'بحث/فلترة الحسابات',
-                    icon: Icon(Icons.manage_search, color: color),
-                    onPressed: _accounts.isEmpty
-                        ? null
-                        : () async {
-                            final picked = await showAccountPickerBottomSheet(
-                              context: context,
-                              accounts: _accounts,
-                              title: 'اختيار حساب',
-                              isArabic: true,
-                              selectedId: mappedAccountId,
-                            );
-                            if (!mounted || picked == null) return;
-                            final raw = picked['id'];
-                            final id = raw is int
-                                ? raw
-                                : (raw is num
-                                    ? raw.toInt()
-                                    : int.tryParse('${raw ?? ''}'));
-                            if (id == null) return;
-                            _updateMapping(operationType, accountKey, id);
-                          },
-                  ),
+                  if (mappedAccountId != null)
+                    IconButton(
+                      tooltip: 'إزالة الربط',
+                      icon: Icon(Icons.clear, color: _toneColor(_Tone.danger)),
+                      onPressed: () {
+                        _updateMapping(operationType, accountKey, null);
+                      },
+                    ),
                 ],
               ),
               if (hasMapping) ...[
