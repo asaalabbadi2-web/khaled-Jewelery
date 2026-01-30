@@ -1090,6 +1090,15 @@ def _repair_inventory_wage_memo_links():
 
 def ensure_weight_closing_support_accounts():
     """Ensure auxiliary financial/memo accounts required for weight closing exist."""
+    try:
+        settings_row = Settings.query.first()
+        if settings_row and bool(getattr(settings_row, 'disable_startup_bootstrap', False)):
+            print('[INFO] Weight-closing support account bootstrap disabled by settings.')
+            return 0
+    except Exception:
+        # If settings read fails, fall back to existing behavior.
+        pass
+
     created = 0
     linked_pairs = 0
     updated = 0
@@ -2399,131 +2408,188 @@ def _reset_factory_data():
 
 
 def _reset_full_system_wipe():
-    """Full System Wipe with strict ordering and proper transaction handling for PostgreSQL.
+    """Full System Wipe (Level 6).
 
-    Required order (as per safety spec):
-      1) transactions/operations (invoices/journals/vouchers + SafeBoxTransaction)
-      2) associations (customers/suppliers + inventory snapshots)
-      3) structure (SafeBox -> Users/Employees (keep admin) -> Branch -> Office)
-      4) chart of accounts (AccountingMapping -> Account)
-    
-    Uses direct SQL TRUNCATE for maximum compatibility with both SQLite and PostgreSQL.
+    Root-cause fix (PostgreSQL):
+    - Do not swallow FK/constraint errors and still return "success".
+    - Explicitly delete/clear *all* SafeBox/Account dependency tables first.
+
+    Ordering:
+      1) Operational/transaction tables (incl. SafeBoxTransaction + CategoryWeightMovement + recurring journals)
+      2) Parties/master-data (customers/suppliers/items/categories/payment)
+      3) Structure (employees/users/branches/offices/safebox)
+      4) Chart of accounts (mappings -> accounts)
     """
-    from models import AppUser, Branch
-    from models import Category, Item, PaymentType
-    from sqlalchemy import text
 
-    print("🟡 Starting Full System Wipe (Level 6)...")
+    from models import (
+        AppUser,
+        AuditLog,
+        Branch,
+        BonusRule,
+        Category,
+        CategoryWeightMovement,
+        GoldPrice,
+        InventoryCostingConfig,
+        InvoiceWeightSettlement,
+        Item,
+        PaymentType,
+        SupplierGoldTransaction,
+        SystemAlert,
+        WeightClosingLog,
+    )
+    from recurring_journal_system import RecurringJournalLine, RecurringJournalTemplate
 
-    # Level 1 + 2
-    _reset_factory_data()
-    print("✅ Level 1-2: Transactions cleared")
-
-    # Helper: safely execute raw SQL with savepoint
-    def safe_exec_sql(sql_str, description):
+    def _step(label: str, fn, required: bool = True) -> None:
         try:
             with db.session.begin_nested():
-                db.session.execute(text(sql_str))
+                fn()
                 db.session.flush()
-                print(f"✅ {description}")
         except Exception as e:
-            print(f"⚠️ {description}: {e}")
+            # Savepoint is rolled back automatically; make the failure explicit.
+            msg = f"{label}: {str(e)}"
+            if required:
+                raise Exception(msg)
+            print(f"⚠️ {msg}")
 
-    # Helper: safely delete model with savepoint
-    def safe_delete_model(model_class, filter_cond=None):
+    # 1) Transactions/operational tables that block SafeBox/Account deletion
+    _step('Delete CategoryWeightMovement (blocks SafeBox)', lambda: CategoryWeightMovement.query.delete())
+    _step('Delete SafeBoxTransaction (blocks SafeBox)', lambda: SafeBoxTransaction.query.delete())
+    _step('Delete recurring journals (block Account)', lambda: RecurringJournalLine.query.delete())
+    _step('Delete recurring journal templates (block Account)', lambda: RecurringJournalTemplate.query.delete())
+
+    # Core operations (children first)
+    _step('Delete WeightClosingExecution', lambda: WeightClosingExecution.query.delete())
+    _step('Delete WeightClosingOrder', lambda: WeightClosingOrder.query.delete())
+    _step('Delete InvoiceWeightSettlement', lambda: InvoiceWeightSettlement.query.delete())
+
+    _step('Delete JournalEntryLine', lambda: JournalEntryLine.query.delete())
+    _step('Delete JournalEntry', lambda: JournalEntry.query.delete())
+
+    _step('Delete InvoicePayment', lambda: InvoicePayment.query.delete())
+    _step('Delete InvoiceKaratLine', lambda: InvoiceKaratLine.query.delete())
+    _step('Delete InvoiceItem', lambda: InvoiceItem.query.delete())
+    _step('Delete Invoice', lambda: Invoice.query.delete())
+
+    _step('Delete VoucherAccountLine', lambda: VoucherAccountLine.query.delete())
+    _step('Delete Voucher', lambda: Voucher.query.delete())
+
+    _step('Delete OfficeReservation', lambda: OfficeReservation.query.delete())
+    _step('Delete Payroll', lambda: Payroll.query.delete())
+    _step('Delete Attendance', lambda: Attendance.query.delete())
+    _step('Delete Employee bonuses', lambda: EmployeeBonus.query.delete())
+    _step('Delete BonusInvoiceLink', lambda: BonusInvoiceLink.query.delete())
+
+    # Oversight/logging
+    _step('Delete SystemAlert', lambda: SystemAlert.query.delete())
+    _step('Delete AuditLog', lambda: AuditLog.query.delete())
+    _step('Delete WeightClosingLog', lambda: WeightClosingLog.query.delete())
+    _step('Delete SupplierGoldTransaction', lambda: SupplierGoldTransaction.query.delete())
+    _step('Delete InventoryCostingConfig', lambda: InventoryCostingConfig.query.delete())
+
+    # 2) Master data that can reference safebox/account
+    _step('Detach PaymentMethod -> SafeBox (default/settlement)', lambda: PaymentMethod.query.update({
+        PaymentMethod.default_safe_box_id: None,
+        PaymentMethod.settlement_bank_safe_box_id: None,
+    }, synchronize_session=False), required=False)
+    _step('Delete PaymentMethod', lambda: PaymentMethod.query.delete())
+    _step('Delete PaymentType', lambda: PaymentType.query.delete(), required=False)
+
+    _step('Delete Item', lambda: Item.query.delete())
+    _step('Delete Category', lambda: Category.query.delete())
+    _step('Delete GoldPrice', lambda: GoldPrice.query.delete(), required=False)
+    _step('Delete BonusRule', lambda: BonusRule.query.delete(), required=False)
+
+    # 3) Structure: clear FK references that are RESTRICT before deleting
+    def _detach_settings_refs() -> None:
+        settings_row = Settings.query.first()
+        if not settings_row:
+            settings_row = Settings()
+            db.session.add(settings_row)
+            db.session.flush()
+
+        settings_row.main_cash_safe_box_id = None
+        settings_row.sale_gold_safe_box_id = None
+        settings_row.main_scrap_gold_safe_box_id = None
+        settings_row.payment_methods = '[]'
         try:
-            with db.session.begin_nested():
-                if filter_cond is not None:
-                    model_class.query.filter(filter_cond).delete(synchronize_session=False)
-                else:
-                    model_class.query.delete(synchronize_session=False)
-                db.session.flush()
-                print(f"✅ Deleted all {model_class.__name__}")
-        except Exception as e:
-            print(f"⚠️ Failed to delete {model_class.__name__}: {e}")
+            settings_row.disable_startup_bootstrap = True
+        except Exception:
+            # Column may not exist on legacy DBs until schema_guard runs.
+            pass
 
-    # Helper: safely update model with savepoint
-    def safe_update_model(model_class, values, filter_cond=None):
-        try:
-            with db.session.begin_nested():
-                query = model_class.query
-                if filter_cond is not None:
-                    query = query.filter(filter_cond)
-                query.update(values, synchronize_session=False)
-                db.session.flush()
-        except Exception as e:
-            print(f"⚠️ Failed to update {model_class.__name__}: {e}")
+    _step('Detach Settings -> SafeBox', _detach_settings_refs, required=False)
 
-    # ============ LEVEL 3: STRUCTURE - NULLIFY ALL FOREIGN KEYS FIRST ============
-    print("🟡 Nullifying foreign key references...")
+    _step('Detach Employee -> SafeBox', lambda: db.session.query(Employee).update({
+        Employee.gold_safe_box_id: None,
+        Employee.cash_safe_box_id: None,
+    }, synchronize_session=False), required=False)
 
-    # Employee → SafeBox
-    safe_update_model(Employee, {Employee.gold_safe_box_id: None, Employee.cash_safe_box_id: None})
+    _step('Detach AppUser -> Employee', lambda: db.session.query(AppUser).update({
+        AppUser.employee_id: None,
+    }, synchronize_session=False), required=False)
 
-    # Settings → SafeBox and other refs
-    safe_update_model(Settings, {
-        Settings.main_cash_safe_box_id: None,
-        Settings.sale_gold_safe_box_id: None,
-        Settings.main_scrap_gold_safe_box_id: None,
-        Settings.payment_methods: '[]',
-    })
+    # Delete SafeBoxes now (SafeBox.account_id blocks Account deletion)
+    _step('Delete SafeBox', lambda: SafeBox.query.delete())
 
-    # AppUser → Employee
-    safe_update_model(AppUser, {AppUser.employee_id: None})
+    # Now delete parties + structure
+    _step('Delete Customer', lambda: Customer.query.delete())
+    _step('Delete Supplier', lambda: Supplier.query.delete())
 
-    # PaymentMethod → SafeBox
-    safe_update_model(PaymentMethod, {PaymentMethod.default_safe_box_id: None})
+    _step('Delete Employee', lambda: Employee.query.delete())
+    _step('Delete User (non-admin)', lambda: User.query.filter(User.is_admin.is_(False)).delete(synchronize_session=False), required=False)
+    _step('Delete AppUser (non-system_admin)', lambda: AppUser.query.filter(func.lower(AppUser.role) != 'system_admin').delete(synchronize_session=False), required=False)
 
-    # Office → Supplier (via supplier_id)
-    safe_update_model(Office, {Office.supplier_id: None})
+    _step('Delete Branch', lambda: Branch.query.delete())
+    _step('Delete Office', lambda: Office.query.delete())
 
-    print("✅ All foreign key references nullified")
-
-    # ============ NOW SAFE TO DELETE STRUCTURE ============
-    print("🟡 Deleting master data...")
-
-    # Inventory
-    safe_delete_model(InventoryCostingConfig)
-    safe_delete_model(PaymentMethod)
-    safe_delete_model(PaymentType)
-    safe_delete_model(Item)
-    safe_delete_model(Category)
-
-    # Structure
-    safe_delete_model(SafeBox)
-    safe_delete_model(Employee)
-    safe_delete_model(User, User.is_admin.is_(False))
-    safe_delete_model(AppUser, func.lower(AppUser.role) != 'system_admin')
-    safe_delete_model(Branch)
-    safe_delete_model(Office)
-
-    print("✅ Master data structure deleted")
-
-    # ============ LEVEL 4: CHART OF ACCOUNTS ============
-    print("🟡 Deleting chart of accounts...")
-
-    # Null Account self-references BEFORE deleting
-    safe_update_model(Account, {
+    # 4) Chart of accounts
+    _step('Delete AccountingMapping', lambda: AccountingMapping.query.delete())
+    _step('Detach Account self-references', lambda: db.session.query(Account).update({
         Account.parent_id: None,
         Account.memo_account_id: None,
-    })
+    }, synchronize_session=False), required=False)
+    _step('Delete Account', lambda: Account.query.delete())
 
-    # AccountingMapping
-    safe_delete_model(AccountingMapping)
+    def _verify_post_wipe_counts() -> None:
+        # Ensure all counts used by /system/reset/info are actually cleared.
+        remaining = {
+            'safe_box_transactions': SafeBoxTransaction.query.count(),
+            'system_alerts': SystemAlert.query.count(),
+            'audit_logs': AuditLog.query.count(),
+            'weight_closing_logs': WeightClosingLog.query.count(),
+            'office_reservations': OfficeReservation.query.count(),
+            'payroll_entries': Payroll.query.count(),
+            'attendance_records': Attendance.query.count(),
+            'employee_bonuses': EmployeeBonus.query.count(),
+            'bonus_invoice_links': BonusInvoiceLink.query.count(),
+            'weight_closing_orders': WeightClosingOrder.query.count(),
+            'weight_closing_executions': WeightClosingExecution.query.count(),
+            'invoice_weight_settlements': InvoiceWeightSettlement.query.count(),
+            'customers': Customer.query.count(),
+            'suppliers': Supplier.query.count(),
+            'items': Item.query.count(),
+            'categories': Category.query.count(),
+            'gold_prices': GoldPrice.query.count(),
+            'payment_methods': PaymentMethod.query.count(),
+            'safe_boxes': SafeBox.query.count(),
+            'employees': Employee.query.count(),
+            'branches': Branch.query.count(),
+            'offices': Office.query.count(),
+            'accounting_mappings': AccountingMapping.query.count(),
+            'accounts': Account.query.count(),
+            'bonus_rules': BonusRule.query.count(),
+        }
 
-    # Finally: Accounts
-    safe_delete_model(Account)
+        not_empty = {k: v for k, v in remaining.items() if int(v or 0) != 0}
+        if not_empty:
+            raise Exception(f"Post-wipe verification failed; remaining rows: {not_empty}")
 
-    print("✅ Chart of accounts deleted")
+    _step('Verify post-wipe counts are zero', _verify_post_wipe_counts)
 
-    # ============ FINAL COMMIT ============
-    print("🟡 Committing changes...")
     try:
         db.session.commit()
-        print("✅✅✅ Full System Wipe (Level 6) COMPLETE")
     except Exception as e:
         db.session.rollback()
-        print(f"❌ Failed to commit full wipe: {e}")
         raise e
 
 

@@ -331,56 +331,71 @@ def create_tables():
 try:
 	create_tables()
 	with app.app_context():
-		# Seed chart of accounts only for fresh/empty databases.
+		# Allow admin tooling (Full System Wipe) to intentionally keep the system empty
+		# without auto-creating COA/support accounts on worker restart.
+		bootstrap_disabled = False
 		try:
-			from coa_seed import seed_chart_of_accounts_if_empty
-			seeded = seed_chart_of_accounts_if_empty(db, '../exports/accounts_standard_220126.json')
-			if seeded:
-				print(f"[INFO] Seeded chart of accounts from standard JSON: {seeded} accounts")
-		except Exception as exc:
-			print(f"[WARNING] COA seed skipped/failed: {exc}")
-
-		# Repair/normalize employee gold custody group account numbering on startup.
-		try:
-			from employee_gold_safe_helpers import ensure_employee_gold_group_account
-			ensure_employee_gold_group_account(created_by='system')
-			db.session.commit()
+			from models import Settings
+			s = Settings.query.first()
+			bootstrap_disabled = bool(getattr(s, 'disable_startup_bootstrap', False)) if s else False
 		except Exception as exc:
 			db.session.rollback()
-			print(f"[WARNING] Employee gold custody bootstrap skipped/failed: {exc}")
+			print(f"[WARNING] Bootstrap flag read failed: {exc}")
+			bootstrap_disabled = False
 
-		ensure_weight_closing_support_accounts()
-		# Ensure core VAT accounts exist (required by supplier purchase postings).
-		try:
-			from models import Account
+		if bootstrap_disabled:
+			print('[INFO] Startup bootstrap disabled by settings; skipping COA/support account seeding.')
+		else:
+			# Seed chart of accounts only for fresh/empty databases.
+			try:
+				from coa_seed import seed_chart_of_accounts_if_empty
+				seeded = seed_chart_of_accounts_if_empty(db, '../exports/accounts_standard_220126.json')
+				if seeded:
+					print(f"[INFO] Seeded chart of accounts from standard JSON: {seeded} accounts")
+			except Exception as exc:
+				print(f"[WARNING] COA seed skipped/failed: {exc}")
 
-			def _ensure_account(account_number, name, acc_type):
-				acc = Account.query.filter_by(account_number=str(account_number)).first()
-				if acc:
+			# Repair/normalize employee gold custody group account numbering on startup.
+			try:
+				from employee_gold_safe_helpers import ensure_employee_gold_group_account
+				ensure_employee_gold_group_account(created_by='system')
+				db.session.commit()
+			except Exception as exc:
+				db.session.rollback()
+				print(f"[WARNING] Employee gold custody bootstrap skipped/failed: {exc}")
+
+			ensure_weight_closing_support_accounts()
+			# Ensure core VAT accounts exist (required by supplier purchase postings).
+			try:
+				from models import Account
+
+				def _ensure_account(account_number, name, acc_type):
+					acc = Account.query.filter_by(account_number=str(account_number)).first()
+					if acc:
+						return acc
+					acc = Account(
+						account_number=str(account_number),
+						name=str(name),
+						type=str(acc_type),
+						transaction_type='cash',
+						tracks_weight=False,
+						parent_id=None,
+					)
+					db.session.add(acc)
+					db.session.flush()
 					return acc
-				acc = Account(
-					account_number=str(account_number),
-					name=str(name),
-					type=str(acc_type),
-					transaction_type='cash',
-					tracks_weight=False,
-					parent_id=None,
-				)
-				db.session.add(acc)
-				db.session.flush()
-				return acc
 
-			_ensure_account('1500', 'ضريبة القيمة المضافة (مدفوعة)', 'Asset')
-			_ensure_account('2210', 'ضريبة القيمة المضافة المستحقة', 'Liability')
-			_ensure_account('1501', 'ضريبة عمولات نقاط البيع (مدفوعة)', 'Asset')
-			db.session.commit()
-		except Exception as exc:
-			db.session.rollback()
-			print(f"[WARNING] VAT accounts bootstrap skipped/failed: {exc}")
-		try:
-			ensure_default_payment_types()
-		except Exception as exc:
-			print(f"[WARNING] Default payment types bootstrap failed: {exc}")
+				_ensure_account('1500', 'ضريبة القيمة المضافة (مدفوعة)', 'Asset')
+				_ensure_account('2210', 'ضريبة القيمة المضافة المستحقة', 'Liability')
+				_ensure_account('1501', 'ضريبة عمولات نقاط البيع (مدفوعة)', 'Asset')
+				db.session.commit()
+			except Exception as exc:
+				db.session.rollback()
+				print(f"[WARNING] VAT accounts bootstrap skipped/failed: {exc}")
+			try:
+				ensure_default_payment_types()
+			except Exception as exc:
+				print(f"[WARNING] Default payment types bootstrap failed: {exc}")
 except Exception as exc:
 	print(f"[WARNING] Startup DB bootstrap failed: {exc}")
 

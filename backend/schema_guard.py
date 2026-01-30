@@ -219,6 +219,9 @@ def ensure_settings_columns(engine: Engine) -> None:
                     ("main_cash_safe_box_id", "INTEGER", "NULL"),
                     ("sale_gold_safe_box_id", "INTEGER", "NULL"),
                     ("main_scrap_gold_safe_box_id", "INTEGER", "NULL"),
+
+                    # Startup bootstrap guard
+                    ("disable_startup_bootstrap", "BOOLEAN", "0"),
                 ],
             )
         )

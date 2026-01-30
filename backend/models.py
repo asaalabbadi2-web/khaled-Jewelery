@@ -1978,6 +1978,10 @@ class Settings(db.Model):
     # 🆕 سياسة كلمات المرور (JSON)
     # مثال: {"min_length": 6, "require_numbers": false}
     password_policy = db.Column(db.Text, nullable=True)
+
+    # 🆕 تعطيل bootstraps عند بدء التشغيل (مفيد بعد Full System Wipe)
+    # عندما True: لا يتم seed لشجرة الحسابات أو حسابات الدعم تلقائياً عند تشغيل السيرفر.
+    disable_startup_bootstrap = db.Column(db.Boolean, default=False)
     
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
