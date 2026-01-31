@@ -1070,6 +1070,38 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                             ),
                           ),
                         ),
+                        // 🆕 Draft Badge
+                        if (entry['is_draft'] == true) ...[
+                          SizedBox(width: 8),
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.orange,
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.edit_note, size: 14, color: Colors.orange),
+                                SizedBox(width: 4),
+                                Text(
+                                  'مسودة',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: Colors.orange,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         if (entry['entry_type'] != null &&
                             entry['entry_type'] != 'عادي') ...[
                           SizedBox(width: 8),

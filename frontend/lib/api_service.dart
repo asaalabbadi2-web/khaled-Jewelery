@@ -1371,6 +1371,17 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getAccountStatementMerged(int accountId) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/accounts/$accountId/statement_merged'),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load merged account statement');
+    }
+  }
+
   Future<Map<String, dynamic>> getCustomerStatement(int customerId) async {
     final response = await _authedGet(
       Uri.parse('$_baseUrl/customers/$customerId/statement'),

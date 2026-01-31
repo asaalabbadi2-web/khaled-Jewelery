@@ -1617,6 +1617,9 @@ class JournalEntry(db.Model):
     recurring_template_id = db.Column(db.Integer, db.ForeignKey('recurring_journal_template.id'), nullable=True)  # ربط بالقالب الدوري
     created_by = db.Column(db.String(100))
     
+    # 🆕 نظام المسودات (Draft System)
+    is_draft = db.Column(db.Boolean, default=True, nullable=False, index=True)  # هل القيد مسودة؟
+    
     # 🆕 نظام الترحيل (Posting System)
     is_posted = db.Column(db.Boolean, default=False, nullable=False, index=True)  # هل تم ترحيل القيد؟
     posted_at = db.Column(db.DateTime, nullable=True)  # متى تم الترحيل؟
@@ -1661,6 +1664,7 @@ class JournalEntry(db.Model):
             'reference_id': self.reference_id,
             'reference_number': self.reference_number,
             'created_by': self.created_by,
+            'is_draft': self.is_draft,  # 🆕 حالة المسودة
             'is_posted': self.is_posted,  # 🆕 حالة الترحيل
             'posted_at': self.posted_at.isoformat() if self.posted_at else None,  # 🆕
             'posted_by': self.posted_by,  # 🆕

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 class AccountStatement {
   final double openingBalanceGold;
   final double openingBalanceCash;
+  final Map<String, double> openingBalanceGoldDetails;
   final double closingBalanceGoldNormalized;
   final double closingBalanceCash;
   final Map<String, double> closingBalanceGoldDetails;
@@ -19,6 +20,7 @@ class AccountStatement {
   AccountStatement({
     required this.openingBalanceGold,
     required this.openingBalanceCash,
+    required this.openingBalanceGoldDetails,
     required this.closingBalanceGoldNormalized,
     required this.closingBalanceCash,
     required this.closingBalanceGoldDetails,
@@ -67,6 +69,12 @@ class AccountStatement {
       openingBalanceGold:
           json['opening_balance_gold_normalized']?.toDouble() ?? 0.0,
       openingBalanceCash: json['opening_balance_cash']?.toDouble() ?? 0.0,
+      openingBalanceGoldDetails:
+          (json['opening_balance_gold_details'] as Map<String, dynamic>?)?.map(
+            (key, value) =>
+                MapEntry(key, (value is num) ? value.toDouble() : 0.0),
+          ) ??
+          {},
       closingBalanceGoldNormalized:
           json['closing_balance_gold_normalized']?.toDouble() ?? 0.0,
       closingBalanceCash: json['closing_balance_cash']?.toDouble() ?? 0.0,

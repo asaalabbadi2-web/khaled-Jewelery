@@ -49,6 +49,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _showOnlyMovement = false;
   bool _includeBreakdown = true;
   bool _isExporting = false;
+  bool _useMergedView = false; // Toggle for merged statement
 
   void _clearFilters() {
     setState(() {
@@ -93,7 +94,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       } else if (widget.entityType == 'supplier') {
         data = await ApiService().getSupplierStatement(widget.accountId);
       } else {
-        data = await ApiService().getAccountStatement(widget.accountId);
+        // Use merged view if enabled, otherwise regular statement
+        if (_useMergedView) {
+          data = await ApiService().getAccountStatementMerged(widget.accountId);
+        } else {
+          data = await ApiService().getAccountStatement(widget.accountId);
+        }
       }
 
       if (!mounted) return;
@@ -1012,6 +1018,21 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                 setState(() => _viewMode = value.first);
               },
             ),
+            if (widget.entityType == 'account')
+              FilterChip(
+                label: const Text('دمج الحسابين'),
+                avatar: Icon(
+                  _useMergedView ? Icons.merge : Icons.call_split,
+                  size: 18,
+                ),
+                selected: _useMergedView,
+                onSelected: (value) {
+                  setState(() {
+                    _useMergedView = value;
+                  });
+                  _fetchAccountStatement();
+                },
+              ),
             FilterChip(
               label: const Text('حركات فقط'),
               selected: _showOnlyMovement,

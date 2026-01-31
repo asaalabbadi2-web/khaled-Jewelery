@@ -521,7 +521,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   }
 
   // --- Save Logic ---
-  Future<void> _saveJournalEntry() async {
+  Future<void> _saveJournalEntry({bool isDraft = false}) async {
     // First, validate the form fields themselves
     if (!_formKey.currentState!.validate()) {
       return;
@@ -530,8 +530,11 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     // Then, perform custom validation on the lines
     if (!_validateLines()) return;
 
-    // Finally, check for balance and ask for confirmation if needed
-    if (!await _checkBalances()) return;
+    // Skip balance check if saving as draft
+    if (!isDraft) {
+      // Finally, check for balance and ask for confirmation if needed
+      if (!await _checkBalances()) return;
+    }
 
     final data = {
       'description': _descriptionController.text,
@@ -541,6 +544,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       'reference_number': _referenceNumberController.text.isEmpty
           ? null
           : _referenceNumberController.text,
+      'is_draft': isDraft,  // 🆕 إضافة حالة المسودة
       'lines': _lines
           .where((line) => line.hasValues)
           .map((line) => line.toMap())
@@ -554,6 +558,12 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         await _apiService.updateJournalEntry(widget.entry['id'], data);
       }
       if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isDraft ? 'تم حفظ القيد كمسودة' : 'تم حفظ القيد بنجاح'),
+            backgroundColor: Colors.green,
+          ),
+        );
         Navigator.of(context).pop(true); // Return true to indicate success
       }
     } catch (e) {
@@ -665,7 +675,22 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
           widget.entry == null ? 'إضافة قيد يومية' : 'تعديل قيد يومية',
         ),
         actions: [
-          IconButton(icon: Icon(Icons.save), onPressed: _saveJournalEntry),
+          // 🆕 زر حفظ كمسودة
+          TextButton.icon(
+            onPressed: () => _saveJournalEntry(isDraft: true),
+            icon: Icon(Icons.edit_note, color: Colors.white70),
+            label: Text(
+              'مسودة',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          SizedBox(width: 8),
+          // زر الحفظ النهائي
+          IconButton(
+            icon: Icon(Icons.save),
+            onPressed: () => _saveJournalEntry(isDraft: false),
+            tooltip: 'حفظ',
+          ),
         ],
       ),
       body: Form(

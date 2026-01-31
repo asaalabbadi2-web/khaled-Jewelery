@@ -3218,13 +3218,45 @@ def get_account_statement(account_id):
     account = Account.query.get_or_404(account_id)
     main_karat = get_main_karat()
 
-    # Statements start from zero (opening balances are represented as movements if they exist)
-    running_balance_cash = 0
-    running_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
+    # Calculate opening balance from افتتاحي entries
+    opening_balance_cash = 0
+    opening_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
 
+    opening_journal_lines = (
+        JournalEntryLine.query.join(JournalEntry)
+        .filter(
+            JournalEntryLine.account_id == account_id,
+            JournalEntry.entry_type == 'افتتاحي'
+        )
+        .all()
+    )
+
+    for line in opening_journal_lines:
+        opening_balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
+        opening_balances_gold['18k'] += (line.debit_18k or 0) - (line.credit_18k or 0)
+        opening_balances_gold['21k'] += (line.debit_21k or 0) - (line.credit_21k or 0)
+        opening_balances_gold['22k'] += (line.debit_22k or 0) - (line.credit_22k or 0)
+        opening_balances_gold['24k'] += (line.debit_24k or 0) - (line.credit_24k or 0)
+
+    # Calculate opening balance normalized to main karat
+    opening_balance_gold_normalized = (
+        convert_to_main_karat(opening_balances_gold['18k'], 18) +
+        convert_to_main_karat(opening_balances_gold['21k'], 21) +
+        convert_to_main_karat(opening_balances_gold['22k'], 22) +
+        convert_to_main_karat(opening_balances_gold['24k'], 24)
+    )
+
+    # Initialize running balances starting from opening balance
+    running_balance_cash = opening_balance_cash
+    running_balances_gold = opening_balances_gold.copy()
+
+    # Get regular journal lines (excluding opening entries)
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
-        .filter(JournalEntryLine.account_id == account_id)
+        .filter(
+            JournalEntryLine.account_id == account_id,
+            JournalEntry.entry_type != 'افتتاحي'
+        )
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
@@ -3342,8 +3374,9 @@ def get_account_statement(account_id):
     return jsonify({
         'account_name': account.name,
         'main_karat': main_karat,
-        'opening_balance_cash': 0, # Statements start from zero
-        'opening_balance_gold_normalized': 0,
+        'opening_balance_cash': opening_balance_cash,
+        'opening_balance_gold_normalized': opening_balance_gold_normalized,
+        'opening_balance_gold_details': opening_balances_gold,
         'lines': statement_lines,
         'totals': {
             'cash_debit': total_cash_debit,
@@ -3355,6 +3388,258 @@ def get_account_statement(account_id):
         'closing_balance_gold_normalized': closing_balance_gold_normalized,
         'closing_balance_gold_details': running_balances_gold,
     })
+
+
+@api.route('/accounts/<int:account_id>/statement_merged', methods=['GET'])
+def get_account_statement_merged(account_id):
+    """
+    كشف حساب مدمج - يجمع بين الحساب المالي وحساب المذكرة المقابل
+    يعرض النقد من الحساب المالي والوزن من حساب المذكرة في سطر واحد
+    """
+    account = Account.query.get_or_404(account_id)
+    main_karat = get_main_karat()
+
+    # Find linked memo account
+    memo_account = None
+    if account.memo_account_id:
+        memo_account = Account.query.get(account.memo_account_id)
+    
+    # If this IS a memo account, find its financial account
+    if not memo_account and account.tracks_weight:
+        financial = Account.query.filter_by(memo_account_id=account_id).first()
+        if financial:
+            # Swap: treat the financial account as primary
+            account, memo_account = financial, account
+
+    # Calculate opening balances from افتتاحي entries
+    opening_balance_cash = 0
+    opening_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
+
+    opening_journal_lines = (
+        JournalEntryLine.query.join(JournalEntry)
+        .filter(
+            JournalEntryLine.account_id == account_id,
+            JournalEntry.entry_type == 'افتتاحي'
+        )
+        .all()
+    )
+
+    for line in opening_journal_lines:
+        opening_balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
+        opening_balances_gold['18k'] += (line.debit_18k or 0) - (line.credit_18k or 0)
+        opening_balances_gold['21k'] += (line.debit_21k or 0) - (line.credit_21k or 0)
+        opening_balances_gold['22k'] += (line.debit_22k or 0) - (line.credit_22k or 0)
+        opening_balances_gold['24k'] += (line.debit_24k or 0) - (line.credit_24k or 0)
+
+    if memo_account:
+        memo_opening_lines = (
+            JournalEntryLine.query.join(JournalEntry)
+            .filter(
+                JournalEntryLine.account_id == memo_account.id,
+                JournalEntry.entry_type == 'افتتاحي'
+            )
+            .all()
+        )
+        for line in memo_opening_lines:
+            opening_balances_gold['18k'] += (line.debit_18k or 0) - (line.credit_18k or 0)
+            opening_balances_gold['21k'] += (line.debit_21k or 0) - (line.credit_21k or 0)
+            opening_balances_gold['22k'] += (line.debit_22k or 0) - (line.credit_22k or 0)
+            opening_balances_gold['24k'] += (line.debit_24k or 0) - (line.credit_24k or 0)
+
+    opening_balance_gold_normalized = (
+        convert_to_main_karat(opening_balances_gold['18k'], 18) +
+        convert_to_main_karat(opening_balances_gold['21k'], 21) +
+        convert_to_main_karat(opening_balances_gold['22k'], 22) +
+        convert_to_main_karat(opening_balances_gold['24k'], 24)
+    )
+
+    # Initialize running balances
+    running_balance_cash = opening_balance_cash
+    running_balances_gold = opening_balances_gold.copy()
+
+    # Get journal lines from both accounts (excluding opening entries)
+    account_ids = [account_id]
+    if memo_account:
+        account_ids.append(memo_account.id)
+
+    journal_lines = (
+        JournalEntryLine.query.join(JournalEntry)
+        .filter(
+            JournalEntryLine.account_id.in_(account_ids),
+            JournalEntry.entry_type != 'افتتاحي'
+        )
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .all()
+    )
+
+    # Get voucher lines (only from main account, not memo)
+    voucher_lines = (
+        VoucherAccountLine.query.join(Voucher)
+        .filter(VoucherAccountLine.account_id == account_id)
+        .order_by(Voucher.date.asc(), Voucher.id.asc(), VoucherAccountLine.id.asc())
+        .all()
+    )
+
+    # Group lines by journal entry to merge parallel accounts
+    lines_by_entry = {}
+    for line in journal_lines:
+        entry_id = line.journal_entry_id
+        if entry_id not in lines_by_entry:
+            lines_by_entry[entry_id] = {
+                'date': line.journal_entry.date,
+                'entry_id': entry_id,
+                'entry_number': line.journal_entry.entry_number,
+                'description': line.journal_entry.description,
+                'reference_type': line.journal_entry.reference_type,
+                'reference_id': line.journal_entry.reference_id,
+                'reference_number': line.journal_entry.reference_number,
+                'cash_debit': 0,
+                'cash_credit': 0,
+                'debit_18k': 0,
+                'credit_18k': 0,
+                'debit_21k': 0,
+                'credit_21k': 0,
+                'debit_22k': 0,
+                'credit_22k': 0,
+                'debit_24k': 0,
+                'credit_24k': 0,
+                'line_ids': []
+            }
+        
+        entry_data = lines_by_entry[entry_id]
+        entry_data['cash_debit'] += line.cash_debit or 0
+        entry_data['cash_credit'] += line.cash_credit or 0
+        entry_data['debit_18k'] += line.debit_18k or 0
+        entry_data['credit_18k'] += line.credit_18k or 0
+        entry_data['debit_21k'] += line.debit_21k or 0
+        entry_data['credit_21k'] += line.credit_21k or 0
+        entry_data['debit_22k'] += line.debit_22k or 0
+        entry_data['credit_22k'] += line.credit_22k or 0
+        entry_data['debit_24k'] += line.debit_24k or 0
+        entry_data['credit_24k'] += line.credit_24k or 0
+        entry_data['line_ids'].append(line.id)
+
+    # Convert grouped entries to list and sort
+    merged_lines = sorted(lines_by_entry.values(), key=lambda x: (x['date'], x['entry_id']))
+
+    statement_lines = []
+    total_cash_debit = 0
+    total_cash_credit = 0
+    total_gold_debit_normalized = 0
+    total_gold_credit_normalized = 0
+
+    # Add voucher lines first
+    for line in voucher_lines:
+        cash_debit = float(line.amount or 0) if line.line_type == 'debit' else 0.0
+        cash_credit = float(line.amount or 0) if line.line_type == 'credit' else 0.0
+        running_balance_cash += cash_debit - cash_credit
+
+        statement_lines.append({
+            'id': -int(line.id),
+            'date': line.voucher.date.isoformat(),
+            'description': line.voucher.description or (line.description or ''),
+            'journal_entry_id': line.voucher.journal_entry_id,
+            'entry_number': line.voucher.journal_entry.entry_number if line.voucher.journal_entry else None,
+            'reference_type': 'voucher',
+            'reference_id': line.voucher.id,
+            'reference_number': line.voucher.voucher_number,
+            'cash_debit': cash_debit,
+            'cash_credit': cash_credit,
+            'gold_debit': 0.0,
+            'gold_credit': 0.0,
+            'debit_18k': 0.0,
+            'credit_18k': 0.0,
+            'debit_21k': 0.0,
+            'credit_21k': 0.0,
+            'debit_22k': 0.0,
+            'credit_22k': 0.0,
+            'debit_24k': 0.0,
+            'credit_24k': 0.0,
+        })
+
+        total_cash_debit += cash_debit
+        total_cash_credit += cash_credit
+
+    # Add merged journal entries
+    for entry_data in merged_lines:
+        # Update running balances
+        running_balances_gold['18k'] += entry_data['debit_18k'] - entry_data['credit_18k']
+        running_balances_gold['21k'] += entry_data['debit_21k'] - entry_data['credit_21k']
+        running_balances_gold['22k'] += entry_data['debit_22k'] - entry_data['credit_22k']
+        running_balances_gold['24k'] += entry_data['debit_24k'] - entry_data['credit_24k']
+        running_balance_cash += entry_data['cash_debit'] - entry_data['cash_credit']
+
+        # Normalize gold
+        gold_debit_normalized = (
+            convert_to_main_karat(entry_data['debit_18k'], 18) +
+            convert_to_main_karat(entry_data['debit_21k'], 21) +
+            convert_to_main_karat(entry_data['debit_22k'], 22) +
+            convert_to_main_karat(entry_data['debit_24k'], 24)
+        )
+        gold_credit_normalized = (
+            convert_to_main_karat(entry_data['credit_18k'], 18) +
+            convert_to_main_karat(entry_data['credit_21k'], 21) +
+            convert_to_main_karat(entry_data['credit_22k'], 22) +
+            convert_to_main_karat(entry_data['credit_24k'], 24)
+        )
+
+        statement_lines.append({
+            'id': entry_data['line_ids'][0],  # Use first line ID
+            'merged_ids': entry_data['line_ids'],  # All line IDs
+            'date': entry_data['date'].isoformat(),
+            'description': entry_data['description'],
+            'journal_entry_id': entry_data['entry_id'],
+            'entry_number': entry_data['entry_number'],
+            'reference_type': entry_data['reference_type'],
+            'reference_id': entry_data['reference_id'],
+            'reference_number': entry_data['reference_number'],
+            'cash_debit': entry_data['cash_debit'],
+            'cash_credit': entry_data['cash_credit'],
+            'gold_debit': gold_debit_normalized,
+            'gold_credit': gold_credit_normalized,
+            'debit_18k': entry_data['debit_18k'],
+            'credit_18k': entry_data['credit_18k'],
+            'debit_21k': entry_data['debit_21k'],
+            'credit_21k': entry_data['credit_21k'],
+            'debit_22k': entry_data['debit_22k'],
+            'credit_22k': entry_data['credit_22k'],
+            'debit_24k': entry_data['debit_24k'],
+            'credit_24k': entry_data['credit_24k'],
+        })
+
+        total_cash_debit += entry_data['cash_debit']
+        total_cash_credit += entry_data['cash_credit']
+        total_gold_debit_normalized += gold_debit_normalized
+        total_gold_credit_normalized += gold_credit_normalized
+
+    # Final closing balances
+    closing_balance_gold_normalized = (
+        convert_to_main_karat(running_balances_gold['18k'], 18) +
+        convert_to_main_karat(running_balances_gold['21k'], 21) +
+        convert_to_main_karat(running_balances_gold['22k'], 22) +
+        convert_to_main_karat(running_balances_gold['24k'], 24)
+    )
+
+    return jsonify({
+        'account_name': account.name,
+        'memo_account_name': memo_account.name if memo_account else None,
+        'main_karat': main_karat,
+        'is_merged': memo_account is not None,
+        'opening_balance_cash': opening_balance_cash,
+        'opening_balance_gold_normalized': opening_balance_gold_normalized,
+        'opening_balance_gold_details': opening_balances_gold,
+        'lines': statement_lines,
+        'totals': {
+            'cash_debit': total_cash_debit,
+            'cash_credit': total_cash_credit,
+            'gold_debit_normalized': total_gold_debit_normalized,
+            'gold_credit_normalized': total_gold_credit_normalized,
+        },
+        'closing_balance_cash': running_balance_cash,
+        'closing_balance_gold_normalized': closing_balance_gold_normalized,
+        'closing_balance_gold_details': running_balances_gold,
+    })
+
 
 # Customers CRUD
 @api.route('/customers/<int:id>', methods=['DELETE'])
@@ -10849,6 +11134,80 @@ def _account_weight_balance_main_karat(account):
     total += convert_to_main_karat(account.balance_21k or 0.0, 21)
     total += convert_to_main_karat(account.balance_22k or 0.0, 22)
     total += convert_to_main_karat(account.balance_24k or 0.0, 24)
+    return total
+
+
+def _update_account_balances_from_journal_lines(journal_entry_lines):
+    """
+    تحديث أرصدة الحسابات بناءً على أسطر قيد يومية
+    
+    Args:
+        journal_entry_lines: قائمة من JournalEntryLine objects
+    """
+    affected_accounts = set()
+    
+    for line in journal_entry_lines:
+        if line.account_id:
+            affected_accounts.add(line.account_id)
+    
+    # تحديث كل حساب متأثر
+    for account_id in affected_accounts:
+        account = Account.query.get(account_id)
+        if not account:
+            continue
+        
+        # إعادة حساب الرصيد من جميع القيود
+        account.balance_cash = 0.0
+        account.balance_18k = 0.0
+        account.balance_21k = 0.0
+        account.balance_22k = 0.0
+        account.balance_24k = 0.0
+        
+        # جمع كل أسطر القيود لهذا الحساب
+        all_lines = (
+            JournalEntryLine.query
+            .join(JournalEntry)
+            .filter(
+                JournalEntryLine.account_id == account_id,
+                JournalEntry.is_deleted == False
+            )
+            .all()
+        )
+        
+        for line in all_lines:
+            account.balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
+            
+            if account.tracks_weight:
+                account.balance_18k += (line.debit_18k or 0) - (line.credit_18k or 0)
+                account.balance_21k += (line.debit_21k or 0) - (line.credit_21k or 0)
+                account.balance_22k += (line.debit_22k or 0) - (line.credit_22k or 0)
+                account.balance_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
+        
+        # جمع أسطر السندات أيضاً
+        voucher_lines = (
+            VoucherAccountLine.query
+            .join(Voucher)
+            .filter(
+                VoucherAccountLine.account_id == account_id
+            )
+            .all()
+        )
+        
+        for line in voucher_lines:
+            if line.line_type == 'debit':
+                account.balance_cash += (line.amount or 0)
+            else:
+                account.balance_cash -= (line.amount or 0)
+
+
+def _account_weight_balance_main_karat(account):
+    if not account or not account.tracks_weight:
+        return 0.0
+    total = 0.0
+    total += convert_to_main_karat(account.balance_18k or 0.0, 18)
+    total += convert_to_main_karat(account.balance_21k or 0.0, 21)
+    total += convert_to_main_karat(account.balance_22k or 0.0, 22)
+    total += convert_to_main_karat(account.balance_24k or 0.0, 24)
     return round(total, 6)
 
 
@@ -11064,11 +11423,16 @@ def add_journal_entry():
     try:
         new_entry = JournalEntry(
             date=datetime.fromisoformat(data['date']),
-            description=data['description']
+            description=data['description'],
+            is_draft=data.get('is_draft', True),  # 🆕 دعم المسودات (افتراضياً مسودة)
+            entry_type=data.get('entry_type', 'عادي'),  # 🆕 نوع القيد
+            reference_type=data.get('reference_type'),
+            reference_number=data.get('reference_number'),
         )
         db.session.add(new_entry)
         db.session.flush() # Get the ID for the lines
 
+        created_lines = []
         for line_data in lines_data:
             new_line = JournalEntryLine(
                 journal_entry_id=new_entry.id,
@@ -11085,6 +11449,12 @@ def add_journal_entry():
                 credit_24k=line_data.get('credit_24k', 0)
             )
             db.session.add(new_line)
+            created_lines.append(new_line)
+
+        db.session.flush()
+        
+        # 🆕 تحديث أرصدة الحسابات
+        _update_account_balances_from_journal_lines(created_lines)
 
         db.session.commit()
         return jsonify(new_entry.to_dict()), 201
@@ -11158,12 +11528,21 @@ def update_journal_entry(id):
     try:
         entry.date = datetime.fromisoformat(data['date'])
         entry.description = data['description']
+        # 🆕 تحديث حالة المسودة إذا تم إرسالها
+        if 'is_draft' in data:
+            entry.is_draft = data['is_draft']
+
+        # حفظ معرفات الحسابات المتأثرة من الأسطر القديمة
+        old_account_ids = {line.account_id for line in entry.lines if line.account_id}
 
         # Remove old lines
         for line in entry.lines:
             db.session.delete(line)
 
+        db.session.flush()
+
         # Add new lines
+        new_lines = []
         for line_data in data['lines']:
             new_line = JournalEntryLine(
                 journal_entry_id=entry.id,
@@ -11180,6 +11559,39 @@ def update_journal_entry(id):
                 credit_24k=line_data.get('credit_24k', 0),
             )
             db.session.add(new_line)
+            new_lines.append(new_line)
+
+        db.session.flush()
+        
+        # 🆕 تحديث أرصدة جميع الحسابات المتأثرة (القديمة والجديدة)
+        affected_accounts = old_account_ids | {line.account_id for line in new_lines if line.account_id}
+        for account_id in affected_accounts:
+            account = Account.query.get(account_id)
+            if account:
+                # إعادة حساب من الصفر
+                account.balance_cash = 0.0
+                account.balance_18k = 0.0
+                account.balance_21k = 0.0
+                account.balance_22k = 0.0
+                account.balance_24k = 0.0
+                
+                all_lines = (
+                    JournalEntryLine.query
+                    .join(JournalEntry)
+                    .filter(
+                        JournalEntryLine.account_id == account_id,
+                        JournalEntry.is_deleted == False
+                    )
+                    .all()
+                )
+                
+                for line in all_lines:
+                    account.balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
+                    if account.tracks_weight:
+                        account.balance_18k += (line.debit_18k or 0) - (line.credit_18k or 0)
+                        account.balance_21k += (line.debit_21k or 0) - (line.credit_21k or 0)
+                        account.balance_22k += (line.debit_22k or 0) - (line.credit_22k or 0)
+                        account.balance_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
 
         db.session.commit()
         return jsonify({'result': 'success'})
