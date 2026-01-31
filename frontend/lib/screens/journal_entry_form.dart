@@ -11,6 +11,8 @@ import '../widgets/account_picker_sheet.dart';
 // --- Data Models ---
 class JournalLine {
   int? accountId;
+  String? accountName;
+  String? accountNumber;
   String? accountTransactionType; // 'cash', 'gold', or 'both'
   final TextEditingController cashDebitController;
   final TextEditingController cashCreditController;
@@ -20,6 +22,8 @@ class JournalLine {
 
   JournalLine({
     this.accountId,
+    this.accountName,
+    this.accountNumber,
     this.accountTransactionType,
     String cashDebit = '0.0',
     String cashCredit = '0.0',
@@ -67,8 +71,17 @@ class JournalLine {
       goldCredits[karat] = (map['credit_${karat}k'] ?? 0.0).toString();
     }
 
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
     return JournalLine(
-      accountId: map['account_id'],
+      accountId: toInt(map['account_id'] ?? map['accountId']),
+      accountName: map['account_name']?.toString(),
+      accountNumber: map['account_number']?.toString(),
       // transaction type is set later after accounts are fetched
       cashDebit: (map['cash_debit'] ?? 0.0).toString(),
       cashCredit: (map['cash_credit'] ?? 0.0).toString(),
@@ -286,13 +299,44 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       final accounts = await _apiService.getAccounts();
       if (mounted) {
         setState(() {
+          int? toInt(dynamic v) {
+            if (v is int) return v;
+            if (v is num) return v.toInt();
+            if (v is String) return int.tryParse(v);
+            return int.tryParse('${v ?? ''}');
+          }
+
           _accounts = accounts;
+          final accountIds = _accounts
+              .map((acc) => toInt(acc['id']))
+              .whereType<int>()
+              .toSet();
+
+          // Add placeholder accounts for lines that reference missing accounts.
+          for (var line in _lines) {
+            final lineId = toInt(line.accountId);
+            if (lineId != null && !accountIds.contains(lineId)) {
+              final placeholderName =
+                  (line.accountName?.trim().isNotEmpty == true)
+                      ? line.accountName!.trim()
+                      : 'حساب غير متاح (ID: $lineId)';
+              final placeholderNumber = line.accountNumber?.trim() ?? '';
+              _accounts.add({
+                'id': lineId,
+                'account_number': placeholderNumber,
+                'name': placeholderName,
+              });
+              accountIds.add(lineId);
+            }
+          }
+
           // After fetching accounts, update transaction types for existing lines
           for (var line in _lines) {
             if (line.accountId != null) {
               try {
+                final lineId = toInt(line.accountId);
                 final account = _accounts.firstWhere(
-                  (acc) => acc['id'] == line.accountId,
+                  (acc) => toInt(acc['id']) == lineId,
                 );
                 line.accountTransactionType = account['transaction_type'];
                 if (line.accountTransactionType == 'gold' ||
@@ -522,8 +566,18 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   }
 
   bool _validateLines() {
-    // Identify all parent accounts
-    final parentIds = _accounts.map((acc) => acc['parent_id']).toSet();
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
+    // Identify all parent accounts (IDs that are referenced as parent_id)
+    final parentIds = _accounts
+        .map((acc) => toInt(acc['parent_id']))
+        .whereType<int>()
+        .toSet();
 
     for (var line in _lines) {
       // Skip empty lines
@@ -540,7 +594,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       }
 
       // Check if the selected account is a parent account
-      if (parentIds.contains(line.accountId)) {
+      if (line.accountId != null && parentIds.contains(line.accountId)) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -593,7 +647,17 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   // --- Build Method ---
   @override
   Widget build(BuildContext context) {
-    final parentIds = _accounts.map((acc) => acc['parent_id']).toSet();
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
+    final parentIds = _accounts
+        .map((acc) => toInt(acc['parent_id']))
+        .whereType<int>()
+        .toSet();
 
     return Scaffold(
       appBar: AppBar(
@@ -798,12 +862,18 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     );
   }
 
-  Widget _buildLinesList(Set<dynamic> parentIds) {
-    final selectableAccounts = _accounts
-        .where((acc) => !parentIds.contains(acc['id']))
-        .toList();
+  Widget _buildLinesList(Set<int> parentIds) {
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
 
-    final sortedAccounts = List<dynamic>.from(selectableAccounts)
+    // Keep ALL accounts in the list so existing (even parent) selections can
+    // still display their label. Use predicate/validation to prevent selecting
+    // parent accounts.
+    final sortedAccounts = List<dynamic>.from(_accounts)
       ..sort((a, b) {
         final aNum = int.tryParse(a['account_number']?.toString() ?? '0') ?? 0;
         final bNum = int.tryParse(b['account_number']?.toString() ?? '0') ?? 0;
@@ -814,6 +884,11 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
         .toList(growable: false);
+
+    final accountIds = sortedAccountsTyped
+      .map((acc) => toInt(acc['id']))
+      .whereType<int>()
+      .toSet();
 
     return Expanded(
       child: Column(
@@ -844,15 +919,19 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                 }
 
                 final line = _lines[index];
-                final isSelectedAccountValid = sortedAccountsTyped.any(
-                  (acc) => acc['id'] == line.accountId,
-                );
+                final lineAccountId = line.accountId;
+                final isSelectedAccountMissing =
+                    lineAccountId != null && !accountIds.contains(lineAccountId);
+                final isSelectedAccountParent =
+                    lineAccountId != null && parentIds.contains(lineAccountId);
 
                 return _buildJournalLineCard(
                   index: index,
                   line: line,
                   accounts: sortedAccountsTyped,
-                  isSelectedAccountValid: isSelectedAccountValid,
+                  parentIds: parentIds,
+                  isSelectedAccountMissing: isSelectedAccountMissing,
+                  isSelectedAccountParent: isSelectedAccountParent,
                 );
               },
             ),
@@ -867,7 +946,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     required int index,
     required JournalLine line,
     required List<Map<String, dynamic>> accounts,
-    required bool isSelectedAccountValid,
+    required Set<int> parentIds,
+    required bool isSelectedAccountMissing,
+    required bool isSelectedAccountParent,
   }) {
     final theme = Theme.of(context);
 
@@ -933,7 +1014,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             AccountPickerFormField(
               context: context,
               accounts: accounts,
-              value: isSelectedAccountValid ? line.accountId : null,
+              value: line.accountId,
               labelText: 'اختر الحساب',
               hintText: 'اختر حساب فرعي',
               title: 'اختيار حساب',
@@ -944,9 +1025,25 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                   : 'ابحث بالرقم/الاسم + فلترة (نقدي/ذهبي)',
               showTransactionTypeFilter: true,
               showTracksWeightFilter: false,
+              predicate: (acc) {
+                final raw = acc['id'];
+                final id = raw is int
+                    ? raw
+                    : (raw is num
+                          ? raw.toInt()
+                          : int.tryParse('${raw ?? ''}'));
+                if (id == null) return false;
+                return !parentIds.contains(id);
+              },
               validator: (value) {
                 if (line.hasValues && value == null) {
                   return 'حساب غير صالح أو رئيسي';
+                }
+                if (line.hasValues && isSelectedAccountMissing) {
+                  return 'الحساب المحدد غير موجود';
+                }
+                if (line.hasValues && isSelectedAccountParent) {
+                  return 'لا يمكن إجراء معاملة على حساب رئيسي';
                 }
                 return null;
               },

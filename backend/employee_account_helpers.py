@@ -3,17 +3,17 @@
 """Employee account helpers.
 
 This project supports a dual ledger (cash + weight/memo). For employees, the
-requested structure (per screenshots) is:
+requested structure is:
 
-- Assets (debtors):
+- Assets (employee personal accounts):
     - 170: أرصدة مدينة أخرى
         - 1700: حسابات الموظفين
 
-- Liabilities (creditors):
-    - 230: ذمم الموظفين
-        - 2300: رواتب موظفين مستحقة
-        - 2310: عولات بائعين ومشترين مستحقة
-        - 2320: مخصص مكافئة نهاية الخدمة
+- Liabilities (employee payables):
+    - 240: ذمم الموظفين
+        - 2400: ذمم الموظفين-رواتب
+        - 2410: ذمم الموظفين-عمولات
+        - 2420: ذمم الموظفين - مكافآت نهاية الخدمة
 
 All created/ensured accounts should have a weight (memo) parallel account:
     memo_number = '7' + financial_number
@@ -38,7 +38,7 @@ from typing import Dict, List, Optional, Tuple
 
 EMPLOYEE_DEBTORS_ROOT_NUMBER = '170'
 EMPLOYEE_PERSONAL_PARENT_NUMBER = '1700'
-EMPLOYEE_PAYABLES_ROOT_NUMBER = '230'
+EMPLOYEE_PAYABLES_ROOT_NUMBER = '240'
 
 
 def _normalize_type(value: str) -> str:
@@ -197,8 +197,8 @@ def ensure_employee_group_accounts(created_by: str = 'system'):
         Requested structure:
         - 170: أرصدة مدينة أخرى (تجميعي)
             - 1700: حسابات الموظفين (تجميعي)
-        - 230: ذمم الموظفين (تجميعي)
-            - 2300/2310/2320: مجموعات ذمم الموظفين
+        - 240: ذمم الموظفين (تجميعي)
+            - 2400/2410/2420: مجموعات ذمم الموظفين
     """
 
     ensured: Dict[str, Account] = {}
@@ -232,7 +232,7 @@ def ensure_employee_group_accounts(created_by: str = 'system'):
     ensured[EMPLOYEE_PERSONAL_PARENT_NUMBER] = parent_1700
     ensure_memo_for_account(parent_1700)
 
-    # 230 - employee payables root under liabilities
+    # 240 - employee payables root under liabilities
     root_liab = Account.query.filter_by(account_number=EMPLOYEE_PAYABLES_ROOT_NUMBER).first()
     if not root_liab:
         inferred_parent = Account.query.filter_by(account_number='2').first() or _find_existing_parent_by_prefix('2')
@@ -247,11 +247,11 @@ def ensure_employee_group_accounts(created_by: str = 'system'):
     ensured[EMPLOYEE_PAYABLES_ROOT_NUMBER] = root_liab
     ensure_memo_for_account(root_liab)
 
-    # Detail groups under 230 for employee payables
+    # Detail groups under 240 for employee payables
     detail_groups: List[Tuple[str, str]] = [
-        ('2300', 'رواتب موظفين مستحقة'),
-        ('2310', 'عولات بائعين ومشترين مستحقة'),
-        ('2320', 'مخصص مكافئة نهاية الخدمة'),
+        ('2400', 'ذمم الموظفين-رواتب'),
+        ('2410', 'ذمم الموظفين-عمولات'),
+        ('2420', 'ذمم الموظفين - مكافآت نهاية الخدمة'),
     ]
 
     for acc_num, name_ar in detail_groups:
@@ -341,7 +341,7 @@ def create_employee_account(employee_name, department='administration', created_
 
 
 def create_employee_payables_accounts(employee_name: str, created_by: str = 'system') -> List[Account]:
-    """Create employee-specific payables accounts under 2300/2400/2500.
+    """Create employee-specific payables accounts under 2400/2410/2420.
 
     Notes:
     - These accounts are not linked to the Employee model directly.
@@ -352,21 +352,21 @@ def create_employee_payables_accounts(employee_name: str, created_by: str = 'sys
 
 
 def get_or_create_employee_payables_accounts(employee_name: str, created_by: str = 'system') -> List[Account]:
-    """Idempotently ensure employee-specific payables accounts under (23) groups.
+    """Idempotently ensure employee-specific payables accounts under (24) groups.
 
     Creates per-employee accounts under:
-    - 2300 رواتب مستحقة
-    - 2310 مكافآت مستحقة
-    - 2320 مستحقات موظفين أخرى
+    - 2400 ذمم الموظفين-رواتب
+    - 2410 ذمم الموظفين-عمولات
+    - 2420 ذمم الموظفين - مكافآت نهاية الخدمة
     """
 
     ensured = ensure_employee_group_accounts(created_by=created_by)
     result: List[Account] = []
 
     specs = [
-        ('2300', 'رواتب'),
-        ('2310', 'مكافآت'),
-        ('2320', 'أخرى'),
+        ('2400', 'رواتب'),
+        ('2410', 'عمولات'),
+        ('2420', 'نهاية الخدمة'),
     ]
 
     for parent_num, category_ar in specs:

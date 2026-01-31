@@ -274,6 +274,45 @@
 			"command": "export DATABASE_URL=\"sqlite:///../app.db\"; cd backend && ( [ -x venv/bin/python ] && PY=venv/bin/python || PY=python3; \"$PY\" seed_test_vaults_and_payments.py )",
 			"isBackground": false,
 			"problemMatcher": []
+		},
+		{
+			"label": "Debug: Inspect Employee Payables Roots (240/230)",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3,os; con=sqlite3.connect('app.db'); cur=con.cursor();\nnums=['240','230','170','1700','2300','2310','2320'];\nq='select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number in (%s) order by account_number' % ','.join(['?']*len(nums));\ncur.execute(q, nums);\nprint('roots:');\n[print(r) for r in cur.fetchall()];\nfor root in ['240','230']:\n    cur.execute('select id from account where account_number=? limit 1',(root,));\n    row=cur.fetchone();\n    if not row:\n        print('\\nroot',root,'NOT FOUND');\n        continue\n    root_id=row[0]\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where parent_id=? order by account_number',(root_id,));\n    rows=cur.fetchall();\n    print('\\nchildren of',root,'count',len(rows));\n    [print(r) for r in rows[:40]];\ncon.close()\" || python3 -c \"import sqlite3,os; con=sqlite3.connect('app.db'); cur=con.cursor();\nnums=['240','230','170','1700','2300','2310','2320'];\nq='select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number in (%s) order by account_number' % ','.join(['?']*len(nums));\ncur.execute(q, nums);\nprint('roots:');\n[print(r) for r in cur.fetchall()];\nfor root in ['240','230']:\n    cur.execute('select id from account where account_number=? limit 1',(root,));\n    row=cur.fetchone();\n    if not row:\n        print('\\nroot',root,'NOT FOUND');\n        continue\n    root_id=row[0]\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where parent_id=? order by account_number',(root_id,));\n    rows=cur.fetchall();\n    print('\\nchildren of',root,'count',len(rows));\n    [print(r) for r in rows[:40]];\ncon.close()\" )"
+		},
+		{
+			"label": "Debug: Check 240 Exists",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','2430','230','2300','2310','2320']:\n    cur.execute('select id,account_number,name,parent_id from account where account_number=? limit 1',(num,));\n    row=cur.fetchone();\n    print(num, '=>', row);\ncon.close()\" || python3 -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','2430','230','2300','2310','2320']:\n    cur.execute('select id,account_number,name,parent_id from account where account_number=? limit 1',(num,));\n    row=cur.fetchone();\n    print(num, '=>', row);\ncon.close()\" )"
+		},
+		{
+			"label": "Debug: Check Employee Payables Root 240",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','250','2510']:\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',(num,));\n    print(num, cur.fetchone());\ncon.close()\" || python3 -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','250','2510']:\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',(num,));\n    print(num, cur.fetchone());\ncon.close()\" )"
+		},
+		{
+			"label": "Debug: Query Account 240 Only",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor(); cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',('240',)); print(cur.fetchone()); con.close()\" || python3 -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor(); cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',('240',)); print(cur.fetchone()); con.close()\" )"
+		},
+		{
+			"label": "Pytest: Employee Payables Auto-Create",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -m pytest -q test_employee_payables_autocreate.py || python3 -m pytest -q test_employee_payables_autocreate.py )",
+			"problemMatcher": []
+		},
+		{
+			"label": "Debug: Create Employee and Show Payables Parents",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"from app import app; from employee_account_helpers import get_or_create_employee_payables_accounts; from models import Account, db; \nwith app.app_context():\n    accs=get_or_create_employee_payables_accounts('تجربة موظف', created_by='debug');\n    for a in accs:\n        parent=Account.query.get(int(a.parent_id)) if a.parent_id else None\n        print(a.account_number, a.name, 'parent=', getattr(parent,'account_number',None))\n    db.session.commit()\" || python3 -c \"from app import app; from employee_account_helpers import get_or_create_employee_payables_accounts; from models import Account, db; \nwith app.app_context():\n    accs=get_or_create_employee_payables_accounts('تجربة موظف', created_by='debug');\n    for a in accs:\n        parent=Account.query.get(int(a.parent_id)) if a.parent_id else None\n        print(a.account_number, a.name, 'parent=', getattr(parent,'account_number',None))\n    db.session.commit()\" )",
+			"problemMatcher": []
+		},
+		{
+			"label": "Flutter: Analyze",
+			"type": "shell",
+			"command": "cd frontend && flutter analyze",
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

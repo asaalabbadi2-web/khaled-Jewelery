@@ -1569,29 +1569,29 @@ class ApiService {
   Future<Map<String, dynamic>> addJournalEntry(
     Map<String, dynamic> entryData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/journal_entries'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(entryData),
     );
     if (response.statusCode == 201) {
-      return json.decode(response.body);
-    } else {
-      throw Exception('Failed to add journal entry: ${response.body}');
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      throw Exception('Invalid server response');
     }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<void> updateJournalEntry(
     int id,
     Map<String, dynamic> entryData,
   ) async {
-    final response = await http.put(
+    final response = await _authedPut(
       Uri.parse('$_baseUrl/journal_entries/$id'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(entryData),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to update journal entry: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1602,36 +1602,36 @@ class ApiService {
     String deletedBy,
     String reason,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/journal_entries/$id/soft_delete'),
-      headers: {'Content-Type': 'application/json'},
       body: json.encode({'deleted_by': deletedBy, 'reason': reason}),
     );
 
     if (response.statusCode == 200) {
-      return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      final error = json.decode(utf8.decode(response.bodyBytes));
-      throw Exception(error['error'] ?? 'فشل حذف القيد');
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      throw Exception('Invalid server response');
     }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<Map<String, dynamic>> restoreJournalEntry(
     int id,
     String restoredBy,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/journal_entries/$id/restore'),
-      headers: {'Content-Type': 'application/json'},
       body: json.encode({'restored_by': restoredBy}),
     );
 
     if (response.statusCode == 200) {
-      return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      final error = json.decode(utf8.decode(response.bodyBytes));
-      throw Exception(error['error'] ?? 'فشل استرجاع القيد');
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      throw Exception('Invalid server response');
     }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<List<dynamic>> getDeletedJournalEntries() async {
@@ -1647,11 +1647,11 @@ class ApiService {
 
   Future<void> deleteJournalEntry(int id) async {
     // الحذف النهائي (Hard Delete) - للاستخدام الإداري فقط
-    final response = await http.delete(
+    final response = await _authedDelete(
       Uri.parse('$_baseUrl/journal_entries/$id'),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to delete journal entry');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
