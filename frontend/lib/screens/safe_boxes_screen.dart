@@ -829,11 +829,21 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                                 style: TextStyle(color: safeBox.typeColor),
                               ),
                               if (safeBox.safeType == 'gold' &&
-                                  safeBox.weightBalance != null)
+                                  safeBox.hasNonZeroLedgerWeight)
                                 Text(
                                   isAr
                                       ? 'الرصيد الوزني: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}'
                                       : 'Weight balance: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                )
+                              else if (safeBox.safeType == 'gold' &&
+                                  safeBox.balance?.weight != null)
+                                Text(
+                                  isAr
+                                      ? 'الرصيد الوزني: 24k ${safeBox.accountGoldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.accountGoldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.accountGoldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.accountGoldBalance18k.toStringAsFixed(3)}'
+                                      : 'Weight balance: 24k ${safeBox.accountGoldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.accountGoldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.accountGoldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.accountGoldBalance18k.toStringAsFixed(3)}',
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                   ),

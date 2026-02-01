@@ -191,7 +191,23 @@ class SafeBoxModel {
   }
 
   /// الرصيد النقدي
-  double get cashBalance => ledgerCashBalance ?? balance?.cash ?? 0.0;
+  // Prefer the linked Account balance (authoritative for reports/journal effects).
+  // Ledger balance is optional and may legitimately be 0 even when account has
+  // balance (e.g., when SafeBoxTransaction ledger is not used for journal entries).
+  double get cashBalance => balance?.cash ?? ledgerCashBalance ?? 0.0;
+
+  /// هل يوجد رصيد وزني فعلي من الـ ledger؟
+  bool get hasNonZeroLedgerWeight {
+    final wb = weightBalance;
+    if (wb == null || wb.isEmpty) return false;
+    return wb.values.any((v) => v.abs() > 1e-9);
+  }
+
+  /// الأرصدة الوزنية من الحساب المرتبط (إن توفرت ضمن balance.weight)
+  double get accountGoldBalance24k => balance?.weight?.karat24 ?? 0.0;
+  double get accountGoldBalance22k => balance?.weight?.karat22 ?? 0.0;
+  double get accountGoldBalance21k => balance?.weight?.karat21 ?? 0.0;
+  double get accountGoldBalance18k => balance?.weight?.karat18 ?? 0.0;
 
   /// الرصيد الوزني (إن توفر من الـ ledger)
   double get goldBalance24k => weightBalance?['24k'] ?? 0.0;

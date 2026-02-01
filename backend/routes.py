@@ -22299,74 +22299,13 @@ def get_admin_dashboard():
     today_start = datetime.combine(now.date(), datetime.min.time())
     tomorrow_start = today_start + timedelta(days=1)
 
-    # --- Ledger-derived balances (current, all-time) ---
-    signed_cash_expr = case(
-        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
-        else_=-SafeBoxTransaction.amount_cash,
-    )
-    signed_w18_expr = case(
-        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_18k),
-        else_=-SafeBoxTransaction.weight_18k,
-    )
-    signed_w21_expr = case(
-        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_21k),
-        else_=-SafeBoxTransaction.weight_21k,
-    )
-    signed_w22_expr = case(
-        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_22k),
-        else_=-SafeBoxTransaction.weight_22k,
-    )
-    signed_w24_expr = case(
-        (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_24k),
-        else_=-SafeBoxTransaction.weight_24k,
-    )
-
-    ledger_row = (
-        db.session.query(
-            func.coalesce(
-                func.sum(
-                    case(
-                        (SafeBox.safe_type.in_(['cash', 'bank', 'check']), signed_cash_expr),
-                        else_=0.0,
-                    )
-                ),
-                0.0,
-            ).label('cash_balance'),
-            func.coalesce(
-                func.sum(case((SafeBox.safe_type == 'gold', signed_w18_expr), else_=0.0)),
-                0.0,
-            ).label('w18'),
-            func.coalesce(
-                func.sum(case((SafeBox.safe_type == 'gold', signed_w21_expr), else_=0.0)),
-                0.0,
-            ).label('w21'),
-            func.coalesce(
-                func.sum(case((SafeBox.safe_type == 'gold', signed_w22_expr), else_=0.0)),
-                0.0,
-            ).label('w22'),
-            func.coalesce(
-                func.sum(case((SafeBox.safe_type == 'gold', signed_w24_expr), else_=0.0)),
-                0.0,
-            ).label('w24'),
-        )
-        .select_from(SafeBoxTransaction)
-        .join(SafeBox, SafeBox.id == SafeBoxTransaction.safe_box_id)
-        .filter(SafeBox.is_active.is_(True))
-        .first()
-    )
-
-    cash_balance = float(getattr(ledger_row, 'cash_balance', 0.0) or 0.0)
-    gold_18k = float(getattr(ledger_row, 'w18', 0.0) or 0.0)
-    gold_21k = float(getattr(ledger_row, 'w21', 0.0) or 0.0)
-    gold_22k = float(getattr(ledger_row, 'w22', 0.0) or 0.0)
-    gold_24k = float(getattr(ledger_row, 'w24', 0.0) or 0.0)
-
-    gold_pure_24k = (
-        (gold_18k * (18.0 / 24.0))
-        + (gold_21k * (21.0 / 24.0))
-        + (gold_22k * (22.0 / 24.0))
-        + gold_24k
-    )
+    # --- Safe boxes summary (Account-derived balances; aligned with SafeBox details UI) ---
+    main_karat = current_app.config.get('MAIN_KARAT', 21)
+    cash_balance = 0.0
+    gold_18k = 0.0
+    gold_21k = 0.0
+    gold_22k = 0.0
+    gold_24k = 0.0
 
     # --- Sales today (posted only) ---
     sale_types = {
@@ -22566,14 +22505,20 @@ def get_admin_dashboard():
 
     last_7_days_purchases = list(purchases_by_day.values())
 
-    # --- Gold equivalent in main karat (21k) ---
-    main_karat = current_app.config.get('MAIN_KARAT', 21)
-    gold_equivalent_main_karat = (
-        (gold_18k * (18.0 / main_karat))
-        + gold_21k
-        + (gold_22k * (22.0 / main_karat))
-        + (gold_24k * (24.0 / main_karat))
-    )
+    # --- Gold equivalent in main karat (from account-derived balances) ---
+    gold_equivalent_main_karat = 0.0
+    try:
+        mk = float(main_karat or 21)
+        if mk <= 0:
+            mk = 21.0
+        gold_equivalent_main_karat = (
+            (gold_18k * (18.0 / mk))
+            + gold_21k
+            + (gold_22k * (22.0 / mk))
+            + (gold_24k * (24.0 / mk))
+        )
+    except Exception:
+        gold_equivalent_main_karat = 0.0
 
     # --- Price Intelligence: Average cost vs market price ---
     from models import Item
@@ -22640,43 +22585,33 @@ def get_admin_dashboard():
     try:
         safe_boxes = SafeBox.query.filter(SafeBox.is_active.is_(True)).all()
         for sb in safe_boxes:
-            # Calculate balance for this safe box
-            sb_signed_cash = case(
-                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
-                else_=-SafeBoxTransaction.amount_cash,
-            )
-            sb_signed_w18 = case(
-                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_18k),
-                else_=-SafeBoxTransaction.weight_18k,
-            )
-            sb_signed_w21 = case(
-                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_21k),
-                else_=-SafeBoxTransaction.weight_21k,
-            )
-            sb_signed_w22 = case(
-                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_22k),
-                else_=-SafeBoxTransaction.weight_22k,
-            )
-            sb_signed_w24 = case(
-                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.weight_24k),
-                else_=-SafeBoxTransaction.weight_24k,
-            )
-            sb_row = (
-                db.session.query(
-                    func.coalesce(func.sum(sb_signed_cash), 0.0).label('cash'),
-                    func.coalesce(func.sum(sb_signed_w18), 0.0).label('gold_18k'),
-                    func.coalesce(func.sum(sb_signed_w21), 0.0).label('gold_21k'),
-                    func.coalesce(func.sum(sb_signed_w22), 0.0).label('gold_22k'),
-                    func.coalesce(func.sum(sb_signed_w24), 0.0).label('gold_24k'),
-                )
-                .filter(SafeBoxTransaction.safe_box_id == sb.id)
-                .first()
-            )
+            sb_data = sb.to_dict(include_balance=True)
+            bal = (sb_data.get('balance') or {}) if isinstance(sb_data, dict) else {}
+            cash = 0.0
+            try:
+                cash = float(bal.get('cash') or 0.0)
+            except Exception:
+                cash = 0.0
 
-            g18 = float(getattr(sb_row, 'gold_18k', 0) or 0)
-            g21 = float(getattr(sb_row, 'gold_21k', 0) or 0)
-            g22 = float(getattr(sb_row, 'gold_22k', 0) or 0)
-            g24 = float(getattr(sb_row, 'gold_24k', 0) or 0)
+            w = bal.get('weight') if isinstance(bal, dict) else None
+            w = w if isinstance(w, dict) else {}
+
+            try:
+                g18 = float(w.get('18k') or 0.0)
+            except Exception:
+                g18 = 0.0
+            try:
+                g21 = float(w.get('21k') or 0.0)
+            except Exception:
+                g21 = 0.0
+            try:
+                g22 = float(w.get('22k') or 0.0)
+            except Exception:
+                g22 = 0.0
+            try:
+                g24 = float(w.get('24k') or 0.0)
+            except Exception:
+                g24 = 0.0
 
             total_main = 0.0
             try:
@@ -22691,7 +22626,7 @@ def get_admin_dashboard():
                 'id': sb.id,
                 'name': sb.name,
                 'safe_type': sb.safe_type,
-                'balance_cash': round(float(getattr(sb_row, 'cash', 0) or 0), 2),
+                'balance_cash': round(float(cash), 2),
                 # Keep legacy single-field gold balance used by older UI.
                 'balance_gold_21k': round(g21, 3),
                 # New: detailed weights per karat (ledger-based) for richer UI.
@@ -22706,6 +22641,44 @@ def get_admin_dashboard():
             })
     except Exception:
         safe_boxes_summary = []
+
+    # Roll up account-derived totals for KPIs and liquidity.
+    try:
+        cash_balance = 0.0
+        gold_18k = gold_21k = gold_22k = gold_24k = 0.0
+        for sb in safe_boxes_summary:
+            st = (sb.get('safe_type') or '').strip()
+            if st in ('cash', 'bank', 'check'):
+                cash_balance += float(sb.get('balance_cash') or 0.0)
+            if st == 'gold':
+                wb = sb.get('weight_balance') if isinstance(sb.get('weight_balance'), dict) else {}
+                gold_18k += float(wb.get('18k') or 0.0)
+                gold_21k += float(wb.get('21k') or 0.0)
+                gold_22k += float(wb.get('22k') or 0.0)
+                gold_24k += float(wb.get('24k') or 0.0)
+    except Exception:
+        cash_balance = 0.0
+        gold_18k = gold_21k = gold_22k = gold_24k = 0.0
+
+    gold_pure_24k = (
+        (gold_18k * (18.0 / 24.0))
+        + (gold_21k * (21.0 / 24.0))
+        + (gold_22k * (22.0 / 24.0))
+        + gold_24k
+    )
+
+    try:
+        mk = float(main_karat or 21)
+        if mk <= 0:
+            mk = 21.0
+        gold_equivalent_main_karat = (
+            (gold_18k * (18.0 / mk))
+            + gold_21k
+            + (gold_22k * (22.0 / mk))
+            + (gold_24k * (24.0 / mk))
+        )
+    except Exception:
+        gold_equivalent_main_karat = 0.0
 
     # --- Unposted invoices count ---
     unposted_invoices_count = 0
