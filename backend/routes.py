@@ -11287,16 +11287,19 @@ def _recalculate_account_balances_for_accounts(account_ids):
         account.balance_22k = 0.0
         account.balance_24k = 0.0
 
-        # Posted + not deleted journal lines only (exclude drafts)
+        filters = [
+            JournalEntryLine.account_id == account_id,
+            JournalEntry.is_deleted == False,
+            JournalEntryLine.is_deleted == False,
+        ]
+        if _db_has_column('journal_entry', 'is_draft'):
+            filters.append(JournalEntry.is_draft == False)
+
+        # Posted + not deleted journal lines only (exclude drafts when available)
         all_lines = (
             JournalEntryLine.query
             .join(JournalEntry)
-            .filter(
-                JournalEntryLine.account_id == account_id,
-                JournalEntry.is_deleted == False,
-                JournalEntry.is_draft == False,
-                JournalEntryLine.is_deleted == False,
-            )
+            .filter(*filters)
             .all()
         )
 
@@ -11322,6 +11325,113 @@ def _recalculate_account_balances_for_accounts(account_ids):
                 account.balance_cash += (line.amount or 0)
             else:
                 account.balance_cash -= (line.amount or 0)
+
+
+def _rebuild_all_account_balances() -> dict:
+    """Rebuild stored Account balances from journal + voucher lines.
+
+    This is intended as an operational repair tool when DB was migrated/restored
+    and stored balances were not backfilled.
+    """
+
+    # 1) Reset all balances.
+    db.session.query(Account).update({
+        Account.balance_cash: 0.0,
+        Account.balance_18k: 0.0,
+        Account.balance_21k: 0.0,
+        Account.balance_22k: 0.0,
+        Account.balance_24k: 0.0,
+    }, synchronize_session=False)
+
+    # 2) Aggregate journal deltas.
+    jl_filters = [
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        jl_filters.append(JournalEntry.is_draft == False)
+
+    journal_rows = (
+        db.session.query(
+            JournalEntryLine.account_id.label('account_id'),
+            (func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0) - func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0)).label('cash'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0)).label('b18'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0)).label('b21'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0)).label('b22'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0)).label('b24'),
+        )
+        .join(JournalEntry)
+        .filter(*jl_filters)
+        .group_by(JournalEntryLine.account_id)
+        .all()
+    )
+
+    # 3) Aggregate voucher deltas (cash only).
+    voucher_rows = (
+        db.session.query(
+            VoucherAccountLine.account_id.label('account_id'),
+            (
+                func.coalesce(func.sum(case((VoucherAccountLine.line_type == 'debit', VoucherAccountLine.amount), else_=0.0)), 0.0)
+                - func.coalesce(func.sum(case((VoucherAccountLine.line_type == 'credit', VoucherAccountLine.amount), else_=0.0)), 0.0)
+            ).label('cash'),
+        )
+        .join(Voucher)
+        .group_by(VoucherAccountLine.account_id)
+        .all()
+    )
+
+    voucher_cash_by_account = {int(r.account_id): float(r.cash or 0.0) for r in voucher_rows if r.account_id is not None}
+
+    # 4) Apply updates (bulk).
+    updates: list[dict] = []
+    for r in journal_rows:
+        acc_id = int(r.account_id)
+        updates.append({
+            'id': acc_id,
+            'balance_cash': float(r.cash or 0.0) + float(voucher_cash_by_account.get(acc_id, 0.0)),
+            'balance_18k': float(r.b18 or 0.0),
+            'balance_21k': float(r.b21 or 0.0),
+            'balance_22k': float(r.b22 or 0.0),
+            'balance_24k': float(r.b24 or 0.0),
+        })
+
+    # Accounts that appear only in vouchers (no journal rows).
+    journal_account_ids = {int(r.account_id) for r in journal_rows if r.account_id is not None}
+    for acc_id, cash in voucher_cash_by_account.items():
+        if acc_id in journal_account_ids:
+            continue
+        updates.append({
+            'id': int(acc_id),
+            'balance_cash': float(cash or 0.0),
+            'balance_18k': 0.0,
+            'balance_21k': 0.0,
+            'balance_22k': 0.0,
+            'balance_24k': 0.0,
+        })
+
+    if updates:
+        db.session.bulk_update_mappings(Account, updates)
+
+    db.session.commit()
+
+    return {
+        'updated_accounts': len(updates),
+        'journal_accounts': len(journal_rows),
+        'voucher_accounts': len(voucher_cash_by_account),
+        'used_is_draft_filter': _db_has_column('journal_entry', 'is_draft'),
+    }
+
+
+@api.route('/system/rebuild-account-balances', methods=['POST'])
+@require_permission('system.settings')
+def system_rebuild_account_balances():
+    """Admin: rebuild stored account balances from transactions."""
+    stats = _rebuild_all_account_balances()
+    return jsonify({
+        'status': 'success',
+        'message': 'Rebuilt account balances',
+        **stats,
+    })
 
 
 def _update_account_balances_from_journal_lines(journal_entry_lines):
