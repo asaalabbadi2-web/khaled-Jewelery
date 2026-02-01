@@ -47,7 +47,9 @@ def recalculate_account_balances(account_id=None, verbose=True):
                 .join(JournalEntry)
                 .filter(
                     JournalEntryLine.account_id == account.id,
-                    JournalEntry.is_deleted == False
+                    JournalEntry.is_deleted == False,
+                    JournalEntry.is_draft == False,
+                    JournalEntryLine.is_deleted == False,
                 )
                 .all()
             )

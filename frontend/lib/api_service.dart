@@ -28,9 +28,13 @@ String _resolveApiBaseUrl() {
   }
 
   if (kIsWeb) {
-    // Use the current page host so the web app works from other machines
-    // (LAN/IP) without hardcoding localhost.
-    final rawHost = Uri.base.host;
+    // Web builds may be deployed behind a reverse proxy where the backend is
+    // reachable via the same origin (e.g. https://example.com/api).
+    // In dev/LAN setups, the frontend is often served from :<random_port>
+    // while the backend runs on :8001.
+    final base = Uri.base;
+    final rawHost = base.host;
+
     // On Flutter web dev servers the URL can sometimes be opened as
     // http://0.0.0.0:<port>/ which is not a routable destination host.
     // Also, some environments resolve `localhost` to IPv6 ::1 while the
@@ -39,7 +43,20 @@ String _resolveApiBaseUrl() {
         (rawHost.isEmpty || rawHost == '0.0.0.0' || rawHost == 'localhost')
         ? '127.0.0.1'
         : rawHost;
-    final scheme = Uri.base.scheme.isNotEmpty ? Uri.base.scheme : 'http';
+
+    final scheme = base.scheme.isNotEmpty ? base.scheme : 'http';
+    final port = base.hasPort ? base.port : 0;
+
+    final isDefaultHttp = scheme == 'http' && (port == 0 || port == 80);
+    final isDefaultHttps = scheme == 'https' && (port == 0 || port == 443);
+    final isDefaultPort = isDefaultHttp || isDefaultHttps;
+
+    // If we're on a default port (80/443), assume production-style same-origin.
+    if (isDefaultPort) {
+      return '$scheme://$host/api';
+    }
+
+    // Otherwise, prefer the historical dev convention (backend on :8001).
     return '$scheme://$host:8001/api';
   }
 

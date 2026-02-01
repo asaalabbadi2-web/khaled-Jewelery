@@ -3226,7 +3226,10 @@ def get_account_statement(account_id):
         JournalEntryLine.query.join(JournalEntry)
         .filter(
             JournalEntryLine.account_id == account_id,
-            JournalEntry.entry_type == 'افتتاحي'
+            JournalEntry.entry_type == 'افتتاحي',
+            JournalEntry.is_deleted == False,
+            JournalEntry.is_draft == False,
+            JournalEntryLine.is_deleted == False,
         )
         .all()
     )
@@ -3255,7 +3258,10 @@ def get_account_statement(account_id):
         JournalEntryLine.query.join(JournalEntry)
         .filter(
             JournalEntryLine.account_id == account_id,
-            JournalEntry.entry_type != 'افتتاحي'
+            JournalEntry.entry_type != 'افتتاحي',
+            JournalEntry.is_deleted == False,
+            JournalEntry.is_draft == False,
+            JournalEntryLine.is_deleted == False,
         )
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
@@ -3341,6 +3347,7 @@ def get_account_statement(account_id):
             'description': line.journal_entry.description,
             'journal_entry_id': line.journal_entry_id,
             'entry_number': line.journal_entry.entry_number,
+            'entry_type': line.journal_entry.entry_type,
             'reference_type': line.journal_entry.reference_type,
             'reference_id': line.journal_entry.reference_id,
             'reference_number': line.journal_entry.reference_number,
@@ -3411,6 +3418,8 @@ def get_account_statement_merged(account_id):
             # Swap: treat the financial account as primary
             account, memo_account = financial, account
 
+    primary_account_id = account.id
+
     # Calculate opening balances from افتتاحي entries
     opening_balance_cash = 0
     opening_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
@@ -3418,8 +3427,11 @@ def get_account_statement_merged(account_id):
     opening_journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(
-            JournalEntryLine.account_id == account_id,
-            JournalEntry.entry_type == 'افتتاحي'
+            JournalEntryLine.account_id == primary_account_id,
+            JournalEntry.entry_type == 'افتتاحي',
+            JournalEntry.is_deleted == False,
+            JournalEntry.is_draft == False,
+            JournalEntryLine.is_deleted == False,
         )
         .all()
     )
@@ -3436,7 +3448,10 @@ def get_account_statement_merged(account_id):
             JournalEntryLine.query.join(JournalEntry)
             .filter(
                 JournalEntryLine.account_id == memo_account.id,
-                JournalEntry.entry_type == 'افتتاحي'
+                JournalEntry.entry_type == 'افتتاحي',
+                JournalEntry.is_deleted == False,
+                JournalEntry.is_draft == False,
+                JournalEntryLine.is_deleted == False,
             )
             .all()
         )
@@ -3458,7 +3473,7 @@ def get_account_statement_merged(account_id):
     running_balances_gold = opening_balances_gold.copy()
 
     # Get journal lines from both accounts (excluding opening entries)
-    account_ids = [account_id]
+    account_ids = [primary_account_id]
     if memo_account:
         account_ids.append(memo_account.id)
 
@@ -3466,7 +3481,10 @@ def get_account_statement_merged(account_id):
         JournalEntryLine.query.join(JournalEntry)
         .filter(
             JournalEntryLine.account_id.in_(account_ids),
-            JournalEntry.entry_type != 'افتتاحي'
+            JournalEntry.entry_type != 'افتتاحي',
+            JournalEntry.is_deleted == False,
+            JournalEntry.is_draft == False,
+            JournalEntryLine.is_deleted == False,
         )
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
@@ -3475,7 +3493,7 @@ def get_account_statement_merged(account_id):
     # Get voucher lines (only from main account, not memo)
     voucher_lines = (
         VoucherAccountLine.query.join(Voucher)
-        .filter(VoucherAccountLine.account_id == account_id)
+        .filter(VoucherAccountLine.account_id == primary_account_id)
         .order_by(Voucher.date.asc(), Voucher.id.asc(), VoucherAccountLine.id.asc())
         .all()
     )
@@ -3489,6 +3507,7 @@ def get_account_statement_merged(account_id):
                 'date': line.journal_entry.date,
                 'entry_id': entry_id,
                 'entry_number': line.journal_entry.entry_number,
+                'entry_type': line.journal_entry.entry_type,
                 'description': line.journal_entry.description,
                 'reference_type': line.journal_entry.reference_type,
                 'reference_id': line.journal_entry.reference_id,
@@ -3590,6 +3609,7 @@ def get_account_statement_merged(account_id):
             'description': entry_data['description'],
             'journal_entry_id': entry_data['entry_id'],
             'entry_number': entry_data['entry_number'],
+            'entry_type': entry_data.get('entry_type'),
             'reference_type': entry_data['reference_type'],
             'reference_id': entry_data['reference_id'],
             'reference_number': entry_data['reference_number'],
@@ -11053,18 +11073,24 @@ def get_journal_entries():
                     'cash_debit': line.cash_debit,
                     'cash_credit': line.cash_credit,
                     'debit_18k': line.debit_18k,
-                'credit_18k': line.credit_18k,
-                'debit_21k': line.debit_21k,
-                'credit_21k': line.credit_21k,
-                'debit_22k': line.debit_22k,
-                'credit_22k': line.credit_22k,
-                'debit_24k': line.debit_24k,
-                'credit_24k': line.credit_24k,
-            })
+                    'credit_18k': line.credit_18k,
+                    'debit_21k': line.debit_21k,
+                    'credit_21k': line.credit_21k,
+                    'debit_22k': line.debit_22k,
+                    'credit_22k': line.credit_22k,
+                    'debit_24k': line.debit_24k,
+                    'credit_24k': line.credit_24k,
+                })
         result.append({
             'id': entry.id,
             'date': entry.date.isoformat(),
             'description': entry.description,
+            'entry_number': entry.entry_number,
+            'entry_type': getattr(entry, 'entry_type', None),
+            'is_draft': bool(getattr(entry, 'is_draft', False)),
+            'reference_type': getattr(entry, 'reference_type', None),
+            'reference_id': getattr(entry, 'reference_id', None),
+            'reference_number': getattr(entry, 'reference_number', None),
             'lines': lines
         })
     return jsonify(result)
@@ -11137,67 +11163,67 @@ def _account_weight_balance_main_karat(account):
     return total
 
 
-def _update_account_balances_from_journal_lines(journal_entry_lines):
+def _recalculate_account_balances_for_accounts(account_ids):
+    """Recalculate stored Account balances for the given account IDs.
+
+    Uses posted (non-draft) + non-deleted journal lines and all voucher lines.
     """
-    تحديث أرصدة الحسابات بناءً على أسطر قيد يومية
-    
-    Args:
-        journal_entry_lines: قائمة من JournalEntryLine objects
-    """
-    affected_accounts = set()
-    
-    for line in journal_entry_lines:
-        if line.account_id:
-            affected_accounts.add(line.account_id)
-    
-    # تحديث كل حساب متأثر
-    for account_id in affected_accounts:
+    if not account_ids:
+        return
+
+    for account_id in set(account_ids):
         account = Account.query.get(account_id)
         if not account:
             continue
-        
-        # إعادة حساب الرصيد من جميع القيود
+
+        # Reset
         account.balance_cash = 0.0
         account.balance_18k = 0.0
         account.balance_21k = 0.0
         account.balance_22k = 0.0
         account.balance_24k = 0.0
-        
-        # جمع كل أسطر القيود لهذا الحساب
+
+        # Posted + not deleted journal lines only (exclude drafts)
         all_lines = (
             JournalEntryLine.query
             .join(JournalEntry)
             .filter(
                 JournalEntryLine.account_id == account_id,
-                JournalEntry.is_deleted == False
+                JournalEntry.is_deleted == False,
+                JournalEntry.is_draft == False,
+                JournalEntryLine.is_deleted == False,
             )
             .all()
         )
-        
+
         for line in all_lines:
             account.balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
-            
+
             if account.tracks_weight:
                 account.balance_18k += (line.debit_18k or 0) - (line.credit_18k or 0)
                 account.balance_21k += (line.debit_21k or 0) - (line.credit_21k or 0)
                 account.balance_22k += (line.debit_22k or 0) - (line.credit_22k or 0)
                 account.balance_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
-        
-        # جمع أسطر السندات أيضاً
+
+        # Voucher lines also affect cash balances
         voucher_lines = (
             VoucherAccountLine.query
             .join(Voucher)
-            .filter(
-                VoucherAccountLine.account_id == account_id
-            )
+            .filter(VoucherAccountLine.account_id == account_id)
             .all()
         )
-        
+
         for line in voucher_lines:
             if line.line_type == 'debit':
                 account.balance_cash += (line.amount or 0)
             else:
                 account.balance_cash -= (line.amount or 0)
+
+
+def _update_account_balances_from_journal_lines(journal_entry_lines):
+    """Update stored Account balances for accounts referenced by given journal lines."""
+    affected_accounts = {line.account_id for line in (journal_entry_lines or []) if getattr(line, 'account_id', None)}
+    _recalculate_account_balances_for_accounts(affected_accounts)
 
 
 def _account_weight_balance_main_karat(account):
@@ -11468,6 +11494,8 @@ def get_journal_entry(id):
     entry = JournalEntry.query.get_or_404(id)
     lines = []
     for line in entry.lines:
+        if line.is_deleted:
+            continue
         lines.append({
             'id': line.id,
             'account_id': line.account_id,
@@ -11487,6 +11515,12 @@ def get_journal_entry(id):
         'id': entry.id,
         'date': entry.date.isoformat(),
         'description': entry.description,
+        'entry_number': entry.entry_number,
+        'entry_type': getattr(entry, 'entry_type', None),
+        'is_draft': bool(getattr(entry, 'is_draft', False)),
+        'reference_type': getattr(entry, 'reference_type', None),
+        'reference_id': getattr(entry, 'reference_id', None),
+        'reference_number': getattr(entry, 'reference_number', None),
         'lines': lines
     })
 
@@ -11565,33 +11599,7 @@ def update_journal_entry(id):
         
         # 🆕 تحديث أرصدة جميع الحسابات المتأثرة (القديمة والجديدة)
         affected_accounts = old_account_ids | {line.account_id for line in new_lines if line.account_id}
-        for account_id in affected_accounts:
-            account = Account.query.get(account_id)
-            if account:
-                # إعادة حساب من الصفر
-                account.balance_cash = 0.0
-                account.balance_18k = 0.0
-                account.balance_21k = 0.0
-                account.balance_22k = 0.0
-                account.balance_24k = 0.0
-                
-                all_lines = (
-                    JournalEntryLine.query
-                    .join(JournalEntry)
-                    .filter(
-                        JournalEntryLine.account_id == account_id,
-                        JournalEntry.is_deleted == False
-                    )
-                    .all()
-                )
-                
-                for line in all_lines:
-                    account.balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
-                    if account.tracks_weight:
-                        account.balance_18k += (line.debit_18k or 0) - (line.credit_18k or 0)
-                        account.balance_21k += (line.debit_21k or 0) - (line.credit_21k or 0)
-                        account.balance_22k += (line.debit_22k or 0) - (line.credit_22k or 0)
-                        account.balance_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
+        _recalculate_account_balances_for_accounts(affected_accounts)
 
         db.session.commit()
         return jsonify({'result': 'success'})
@@ -11616,6 +11624,8 @@ def soft_delete_journal_entry(id):
     reason = data.get('reason', '')
     
     try:
+        affected_account_ids = {line.account_id for line in entry.lines if line.account_id}
+
         # تطبيق الحذف الناعم
         entry.soft_delete(deleted_by, reason)
         
@@ -11624,6 +11634,9 @@ def soft_delete_journal_entry(id):
         for line in entry.lines:
             line.is_deleted = True
             line.deleted_at = datetime.now()
+
+        # إعادة حساب أرصدة الحسابات المتأثرة
+        _recalculate_account_balances_for_accounts(affected_account_ids)
         
         db.session.commit()
         
@@ -11649,6 +11662,8 @@ def restore_journal_entry(id):
     restored_by = data.get('restored_by', 'غير محدد')
     
     try:
+        affected_account_ids = {line.account_id for line in entry.lines if line.account_id}
+
         # استرجاع القيد
         entry.restore(restored_by)
         
@@ -11656,6 +11671,9 @@ def restore_journal_entry(id):
         for line in entry.lines:
             line.is_deleted = False
             line.deleted_at = None
+
+        # إعادة حساب أرصدة الحسابات المتأثرة
+        _recalculate_account_balances_for_accounts(affected_account_ids)
         
         db.session.commit()
         
