@@ -107,6 +107,26 @@ def _wrap_api_exceptions(error_code: str, message: str):
         return wrapper
 
     return decorator
+
+
+_DB_COLUMN_CACHE: dict[tuple[str, str], bool] = {}
+
+
+def _db_has_column(table_name: str, column_name: str) -> bool:
+    key = (table_name, column_name)
+    cached = _DB_COLUMN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from sqlalchemy import inspect as sa_inspect
+
+        inspector = sa_inspect(db.engine)
+        cols = {c.get('name') for c in inspector.get_columns(table_name)}
+        exists = column_name in cols
+    except Exception:
+        exists = False
+    _DB_COLUMN_CACHE[key] = exists
+    return exists
 from permissions import ALL_PERMISSIONS
 
 api = Blueprint('api', __name__)
@@ -3268,17 +3288,16 @@ def get_account_statement(account_id):
     opening_balance_cash = 0
     opening_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
 
-    opening_journal_lines = (
-        JournalEntryLine.query.join(JournalEntry)
-        .filter(
-            JournalEntryLine.account_id == account_id,
-            JournalEntry.entry_type == 'افتتاحي',
-            JournalEntry.is_deleted == False,
-            JournalEntry.is_draft == False,
-            JournalEntryLine.is_deleted == False,
-        )
-        .all()
-    )
+    opening_filters = [
+        JournalEntryLine.account_id == account_id,
+        JournalEntry.entry_type == 'افتتاحي',
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        opening_filters.append(JournalEntry.is_draft == False)
+
+    opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
 
     for line in opening_journal_lines:
         opening_balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
@@ -3300,15 +3319,18 @@ def get_account_statement(account_id):
     running_balances_gold = opening_balances_gold.copy()
 
     # Get regular journal lines (excluding opening entries)
+    journal_filters = [
+        JournalEntryLine.account_id == account_id,
+        JournalEntry.entry_type != 'افتتاحي',
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        journal_filters.append(JournalEntry.is_draft == False)
+
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
-        .filter(
-            JournalEntryLine.account_id == account_id,
-            JournalEntry.entry_type != 'افتتاحي',
-            JournalEntry.is_deleted == False,
-            JournalEntry.is_draft == False,
-            JournalEntryLine.is_deleted == False,
-        )
+        .filter(*journal_filters)
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
@@ -3497,17 +3519,16 @@ def get_account_statement_merged(account_id):
     opening_balance_cash = 0
     opening_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
 
-    opening_journal_lines = (
-        JournalEntryLine.query.join(JournalEntry)
-        .filter(
-            JournalEntryLine.account_id == primary_account_id,
-            JournalEntry.entry_type == 'افتتاحي',
-            JournalEntry.is_deleted == False,
-            JournalEntry.is_draft == False,
-            JournalEntryLine.is_deleted == False,
-        )
-        .all()
-    )
+    opening_filters = [
+        JournalEntryLine.account_id == primary_account_id,
+        JournalEntry.entry_type == 'افتتاحي',
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        opening_filters.append(JournalEntry.is_draft == False)
+
+    opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
 
     for line in opening_journal_lines:
         opening_balance_cash += (line.cash_debit or 0) - (line.cash_credit or 0)
@@ -3517,15 +3538,18 @@ def get_account_statement_merged(account_id):
         opening_balances_gold['24k'] += (line.debit_24k or 0) - (line.credit_24k or 0)
 
     if memo_account:
+        memo_opening_filters = [
+            JournalEntryLine.account_id == memo_account.id,
+            JournalEntry.entry_type == 'افتتاحي',
+            JournalEntry.is_deleted == False,
+            JournalEntryLine.is_deleted == False,
+        ]
+        if _db_has_column('journal_entry', 'is_draft'):
+            memo_opening_filters.append(JournalEntry.is_draft == False)
+
         memo_opening_lines = (
             JournalEntryLine.query.join(JournalEntry)
-            .filter(
-                JournalEntryLine.account_id == memo_account.id,
-                JournalEntry.entry_type == 'افتتاحي',
-                JournalEntry.is_deleted == False,
-                JournalEntry.is_draft == False,
-                JournalEntryLine.is_deleted == False,
-            )
+            .filter(*memo_opening_filters)
             .all()
         )
         for line in memo_opening_lines:
@@ -3550,15 +3574,18 @@ def get_account_statement_merged(account_id):
     if memo_account:
         account_ids.append(memo_account.id)
 
+    journal_filters = [
+        JournalEntryLine.account_id.in_(account_ids),
+        JournalEntry.entry_type != 'افتتاحي',
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        journal_filters.append(JournalEntry.is_draft == False)
+
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
-        .filter(
-            JournalEntryLine.account_id.in_(account_ids),
-            JournalEntry.entry_type != 'افتتاحي',
-            JournalEntry.is_deleted == False,
-            JournalEntry.is_draft == False,
-            JournalEntryLine.is_deleted == False,
-        )
+        .filter(*journal_filters)
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
@@ -18822,7 +18849,7 @@ def list_safe_boxes():
     safe_boxes = query.order_by(SafeBox.is_default.desc(), SafeBox.name).all()
     
     include_account = request.args.get('include_account', 'false').lower() == 'true'
-    include_balance = request.args.get('include_balance', 'false').lower() == 'true'
+    include_balance = request.args.get('include_balance', 'true').lower() == 'true'
     
     return jsonify([sb.to_dict(include_account=include_account, include_balance=include_balance) for sb in safe_boxes])
 
