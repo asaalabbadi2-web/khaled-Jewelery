@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from functools import wraps
 from flask import Blueprint, request, jsonify, g, current_app, send_file
 import io
 import os
@@ -78,6 +79,34 @@ from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import pstdev
 from auth_decorators import get_current_user, require_permission, require_any_permission
+
+
+def _wrap_api_exceptions(error_code: str, message: str):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                try:
+                    current_app.logger.exception('%s', error_code)
+                except Exception:
+                    pass
+
+                expose = (os.getenv('EXPOSE_API_ERRORS') or '').strip() == '1'
+                payload = {
+                    'error': error_code,
+                    'message': message,
+                }
+                if 'account_id' in kwargs:
+                    payload['account_id'] = kwargs['account_id']
+                if expose:
+                    payload['details'] = str(exc)
+                return jsonify(payload), 500
+
+        return wrapper
+
+    return decorator
 from permissions import ALL_PERMISSIONS
 
 api = Blueprint('api', __name__)
@@ -3214,10 +3243,10 @@ def system_backup_restore():
 
 
 @api.route('/accounts/<int:account_id>/statement', methods=['GET'])
+@_wrap_api_exceptions('account_statement_failed', 'Failed to load account statement')
 def get_account_statement(account_id):
-    try:
-        account = Account.query.get_or_404(account_id)
-        main_karat = get_main_karat()
+    account = Account.query.get_or_404(account_id)
+    main_karat = get_main_karat()
 
     def _safe_dt(value, fallback=None):
         if value is None:
@@ -3405,46 +3434,34 @@ def get_account_statement(account_id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
-        return jsonify({
-            'account_name': account.name,
-            'main_karat': main_karat,
-            'opening_balance_cash': opening_balance_cash,
-            'opening_balance_gold_normalized': opening_balance_gold_normalized,
-            'opening_balance_gold_details': opening_balances_gold,
-            'lines': statement_lines,
-            'totals': {
-                'cash_debit': total_cash_debit,
-                'cash_credit': total_cash_credit,
-                'gold_debit_normalized': total_gold_debit_normalized,
-                'gold_credit_normalized': total_gold_credit_normalized,
-            },
-            'closing_balance_cash': running_balance_cash,
-            'closing_balance_gold_normalized': closing_balance_gold_normalized,
-            'closing_balance_gold_details': running_balances_gold,
-        })
-    except Exception as exc:
-        try:
-            current_app.logger.exception('account_statement_failed account_id=%s', account_id)
-        except Exception:
-            pass
-        expose = (os.getenv('EXPOSE_API_ERRORS') or '').strip() == '1'
-        return jsonify({
-            'error': 'account_statement_failed',
-            'account_id': account_id,
-            'message': 'Failed to load account statement',
-            'details': str(exc) if expose else None,
-        }), 500
+    return jsonify({
+        'account_name': account.name,
+        'main_karat': main_karat,
+        'opening_balance_cash': opening_balance_cash,
+        'opening_balance_gold_normalized': opening_balance_gold_normalized,
+        'opening_balance_gold_details': opening_balances_gold,
+        'lines': statement_lines,
+        'totals': {
+            'cash_debit': total_cash_debit,
+            'cash_credit': total_cash_credit,
+            'gold_debit_normalized': total_gold_debit_normalized,
+            'gold_credit_normalized': total_gold_credit_normalized,
+        },
+        'closing_balance_cash': running_balance_cash,
+        'closing_balance_gold_normalized': closing_balance_gold_normalized,
+        'closing_balance_gold_details': running_balances_gold,
+    })
 
 
 @api.route('/accounts/<int:account_id>/statement_merged', methods=['GET'])
+@_wrap_api_exceptions('account_statement_merged_failed', 'Failed to load merged account statement')
 def get_account_statement_merged(account_id):
     """
     كشف حساب مدمج - يجمع بين الحساب المالي وحساب المذكرة المقابل
     يعرض النقد من الحساب المالي والوزن من حساب المذكرة في سطر واحد
     """
-    try:
-        account = Account.query.get_or_404(account_id)
-        main_karat = get_main_karat()
+    account = Account.query.get_or_404(account_id)
+    main_karat = get_main_karat()
 
     def _safe_dt(value, fallback=None):
         if value is None:
@@ -3700,37 +3717,25 @@ def get_account_statement_merged(account_id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
-        return jsonify({
-            'account_name': account.name,
-            'memo_account_name': memo_account.name if memo_account else None,
-            'main_karat': main_karat,
-            'is_merged': memo_account is not None,
-            'opening_balance_cash': opening_balance_cash,
-            'opening_balance_gold_normalized': opening_balance_gold_normalized,
-            'opening_balance_gold_details': opening_balances_gold,
-            'lines': statement_lines,
-            'totals': {
-                'cash_debit': total_cash_debit,
-                'cash_credit': total_cash_credit,
-                'gold_debit_normalized': total_gold_debit_normalized,
-                'gold_credit_normalized': total_gold_credit_normalized,
-            },
-            'closing_balance_cash': running_balance_cash,
-            'closing_balance_gold_normalized': closing_balance_gold_normalized,
-            'closing_balance_gold_details': running_balances_gold,
-        })
-    except Exception as exc:
-        try:
-            current_app.logger.exception('account_statement_merged_failed account_id=%s', account_id)
-        except Exception:
-            pass
-        expose = (os.getenv('EXPOSE_API_ERRORS') or '').strip() == '1'
-        return jsonify({
-            'error': 'account_statement_merged_failed',
-            'account_id': account_id,
-            'message': 'Failed to load merged account statement',
-            'details': str(exc) if expose else None,
-        }), 500
+    return jsonify({
+        'account_name': account.name,
+        'memo_account_name': memo_account.name if memo_account else None,
+        'main_karat': main_karat,
+        'is_merged': memo_account is not None,
+        'opening_balance_cash': opening_balance_cash,
+        'opening_balance_gold_normalized': opening_balance_gold_normalized,
+        'opening_balance_gold_details': opening_balances_gold,
+        'lines': statement_lines,
+        'totals': {
+            'cash_debit': total_cash_debit,
+            'cash_credit': total_cash_credit,
+            'gold_debit_normalized': total_gold_debit_normalized,
+            'gold_credit_normalized': total_gold_credit_normalized,
+        },
+        'closing_balance_cash': running_balance_cash,
+        'closing_balance_gold_normalized': closing_balance_gold_normalized,
+        'closing_balance_gold_details': running_balances_gold,
+    })
 
 
 # Customers CRUD
