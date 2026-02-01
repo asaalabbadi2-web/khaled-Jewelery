@@ -3218,6 +3218,22 @@ def get_account_statement(account_id):
     account = Account.query.get_or_404(account_id)
     main_karat = get_main_karat()
 
+    def _safe_dt(value, fallback=None):
+        if value is None:
+            return fallback
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, time.min)
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return fallback
+
+    def _iso_or_none(value):
+        dt = _safe_dt(value)
+        return dt.isoformat() if dt else None
+
     # Calculate opening balance from افتتاحي entries
     opening_balance_cash = 0
     opening_balances_gold = {'18k': 0, '21k': 0, '22k': 0, '24k': 0}
@@ -3282,21 +3298,27 @@ def get_account_statement(account_id):
 
     merged = []
     for line in journal_lines:
-        merged.append(('journal', line.journal_entry.date, line.journal_entry.id, line.id, line))
+        je = getattr(line, 'journal_entry', None)
+        dt = _safe_dt(getattr(je, 'date', None), _safe_dt(getattr(je, 'created_at', None), datetime.min))
+        merged.append(('journal', dt, getattr(je, 'id', 0) or 0, line.id, line))
     for line in voucher_lines:
-        merged.append(('voucher', line.voucher.date, line.voucher.id, line.id, line))
+        v = getattr(line, 'voucher', None)
+        dt = _safe_dt(getattr(v, 'date', None), _safe_dt(getattr(v, 'created_at', None), datetime.min))
+        merged.append(('voucher', dt, getattr(v, 'id', 0) or 0, line.id, line))
     merged.sort(key=lambda x: (x[1], x[2], x[3]))
 
     for kind, _, _, _, line in merged:
         if kind == 'voucher':
+            if not getattr(line, 'voucher', None):
+                continue
             cash_debit = float(line.amount or 0) if line.line_type == 'debit' else 0.0
             cash_credit = float(line.amount or 0) if line.line_type == 'credit' else 0.0
             running_balance_cash += cash_debit - cash_credit
 
             statement_lines.append({
                 'id': -int(line.id),
-                'date': line.voucher.date.isoformat(),
-                'description': line.voucher.description or (line.description or ''),
+                'date': _iso_or_none(getattr(line.voucher, 'date', None) or getattr(line.voucher, 'created_at', None)),
+                'description': (line.voucher.description or (line.description or '')),
                 'journal_entry_id': line.voucher.journal_entry_id,
                 'entry_number': line.voucher.journal_entry.entry_number if line.voucher.journal_entry else None,
                 'reference_type': 'voucher',
@@ -3341,16 +3363,20 @@ def get_account_statement(account_id):
             convert_to_main_karat(line.credit_24k or 0, 24)
         )
 
+        je = getattr(line, 'journal_entry', None)
+        if not je:
+            continue
+
         statement_lines.append({
             'id': line.id,
-            'date': line.journal_entry.date.isoformat(),
-            'description': line.journal_entry.description,
+            'date': _iso_or_none(getattr(je, 'date', None) or getattr(je, 'created_at', None)),
+            'description': je.description,
             'journal_entry_id': line.journal_entry_id,
-            'entry_number': line.journal_entry.entry_number,
-            'entry_type': line.journal_entry.entry_type,
-            'reference_type': line.journal_entry.reference_type,
-            'reference_id': line.journal_entry.reference_id,
-            'reference_number': line.journal_entry.reference_number,
+            'entry_number': je.entry_number,
+            'entry_type': je.entry_type,
+            'reference_type': je.reference_type,
+            'reference_id': je.reference_id,
+            'reference_number': je.reference_number,
             'cash_debit': line.cash_debit or 0,
             'cash_credit': line.cash_credit or 0,
             'gold_debit': gold_debit_normalized,
@@ -3405,6 +3431,22 @@ def get_account_statement_merged(account_id):
     """
     account = Account.query.get_or_404(account_id)
     main_karat = get_main_karat()
+
+    def _safe_dt(value, fallback=None):
+        if value is None:
+            return fallback
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, time.min)
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return fallback
+
+    def _iso_or_none(value):
+        dt = _safe_dt(value)
+        return dt.isoformat() if dt else None
 
     # Find linked memo account
     memo_account = None
@@ -3503,15 +3545,17 @@ def get_account_statement_merged(account_id):
     for line in journal_lines:
         entry_id = line.journal_entry_id
         if entry_id not in lines_by_entry:
+            je = getattr(line, 'journal_entry', None)
+            dt = _safe_dt(getattr(je, 'date', None), _safe_dt(getattr(je, 'created_at', None), datetime.min))
             lines_by_entry[entry_id] = {
-                'date': line.journal_entry.date,
+                'date': dt,
                 'entry_id': entry_id,
-                'entry_number': line.journal_entry.entry_number,
-                'entry_type': line.journal_entry.entry_type,
-                'description': line.journal_entry.description,
-                'reference_type': line.journal_entry.reference_type,
-                'reference_id': line.journal_entry.reference_id,
-                'reference_number': line.journal_entry.reference_number,
+                'entry_number': je.entry_number if je else None,
+                'entry_type': je.entry_type if je else None,
+                'description': je.description if je else None,
+                'reference_type': je.reference_type if je else None,
+                'reference_id': je.reference_id if je else None,
+                'reference_number': je.reference_number if je else None,
                 'cash_debit': 0,
                 'cash_credit': 0,
                 'debit_18k': 0,
@@ -3549,13 +3593,15 @@ def get_account_statement_merged(account_id):
 
     # Add voucher lines first
     for line in voucher_lines:
+        if not getattr(line, 'voucher', None):
+            continue
         cash_debit = float(line.amount or 0) if line.line_type == 'debit' else 0.0
         cash_credit = float(line.amount or 0) if line.line_type == 'credit' else 0.0
         running_balance_cash += cash_debit - cash_credit
 
         statement_lines.append({
             'id': -int(line.id),
-            'date': line.voucher.date.isoformat(),
+            'date': _iso_or_none(getattr(line.voucher, 'date', None) or getattr(line.voucher, 'created_at', None)),
             'description': line.voucher.description or (line.description or ''),
             'journal_entry_id': line.voucher.journal_entry_id,
             'entry_number': line.voucher.journal_entry.entry_number if line.voucher.journal_entry else None,
@@ -3605,7 +3651,7 @@ def get_account_statement_merged(account_id):
         statement_lines.append({
             'id': entry_data['line_ids'][0],  # Use first line ID
             'merged_ids': entry_data['line_ids'],  # All line IDs
-            'date': entry_data['date'].isoformat(),
+            'date': _iso_or_none(entry_data.get('date')),
             'description': entry_data['description'],
             'journal_entry_id': entry_data['entry_id'],
             'entry_number': entry_data['entry_number'],
