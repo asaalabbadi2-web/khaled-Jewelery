@@ -23,8 +23,32 @@ const String _envApiBaseUrl = String.fromEnvironment(
 );
 
 String _resolveApiBaseUrl() {
+  String trimTrailingSlash(String value) {
+    var v = value.trim();
+    while (v.endsWith('/')) {
+      v = v.substring(0, v.length - 1);
+    }
+    return v;
+  }
+
   if (_envApiBaseUrl.isNotEmpty) {
-    return _envApiBaseUrl;
+    final configured = trimTrailingSlash(_envApiBaseUrl);
+    if (kIsWeb) {
+      // Support relative base URLs for web deployments (e.g. /api behind nginx).
+      // Docker builds often pass API_BASE_URL=/api.
+      final isAbsolute = configured.startsWith('http://') ||
+          configured.startsWith('https://');
+      if (isAbsolute) return configured;
+
+      final origin = Uri.base.origin;
+      if (configured.startsWith('/')) {
+        return trimTrailingSlash('$origin$configured');
+      }
+      // Relative path without leading slash.
+      return trimTrailingSlash('$origin/$configured');
+    }
+
+    return configured;
   }
 
   if (kIsWeb) {
@@ -1384,7 +1408,10 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load account statement');
+      throw Exception(
+        'Failed to load account statement (HTTP ${response.statusCode}): '
+        '${utf8.decode(response.bodyBytes)}',
+      );
     }
   }
 
@@ -1395,7 +1422,10 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load merged account statement');
+      throw Exception(
+        'Failed to load merged account statement (HTTP ${response.statusCode}): '
+        '${utf8.decode(response.bodyBytes)}',
+      );
     }
   }
 
