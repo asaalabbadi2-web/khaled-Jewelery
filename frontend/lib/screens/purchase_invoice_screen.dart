@@ -11,6 +11,7 @@ import '../models/category_model.dart';
 import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
+import '../widgets/invoice_settings_sheet.dart';
 import 'add_supplier_screen.dart';
 import 'invoice_print_screen.dart';
 import '../utils.dart';
@@ -41,6 +42,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   bool _isLoadingSuppliers = false;
   bool _isSavingInvoice = false;
   bool _showAdvancedPaymentOptions = false;
+
+  bool _uiLockPriceEdits = false;
+  bool _uiDisableVat = false;
+  bool _uiAutoOpenPrintAfterSave = false;
+  String _uiPaperSize = 'A4';
 
   // Branches (فروع المعرض/المحل)
   bool _isLoadingBranches = false;
@@ -133,6 +139,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   }
 
   double _vatRateFromSettings() {
+    if (_uiDisableVat) return 0.0;
     try {
       final settings = context.read<SettingsProvider>();
       return settings.taxEnabled ? settings.taxRate : 0.0;
@@ -326,6 +333,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     super.initState();
     _selectedSupplierId = widget.supplierId;
     _loadUiDefaultsFromPrefs();
+    _loadInvoiceUiSettingsFromPrefs();
     _loadBranches();
     _loadSuppliers();
     _loadCategories();
@@ -334,6 +342,24 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     _loadGoldSafeBoxes();
     _loadSettings();
     _applyTotals(_KaratTotals.zero);
+  }
+
+  Future<void> _loadInvoiceUiSettingsFromPrefs() async {
+    try {
+      final settings = await InvoiceUiSettings.load(InvoiceUiContext.purchase);
+      if (!mounted) return;
+      setState(() {
+        _uiLockPriceEdits = settings.lockPriceEdits;
+        _uiDisableVat = settings.disableVat;
+        _uiAutoOpenPrintAfterSave = settings.autoOpenPrintAfterSave;
+        _uiPaperSize = settings.paperSize;
+      });
+
+      if (!mounted) return;
+      _applyCombinedTotals();
+    } catch (_) {
+      // ignore
+    }
   }
 
   Future<void> _loadUiDefaultsFromPrefs() async {
@@ -1429,36 +1455,42 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         // ignore
       }
 
-      final shouldPrint = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return AlertDialog(
-            title: const Text('تم حفظ الفاتورة'),
-            content: Text(
-              '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('تم'),
-              ),
-              FilledButton.icon(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                icon: const Icon(Icons.print),
-                label: const Text('طباعة'),
-              ),
-            ],
-          );
-        },
-      );
+      final shouldPrint = _uiAutoOpenPrintAfterSave
+          ? true
+          : await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (dialogContext) {
+                return AlertDialog(
+                  title: const Text('تم حفظ الفاتورة'),
+                  content: Text(
+                    '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('تم'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      icon: const Icon(Icons.print),
+                      label: const Text('طباعة'),
+                    ),
+                  ],
+                );
+              },
+            );
 
       if (!mounted) return;
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) =>
-                InvoicePrintScreen(invoice: invoiceForPrint, isArabic: true),
+                InvoicePrintScreen(
+                  invoice: invoiceForPrint,
+                  isArabic: true,
+                  printSettings: {'paperSize': _uiPaperSize},
+                ),
           ),
         );
       }
@@ -1519,6 +1551,29 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             tooltip: 'تحديث سعر الذهب',
             icon: const Icon(Icons.refresh),
             onPressed: _loadGoldPrice,
+          ),
+          IconButton(
+            tooltip: 'إعدادات الفاتورة',
+            icon: const Icon(Icons.settings),
+            onPressed: () async {
+              await InvoiceSettingsSheet.show(
+                context,
+                contextType: InvoiceUiContext.purchase,
+                supportsVatToggle: true,
+                supportsLockEdits: true,
+                supportsAutoOpenPrint: true,
+                onChanged: (s) {
+                  if (!mounted) return;
+                  setState(() {
+                    _uiLockPriceEdits = s.lockPriceEdits;
+                    _uiDisableVat = s.disableVat;
+                    _uiAutoOpenPrintAfterSave = s.autoOpenPrintAfterSave;
+                    _uiPaperSize = s.paperSize;
+                  });
+                  _applyCombinedTotals();
+                },
+              );
+            },
           ),
         ],
       ),
@@ -2367,14 +2422,16 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             ToggleButtons(
               isSelected: [_manualPricing, !_manualPricing],
               borderRadius: BorderRadius.circular(12),
-              onPressed: (index) {
-                final manual = index == 0;
-                if (manual == _manualPricing) return;
-                setState(() {
-                  _manualPricing = manual;
-                  _applyCombinedTotals();
-                });
-              },
+              onPressed: _uiLockPriceEdits
+                  ? null
+                  : (index) {
+                      final manual = index == 0;
+                      if (manual == _manualPricing) return;
+                      setState(() {
+                        _manualPricing = manual;
+                        _applyCombinedTotals();
+                      });
+                    },
               children: const [
                 Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
@@ -2426,13 +2483,15 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                     ? 'سيتم احتساب الضريبة على قيمة الذهب وأجور المصنعية.'
                     : 'سيتم احتساب الضريبة على أجور المصنعية فقط.',
               ),
-              onChanged: (value) {
-                setState(() {
-                  _applyVatOnGold = value;
-                  _applyCombinedTotals();
-                });
-                _persistApplyVatOnGold(value);
-              },
+              onChanged: _uiLockPriceEdits
+                  ? null
+                  : (value) {
+                      setState(() {
+                        _applyVatOnGold = value;
+                        _applyCombinedTotals();
+                      });
+                      _persistApplyVatOnGold(value);
+                    },
             ),
             const SizedBox(height: 12),
             _buildSummaryRow('إجمالي الوزن', _formatWeight(_totalWeight)),

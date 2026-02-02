@@ -9,6 +9,7 @@ import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import 'add_customer_screen.dart';
 import '../widgets/invoice_type_banner.dart';
+import '../widgets/invoice_settings_sheet.dart';
 import 'settings_screen_enhanced.dart';
 import '../utils/arabic_number_formatter.dart';
 import 'invoice_print_screen.dart';
@@ -62,6 +63,13 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
   // Settings - accessible throughout the class
   late SettingsProvider _settingsProvider;
+
+  bool _uiLockPriceEdits = false;
+  bool _uiDisableVat = false;
+  bool _uiAutoOpenPrintAfterSave = false;
+  String _uiPaperSize = 'A4';
+
+  double get _effectiveVatRate => _uiDisableVat ? 0.0 : _settingsProvider.taxRate;
 
   // Payment - 🆕 وسائل دفع متعددة
   List<Map<String, dynamic>> _paymentMethods = [];
@@ -189,10 +197,26 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     if (_availableItems.isEmpty) {
       _loadAvailableItems();
     }
+    _loadInvoiceUiSettingsFromPrefs();
     _loadSettings();
     _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
     _smartInputFocus.requestFocus();
+  }
+
+  Future<void> _loadInvoiceUiSettingsFromPrefs() async {
+    try {
+      final loaded = await InvoiceUiSettings.load(InvoiceUiContext.saleNew);
+      if (!mounted) return;
+      setState(() {
+        _uiLockPriceEdits = loaded.lockPriceEdits;
+        _uiDisableVat = loaded.disableVat;
+        _uiAutoOpenPrintAfterSave = loaded.autoOpenPrintAfterSave;
+        _uiPaperSize = loaded.paperSize;
+      });
+    } catch (_) {
+      // ignore
+    }
   }
 
   @override
@@ -948,7 +972,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final commission = double.parse((amount * (rate / 100)).toStringAsFixed(2));
     // حساب ضريبة القيمة المضافة على العمولة بحسب الإعدادات
     final commissionVat = double.parse(
-      (commission * _settingsProvider.taxRate).toStringAsFixed(2),
+      (commission * _effectiveVatRate).toStringAsFixed(2),
     );
     // الصافي = المبلغ - العمولة - ضريبة العمولة
     final net = double.parse(
@@ -1193,7 +1217,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           categoryName: categoryName,
           goldPrice24k: _goldPrice24k,
           mainKarat: settings.mainKarat,
-          taxRate: settings.taxRateForKarat(karat),
+          taxRate: _uiDisableVat ? 0.0 : settings.taxRateForKarat(karat),
           avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
           avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
         ),
@@ -1448,9 +1472,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       count: manualData['count'] as int? ?? 1,  // 🆕
       goldPrice24k: _goldPrice24k,
       mainKarat: _settingsProvider.mainKarat,
-      taxRate: _settingsProvider.taxRateForKarat(
-        _parseDouble(manualData['karat']),
-      ),
+      taxRate: _uiDisableVat
+          ? 0.0
+          : _settingsProvider.taxRateForKarat(
+              _parseDouble(manualData['karat']),
+            ),
       avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
       avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
     );
@@ -1553,7 +1579,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           wage: wage,
           goldPrice24k: _goldPrice24k,
           mainKarat: _settingsProvider.mainKarat,
-          taxRate: _settingsProvider.taxRateForKarat(selectedKarat.toDouble()),
+            taxRate: _uiDisableVat
+              ? 0.0
+              : _settingsProvider.taxRateForKarat(selectedKarat.toDouble()),
           avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
           avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
           categoryId: categoryId,
@@ -1635,7 +1663,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       switch (field) {
         case 'karat':
           item.karat = value;
-          item.taxRate = _settingsProvider.taxRateForKarat(value);
+          item.taxRate = _uiDisableVat ? 0.0 : _settingsProvider.taxRateForKarat(value);
           requiresManualTargetRecalculation = true;
           break;
         case 'weight':
@@ -1747,7 +1775,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final totalCosts = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
 
     // الخطوة 2: حساب المبلغ بدون ضريبة
-    final amountWithoutTax = targetTotal / (1 + _settingsProvider.taxRate);
+    final amountWithoutTax =
+      _effectiveVatRate <= 0 ? targetTotal : targetTotal / (1 + _effectiveVatRate);
 
     // الخطوة 3: حساب الربح المتاح للتوزيع
     final profitPool = amountWithoutTax - totalCosts;
@@ -2154,42 +2183,48 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         // ignore
       }
 
-      final shouldPrint = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return AlertDialog(
-            title: Text(
-              approvalRequired
-                  ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
-                  : 'تم حفظ الفاتورة',
-            ),
-            content: Text(
-              '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
-              '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
-              '\n\nهل تريد طباعتها الآن؟',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('تم'),
-              ),
-              FilledButton.icon(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                icon: const Icon(Icons.print),
-                label: const Text('طباعة'),
-              ),
-            ],
-          );
-        },
-      );
+      final shouldPrint = _uiAutoOpenPrintAfterSave
+          ? true
+          : await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (dialogContext) {
+                return AlertDialog(
+                  title: Text(
+                    approvalRequired
+                        ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                        : 'تم حفظ الفاتورة',
+                  ),
+                  content: Text(
+                    '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
+                    '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
+                    '\n\nهل تريد طباعتها الآن؟',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('تم'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      icon: const Icon(Icons.print),
+                      label: const Text('طباعة'),
+                    ),
+                  ],
+                );
+              },
+            );
 
       if (!mounted) return;
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) =>
-                InvoicePrintScreen(invoice: invoiceForPrint, isArabic: true),
+                InvoicePrintScreen(
+                  invoice: invoiceForPrint,
+                  isArabic: true,
+                  printSettings: {'paperSize': _uiPaperSize},
+                ),
           ),
         );
       }
@@ -3117,6 +3152,40 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 tooltip: 'تحديث سعر الذهب',
                 onPressed: _loadSettings,
                 icon: const Icon(Icons.sync),
+              ),
+              IconButton(
+                tooltip: 'إعدادات الفاتورة',
+                onPressed: () async {
+                  await InvoiceSettingsSheet.show(
+                    context,
+                    contextType: InvoiceUiContext.saleNew,
+                    supportsVatToggle: true,
+                    supportsLockEdits: true,
+                    supportsAutoOpenPrint: true,
+                    onChanged: (s) {
+                      if (!mounted) return;
+                      setState(() {
+                        _uiLockPriceEdits = s.lockPriceEdits;
+                        _uiDisableVat = s.disableVat;
+                        _uiAutoOpenPrintAfterSave = s.autoOpenPrintAfterSave;
+                        _uiPaperSize = s.paperSize;
+
+                        if (_uiDisableVat) {
+                          for (final item in _items) {
+                            item.taxRate = 0.0;
+                          }
+                        } else {
+                          for (final item in _items) {
+                            item.taxRate = _settingsProvider.taxRateForKarat(
+                              item.karat,
+                            );
+                          }
+                        }
+                      });
+                    },
+                  );
+                },
+                icon: const Icon(Icons.settings),
               ),
             ],
           ),
@@ -4302,6 +4371,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     String field,
     double currentValue,
   ) async {
+    if (_uiLockPriceEdits) {
+      _showError('التعديلات مقفلة من إعدادات الفاتورة');
+      return;
+    }
+
     final controller = TextEditingController(text: currentValue.toString());
     controller.selection = TextSelection(
       baseOffset: 0,

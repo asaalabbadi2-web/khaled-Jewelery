@@ -10,6 +10,7 @@ import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import 'add_customer_screen.dart';
 import '../widgets/invoice_type_banner.dart';
+import '../widgets/invoice_settings_sheet.dart';
 import '../utils.dart';
 import 'invoice_print_screen.dart';
 
@@ -54,6 +55,10 @@ class _ScrapPurchaseInvoiceScreenState
   double _goldPrice24k = 0.0;
   double _purchasePrice24k = 0.0;
   late SettingsProvider _settingsProvider;
+
+  bool _uiLockPriceEdits = false;
+  bool _uiAutoOpenPrintAfterSave = false;
+  String _uiPaperSize = 'A4';
 
   // Payment - 🆕 وسائل دفع متعددة
   List<Map<String, dynamic>> _paymentMethods = [];
@@ -101,6 +106,7 @@ class _ScrapPurchaseInvoiceScreenState
   @override
   void initState() {
     super.initState();
+    _loadInvoiceUiSettingsFromPrefs();
     _loadSettings();
     _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
@@ -108,6 +114,20 @@ class _ScrapPurchaseInvoiceScreenState
     _loadPurchaseBaseline();
     _loadPurchaseItems();
     _smartInputFocus.requestFocus();
+  }
+
+  Future<void> _loadInvoiceUiSettingsFromPrefs() async {
+    try {
+      final loaded = await InvoiceUiSettings.load(InvoiceUiContext.scrapPurchase);
+      if (!mounted) return;
+      setState(() {
+        _uiLockPriceEdits = loaded.lockPriceEdits;
+        _uiAutoOpenPrintAfterSave = loaded.autoOpenPrintAfterSave;
+        _uiPaperSize = loaded.paperSize;
+      });
+    } catch (_) {
+      // ignore
+    }
   }
 
   Future<void> _loadBranches() async {
@@ -1088,36 +1108,42 @@ class _ScrapPurchaseInvoiceScreenState
         // ignore
       }
 
-      final shouldPrint = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return AlertDialog(
-            title: const Text('تم حفظ الفاتورة'),
-            content: Text(
-              '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('تم'),
-              ),
-              FilledButton.icon(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                icon: const Icon(Icons.print),
-                label: const Text('طباعة'),
-              ),
-            ],
-          );
-        },
-      );
+      final shouldPrint = _uiAutoOpenPrintAfterSave
+          ? true
+          : await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (dialogContext) {
+                return AlertDialog(
+                  title: const Text('تم حفظ الفاتورة'),
+                  content: Text(
+                    '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('تم'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      icon: const Icon(Icons.print),
+                      label: const Text('طباعة'),
+                    ),
+                  ],
+                );
+              },
+            );
 
       if (!mounted) return;
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) =>
-                InvoicePrintScreen(invoice: invoiceForPrint, isArabic: true),
+                InvoicePrintScreen(
+                  invoice: invoiceForPrint,
+                  isArabic: true,
+                  printSettings: {'paperSize': _uiPaperSize},
+                ),
           ),
         );
       }
@@ -1675,6 +1701,27 @@ class _ScrapPurchaseInvoiceScreenState
                 tooltip: 'تحديث سعر الذهب',
                 onPressed: _loadSettings,
                 icon: const Icon(Icons.sync),
+              ),
+              IconButton(
+                tooltip: 'إعدادات الفاتورة',
+                icon: const Icon(Icons.settings),
+                onPressed: () async {
+                  await InvoiceSettingsSheet.show(
+                    context,
+                    contextType: InvoiceUiContext.scrapPurchase,
+                    supportsVatToggle: false,
+                    supportsLockEdits: true,
+                    supportsAutoOpenPrint: true,
+                    onChanged: (s) {
+                      if (!mounted) return;
+                      setState(() {
+                        _uiLockPriceEdits = s.lockPriceEdits;
+                        _uiAutoOpenPrintAfterSave = s.autoOpenPrintAfterSave;
+                        _uiPaperSize = s.paperSize;
+                      });
+                    },
+                  );
+                },
               ),
             ],
           ),
@@ -2499,6 +2546,11 @@ class _ScrapPurchaseInvoiceScreenState
     String field,
     double currentValue,
   ) async {
+    if (_uiLockPriceEdits) {
+      _showError('التعديلات مقفلة من إعدادات الفاتورة');
+      return;
+    }
+
     final controller = TextEditingController(text: currentValue.toString());
     controller.selection = TextSelection(
       baseOffset: 0,

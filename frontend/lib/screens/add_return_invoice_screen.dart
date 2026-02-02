@@ -148,6 +148,22 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   String paymentMethod = 'cash';
   double amountPaid = 0;
 
+  bool _uiAutoOpenPrintAfterSave = false;
+  String _uiPaperSize = 'A4';
+
+  Future<void> _loadInvoiceUiSettingsFromPrefs() async {
+    try {
+      final loaded = await InvoiceUiSettings.load(InvoiceUiContext.returns);
+      if (!mounted) return;
+      setState(() {
+        _uiAutoOpenPrintAfterSave = loaded.autoOpenPrintAfterSave;
+        _uiPaperSize = loaded.paperSize;
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+
   void _resetAfterSave() {
     setState(() {
       _currentStep = 0;
@@ -237,6 +253,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   void initState() {
     super.initState();
     _loadCurrencySettings();
+    _loadInvoiceUiSettingsFromPrefs();
 
     // If the caller already knows the original invoice, prefill it and load its details.
     final prefilled = widget.prefilledOriginalInvoice;
@@ -504,36 +521,42 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
             selectedOriginalInvoice!['name'];
       }
 
-      final shouldPrint = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return AlertDialog(
-            title: const Text('تم حفظ المرتجع'),
-            content: Text(
-              '✅ تم حفظ المرتجع #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعته الآن؟',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('تم'),
-              ),
-              FilledButton.icon(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                icon: const Icon(Icons.print),
-                label: const Text('طباعة'),
-              ),
-            ],
-          );
-        },
-      );
+      final shouldPrint = _uiAutoOpenPrintAfterSave
+          ? true
+          : await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (dialogContext) {
+                  return AlertDialog(
+                    title: const Text('تم حفظ المرتجع'),
+                    content: Text(
+                      '✅ تم حفظ المرتجع #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعته الآن؟',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('تم'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                        icon: const Icon(Icons.print),
+                        label: const Text('طباعة'),
+                      ),
+                    ],
+                  );
+                },
+              ) ??
+              false;
 
       if (!mounted) return;
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) =>
-                InvoicePrintScreen(invoice: invoiceForPrint, isArabic: true),
+            builder: (_) => InvoicePrintScreen(
+              invoice: invoiceForPrint,
+              isArabic: true,
+              printSettings: {'paperSize': _uiPaperSize},
+            ),
           ),
         );
       }
@@ -1357,6 +1380,27 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         backgroundColor: AppColors.invoiceReturn,
         foregroundColor: Colors.white,
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'إعدادات الفاتورة',
+            onPressed: () {
+              InvoiceSettingsSheet.show(
+                context,
+                contextType: InvoiceUiContext.returns,
+                supportsVatToggle: false,
+                supportsLockEdits: false,
+                supportsAutoOpenPrint: true,
+                onChanged: (next) {
+                  setState(() {
+                    _uiAutoOpenPrintAfterSave = next.autoOpenPrintAfterSave;
+                    _uiPaperSize = next.paperSize;
+                  });
+                },
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [

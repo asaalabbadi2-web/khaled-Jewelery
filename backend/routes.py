@@ -3457,6 +3457,8 @@ def get_account_statement(account_id):
     )
 
     return jsonify({
+        'account_id': account.id,
+        'account_number': account.account_number,
         'account_name': account.name,
         'main_karat': main_karat,
         'opening_balance_cash': opening_balance_cash,
@@ -3473,6 +3475,14 @@ def get_account_statement(account_id):
         'closing_balance_gold_normalized': closing_balance_gold_normalized,
         'closing_balance_gold_details': running_balances_gold,
     })
+
+
+@api.route('/accounts/by-number/<string:account_number>/statement', methods=['GET'])
+@_wrap_api_exceptions('account_statement_failed', 'Failed to load account statement')
+def get_account_statement_by_number(account_number):
+    """Convenience endpoint: fetch statement using account_number (stable identifier)."""
+    account = Account.query.filter_by(account_number=account_number).first_or_404()
+    return get_account_statement(account.id)
 
 
 @api.route('/accounts/<int:account_id>/statement_merged', methods=['GET'])
@@ -3745,6 +3755,8 @@ def get_account_statement_merged(account_id):
     )
 
     return jsonify({
+        'account_id': account.id,
+        'account_number': account.account_number,
         'account_name': account.name,
         'memo_account_name': memo_account.name if memo_account else None,
         'main_karat': main_karat,
@@ -3763,6 +3775,14 @@ def get_account_statement_merged(account_id):
         'closing_balance_gold_normalized': closing_balance_gold_normalized,
         'closing_balance_gold_details': running_balances_gold,
     })
+
+
+@api.route('/accounts/by-number/<string:account_number>/statement_merged', methods=['GET'])
+@_wrap_api_exceptions('account_statement_merged_failed', 'Failed to load merged account statement')
+def get_account_statement_merged_by_number(account_number):
+    """Convenience endpoint: fetch merged statement using account_number."""
+    account = Account.query.filter_by(account_number=account_number).first_or_404()
+    return get_account_statement_merged(account.id)
 
 
 # Customers CRUD
@@ -16986,10 +17006,20 @@ def create_journal_entry_from_voucher(voucher):
                     else:
                         credit_21k = amount
             
+            # Tag party on journal lines so statements/ledgers can pick them up.
+            customer_id = None
+            supplier_id = None
+            if getattr(voucher, 'party_type', None) == 'customer' and getattr(voucher, 'customer_id', None):
+                customer_id = voucher.customer_id
+            if getattr(voucher, 'party_type', None) == 'supplier' and getattr(voucher, 'supplier_id', None):
+                supplier_id = voucher.supplier_id
+
             # إنشاء سطر القيد
             journal_line = JournalEntryLine(
                 journal_entry_id=journal_entry.id,
                 account_id=account_line.account_id,
+                customer_id=customer_id,
+                supplier_id=supplier_id,
                 cash_debit=cash_debit,
                 cash_credit=cash_credit,
                 debit_18k=debit_18k,
@@ -16999,7 +17029,8 @@ def create_journal_entry_from_voucher(voucher):
                 debit_22k=debit_22k,
                 credit_22k=credit_22k,
                 debit_24k=debit_24k,
-                credit_24k=credit_24k
+                credit_24k=credit_24k,
+                description=(account_line.description or voucher.description),
             )
             
             db.session.add(journal_line)

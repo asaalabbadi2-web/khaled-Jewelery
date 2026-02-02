@@ -5,6 +5,7 @@ import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/invoice_type_banner.dart';
+import '../widgets/invoice_settings_sheet.dart';
 import '../utils.dart';
 import 'invoice_print_screen.dart';
 
@@ -32,6 +33,18 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   final _smartInputController = TextEditingController();
   final _smartInputFocus = FocusNode();
   final _customAmountController = TextEditingController(); // 🆕 للمبلغ المخصص
+
+  bool _uiLockPriceEdits = false;
+  bool _uiDisableVat = false;
+  bool _uiAutoOpenPrintAfterSave = false;
+  String _uiPaperSize = 'A4';
+
+  double get _effectiveVatRate => _uiDisableVat ? 0.0 : _settingsProvider.taxRate;
+
+  double _effectiveTaxRateForKarat(double karat) {
+    if (_uiDisableVat) return 0.0;
+    return _settingsProvider.taxRateForKarat(karat);
+  }
 
   // Branches (فروع المعرض/المحل)
   List<Map<String, dynamic>> _branches = [];
@@ -72,6 +85,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   @override
   void initState() {
     super.initState();
+    _loadInvoiceUiSettingsFromPrefs();
     _loadSettings();
     _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
@@ -79,10 +93,32 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     _smartInputFocus.requestFocus();
   }
 
+  Future<void> _loadInvoiceUiSettingsFromPrefs() async {
+    try {
+      final loaded = await InvoiceUiSettings.load(InvoiceUiContext.scrapSale);
+      if (!mounted) return;
+      setState(() {
+        _uiLockPriceEdits = loaded.lockPriceEdits;
+        _uiDisableVat = loaded.disableVat;
+        _uiAutoOpenPrintAfterSave = loaded.autoOpenPrintAfterSave;
+        _uiPaperSize = loaded.paperSize;
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _settingsProvider = Provider.of<SettingsProvider>(context);
+
+    // Ensure VAT override is applied once settings are available.
+    if (_uiDisableVat && mounted && _items.isNotEmpty) {
+      for (final item in _items) {
+        item.taxRate = 0.0;
+      }
+    }
   }
 
   @override
@@ -280,7 +316,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     final commission = double.parse((amount * (rate / 100)).toStringAsFixed(2));
     // حساب ضريبة القيمة المضافة على العمولة بحسب الإعدادات
     final commissionVat = double.parse(
-      (commission * _settingsProvider.taxRate).toStringAsFixed(2),
+      (commission * _effectiveVatRate).toStringAsFixed(2),
     );
     // الصافي = المبلغ - العمولة - ضريبة العمولة
     final net = double.parse(
@@ -448,7 +484,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           wage: wage,
           goldPrice24k: _goldPrice24k,
           mainKarat: _settingsProvider.mainKarat,
-          taxRate: _settingsProvider.taxRateForKarat(karat),
+          taxRate: _effectiveTaxRateForKarat(karat),
         ),
       );
       debugPrint('📋 عدد الأصناف الآن: ${_items.length}');
@@ -463,7 +499,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       switch (field) {
         case 'karat':
           item.karat = value;
-          item.taxRate = _settingsProvider.taxRateForKarat(value);
+          item.taxRate = _effectiveTaxRateForKarat(value);
           // إذا كان هناك إجمالي محدد، أعد حساب الحقول للوصول له
           if (item._hasManualTotal && item._targetTotal != null) {
             _recalculateFieldsForTarget(item);
@@ -497,7 +533,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
     final targetTotal = item._targetTotal!;
     final targetNet =
-        targetTotal / (1 + _settingsProvider.taxRate); // إزالة الضريبة
+        _effectiveVatRate <= 0
+          ? targetTotal
+          : targetTotal / (1 + _effectiveVatRate); // إزالة الضريبة
 
     // حساب التكلفة الحالية
     final currentCost = item.cost;
@@ -587,7 +625,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     final totalCosts = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
 
     // الخطوة 2: حساب المبلغ بدون ضريبة
-    final amountWithoutTax = targetTotal / (1 + _settingsProvider.taxRate);
+    final amountWithoutTax = _effectiveVatRate <= 0
+      ? targetTotal
+      : targetTotal / (1 + _effectiveVatRate);
 
     // الخطوة 3: حساب الربح المتاح للتوزيع
     final profitPool = amountWithoutTax - totalCosts;
@@ -952,42 +992,48 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           // ignore
         }
 
-        final shouldPrint = await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) {
-            return AlertDialog(
-              title: Text(
-                approvalRequired
-                    ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
-                    : 'تم حفظ الفاتورة',
-              ),
-              content: Text(
-                '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
-                '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
-                '\n\nهل تريد طباعتها الآن؟',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                  child: const Text('تم'),
-                ),
-                FilledButton.icon(
-                  onPressed: () => Navigator.pop(dialogContext, true),
-                  icon: const Icon(Icons.print),
-                  label: const Text('طباعة'),
-                ),
-              ],
-            );
-          },
-        );
+        final shouldPrint = _uiAutoOpenPrintAfterSave
+            ? true
+            : await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (dialogContext) {
+                  return AlertDialog(
+                    title: Text(
+                      approvalRequired
+                          ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                          : 'تم حفظ الفاتورة',
+                    ),
+                    content: Text(
+                      '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
+                      '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
+                      '\n\nهل تريد طباعتها الآن؟',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('تم'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                        icon: const Icon(Icons.print),
+                        label: const Text('طباعة'),
+                      ),
+                    ],
+                  );
+                },
+              );
 
         if (!context.mounted) return;
         if (shouldPrint == true) {
           await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) =>
-                  InvoicePrintScreen(invoice: invoiceForPrint, isArabic: true),
+                    InvoicePrintScreen(
+                      invoice: invoiceForPrint,
+                      isArabic: true,
+                      printSettings: {'paperSize': _uiPaperSize},
+                    ),
             ),
           );
         }
@@ -1382,6 +1428,38 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 tooltip: 'تحديث سعر الذهب',
                 onPressed: _loadSettings,
                 icon: const Icon(Icons.sync),
+              ),
+              IconButton(
+                tooltip: 'إعدادات الفاتورة',
+                icon: const Icon(Icons.settings),
+                onPressed: () async {
+                  await InvoiceSettingsSheet.show(
+                    context,
+                    contextType: InvoiceUiContext.scrapSale,
+                    supportsVatToggle: true,
+                    supportsLockEdits: true,
+                    supportsAutoOpenPrint: true,
+                    onChanged: (s) {
+                      if (!mounted) return;
+                      setState(() {
+                        _uiLockPriceEdits = s.lockPriceEdits;
+                        _uiDisableVat = s.disableVat;
+                        _uiAutoOpenPrintAfterSave = s.autoOpenPrintAfterSave;
+                        _uiPaperSize = s.paperSize;
+
+                        if (_uiDisableVat) {
+                          for (final item in _items) {
+                            item.taxRate = 0.0;
+                          }
+                        } else {
+                          for (final item in _items) {
+                            item.taxRate = _effectiveTaxRateForKarat(item.karat);
+                          }
+                        }
+                      });
+                    },
+                  );
+                },
               ),
             ],
           ),
@@ -2173,6 +2251,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     String field,
     double currentValue,
   ) async {
+    if (_uiLockPriceEdits) {
+      _showError('التعديلات مقفلة من إعدادات الفاتورة');
+      return;
+    }
+
     final controller = TextEditingController(text: currentValue.toString());
     controller.selection = TextSelection(
       baseOffset: 0,
