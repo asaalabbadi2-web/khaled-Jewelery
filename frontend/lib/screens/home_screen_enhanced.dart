@@ -50,6 +50,7 @@ import 'offices_screen.dart';
 import 'posting_management_screen.dart';
 import 'audit_log_screen.dart';
 import 'shift_closing_screen.dart';
+import 'weight_closing_execute_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
 import 'reports/admin_dashboard_screen.dart';
@@ -2507,6 +2508,42 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             builder: (_) =>
                 MeltingRenewalScreen(api: api, isArabic: widget.isArabic),
           ),
+        );
+        break;
+      case 'offices':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OfficesScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'gold_reservation':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GoldReservationScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'shift_closing':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ShiftClosingScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'audit_log':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+        );
+        break;
+      case 'weight_closing_execute':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const WeightClosingExecuteScreen()),
         );
         break;
       case 'posting_management':

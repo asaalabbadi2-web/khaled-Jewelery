@@ -59,7 +59,7 @@ def _add_entry(account_id: int, cash_debit=0.0, cash_credit=0.0, gold_debit_21k=
     return entry
 
 
-def test_general_ledger_account_filter_and_balances():
+def test_general_ledger_account_filter_and_balances(auth_headers):
     with app.app_context():
         primary_account = _create_account('حساب الأستاذ العام')
         _add_entry(
@@ -85,7 +85,7 @@ def test_general_ledger_account_filter_and_balances():
             'account_id': target_account_id,
             'show_balances': 'true',
             'karat_detail': 'true',
-        })
+        }, headers=auth_headers)
 
     assert resp.status_code == 200
     payload = resp.get_json()
@@ -103,7 +103,7 @@ def test_general_ledger_account_filter_and_balances():
     assert entry['running_balance']['by_karat']['21k'] == pytest.approx(1.25, rel=1e-4)
 
 
-def test_general_ledger_date_filters_trim_entries():
+def test_general_ledger_date_filters_trim_entries(auth_headers):
     with app.app_context():
         date_account = _create_account('حساب التواريخ')
         _add_entry(
@@ -124,7 +124,7 @@ def test_general_ledger_date_filters_trim_entries():
             'account_id': account_id,
             'start_date': '2025-01-10',
             'show_balances': 'true',
-        })
+        }, headers=auth_headers)
 
     assert resp.status_code == 200
     payload = resp.get_json()
@@ -136,7 +136,7 @@ def test_general_ledger_date_filters_trim_entries():
     assert entry['running_balance']['cash'] == pytest.approx(800.0)
 
 
-def test_general_ledger_extended_filters():
+def test_general_ledger_extended_filters(auth_headers):
     with app.app_context():
         riyadh_account = _create_account('خزينة الرياض')
         jeddah_account = _create_account('خزينة جدة')
@@ -208,7 +208,7 @@ def test_general_ledger_extended_filters():
             'reference_types': 'invoice',
             'user': 'auditor',
             'branch': 'riyadh',
-        })
+        }, headers=auth_headers)
 
     assert resp.status_code == 200
     payload = resp.get_json()
@@ -222,7 +222,7 @@ def test_general_ledger_extended_filters():
             'account_id': riyadh_account_id,
             'created_by': 'ali',
             'show_balances': 'false',
-        })
+        }, headers=auth_headers)
 
     assert resp_created.status_code == 200
     payload_created = resp_created.get_json()

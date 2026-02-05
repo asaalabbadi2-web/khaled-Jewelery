@@ -5,7 +5,7 @@ import pytest
 import app as flask_app_module
 
 from app import app, reset_database
-from models import db, Account, Supplier, Customer, Employee, Invoice
+from models import db, Account, Supplier, Customer, Employee, Invoice, User
 from datetime import datetime
 
 
@@ -50,6 +50,13 @@ def initialize_db():
                     a.balance_cash = 10000.0
                 db.session.add(a)
 
+        # Seed an admin user for authenticated endpoints in unit tests.
+        admin = User.query.filter_by(username='admin').first()
+        if not admin:
+            admin = User(username='admin', full_name='Admin', email=None, is_active=True, is_admin=True)
+            admin.set_password('admin123')
+            db.session.add(admin)
+
         # Seed a supplier with id=1 (some integration tests expect supplier 1)
         if not Supplier.query.get(1):
             s = Supplier(id=1, supplier_code='S-000001', name='لازوردي')
@@ -65,6 +72,26 @@ def initialize_db():
             db.session.add(e)
 
         db.session.commit()
+
+
+@pytest.fixture
+def access_token():
+    """JWT access token for the seeded admin user."""
+    with app.app_context():
+        from auth_decorators import generate_token
+
+        admin = User.query.filter_by(username='admin').first()
+        if not admin:
+            admin = User(username='admin', full_name='Admin', email=None, is_active=True, is_admin=True)
+            admin.set_password('admin123')
+            db.session.add(admin)
+            db.session.commit()
+        return generate_token(admin)
+
+
+@pytest.fixture
+def auth_headers(access_token):
+    return {'Authorization': f'Bearer {access_token}'}
 
 
 @pytest.fixture

@@ -604,6 +604,14 @@ class Supplier(db.Model):
     # - cash: wages are a SAR liability
     # - gold: wages are converted to gold weight (main karat) and added to gold liability
     default_wage_type = db.Column(db.String(10), default='cash')
+
+    # Default cash/bank SafeBox for settlements (optional)
+    default_safe_box_id = db.Column(
+        db.Integer,
+        db.ForeignKey('safe_box.id', name='fk_supplier_default_safe_box'),
+        nullable=True,
+    )
+    default_safe_box = db.relationship('SafeBox', foreign_keys=[default_safe_box_id])
     active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=db.func.now())
     
@@ -644,6 +652,8 @@ class Supplier(db.Model):
             'tax_number': self.tax_number,
             'classification': self.classification,
             'default_wage_type': self.default_wage_type or 'cash',
+            'default_safe_box_id': self.default_safe_box_id,
+            'default_safe_box_name': self.default_safe_box.name if self.default_safe_box else None,
             'active': self.active,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'account_category_id': self.account_category_id,

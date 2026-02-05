@@ -43,7 +43,7 @@ def create_office_reservation_example():
                     'debit_weight': reserved_weight  # مدين وزني
                 },
                 {
-                    'account_code': '21110',     # مكاتب التسكير
+                    'account_code': '2200',     # مكاتب التسكير (تحت موردي الذهب الخام)
                     'credit': paid_amount,       # دائن نقدي
                     'credit_weight': reserved_weight  # دائن وزني
                 }
@@ -92,8 +92,8 @@ def create_office_reservation_example():
         print('📌 الحسابات المتأثرة:')
         print('   1290 (جسر مشتريات) ← زاد بـ 40,000 ريال + 100g')
         print('   71290 (جسر مشتريات وزن) ← زاد بـ 100g')
-        print('   21110 (مكاتب التسكير) ← زاد بـ 40,000 ريال + 100g')
-        print('   72110 (مكاتب التسكير وزن) ← زاد بـ 100g')
+        print('   2200 (مكاتب التسكير) ← زاد بـ 40,000 ريال + 100g')
+        print('   72200 (مكاتب التسكير وزن) ← زاد بـ 100g')
         print()
         
         return entry

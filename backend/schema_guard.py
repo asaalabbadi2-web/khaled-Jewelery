@@ -232,6 +232,40 @@ def ensure_settings_columns(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_journal_entry_columns(engine: Engine) -> None:
+    """Ensure JournalEntry draft/posting/soft-delete columns exist.
+
+    Some deployments have legacy databases created before the draft/posting
+    system was introduced. Those DBs may lack columns like `is_draft`, which
+    causes runtime INSERT failures when creating journal entries.
+    """
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "journal_entry",
+                [
+                    ("is_draft", "BOOLEAN", "1"),
+                    ("is_posted", "BOOLEAN", "0"),
+                    ("posted_at", "DATETIME", "NULL"),
+                    ("posted_by", "VARCHAR(100)", "NULL"),
+                    ("is_deleted", "BOOLEAN", "0"),
+                    ("deleted_at", "DATETIME", "NULL"),
+                    ("deleted_by", "VARCHAR(100)", "NULL"),
+                    ("deletion_reason", "VARCHAR(500)", "NULL"),
+                    ("restored_at", "DATETIME", "NULL"),
+                    ("restored_by", "VARCHAR(100)", "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed (journal_entry): %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
 def ensure_weight_closing_columns(engine: Engine) -> None:
     """Add invoice weight-closing summary columns when missing."""
     columns_added: list[str] = []
@@ -321,6 +355,7 @@ def ensure_supplier_columns(engine: Engine) -> None:
                     ("tax_number", "VARCHAR(50)", "NULL"),
                     ("classification", "VARCHAR(50)", "NULL"),
                     ("default_wage_type", "VARCHAR(10)", "'cash'"),
+                    ("default_safe_box_id", "INTEGER", "NULL"),
                 ],
             )
         )

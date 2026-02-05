@@ -7,8 +7,9 @@ from datetime import datetime
 
 from flask import Flask
 
-from models import db, Supplier, Account, JournalEntry, JournalEntryLine
+from models import db, Supplier, Account, JournalEntry, JournalEntryLine, User
 from routes import api as api_blueprint
+from auth_decorators import generate_token
 
 
 class SupplierLedgerEndpointTestCase(unittest.TestCase):
@@ -38,10 +39,18 @@ class SupplierLedgerEndpointTestCase(unittest.TestCase):
             tracks_weight=True,
         )
         db.session.add_all([self.supplier, self.account])
+
+        admin = User.query.filter_by(username='admin').first()
+        if not admin:
+            admin = User(username='admin', full_name='Admin', email=None, is_active=True, is_admin=True)
+            admin.set_password('admin123')
+            db.session.add(admin)
+
         db.session.commit()
 
         self._add_entry(datetime(2025, 1, 1, 10, 0), cash_debit=500.0, gold_21k=5.0)
         self.client = self.app.test_client()
+        self.headers = {'Authorization': f'Bearer {generate_token(admin)}'}
 
     def tearDown(self):
         db.session.remove()
@@ -67,7 +76,7 @@ class SupplierLedgerEndpointTestCase(unittest.TestCase):
         return entry
 
     def test_ledger_endpoint_returns_summary_and_movements(self):
-        resp = self.client.get(f'/api/suppliers/{self.supplier.id}/ledger')
+        resp = self.client.get(f'/api/suppliers/{self.supplier.id}/ledger', headers=self.headers)
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
 
@@ -86,6 +95,7 @@ class SupplierLedgerEndpointTestCase(unittest.TestCase):
         resp = self.client.get(
             f'/api/suppliers/{self.supplier.id}/ledger',
             query_string={'date_from': '2025-02-01'},
+            headers=self.headers,
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
@@ -97,6 +107,7 @@ class SupplierLedgerEndpointTestCase(unittest.TestCase):
         resp = self.client.get(
             f'/api/suppliers/{self.supplier.id}/ledger',
             query_string={'per_page': 1},
+            headers=self.headers,
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()

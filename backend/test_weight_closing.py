@@ -9,6 +9,8 @@ import unittest
 from datetime import datetime
 
 from flask import Flask
+from flask import g
+from flask import request
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
@@ -44,10 +46,91 @@ class WeightClosingFlowTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = Flask(__name__)
+        cls.app.config['TESTING'] = True
         cls.app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
         cls.app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
         db.init_app(cls.app)
         cls.app.register_blueprint(api_blueprint, url_prefix='/api')
+
+        # Inject an admin user into request context so endpoints protected by
+        # @require_permission work in unit tests without the full auth stack.
+        @cls.app.before_request
+        def _inject_admin_user():
+            mode = (request.headers.get('X-Test-Auth') or 'admin').strip().lower()
+            if mode in ('none', 'no', '0', 'false', 'unauth'):
+                return
+
+            class _TestUser:
+                def __init__(self, *, is_admin: bool, username: str, allow_all_permissions: bool):
+                    self.is_admin = is_admin
+                    self.username = username
+                    self._allow_all_permissions = allow_all_permissions
+
+                def has_permission(self, _code: str) -> bool:
+                    return bool(self._allow_all_permissions)
+
+            if mode in ('user', 'limited'):
+                g.current_user = _TestUser(is_admin=False, username='test-user', allow_all_permissions=False)
+            else:
+                g.current_user = _TestUser(is_admin=True, username='test-admin', allow_all_permissions=True)
+
+    def _headers(self, auth: str = 'admin'):
+        return {'X-Test-Auth': auth}
+
+    def test_auth_none_returns_401(self):
+        resp = self.client.get('/api/office-reservations', headers=self._headers('none'))
+        self.assertEqual(resp.status_code, 401)
+
+    def test_auth_user_returns_403(self):
+        resp = self.client.get('/api/office-reservations', headers=self._headers('user'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_office_reservation_payment_resolves_cash_by_number(self):
+        """If settings store 1100 as an account_number (not PK id), posting should still work."""
+        # Start from the normal seeded defaults (so weight closing + inventory flow works),
+        # but swap the cash account so PK != 1100 while account_number == '1100'.
+        seeded_cash = Account.query.get(1100)
+        self.assertIsNotNone(seeded_cash)
+        db.session.delete(seeded_cash)
+        db.session.flush()
+
+        cash_account = Account(
+            id=5000,
+            account_number='1100',
+            name='Main Cash Box',
+            type='Asset',
+            transaction_type='cash',
+            tracks_weight=False,
+        )
+        db.session.add(cash_account)
+        db.session.commit()
+
+        sale_invoice = self._create_sale_invoice(weight_grams=1.5, close_price=240.0)
+        _upsert_weight_closing_order(
+            sale_invoice,
+            close_price_per_gram=240.0,
+            settings=DEFAULT_WEIGHT_CLOSING_SETTINGS,
+        )
+        db.session.commit()
+
+        office = self._create_office(code='OFF-CASH-001', name='Cash Resolve Office')
+        payload = {
+            'office_id': office.id,
+            'reservation_date': datetime.utcnow().isoformat(),
+            'karat': 21,
+            'weight': 1.5,
+            'price_per_gram': 240.0,
+            'execution_price_per_gram': 240.0,
+            'paid_amount': 360.0,
+        }
+
+        resp = self.client.post(
+            '/api/office-reservations',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers=self._headers('admin'),
+        )
+        self.assertEqual(resp.status_code, 201, resp.get_data(as_text=True))
 
     def setUp(self):
         self.ctx = self.app.app_context()

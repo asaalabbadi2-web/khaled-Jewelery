@@ -645,13 +645,22 @@ class DefaultQuickActions {
       order: 41,
     ),
     QuickActionItem(
+      id: 'weight_closing_execute',
+      icon: Icons.scale,
+      label: 'تنفيذ التسكير الوزني',
+      route: 'weight_closing_execute',
+      colorHex: '#C9A227',
+      isActive: true,
+      order: 42,
+    ),
+    QuickActionItem(
       id: 'audit_log',
       icon: Icons.history,
       label: 'سجل التدقيق',
       route: 'audit_log',
       colorHex: '#455A64',
       isActive: false,
-      order: 42,
+      order: 43,
     ),
     QuickActionItem(
       id: 'branches_management',
@@ -660,7 +669,7 @@ class DefaultQuickActions {
       route: 'branches_management',
       colorHex: '#00897B',
       isActive: false,
-      order: 43,
+      order: 44,
     ),
     QuickActionItem(
       id: 'posting_management',
@@ -669,7 +678,7 @@ class DefaultQuickActions {
       route: 'posting_management',
       colorHex: '#2E7D32',
       isActive: true,
-      order: 44,
+      order: 45,
     ),
   ];
 

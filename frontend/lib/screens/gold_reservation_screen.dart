@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../api_service.dart';
+import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
 import 'weight_closing_settings_screen.dart';
 import '../utils.dart';
+import '../widgets/safe_box_picker_dialog.dart';
 
 /// شاشة التسكير - حجز ذهب خام من مكاتب بيع وشراء الذهب
 class GoldReservationScreen extends StatefulWidget {
@@ -45,6 +47,8 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
 
   // بيانات
   List<Map<String, dynamic>> _offices = []; // قائمة المكاتب
+  List<SafeBoxModel> _cashBankSafeBoxes = const [];
+  int? _paymentSafeBoxId;
   bool _isLoading = false;
   double _currentGoldPrice = 0.0;
   int? _selectedSupplierId;
@@ -87,14 +91,61 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
 
       // تحميل قائمة المكاتب والموردين من API
       final offices = await widget.api.getOffices(activeOnly: true);
+
+      // تحميل خزائن الدفع (نقد/بنك) من API
+      final safes = await widget.api.getSafeBoxes(
+        isActive: true,
+        includeAccount: true,
+      );
+      final cashBankSafes = safes
+          .where(
+            (s) =>
+                (s.safeType == 'cash' || s.safeType == 'bank') && s.id != null,
+          )
+          .toList()
+        ..sort(
+          (a, b) => a.safeType == b.safeType
+              ? a.name.compareTo(b.name)
+              : a.safeType.compareTo(b.safeType),
+        );
+
       setState(() {
         _offices = offices.cast<Map<String, dynamic>>();
+        _cashBankSafeBoxes = cashBankSafes;
       });
     } catch (e) {
       _showMessage('خطأ في تحميل البيانات: $e', isError: true);
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  String _safeNameById(int? id) {
+    if (id == null) return 'افتراضي (حسب الإعدادات)';
+    final found = _cashBankSafeBoxes.where((s) => s.id == id).toList();
+    if (found.isEmpty) return 'خزينة غير معروفة (#$id)';
+    final sb = found.first;
+    final typeLabel = sb.safeType == 'bank' ? 'بنك' : 'نقد';
+    return '$typeLabel - ${sb.name}';
+  }
+
+  Future<void> _pickPaymentSafeBox() async {
+    if (_cashBankSafeBoxes.isEmpty) {
+      _showMessage('لا توجد خزائن نقد/بنك فعالة', isError: true);
+      return;
+    }
+
+    final chosen = await showDialog<SafeBoxModel>(
+      context: context,
+      builder: (_) => SafeBoxPickerDialog(
+        safeBoxes: _cashBankSafeBoxes,
+        selectedSafeBoxId: _paymentSafeBoxId,
+        excludeGold: true,
+      ),
+    );
+
+    if (!mounted || chosen == null) return;
+    setState(() => _paymentSafeBoxId = chosen.id);
   }
 
   void _calculateTotal() {
@@ -137,6 +188,12 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
       return;
     }
 
+    // Enforce payment safe box selection when any amount is paid.
+    if (_paidAmount > 0 && _paymentSafeBoxId == null) {
+      _showMessage('الرجاء اختيار خزينة الدفع عند إدخال مبلغ مدفوع', isError: true);
+      return;
+    }
+
     final confirmed = await _showConfirmDialog();
     if (!confirmed) return;
 
@@ -154,6 +211,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
         'total_amount': _totalAmount,
         'paid_amount': _paidAmount,
         'payment_status': _paymentStatus,
+        if (_paymentSafeBoxId != null) 'safe_box_id': _paymentSafeBoxId,
         'contact_person': _contactPersonController.text.trim().isEmpty
             ? null
             : _contactPersonController.text.trim(),
@@ -224,6 +282,10 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                 Text(
                   '${isAr ? "المبلغ المدفوع" : "Paid"}: ${_paidAmount.toStringAsFixed(2)} ر.س',
                 ),
+                if (_paidAmount > 0)
+                  Text(
+                    '${isAr ? "خزينة الدفع" : "Payment Safe"}: ${_safeNameById(_paymentSafeBoxId)}',
+                  ),
                 if (_totalAmount - _paidAmount > 0)
                   Text(
                     '${isAr ? "المتبقي" : "Remaining"}: ${(_totalAmount - _paidAmount).toStringAsFixed(2)} ر.س',
@@ -623,6 +685,38 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                                     decimal: true,
                                   ),
                               inputFormatters: [NormalizeNumberFormatter()],
+                            ),
+                            const SizedBox(height: 12),
+                            // خزينة الدفع
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading:
+                                  const Icon(Icons.account_balance_wallet_outlined),
+                              title: Text(
+                                isAr
+                                    ? 'خزينة الدفع: ${_safeNameById(_paymentSafeBoxId)}'
+                                    : 'Payment Safe: ${_safeNameById(_paymentSafeBoxId)}',
+                              ),
+                              subtitle: Text(
+                                isAr
+                                    ? 'اختياري: لتحديد خزينة/حساب خروج الدفعة لهذه العملية'
+                                    : 'Optional: choose which safe/account pays this amount',
+                              ),
+                              trailing: Wrap(
+                                spacing: 8,
+                                children: [
+                                  TextButton(
+                                    onPressed: _pickPaymentSafeBox,
+                                    child: Text(isAr ? 'اختيار' : 'Pick'),
+                                  ),
+                                  if (_paymentSafeBoxId != null)
+                                    TextButton(
+                                      onPressed: () =>
+                                          setState(() => _paymentSafeBoxId = null),
+                                      child: Text(isAr ? 'مسح' : 'Clear'),
+                                    ),
+                                ],
+                              ),
                             ),
                             const SizedBox(height: 12),
                             // المتبقي

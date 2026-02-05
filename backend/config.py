@@ -147,6 +147,26 @@ WEIGHT_SUPPORT_ACCOUNTS = [
 		},
 	},
 	{
+		'key': 'scrap_office_bridge',
+		'financial': {
+			'account_number': '1290',
+			'name': 'جسر مشتريات الكسر والتسكير',
+			'type': 'Asset',
+			'transaction_type': 'cash',
+			'tracks_weight': False,
+			# Commonly placed under current assets (120) in this COA.
+			'parent_number': '120',
+		},
+		'memo': {
+			'account_number': '71290',
+			'name': 'جسر مشتريات الكسر والتسكير وزني',
+			'type': 'Asset',
+			'transaction_type': 'gold',
+			'tracks_weight': True,
+			'parent_number': '71',
+		},
+	},
+	{
 		'key': 'cleaning',
 		'financial': {
 			'account_number': '5110',

@@ -758,38 +758,34 @@ class ApiService {
       '$_baseUrl/office-reservations',
     ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
 
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('Failed to load office reservations');
     }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<Map<String, dynamic>> getOfficeReservation(int id) async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/office-reservations/$id'),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('Failed to load office reservation');
     }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<Map<String, dynamic>> createOfficeReservation(
     Map<String, dynamic> reservationData,
   ) async {
-    final response = await http.post(
+    final response = await _authedPost(
       Uri.parse('$_baseUrl/office-reservations'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(reservationData),
     );
     if (response.statusCode == 201) {
       return json.decode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('Failed to create office reservation: ${response.body}');
     }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   // Item Methods
@@ -2608,6 +2604,44 @@ class ApiService {
     } else {
       throw Exception(_errorMessageFromResponse(response));
     }
+  }
+
+  /// قائمة بروفايلات التسكير الوزني
+  Future<List<Map<String, dynamic>>> getWeightClosingProfiles() async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/weight-closing/profiles'),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      final profiles = decoded is Map<String, dynamic>
+          ? (decoded['profiles'] as List<dynamic>? ?? const [])
+          : const <dynamic>[];
+
+      return profiles
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  /// تنفيذ بروفايل التسكير الوزني
+  Future<Map<String, dynamic>> executeWeightClosingProfile(
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/weight-closing/execute-profile'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   // System Methods

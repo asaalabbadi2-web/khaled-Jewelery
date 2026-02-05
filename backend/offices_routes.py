@@ -95,7 +95,11 @@ def create_office():
             office.account_category_id = int(data['account_category_id'])
             explicit_account_set = True
         elif data.get('account_category_number'):
-            account_category = Account.query.filter_by(account_number=str(data['account_category_number']).strip()).first()
+            requested_number = str(data['account_category_number']).strip()
+            account_category = Account.query.filter_by(account_number=requested_number).first()
+            if not account_category and requested_number == '21110':
+                # Legacy default used by older office screens; map to current office parent.
+                account_category = Account.query.filter_by(account_number='2200').first()
             if not account_category:
                 return jsonify({'error': f"الحساب غير موجود: {data['account_category_number']}"}), 400
             office.account_category_id = account_category.id
@@ -137,7 +141,10 @@ def update_office(office_id):
         if 'account_category_id' in data and data['account_category_id'] is not None:
             office.account_category_id = int(data['account_category_id'])
         elif 'account_category_number' in data and data['account_category_number']:
-            account_category = Account.query.filter_by(account_number=str(data['account_category_number']).strip()).first()
+            requested_number = str(data['account_category_number']).strip()
+            account_category = Account.query.filter_by(account_number=requested_number).first()
+            if not account_category and requested_number == '21110':
+                account_category = Account.query.filter_by(account_number='2200').first()
             if not account_category:
                 return jsonify({'error': f"الحساب غير موجود: {data['account_category_number']}"}), 400
             office.account_category_id = account_category.id
@@ -228,20 +235,32 @@ def get_office_balance(office_id):
         office = db.session.query(Office).get(office_id)
         if not office:
             return jsonify({'error': 'المكتب غير موجود'}), 404
+
+        linked_account = None
+        if office.account_category_id:
+            linked_account = Account.query.get(office.account_category_id)
+
+        # Prefer ledger-backed Account balances when available.
+        balance_cash = (linked_account.balance_cash if linked_account is not None else office.balance_cash) or 0.0
+        bal_18k = (linked_account.balance_18k if linked_account is not None else office.balance_gold_18k) or 0.0
+        bal_21k = (linked_account.balance_21k if linked_account is not None else office.balance_gold_21k) or 0.0
+        bal_22k = (linked_account.balance_22k if linked_account is not None else office.balance_gold_22k) or 0.0
+        bal_24k = (linked_account.balance_24k if linked_account is not None else office.balance_gold_24k) or 0.0
         
         balance_data = {
             'office_id': office.id,
             'office_code': office.office_code,
             'office_name': office.name,
-            'balance_cash': round(office.balance_cash, 2),
+            'balance_cash': round(float(balance_cash), 2),
+            'balance_source': 'account' if linked_account is not None else 'office',
             'balance_gold': {
-                '18k': round(office.balance_gold_18k, 3),
-                '21k': round(office.balance_gold_21k, 3),
-                '22k': round(office.balance_gold_22k, 3),
-                '24k': round(office.balance_gold_24k, 3),
+                '18k': round(float(bal_18k), 3),
+                '21k': round(float(bal_21k), 3),
+                '22k': round(float(bal_22k), 3),
+                '24k': round(float(bal_24k), 3),
                 'total': round(
-                    office.balance_gold_18k + office.balance_gold_21k +
-                    office.balance_gold_22k + office.balance_gold_24k, 3
+                    float(bal_18k) + float(bal_21k) + float(bal_22k) + float(bal_24k),
+                    3,
                 )
             },
             'statistics': {

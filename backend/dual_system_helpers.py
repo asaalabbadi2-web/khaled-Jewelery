@@ -155,7 +155,7 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
         dim_inputs = []
 
         # Branch (stored under the 'office' dimension code in analytics)
-        # مكاتب التسكير كيان مختلف ويصنّف ضمن الموردين؛ لذلك لا نستخدم invoice.office_id كـ "فرع".
+        # مكاتب التسكير كيان مختلف؛ لذلك لا نستخدم invoice.office_id كـ "فرع".
         branch_id = getattr(related_invoice, 'branch_id', None)
         branch_label = None
         if branch_id:
@@ -167,6 +167,26 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
                 branch_label = None
 
             dim_inputs.append(DimensionInput(code='office', int_value=int(branch_id), label_ar=branch_label))
+
+        # Gold Office (مكتب تسكير / مورد ذهب خام)
+        # This is distinct from Branch and uses its own dimension code.
+        gold_office_id = getattr(related_invoice, 'office_id', None)
+        gold_office_label = None
+        if gold_office_id:
+            try:
+                from models import Office
+                office_row = db.session.query(Office).get(gold_office_id)
+                gold_office_label = office_row.name if office_row else None
+            except Exception:
+                gold_office_label = None
+
+            dim_inputs.append(
+                DimensionInput(
+                    code='gold_office',
+                    int_value=int(gold_office_id),
+                    label_ar=gold_office_label,
+                )
+            )
 
         # Transaction Type
         transaction_type = getattr(related_invoice, 'invoice_type', None) or getattr(journal_entry, 'entry_type', None)

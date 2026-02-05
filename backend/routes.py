@@ -747,6 +747,9 @@ DEFAULT_WEIGHT_CLOSING_SETTINGS = {
     'inventory_new_account_id': 1300,
     'inventory_scrap_account_id': 1310,
     'inventory_account_id': 1310,
+    # Preferred settlement routing
+    'cash_safe_box_id': None,
+    # Legacy fallback (id or account_number-like int)
     'cash_account_id': 1100,       # الصندوق
 }
 
@@ -802,6 +805,15 @@ def update_weight_closing_settings():
         except Exception:
             return None
 
+    def _normalize_fk_ref(value):
+        """Accept nullable integer FK values."""
+        if value in (None, '', False):
+            return None
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return None
+
     # Inventory + cash account IDs
     for key in (
         'inventory_new_account_id',
@@ -812,8 +824,18 @@ def update_weight_closing_settings():
     ):
         if key in payload:
             v = _normalize_account_ref(payload.get(key))
-            if v is not None and v > 0:
+            if v is None:
+                merged[key] = None
+            elif v > 0:
                 merged[key] = v
+
+    # Preferred settlement safebox (nullable)
+    if 'cash_safe_box_id' in payload:
+        v = _normalize_fk_ref(payload.get('cash_safe_box_id'))
+        if v is None:
+            merged['cash_safe_box_id'] = None
+        elif v > 0:
+            merged['cash_safe_box_id'] = v
 
     # Persist
     settings_row = Settings.query.first()
@@ -1423,6 +1445,28 @@ def _get_inventory_account_by_karat(karat: int) -> int:
         acc = Account.query.get(preferred_int) or Account.query.filter_by(account_number=str(preferred_int)).first()
         if acc:
             return acc.id
+
+
+def _resolve_account_from_id_or_number(value):
+    """Resolve an account by either internal id or account_number.
+
+    Some deployments store values like `1100` in settings intending an
+    `account_number`, while the code path expects a database primary key.
+    """
+    if value in (None, '', 0, False):
+        return None
+    try:
+        value_int = int(value)
+    except Exception:
+        value_int = None
+
+    if value_int is not None:
+        acc = Account.query.get(value_int)
+        if acc:
+            return acc
+        return Account.query.filter_by(account_number=str(value_int)).first()
+
+    return Account.query.filter_by(account_number=str(value)).first()
     return 1310
 
 
@@ -4120,6 +4164,7 @@ def add_supplier():
             tax_number=data.get('tax_number'),
             classification=data.get('classification'),
             default_wage_type=wage_type,
+            default_safe_box_id=None,
             account_category_id=account_category.id if account_category else None,
             balance_cash=0.0,
             balance_gold_18k=0.0,
@@ -4129,6 +4174,22 @@ def add_supplier():
         )
         db.session.add(new_supplier)
         db.session.flush()
+
+        if 'default_safe_box_id' in data:
+            raw_safe_box_id = data.get('default_safe_box_id')
+            if raw_safe_box_id in (None, '', False):
+                new_supplier.default_safe_box_id = None
+            else:
+                try:
+                    safe_box_id = int(str(raw_safe_box_id).strip())
+                except Exception:
+                    safe_box_id = None
+                safe_box = SafeBox.query.get(safe_box_id) if safe_box_id else None
+                safe_type = (safe_box.safe_type or '').strip().lower() if safe_box else ''
+                if not safe_box or not safe_box.is_active or safe_type not in ('cash', 'bank'):
+                    db.session.rollback()
+                    return jsonify({'error': 'default_safe_box_id غير صالح'}), 400
+                new_supplier.default_safe_box_id = safe_box.id
 
         ensure_accounts = _boolish(data.get('ensure_accounts'), True)
         if ensure_accounts:
@@ -4183,6 +4244,21 @@ def update_supplier(id):
             supplier.default_wage_type = wage_type
         else:
             supplier.default_wage_type = 'cash'
+
+    if 'default_safe_box_id' in data:
+        raw_safe_box_id = data.get('default_safe_box_id')
+        if raw_safe_box_id in (None, '', False):
+            supplier.default_safe_box_id = None
+        else:
+            try:
+                safe_box_id = int(str(raw_safe_box_id).strip())
+            except Exception:
+                safe_box_id = None
+            safe_box = SafeBox.query.get(safe_box_id) if safe_box_id else None
+            safe_type = (safe_box.safe_type or '').strip().lower() if safe_box else ''
+            if not safe_box or not safe_box.is_active or safe_type not in ('cash', 'bank'):
+                return jsonify({'error': 'default_safe_box_id غير صالح'}), 400
+            supplier.default_safe_box_id = safe_box.id
 
     # Allow updating account_category if needed
     if 'account_category_number' in data:
@@ -14408,20 +14484,24 @@ def get_analytics_summary():
     """Financial Dimensions summary (line-level analytics).
 
     Query Parameters:
-    - group_by: office | transaction_type | employee
+    - group_by: branch | gold_office | office | transaction_type | employee
     - start_date: YYYY-MM-DD (optional)
     - end_date: YYYY-MM-DD (optional)
     - posted_only: true|false (default true)
     """
     from models import DimensionDefinition, DimensionValue, DimensionSetItem, JournalEntry, Settings, Account
 
-    group_by = (request.args.get('group_by') or 'office').strip().lower()
+    group_by = (request.args.get('group_by') or 'branch').strip().lower()
     start_date_param = request.args.get('start_date')
     end_date_param = request.args.get('end_date')
     posted_only = request.args.get('posted_only', 'true').lower() == 'true'
 
+    # Historical: "office" dimension code stores Branch.
+    # New: "gold_office" stores مكاتب التسكير.
     code_map = {
+        'branch': 'office',
         'office': 'office',
+        'gold_office': 'gold_office',
         'transaction_type': 'transaction_type',
         'employee': 'employee',
     }
@@ -20476,7 +20556,10 @@ def _auto_consume_weight_closing(
 
             inventory_account_id = _get_inventory_account_by_karat(execution_karat)
 
-            bridge_account_id = Account.query.filter_by(account_number='1290').first()
+            bridge_account_id = (
+                Account.query.filter_by(account_number='1710').first()
+                or Account.query.filter_by(account_number='1290').first()
+            )
             if not bridge_account_id:
                 bridge_account_id = Account.query.filter_by(name='جسر مشتريات الكسر والتسكير').first()
             bridge_id = bridge_account_id.id if bridge_account_id else None
@@ -20602,10 +20685,75 @@ def execute_weight_closing_profile():
         return jsonify({'error': 'الحساب المالي للبروفايل غير متوفر'}), 400
 
     settings = _load_weight_closing_settings()
-    cash_account_id = settings.get('cash_account_id', 1100)
-    cash_account = Account.query.get(cash_account_id)
+
+    def _resolve_cash_account_from_safebox_id(safe_box_id: int):
+        if not safe_box_id or safe_box_id <= 0:
+            return None
+        safe_box = SafeBox.query.get(int(safe_box_id))
+        if not safe_box or not safe_box.is_active:
+            return None
+        if (safe_box.safe_type or '').strip().lower() not in {'cash', 'bank'}:
+            return None
+        return Account.query.get(safe_box.account_id) if safe_box.account_id else None
+
+    # SafeBox selection chain:
+    # 1) explicit override in request payload
+    # 2) supplier.default_safe_box_id (when supplier_id provided)
+    # 3) settings.weight_closing_settings.cash_safe_box_id
+    # 4) legacy settings.cash_account_id (id or account_number-like)
+    supplier = None
+    supplier_id = data.get('supplier_id')
+    try:
+        supplier_id_int = int(supplier_id) if supplier_id not in (None, '', False) else None
+    except Exception:
+        supplier_id_int = None
+    if supplier_id_int:
+        supplier = Supplier.query.get(supplier_id_int)
+
+    override_safe_box_id = data.get('cash_safe_box_id')
+    try:
+        override_safe_box_id_int = int(override_safe_box_id) if override_safe_box_id not in (None, '', False) else None
+    except Exception:
+        override_safe_box_id_int = None
+
+    chosen_cash_safe_box_id = None
+    cash_account = None
+    if override_safe_box_id_int:
+        cash_account = _resolve_cash_account_from_safebox_id(override_safe_box_id_int)
+        if not cash_account:
+            return jsonify({
+                'error': 'الخزينة النقدية المختارة غير صالحة',
+                'details': f"cash_safe_box_id={override_safe_box_id_int}",
+            }), 400
+        chosen_cash_safe_box_id = override_safe_box_id_int
+    else:
+        supplier_safe_box_id = getattr(supplier, 'default_safe_box_id', None) if supplier else None
+        if supplier_safe_box_id:
+            cash_account = _resolve_cash_account_from_safebox_id(int(supplier_safe_box_id))
+            if cash_account:
+                chosen_cash_safe_box_id = int(supplier_safe_box_id)
+
+        if not cash_account:
+            settings_safe_box_id = settings.get('cash_safe_box_id')
+            if settings_safe_box_id:
+                cash_account = _resolve_cash_account_from_safebox_id(int(settings_safe_box_id))
+                if cash_account:
+                    chosen_cash_safe_box_id = int(settings_safe_box_id)
+
+        if not cash_account:
+            cash_account_setting = settings.get('cash_account_id', 1100)
+            cash_account = _resolve_account_from_id_or_number(cash_account_setting)
+
     if not cash_account:
-        return jsonify({'error': 'حساب الصندوق غير معرف في الإعدادات'}), 400
+        return jsonify({
+            'error': 'تعذر تحديد حساب الصندوق/البنك للتسوية',
+            'details': {
+                'supplier_id': supplier_id_int,
+                'supplier_default_safe_box_id': getattr(supplier, 'default_safe_box_id', None) if supplier else None,
+                'settings_cash_safe_box_id': settings.get('cash_safe_box_id'),
+                'cash_account_id': settings.get('cash_account_id', 1100),
+            },
+        }), 400
 
     price_per_gram = _coerce_float(data.get('price_per_gram'), None)
     price_strategy = profile['meta'].get('price_strategy', 'manual')
@@ -20694,6 +20842,7 @@ def execute_weight_closing_profile():
                 'key': profile_key,
                 'display_name': profile['meta'].get('display_name', profile_key),
             },
+            'cash_safe_box_id': chosen_cash_safe_box_id,
             'cash_amount': cash_amount,
             'weight_main_karat': weight_main,
             'price_per_gram': price_per_gram,
@@ -20809,6 +20958,8 @@ def create_office_reservation():
 
     execution_price = _coerce_float(data.get('execution_price_per_gram'), price_per_gram)
     karat = int(data.get('karat') or get_main_karat())
+    if karat not in (18, 21, 22, 24):
+        return jsonify({'error': 'karat غير مدعوم. القيم المسموحة: 18, 21, 22, 24'}), 400
     weight_main_karat = round(convert_to_main_karat(weight_grams, karat), 6)
     total_amount = _coerce_float(data.get('total_amount'), round(weight_grams * price_per_gram, 2))
     paid_amount = _coerce_float(data.get('paid_amount'), total_amount)
@@ -20908,7 +21059,50 @@ def create_office_reservation():
         db.session.flush()
 
         if paid_amount > 0:
-            cash_account_id = settings.get('cash_account_id', 15)
+            # Prefer explicit SafeBox selection (cash/bank) when provided, else fallback to settings.
+            resolved_payment_safe_box_id = (
+                _normalize_fk_ref(data.get('safe_box_id'))
+                or _normalize_fk_ref(data.get('cash_safe_box_id'))
+                or _normalize_fk_ref(settings.get('cash_safe_box_id'))
+            )
+
+            cash_account = None
+            if resolved_payment_safe_box_id is not None:
+                safe_box = SafeBox.query.get(int(resolved_payment_safe_box_id))
+                if not safe_box or not getattr(safe_box, 'is_active', True):
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'الخزينة المحددة غير موجودة/غير فعالة',
+                        'details': f"safe_box_id={resolved_payment_safe_box_id}",
+                    }), 400
+
+                if safe_box.safe_type not in ('cash', 'bank'):
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'الخزينة المحددة ليست خزينة نقد/بنك',
+                        'details': f"safe_box_id={resolved_payment_safe_box_id}, safe_type={safe_box.safe_type}",
+                    }), 400
+
+                cash_account = Account.query.get(safe_box.account_id)
+                if not cash_account:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'لا يمكن تسجيل الدفعة لأن حساب الخزينة غير موجود',
+                        'details': f"safe_box_id={resolved_payment_safe_box_id}, account_id={safe_box.account_id}",
+                    }), 400
+
+                # Store on the created purchase invoice for traceability.
+                purchase_invoice.safe_box_id = safe_box.id
+            else:
+                cash_account_setting = settings.get('cash_account_id', 1100)
+                cash_account = _resolve_account_from_id_or_number(cash_account_setting)
+                if not cash_account:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'لا يمكن تسجيل الدفعة لأن حساب الصندوق غير موجود/غير مضبوط',
+                        'details': f"cash_account_id={cash_account_setting}",
+                    }), 400
+
             # قيد الدفع: المكتب مدين (ندفع له = نقلل الدين) والصندوق دائن (يخرج المال)
             create_dual_journal_entry(
                 journal_entry_id=invoice_entry.id,
@@ -20919,7 +21113,7 @@ def create_office_reservation():
             )
             create_dual_journal_entry(
                 journal_entry_id=invoice_entry.id,
-                account_id=cash_account_id,
+                account_id=cash_account.id,
                 cash_credit=paid_amount,
                 description='خروج نقدية من الصندوق (دائن)'
             )
@@ -20938,8 +21132,11 @@ def create_office_reservation():
         db.session.add(gold_entry)
         db.session.flush()
 
-        # حساب الجسر (1290)
-        bridge_account = Account.query.filter_by(account_number='1290').first()
+        # حساب الجسر (1710 preferred, 1290 fallback)
+        bridge_account = (
+            Account.query.filter_by(account_number='1710').first()
+            or Account.query.filter_by(account_number='1290').first()
+        )
         if not bridge_account:
             bridge_account = Account.query.filter_by(name='جسر مشتريات الكسر والتسكير').first()
         
@@ -20996,6 +21193,10 @@ def create_office_reservation():
 
         response = _serialize_office_reservation(reservation)
         response['weight_consumption'] = consumption
+        # Echo payment safe box (if provided via request or settings) for UI/debugging.
+        payment_sb = _normalize_fk_ref(data.get('safe_box_id')) or _normalize_fk_ref(data.get('cash_safe_box_id'))
+        if payment_sb is not None:
+            response['payment_safe_box_id'] = int(payment_sb)
         return jsonify(response), 201
 
     except Exception as exc:

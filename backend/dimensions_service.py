@@ -34,14 +34,29 @@ def ensure_core_dimensions(db_session) -> dict[str, int]:
     global _DEFINITION_ID_CACHE
 
     # Fast path: if we already have all core codes cached, reuse.
+    # NOTE: Historical/legacy naming:
+    # - We store Branch under the dimension code "office" for older installs.
+    # - "gold_office" is the dedicated dimension for gold raw suppliers (مكاتب التسكير).
     core = {
         "office": "الفرع",
+        "gold_office": "مكتب تسكير",
         "transaction_type": "نوع العملية",
         "employee": "الموظف",
     }
 
     if all(code in _DEFINITION_ID_CACHE for code in core.keys()):
-        return dict(_DEFINITION_ID_CACHE)
+        # Guard against stale in-memory cache after DB reset (drop/create).
+        # Don't trust cached ids blindly; rebuild mapping from current DB.
+        rows = (
+            db_session.query(DimensionDefinition)
+            .filter(DimensionDefinition.code.in_(list(core.keys())))
+            .all()
+        )
+        if len(rows) == len(core):
+            result = {d.code: d.id for d in rows}
+            _DEFINITION_ID_CACHE.update(result)
+            return result
+        _DEFINITION_ID_CACHE.clear()
 
     existing = {
         d.code: d
@@ -82,7 +97,19 @@ def get_or_create_dimension_value(db_session, definition_id: int, input_value: D
     # Cache fast-path
     cached_id = _DIMENSION_VALUE_CACHE.get(cache_key)
     if cached_id is not None:
-        return cached_id
+        # Guard against stale cache after DB reset.
+        # Important: IDs may be re-used after drop/create, so validate row identity.
+        existing_cached = db_session.get(DimensionValue, cached_id)
+        if existing_cached is not None:
+            expected_int = int(input_value.int_value) if input_value.int_value is not None else None
+            expected_str = str(input_value.str_value) if input_value.str_value is not None else None
+            if (
+                int(existing_cached.definition_id) == int(definition_id)
+                and (existing_cached.int_value == expected_int)
+                and (existing_cached.str_value == expected_str)
+            ):
+                return cached_id
+        _DIMENSION_VALUE_CACHE.pop(cache_key, None)
 
     query = db_session.query(DimensionValue).filter(DimensionValue.definition_id == definition_id)
     if input_value.int_value is None:
@@ -158,7 +185,12 @@ def get_or_create_dimension_set(db_session, dimensions: list[DimensionInput]) ->
     # Cache fast-path
     cached_id = _DIMENSION_SET_CACHE.get(key_hash)
     if cached_id is not None:
-        return cached_id
+        # Guard against stale cache after DB reset.
+        # IDs may be re-used after drop/create, so verify key_hash.
+        existing_cached = db_session.get(DimensionSet, cached_id)
+        if existing_cached is not None and existing_cached.key_hash == key_hash:
+            return cached_id
+        _DIMENSION_SET_CACHE.pop(key_hash, None)
 
     existing = db_session.query(DimensionSet).filter(DimensionSet.key_hash == key_hash).first()
     if existing:

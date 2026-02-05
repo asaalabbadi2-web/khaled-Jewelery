@@ -8,7 +8,85 @@ Customer and Supplier Code Generator
 - الأصناف: I-000001, I-000002, I-000003, ...
 """
 
+from typing import Optional
+
 from models import Customer, Supplier, Item, db
+
+
+def _parse_suffix_number(code: str, prefix: str) -> Optional[int]:
+    """Parse a numeric suffix from codes like 'S-000001'.
+
+    Returns an int on success, otherwise None.
+    """
+    if not code:
+        return None
+    raw = str(code).strip()
+    expected = f"{prefix}-"
+    if not raw.upper().startswith(expected.upper()):
+        return None
+    parts = raw.split('-', 1)
+    if len(parts) != 2:
+        return None
+    suffix = parts[1].strip()
+    if not suffix.isdigit():
+        return None
+    try:
+        return int(suffix)
+    except Exception:
+        return None
+
+
+def _next_code_for_prefix(*, prefix: str, width: int, exists_fn) -> str:
+    """Generate the next available code for a given prefix.
+
+    `exists_fn(code) -> bool` should return True if the code already exists.
+    """
+    # Start from the max parseable suffix among recent codes.
+    max_seen: Optional[int] = None
+    return_code: str
+
+    # Try to leverage lexicographic ordering when codes are zero-padded.
+    # Still validate parseability to avoid being confused by malformed codes.
+    candidates = (
+        db.session.query(getattr(Supplier, 'supplier_code', None))
+        .filter(getattr(Supplier, 'supplier_code', None).isnot(None))
+        .filter(getattr(Supplier, 'supplier_code', None).like(f"{prefix}-%"))
+        .order_by(getattr(Supplier, 'supplier_code', None).desc())
+        .limit(250)
+        .all()
+        if prefix == 'S'
+        else []
+    )
+
+    if prefix == 'OFF':
+        from models import Office
+
+        candidates = (
+            db.session.query(Office.office_code)
+            .filter(Office.office_code.isnot(None))
+            .filter(Office.office_code.like(f"{prefix}-%"))
+            .order_by(Office.office_code.desc())
+            .limit(250)
+            .all()
+        )
+
+    for row in candidates:
+        val = row[0] if isinstance(row, tuple) else row
+        parsed = _parse_suffix_number(val, prefix)
+        if parsed is None:
+            continue
+        if max_seen is None or parsed > max_seen:
+            max_seen = parsed
+
+    next_number = (max_seen or 0) + 1
+    return_code = f"{prefix}-{next_number:0{width}d}"
+
+    # Ensure uniqueness even if the DB contains malformed codes.
+    while exists_fn(return_code):
+        next_number += 1
+        return_code = f"{prefix}-{next_number:0{width}d}"
+
+    return return_code
 
 
 def generate_customer_code() -> str:
@@ -54,23 +132,11 @@ def generate_supplier_code() -> str:
         >>> print(code)
         'S-000001'
     """
-    # احصل على آخر مورد
-    last_supplier = Supplier.query.order_by(Supplier.id.desc()).first()
-    
-    if last_supplier and last_supplier.supplier_code:
-        try:
-            # استخرج الرقم من S-000001
-            last_number = int(last_supplier.supplier_code.split('-')[1])
-            next_number = last_number + 1
-        except (IndexError, ValueError):
-            # إذا كان التنسيق غير صحيح، ابدأ من 1
-            next_number = 1
-    else:
-        # أول مورد
-        next_number = 1
-    
-    # أنشئ الكود بالتنسيق S-000001 (6 خانات)
-    return f"S-{next_number:06d}"
+    return _next_code_for_prefix(
+        prefix='S',
+        width=6,
+        exists_fn=lambda code: Supplier.query.filter_by(supplier_code=code).first() is not None,
+    )
 
 
 def generate_office_code() -> str:
@@ -86,24 +152,12 @@ def generate_office_code() -> str:
         'OFF-000001'
     """
     from models import Office
-    
-    # احصل على آخر مكتب
-    last_office = Office.query.order_by(Office.id.desc()).first()
-    
-    if last_office and last_office.office_code:
-        try:
-            # استخرج الرقم من OFF-000001
-            last_number = int(last_office.office_code.split('-')[1])
-            next_number = last_number + 1
-        except (IndexError, ValueError):
-            # إذا كان التنسيق غير صحيح، ابدأ من 1
-            next_number = 1
-    else:
-        # أول مكتب
-        next_number = 1
-    
-    # أنشئ الكود بالتنسيق OFF-000001 (6 خانات)
-    return f"OFF-{next_number:06d}"
+
+    return _next_code_for_prefix(
+        prefix='OFF',
+        width=6,
+        exists_fn=lambda code: Office.query.filter_by(office_code=code).first() is not None,
+    )
 
 
 def generate_branch_code() -> str:

@@ -10,6 +10,7 @@ class SettingsProvider with ChangeNotifier {
     'allow_override': true,
     'shift_close_cash_deficit_threshold': 50.0,
     'shift_close_gold_pure_deficit_threshold_grams': 0.10,
+    'cash_safe_box_id': null,
   };
 
   Map<String, dynamic> _settings = {};
@@ -245,6 +246,20 @@ class SettingsProvider with ChangeNotifier {
     }
 
     if (parsed != null) {
+      // Nullable FK (SafeBox id)
+      final dynamic safeBoxRaw = parsed['cash_safe_box_id'];
+      int? safeBoxId;
+      if (safeBoxRaw is int) {
+        safeBoxId = safeBoxRaw;
+      } else if (safeBoxRaw is double) {
+        safeBoxId = safeBoxRaw.toInt();
+      } else if (safeBoxRaw is String) {
+        safeBoxId = int.tryParse(safeBoxRaw.trim());
+      }
+      normalized['cash_safe_box_id'] = (safeBoxId != null && safeBoxId > 0)
+          ? safeBoxId
+          : null;
+
       final priceSource =
           (parsed['price_source']?.toString().toLowerCase()) ?? 'live';
       if (priceSource == 'average') {

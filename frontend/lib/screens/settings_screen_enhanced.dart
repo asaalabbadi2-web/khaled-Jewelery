@@ -17,6 +17,7 @@ import 'gold_price_manual_screen_enhanced.dart';
 import 'backup_restore_screen.dart';
 import 'system_reset_screen.dart';
 import 'weight_closing_settings_screen.dart';
+import 'weight_closing_execute_screen.dart';
 import 'template_studio_screen.dart';
 import '../utils.dart';
 
@@ -1570,10 +1571,21 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               ],
             ),
             const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _openWeightClosingSettings,
-              icon: const Icon(Icons.settings_suggest_outlined),
-              label: const Text('فتح إعدادات التسكير'),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                FilledButton.icon(
+                  onPressed: _openWeightClosingSettings,
+                  icon: const Icon(Icons.settings_suggest_outlined),
+                  label: const Text('فتح إعدادات التسكير'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _openWeightClosingExecute,
+                  icon: const Icon(Icons.play_circle_outline),
+                  label: const Text('تنفيذ يدوي'),
+                ),
+              ],
             ),
           ],
         ),
@@ -1777,6 +1789,13 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const WeightClosingSettingsScreen()),
+    );
+  }
+
+  Future<void> _openWeightClosingExecute() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const WeightClosingExecuteScreen()),
     );
   }
 

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../api_service.dart';
+import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
+import 'weight_closing_execute_screen.dart';
 
 class WeightClosingSettingsScreen extends StatefulWidget {
   const WeightClosingSettingsScreen({super.key});
@@ -15,10 +18,15 @@ class _WeightClosingSettingsScreenState
     extends State<WeightClosingSettingsScreen> {
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _isLoadingSafes = false;
 
   bool _autoCloseEnabled = true;
   String _priceSource = 'live';
   bool _allowOverride = true;
+
+  int? _cashSafeBoxId;
+  List<SafeBoxModel> _settlementSafeBoxes = const [];
+  final ApiService _api = ApiService();
 
   double _cashDeficitThreshold = 50.0;
   double _goldPureDeficitThresholdGrams = 0.10;
@@ -77,6 +85,7 @@ class _WeightClosingSettingsScreenState
           .fetchWeightClosingSettings();
       if (!mounted) return;
       _applyConfig(config);
+      await _loadSettlementSafeBoxes();
     } catch (error) {
       if (!mounted) return;
       _showSnack('تعذر تحديث الإعدادات: $error', isError: true);
@@ -84,6 +93,42 @@ class _WeightClosingSettingsScreenState
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _loadSettlementSafeBoxes() async {
+    if (_isLoadingSafes) return;
+    if (!mounted) return;
+    setState(() => _isLoadingSafes = true);
+    try {
+      final safes = await _api.getSafeBoxes(
+        isActive: true,
+        includeAccount: true,
+      );
+      final filtered = safes
+          .where(
+            (s) => (s.safeType == 'cash' || s.safeType == 'bank') && s.id != null,
+          )
+          .toList()
+        ..sort(
+          (a, b) => a.safeType == b.safeType
+              ? a.name.compareTo(b.name)
+              : a.safeType.compareTo(b.safeType),
+        );
+
+      if (!mounted) return;
+      setState(() {
+        _settlementSafeBoxes = filtered;
+        if (_cashSafeBoxId != null &&
+            !_settlementSafeBoxes.any((s) => s.id == _cashSafeBoxId)) {
+          _cashSafeBoxId = null;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      _showSnack('تعذر تحميل الخزائن: $error', isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoadingSafes = false);
     }
   }
 
@@ -104,11 +149,16 @@ class _WeightClosingSettingsScreenState
       fallback: 0.10,
     );
 
+    final safeBoxId = _asInt(config['cash_safe_box_id']);
+
     if (shouldSetState) {
       setState(() {
         _autoCloseEnabled = enabled;
         _priceSource = _normalizePriceSource(priceSource);
         _allowOverride = allowOverride;
+        _cashSafeBoxId = (safeBoxId != null && safeBoxId > 0)
+            ? safeBoxId
+            : null;
         _cashDeficitThreshold = cashThreshold < 0 ? 0.0 : cashThreshold;
         _goldPureDeficitThresholdGrams = goldThreshold < 0
             ? 0.0
@@ -118,6 +168,7 @@ class _WeightClosingSettingsScreenState
       _autoCloseEnabled = enabled;
       _priceSource = _normalizePriceSource(priceSource);
       _allowOverride = allowOverride;
+      _cashSafeBoxId = (safeBoxId != null && safeBoxId > 0) ? safeBoxId : null;
       _cashDeficitThreshold = cashThreshold < 0 ? 0.0 : cashThreshold;
       _goldPureDeficitThresholdGrams = goldThreshold < 0 ? 0.0 : goldThreshold;
     }
@@ -131,6 +182,14 @@ class _WeightClosingSettingsScreenState
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value.trim()) ?? fallback;
     return fallback;
+  }
+
+  int? _asInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
   }
 
   String _normalizePriceSource(String source) {
@@ -152,6 +211,8 @@ class _WeightClosingSettingsScreenState
       'enabled': _autoCloseEnabled,
       'price_source': _priceSource,
       'allow_override': _allowOverride,
+      // Always send to allow explicit clearing.
+      'cash_safe_box_id': _cashSafeBoxId,
       'shift_close_cash_deficit_threshold': _cashDeficitThreshold,
       'shift_close_gold_pure_deficit_threshold_grams':
           _goldPureDeficitThresholdGrams,
@@ -220,7 +281,11 @@ class _WeightClosingSettingsScreenState
                   const SizedBox(height: 16),
                   _buildOverrideCard(theme),
                   const SizedBox(height: 16),
+                  _buildSettlementSafeBoxCard(theme),
+                  const SizedBox(height: 16),
                   _buildSecurityThresholds(theme),
+                  const SizedBox(height: 16),
+                  _buildExecuteProfileCard(theme),
                   const SizedBox(height: 16),
                   _buildChecklist(theme),
                   const SizedBox(height: 24),
@@ -421,6 +486,63 @@ class _WeightClosingSettingsScreenState
     );
   }
 
+  Widget _buildSettlementSafeBoxCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'خزينة التسوية الافتراضية',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'تُستخدم عند تنفيذ بروفايل التسكير إذا لم يتم اختيار خزينة في لحظة التنفيذ ولم يكن للمورد خزينة افتراضية.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            if (_isLoadingSafes)
+              const LinearProgressIndicator(minHeight: 2)
+            else
+              DropdownButtonFormField<int?>(
+                value: _cashSafeBoxId,
+                decoration: const InputDecoration(
+                  labelText: 'خزينة نقد/بنك للتسكير',
+                  prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+                ),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('بدون (استخدم حساب الصندوق القديم)'),
+                  ),
+                  ..._settlementSafeBoxes.map(
+                    (safe) => DropdownMenuItem<int?>(
+                      value: safe.id,
+                      child: Text(
+                        '${safe.safeType == 'cash' ? 'نقد' : 'بنك'}: ${safe.name}',
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (value) => setState(() => _cashSafeBoxId = value),
+              ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _isLoadingSafes ? null : _loadSettlementSafeBoxes,
+                icon: const Icon(Icons.refresh),
+                label: const Text('تحديث الخزائن'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSecurityThresholds(ThemeData theme) {
     return Card(
       child: Padding(
@@ -513,6 +635,41 @@ class _WeightClosingSettingsScreenState
                   ],
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExecuteProfileCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'تنفيذ يدوي',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'لتنفيذ بروفايل التسكير يدويًا مع إمكانية اختيار خزينة التسوية لحظة التنفيذ.',
+              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const WeightClosingExecuteScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.play_circle_outline),
+              label: const Text('فتح شاشة التنفيذ'),
             ),
           ],
         ),

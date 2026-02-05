@@ -28,7 +28,7 @@ class _AnalyticsDashboardScreenState extends State<AnalyticsDashboardScreen> {
   String? _error;
 
   DateTimeRange? _selectedRange;
-  String _groupBy = 'office'; // office | transaction_type | employee
+  String _groupBy = 'branch'; // branch | gold_office | transaction_type | employee
   bool _postedOnly = true;
 
   String _currencySymbol = 'ر.س';
@@ -266,7 +266,8 @@ class _AnalyticsDashboardScreenState extends State<AnalyticsDashboardScreen> {
         : '${DateFormat('yyyy-MM-dd').format(_selectedRange!.start)} - ${DateFormat('yyyy-MM-dd').format(_selectedRange!.end)}';
 
     final groupLabels = <String, String>{
-      'office': isArabic ? 'الفروع' : 'Branches',
+      'branch': isArabic ? 'الفروع' : 'Branches',
+      'gold_office': isArabic ? 'مكاتب التسكير' : 'Gold Offices',
       'transaction_type': isArabic ? 'نوع العملية' : 'Transaction Type',
       'employee': isArabic ? 'الموظفون' : 'Employees',
     };
