@@ -1187,7 +1187,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   String _formatWeight(double value) => '${value.toStringAsFixed(3)} جم';
 
-  bool _validateBeforeSave() {
+  bool _validateBeforeSave({bool forDraft = false}) {
     if (_selectedBranchId == null) {
       setState(() {
         _branchError = 'يجب اختيار فرع';
@@ -1206,6 +1206,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         const SnackBar(content: Text('يرجى اختيار المورد قبل الحفظ')),
       );
       return false;
+    }
+
+    if (forDraft) {
+      // Drafts: keep only the minimal required identifiers.
+      // Allow saving even if items/karat lines/weights are not complete yet.
+      return true;
     }
 
     if (_karatLines.isEmpty && _inlineItems.isEmpty) {
@@ -1284,7 +1290,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     return true;
   }
 
-  Map<String, dynamic> _buildInvoicePayload() {
+  Map<String, dynamic> _buildInvoicePayload({bool forDraft = false}) {
     final linePayloads = _karatLines.map((line) {
       final snapshot = _snapshotFor(line);
       return {
@@ -1390,6 +1396,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         ),
       },
     };
+
+    if (forDraft) {
+      payload['save_as_draft'] = true;
+      payload['amount_paid'] = 0.0;
+      return payload;
+    }
 
     // Cash settlement (جزئي): use payments[] so backend can support partial cash.
     if (_settlementMode == _PurchaseSettlementMode.partial &&
@@ -1514,6 +1526,49 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     }
   }
 
+  Future<void> _saveInvoiceDraft() async {
+    if (_isSavingInvoice) return;
+    if (!_validateBeforeSave(forDraft: true)) return;
+
+    setState(() {
+      _isSavingInvoice = true;
+    });
+
+    try {
+      final payload = _buildInvoicePayload(forDraft: true);
+      final response = await _api.addInvoice(payload);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '✅ تم حفظ الفاتورة كمسودة #${response['id'] ?? ''}\nيمكنك إكمالها لاحقاً من شاشة الترحيل.',
+          ),
+          backgroundColor: Colors.blueGrey.shade800,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+
+      _resetAfterSave();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('فشل حفظ المسودة: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingInvoice = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -1541,6 +1596,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _buildSettlementCard(),
       const SizedBox(height: 20),
       _buildSaveInvoiceButton(),
+      const SizedBox(height: 12),
+      _buildSaveDraftInvoiceButton(),
     ];
 
     return Scaffold(
@@ -2884,6 +2941,31 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
               textStyle: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSaveDraftInvoiceButton() {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: theme.brightness == Brightness.dark ? 1 : 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _isSavingInvoice ? null : _saveInvoiceDraft,
+            icon: const Icon(Icons.edit_note_outlined),
+            label: const Text('حفظ كمسودة'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              textStyle: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),

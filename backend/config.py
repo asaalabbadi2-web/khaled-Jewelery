@@ -127,9 +127,9 @@ WEIGHT_SUPPORT_ACCOUNTS = [
 	{
 		'key': 'manufacturing_wage',
 		'financial': {
-			# NOTE: In this chart of accounts, 1350 is the cash wage-inventory account.
-			# 1340 is used for 24k gold inventory (cash), whose memo should be 71330.
-			'account_number': '1350',
+			# NOTE: Manufacturing wage inventory cash account number is configurable.
+			# This project defaults it to 1320 unless overridden via mappings/DB.
+			'account_number': '1320',
 			'name': 'مخزون أجور مصنعية',
 			'type': 'Asset',
 			'transaction_type': 'cash',

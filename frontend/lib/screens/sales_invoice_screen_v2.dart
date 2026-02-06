@@ -1813,21 +1813,27 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   }
 
   // ==================== Submit Invoice ====================
-  Future<void> _submitInvoice() async {
-    if (_items.isEmpty) {
-      _showError('يرجى إضافة أصناف للفاتورة');
-      return;
-    }
+  Future<void> _submitInvoice({bool saveAsDraft = false}) async {
+    if (!saveAsDraft) {
+      if (_items.isEmpty) {
+        _showError('يرجى إضافة أصناف للفاتورة');
+        return;
+      }
 
-    if (_selectedBranchId == null) {
-      _showError('يرجى اختيار الفرع لإكمال الفاتورة.');
-      return;
+      if (_selectedBranchId == null) {
+        _showError('يرجى اختيار الفرع لإكمال الفاتورة.');
+        return;
+      }
     }
 
     final allowPartialPayments = _settingsProvider.allowPartialInvoicePayments;
 
     // 🆕 Barter validation
     final barterTotal = _barterTotal;
+    if (saveAsDraft && _enableBarter && barterTotal > 0.01) {
+      _showError('لا يمكن حفظ مسودة مع المقايضة.');
+      return;
+    }
     if (_enableBarter) {
       if (_barterLines.isEmpty) {
         _showError('يرجى إضافة سطر مقايضة واحد على الأقل');
@@ -1896,43 +1902,18 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     final hasAnySettlement = _payments.isNotEmpty || barterTotal > 0.01;
 
-    if (!hasAnySettlement) {
-      if (!allowPartialPayments) {
-        _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
-        return;
-      }
-
-      final proceed = await _confirmDeferredInvoiceSave(
-        total: total,
-        totalPaid: totalPaid,
-        remaining: total,
-        totalCost: totalCost,
-        paidBelowCost: paidBelowCost,
-        saleBelowCost: saleBelowCost,
-      );
-      shownDeferredDialog = true;
-      if (proceed == _PreSaveDecision.cancel) return;
-      suppressPostSaveApprovalWarning =
-          proceed == _PreSaveDecision.proceedSuppressWarning;
-    } else {
-      // منع الدفع الزائد
-      if (remaining < -0.01) {
-        _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
-        return;
-      }
-
-      if (remaining > 0.01) {
+    // Draft: allow saving without any settlement/payments.
+    if (!saveAsDraft) {
+      if (!hasAnySettlement) {
         if (!allowPartialPayments) {
-          _showError(
-            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
-          );
+          _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
           return;
         }
 
         final proceed = await _confirmDeferredInvoiceSave(
           total: total,
           totalPaid: totalPaid,
-          remaining: remaining,
+          remaining: total,
           totalCost: totalCost,
           paidBelowCost: paidBelowCost,
           saleBelowCost: saleBelowCost,
@@ -1941,10 +1922,39 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         if (proceed == _PreSaveDecision.cancel) return;
         suppressPostSaveApprovalWarning =
             proceed == _PreSaveDecision.proceedSuppressWarning;
+      } else {
+        // منع الدفع الزائد
+        if (remaining < -0.01) {
+          _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
+          return;
+        }
+
+        if (remaining > 0.01) {
+          if (!allowPartialPayments) {
+            _showError(
+              'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+            );
+            return;
+          }
+
+          final proceed = await _confirmDeferredInvoiceSave(
+            total: total,
+            totalPaid: totalPaid,
+            remaining: remaining,
+            totalCost: totalCost,
+            paidBelowCost: paidBelowCost,
+            saleBelowCost: saleBelowCost,
+          );
+          shownDeferredDialog = true;
+          if (proceed == _PreSaveDecision.cancel) return;
+          suppressPostSaveApprovalWarning =
+              proceed == _PreSaveDecision.proceedSuppressWarning;
+        }
       }
     }
 
-    if (!shownDeferredDialog &&
+    if (!saveAsDraft &&
+        !shownDeferredDialog &&
         totalCost > 0 &&
         (paidBelowCost || saleBelowCost)) {
       final decision = await _confirmBelowCostInvoiceSave(
@@ -2022,16 +2032,19 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         'total_weight': totalWeight,
         'total_cost': totalCost,
         'total_tax': totalTax,
-        if (_enableBarter && barterTotal > 0.01) 'barter_total': barterTotal,
-        'payments': _payments
-            .map((p) => p.toJson())
-            .toList(), // 🆕 إرسال array من الدفعات
-        'amount_paid': _totalPayments, // 🆕 إجمالي المدفوع
+        if (!saveAsDraft && _enableBarter && barterTotal > 0.01)
+          'barter_total': barterTotal,
+        'payments': saveAsDraft
+            ? <Map<String, dynamic>>[]
+            : _payments.map((p) => p.toJson()).toList(),
+        'amount_paid': saveAsDraft ? 0.0 : _totalPayments,
+        if (saveAsDraft) 'save_as_draft': true,
         'items': _items.map((item) => item.toJson()).toList(),
       };
 
       final response = await apiService.addInvoice(invoiceData);
 
+      final isDraftSaved = response['draft_saved'] == true;
       final approvalRequired = response['approval_required'] == true;
       final approvalReasons = (response['approval_reasons'] is List)
           ? List<String>.from(response['approval_reasons'])
@@ -2089,6 +2102,23 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             ),
           );
         }
+      }
+
+      if (saveAsDraft || isDraftSaved) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '✅ تم حفظ الفاتورة كمسودة #${response['id'] ?? ''}\nيمكنك إكمالها لاحقاً من شاشة الترحيل.',
+              ),
+              backgroundColor: Colors.blueGrey.shade800,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+        if (mounted) _resetAfterSave();
+        return;
       }
 
       // 🆕 Auto-create linked scrap purchase invoice for barter (offset)
@@ -3089,6 +3119,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _items.isEmpty || _selectedBranchId == null
+                                ? null
+                                : () => _submitInvoice(saveAsDraft: true),
+                            icon: const Icon(Icons.edit_note_outlined),
+                            label: const Text('حفظ كمسودة'),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -3133,6 +3174,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _items.isEmpty || _selectedBranchId == null
+                      ? null
+                      : () => _submitInvoice(saveAsDraft: true),
+                  icon: const Icon(Icons.edit_note_outlined),
+                  label: const Text('حفظ كمسودة'),
                 ),
               ),
             ],

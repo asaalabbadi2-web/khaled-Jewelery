@@ -4609,6 +4609,36 @@ class ApiService {
     }
   }
 
+  /// Finalize (fully post) a draft/unposted invoice.
+  /// This posts both the invoice and its linked journal entry and appends safebox movements.
+  Future<Map<String, dynamic>> finalizeInvoice(int invoiceId) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/invoices/finalize/$invoiceId'),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+
+    if (response.statusCode == 401) {
+      throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
+    }
+    if (response.statusCode == 403) {
+      throw Exception('ليس لديك صلاحية إكمال وترحيل هذه الفاتورة');
+    }
+
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) parsed = decoded;
+    } catch (_) {
+      parsed = null;
+    }
+
+    final msg = parsed?['message']?.toString() ?? 'فشل إكمال وترحيل الفاتورة';
+    throw Exception('$msg (status: ${response.statusCode})');
+  }
+
   /// Post multiple invoices
   Future<Map<String, dynamic>> postInvoicesBatch(
     List<int> invoiceIds,

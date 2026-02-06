@@ -1380,6 +1380,152 @@ def post_invoice(invoice_id):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@posting_bp.route('/invoices/finalize/<int:invoice_id>', methods=['POST'])
+@require_permission('invoice.post')
+@require_permission('journal.post')
+def finalize_invoice(invoice_id):
+    """Finalize a draft invoice.
+
+    This posts BOTH:
+    - Invoice (is_posted)
+    - The invoice-linked JournalEntry (reference_type='invoice')
+    And appends safebox ledger movements for:
+    - invoice payments (ref_type='invoice_payment')
+    - gold inventory movements (ref_type='invoice_gold')
+
+    Intended for invoices saved with `save_as_draft` (status='draft').
+    """
+    try:
+        posted_by = g.current_user.username
+
+        invoice = Invoice.query.get(invoice_id)
+        if not invoice:
+            return jsonify({'success': False, 'message': 'الفاتورة غير موجودة'}), 404
+
+        if invoice.is_posted:
+            return jsonify({'success': False, 'message': 'الفاتورة مرحلة بالفعل'}), 400
+
+        if str(getattr(invoice, 'status', '') or '').strip().lower() != 'draft':
+            return jsonify({
+                'success': False,
+                'message': 'هذه الفاتورة ليست مسودة. استخدم ترحيل الفاتورة العادي.',
+            }), 400
+
+        entry = (
+            JournalEntry.query.filter_by(reference_type='invoice', reference_id=invoice.id)
+            .filter(JournalEntry.is_deleted == False)
+            .order_by(JournalEntry.id.desc())
+            .first()
+        )
+        if not entry:
+            return jsonify({
+                'success': False,
+                'message': 'لا يوجد قيد مرتبط بهذه الفاتورة لترحيله',
+            }), 400
+
+        # Validate journal entry balance (cash + weight)
+        total_cash_debit = sum(line.cash_debit or 0 for line in entry.lines if not line.is_deleted)
+        total_cash_credit = sum(line.cash_credit or 0 for line in entry.lines if not line.is_deleted)
+        if abs(total_cash_debit - total_cash_credit) > 0.01:
+            return jsonify({
+                'success': False,
+                'message': f'القيد غير متوازن (نقد). مدين: {total_cash_debit}, دائن: {total_cash_credit}',
+            }), 400
+
+        for karat in ['18k', '21k', '22k', '24k']:
+            total_debit = sum(getattr(line, f'debit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
+            total_credit = sum(getattr(line, f'credit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
+            if abs(total_debit - total_credit) > 0.001:
+                return jsonify({
+                    'success': False,
+                    'message': f'القيد غير متوازن (عيار {karat}). مدين: {total_debit}, دائن: {total_credit}',
+                }), 400
+
+        # Post journal entry
+        entry.is_posted = True
+        entry.posted_at = datetime.now()
+        entry.posted_by = posted_by
+
+        # Update invoice paid amount from stored payments (if any)
+        try:
+            payments = getattr(invoice, 'payments', None) or []
+            invoice.amount_paid = round(sum(float(p.amount or 0.0) for p in payments), 2)
+        except Exception:
+            pass
+
+        invoice.is_posted = True
+        invoice.posted_at = datetime.now()
+        invoice.posted_by = posted_by
+
+        # Sync invoice status
+        try:
+            total_amount = float(invoice.total or 0.0)
+            paid_amount = float(invoice.amount_paid or 0.0)
+            barter_total_status = float(getattr(invoice, 'barter_total', 0.0) or 0.0)
+            total_settled = paid_amount + barter_total_status
+            eps = 0.01
+            if total_settled <= eps:
+                invoice.status = 'unpaid'
+            elif total_settled >= total_amount - eps:
+                invoice.status = 'paid'
+            else:
+                invoice.status = 'partially_paid'
+        except Exception:
+            pass
+
+        # Append safebox movements
+        _append_safe_transactions_for_invoice_payments(invoice, created_by=posted_by)
+        _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
+
+        db.session.commit()
+
+        # Audit
+        try:
+            AuditLog.log_action(
+                user_name=posted_by,
+                action='finalize_invoice_draft',
+                entity_type='Invoice',
+                entity_id=invoice.id,
+                entity_number=getattr(invoice, 'invoice_number', None),
+                details=json.dumps({
+                    'journal_entry_id': entry.id,
+                    'journal_entry_number': getattr(entry, 'entry_number', None),
+                }, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        return jsonify({
+            'success': True,
+            'message': 'تم إكمال وترحيل الفاتورة بنجاح',
+            'invoice': invoice.to_dict(),
+            'journal_entry': entry.to_dict(),
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        try:
+            posted_by = g.current_user.username if hasattr(g, 'current_user') else 'النظام'
+            AuditLog.log_action(
+                user_name=posted_by,
+                action='finalize_invoice_draft',
+                entity_type='Invoice',
+                entity_id=invoice_id,
+                success=False,
+                error_message=str(e),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @posting_bp.route('/invoices/approve-large-discount/<int:invoice_id>', methods=['POST'])
 @require_permission('invoice.post')
 @require_permission('journal.post')

@@ -1002,12 +1002,12 @@ def _repair_inventory_wage_memo_links():
     Observed misconfiguration in real DBs:
     - Financial account 1340 is used as "24k inventory" but is linked to memo 71340 (wage weight).
     - Memo 71330 (24k inventory weight) exists but is unused.
-    - Financial wage inventory is 1350 (cash) but often lacks memo link.
+    - Wage-inventory cash account (number varies) often lacks memo link.
 
     This repair is designed to be safe and idempotent:
     - Only migrates memo lines from 71340 -> 71330 when 71340 contains *only* 24k weight (no cash, no other karats)
       and 71330 has no lines.
-    - Links 1340 -> 71330 and 1350 -> 71340.
+    - Links 1340 -> 71330 and ensures wage-inventory cash accounts link to wage memo.
     """
     try:
         # --- Fix inventory hierarchy issues (accounts appearing as roots) ---
@@ -1016,32 +1016,23 @@ def _repair_inventory_wage_memo_links():
         hierarchy_fixed = 0
         inv_parent = Account.query.filter_by(account_number='130').first()
         if inv_parent:
-            for child_no in ('1300', '1310', '1350'):
+            for child_no in ('1300', '1310', '1350', '1320'):
                 child = Account.query.filter_by(account_number=child_no).first()
                 if child and not child.parent_id:
                     child.parent_id = inv_parent.id
                     db.session.add(child)
                     hierarchy_fixed += 1
 
-        # Some DBs have legacy misnaming where 1320 (22k inventory) was incorrectly
-        # labeled as wage inventory. Fixing the name reduces user-facing duplicates
-        # without affecting account_number-based posting logic.
-        acc_1320 = Account.query.filter_by(account_number='1320').first()
-        renamed_1320 = False
-        if acc_1320 and acc_1320.name and ('أجور' in acc_1320.name and 'مصنعية' in acc_1320.name):
-            acc_1320.name = 'مخزون ذهب عيار 22'
-            db.session.add(acc_1320)
-            renamed_1320 = True
-
         acc_1340 = Account.query.filter_by(account_number='1340').first()
         acc_1350 = Account.query.filter_by(account_number='1350').first()
+        acc_1320 = Account.query.filter_by(account_number='1320').first()
         memo_71330 = Account.query.filter_by(account_number='71330').first()
         # Wage inventory memo account may be either the new number (71340) or a legacy one (7340).
         memo_71340 = Account.query.filter_by(account_number='71340').first()
         memo_7340 = Account.query.filter_by(account_number='7340').first()
         wage_memo = memo_71340 or memo_7340
 
-        changed = (1 if renamed_1320 else 0) + hierarchy_fixed
+        changed = hierarchy_fixed
 
         # If a legacy wage memo exists (7340) but the new number is expected (71340),
         # renumber in-place to match the new COA.
@@ -1063,12 +1054,13 @@ def _repair_inventory_wage_memo_links():
                 db.session.add(wage_memo)
                 changed += 1
 
-        # Always ensure wage inventory cash account 1350 links to the wage memo when possible,
+        # Always ensure wage-inventory cash accounts link to the wage memo when possible,
         # even if optional 24k inventory accounts are missing in this DB.
-        if acc_1350 and wage_memo and acc_1350.memo_account_id != wage_memo.id:
-            acc_1350.memo_account_id = wage_memo.id
-            db.session.add(acc_1350)
-            changed += 1
+        for acc in (acc_1350, acc_1320):
+            if acc and wage_memo and acc.memo_account_id != wage_memo.id:
+                acc.memo_account_id = wage_memo.id
+                db.session.add(acc)
+                changed += 1
 
         # If the optional 24k inventory accounts are missing, still commit the safe fixes above.
         if not (acc_1340 and memo_71330 and wage_memo):
@@ -1145,7 +1137,7 @@ def _repair_inventory_wage_memo_links():
             acc_1340.memo_account_id = memo_71330.id
             changed += 1
 
-        # Note: 1350 link is already enforced above; keep this section for readability.
+        # Note: wage-inventory link is already enforced above; keep this section for readability.
 
         if changed:
             db.session.commit()
@@ -6331,7 +6323,7 @@ def get_account_id_for_mapping(operation_type, account_type):
         'inventory_24k': 1330,  # مخزون ذهب عيار 24
         
         # 🆕 مخزون أجور المصنعية
-        'manufacturing_wage_inventory': 1350,  # مخزون أجور المصنعية
+        'manufacturing_wage_inventory': 1320,  # مخزون أجور المصنعية
         
         # المخزون الوزني (حسب العيار) - حسابات المذكرة
         'inventory_weight_18k': 7300,  # مخزون وزني عيار 18
@@ -6376,7 +6368,7 @@ def get_account_id_for_mapping(operation_type, account_type):
         
         # حسابات للجسر والمصنعية في مشتريات الموردين
         'supplier_bridge': None,
-    'manufacturing_wage': 5105,  # مصروفات أجور المصنعية
+    'manufacturing_wage': 510,  # مصروفات أجور المصنعية
     }
     
     default_account_number = DEFAULT_ACCOUNTS.get(account_type)
@@ -6412,7 +6404,7 @@ def get_account_id_by_number(account_number):
 
 def _ensure_manufacturing_wage_expense_account():
     """Ensure a dedicated manufacturing wage expense account exists and return its ID."""
-    target_number = '5105'
+    target_number = '510'
     cached = get_account_id_by_number(target_number)
     if cached:
         return cached
@@ -6623,6 +6615,21 @@ def add_invoice():
     
     if not isinstance(data, dict):
         return jsonify({'error': 'Invalid or missing JSON body'}), 400
+
+    def _truthy(val) -> bool:
+        if val in (None, False, 0):
+            return False
+        if isinstance(val, str):
+            return val.strip().lower() in ('1', 'true', 'yes', 'on', 'y', 't')
+        return bool(val)
+
+    # Draft invoices: save now, finalize/post later.
+    # Drafts are created as unposted and should not create SafeBox movements.
+    save_as_draft = _truthy(
+        data.get('save_as_draft')
+        or data.get('save_draft')
+        or data.get('is_draft')
+    )
 
     # 🆕 خيار أمني: رفض إنشاء الفاتورة بدون توكن
     # يمكن تفعيله من (متغير البيئة) أو من (الإعدادات) عبر الواجهة
@@ -7657,12 +7664,20 @@ def add_invoice():
         approval_required = bool(approval_reasons)
         approval_reason = approval_reasons[0] if approval_reasons else None
 
-        if approval_required:
+        # Draft invoices are intentionally unposted and should not trigger approval alerts at creation time.
+        # They will be finalized later via posting endpoints.
+        unposted_mode = bool(approval_required) or bool(save_as_draft)
+        if save_as_draft:
+            approval_required = False
+            approval_reason = None
+            approval_reasons = []
+
+        if unposted_mode:
             # Do not treat as settled/paid until approved/posting occurs.
             try:
                 new_invoice.is_posted = False
                 new_invoice.amount_paid = 0.0
-                new_invoice.status = 'unpaid'
+                new_invoice.status = 'draft' if save_as_draft else 'unpaid'
                 db.session.add(new_invoice)
                 db.session.flush()
             except Exception:
@@ -7852,7 +7867,7 @@ def add_invoice():
                 pm_net_amount = _to_float(payment.get('net_amount', pm_amount - pm_commission_amount - pm_commission_vat))
 
                 payment_notes = payment.get('notes')
-                if approval_required:
+                if unposted_mode:
                     # Persist resolved safe_box_id for later approval/posting.
                     try:
                         payment_notes = json.dumps({
@@ -7875,7 +7890,7 @@ def add_invoice():
                 db.session.add(payment_row)
                 db.session.flush()
 
-                if (not approval_required) and (not is_receivable):
+                if (not unposted_mode) and (not is_receivable):
                     db.session.add(
                         SafeBoxTransaction(
                             safe_box_id=resolved_safe_box_id,
@@ -7943,7 +7958,7 @@ def add_invoice():
                 return 'in'
 
             payment_notes = None
-            if approval_required:
+            if unposted_mode:
                 try:
                     payment_notes = json.dumps({
                         'user_notes': None,
@@ -7964,7 +7979,7 @@ def add_invoice():
             db.session.add(payment_row)
             db.session.flush()
 
-            if (not approval_required) and (not is_receivable):
+            if (not unposted_mode) and (not is_receivable):
                 db.session.add(
                     SafeBoxTransaction(
                         safe_box_id=resolved_safe_box_id,
@@ -7992,14 +8007,14 @@ def add_invoice():
         settled_gold_karat = _to_float_request(data.get('settled_gold_karat', 0.0))
         settled_gold_safe_box_id = data.get('settled_gold_safe_box_id')
 
-        # For approval-required invoices, do not allow gold settlement inputs (would require safe movements).
-        if approval_required:
+        # For unposted invoices (drafts/approval-required), do not allow gold settlement inputs (would require safe movements).
+        if unposted_mode:
             if settled_gold_weight > 0 or settled_gold_karat > 0 or settled_gold_safe_box_id not in (None, '', False):
                 db.session.rollback()
                 return jsonify({
-                    'error': 'approval_required_no_gold_settlement',
-                    'message': 'لا يمكن حفظ سداد/مقايضة ذهب عند وجود اعتماد مطلوب. قم بإزالة بيانات سداد الذهب ثم احفظ، وبعد الاعتماد قم بالترحيل.',
-                    'approval_required': True,
+                    'error': 'unposted_no_gold_settlement',
+                    'message': 'لا يمكن حفظ سداد/مقايضة ذهب عندما تكون الفاتورة غير مرحلة (مسودة/بحاجة اعتماد). قم بإزالة بيانات سداد الذهب ثم احفظ، وبعد الإكمال/الترحيل قم بالترحيل.',
+                    'approval_required': bool(approval_required),
                     'reason': approval_reason,
                 }), 400
 
@@ -8923,14 +8938,17 @@ def add_invoice():
             # - الهدف: فصل المصنعية عن تكلفة المشتريات والحفاظ على شفافية التكاليف
             # ============================================
 
-            # 🆕 استهلاك المصنعية من مخزون أجور المصنعية (1350)
-            # Wage inventory (cash) is 1350 in this chart of accounts
-            wage_inventory_account_id = get_account_id_by_number('1350')
+            # 🆕 استهلاك المصنعية من مخزون أجور المصنعية
+            wage_inventory_account_id = (
+                _get_manufacturing_wage_inventory_account_id()
+                or get_account_id_by_number('1320')
+                or get_account_id_by_number('1350')
+            )
 
             if total_wage_cash_for_cost > 0:
                 if not wage_inventory_account_id:
                     # تحذير: إذا لم يكن الحساب موجوداً
-                    print("⚠️ حساب مخزون أجور المصنعية (1350) غير موجود")
+                    print("⚠️ حساب مخزون أجور المصنعية غير موجود")
                 else:
                     # بدلًا من إثبات المصنعية ضمن تكلفة المبيعات، نثبتها كمصروف تشغيلى
                     # نحاول الحصول على حساب مصروف المصنعية المخصص، وإلا نستخدم حساب المصروفات التشغيلية العام (51)
@@ -8963,7 +8981,7 @@ def add_invoice():
                     )
 
                     # ملاحظة: لا نضيف قيمة المصنعية إلى total_cost_cash - لأنها تُعامل كمصروف منفصل
-                    print(f"✅ Wage inventory consumed and expensed: {total_wage_cash_for_cost} SAR (1350 -> expense)")
+                    print(f"✅ Wage inventory consumed and expensed: {total_wage_cash_for_cost} SAR")
             
             # ============================================
             # 🆕 قيود المذكرة الوزنية (Weight Ledger System)
@@ -10047,18 +10065,21 @@ def add_invoice():
                                 print(f"⚠️ Weight safety-net manual insert failed: {manual_exc}")
                         posted_weight_debits.add(karat_str)
 
-                # --- 2) أجور المصنعية → مخزون أجور المصنعية (1350) ---
+                # --- 2) أجور المصنعية → مخزون أجور المصنعية ---
                 # 🆕 النظام الجديد: فصل المصنعية في حساب مستقل
-                # Wage inventory (cash) is 1350 in this chart of accounts
-                wage_inventory_account_id = get_account_id_by_number('1350')  # مخزون أجور المصنعية
+                wage_inventory_account_id = (
+                    _get_manufacturing_wage_inventory_account_id()
+                    or get_account_id_by_number('1320')
+                    or get_account_id_by_number('1350')
+                )
                 
                 if wage_cash > 0:
                     if not wage_inventory_account_id:
                         return jsonify({
-                            'error': 'حساب مخزون أجور المصنعية (1350) غير موجود. يرجى إنشاؤه أولاً.'
+                            'error': 'حساب مخزون أجور المصنعية غير موجود. يرجى إنشاؤه أولاً أو ضبط mapping (manufacturing_wage_inventory).'
                         }), 400
                     
-                    # إضافة المصنعية لحساب مخزون المصنعية (1350)
+                    # إضافة المصنعية لحساب مخزون المصنعية
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=wage_inventory_account_id,
@@ -10549,6 +10570,24 @@ def add_invoice():
                 resp['below_cost'] = below_cost_details
             resp['discount_pct'] = round(float(discount_pct or 0.0), 2) if discount_pct is not None else None
             resp['threshold_pct'] = float(large_discount_pct_threshold or 0.0)
+            return jsonify(resp), 201
+
+        if save_as_draft:
+            print("✅ Balance verified! Draft requested; skipping posting/safebox effects...")
+
+            new_invoice.is_posted = False
+            if not new_invoice.posted_by:
+                new_invoice.posted_by = posted_by_username or 'system'
+
+            journal_entry.is_posted = False
+            if hasattr(journal_entry, 'posted_at'):
+                journal_entry.posted_at = None
+            if hasattr(journal_entry, 'posted_by'):
+                journal_entry.posted_by = None
+
+            db.session.commit()
+            resp = new_invoice.to_dict()
+            resp['draft_saved'] = True
             return jsonify(resp), 201
 
         print(f"✅ Balance verified! Marking invoice and journal entry as posted...")
