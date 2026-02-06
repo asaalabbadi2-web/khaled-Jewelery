@@ -51,6 +51,120 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _isExporting = false;
   bool _useMergedView = false; // Toggle for merged statement
 
+  ({double gold, double cash}) _openingBalanceAt(DateTime? start) {
+    final statement = _statement;
+    if (statement == null || start == null) {
+      return (
+        gold: statement?.openingBalanceGold ?? 0.0,
+        cash: statement?.openingBalanceCash ?? 0.0,
+      );
+    }
+
+    double gold = statement.openingBalanceGold;
+    double cash = statement.openingBalanceCash;
+
+    for (final line in statement.lines) {
+      if (line.date.isBefore(start)) {
+        gold += line.goldDebit - line.goldCredit;
+        cash += line.cashDebit - line.cashCredit;
+      }
+    }
+
+    return (gold: gold, cash: cash);
+  }
+
+  ({
+    double openingGold,
+    double openingCash,
+    double movementGold,
+    double movementCash,
+    double closingGold,
+    double closingCash,
+  }) _periodSummary() {
+    final statement = _statement;
+    if (statement == null || _dateRange == null) {
+      final movementGold = statement == null
+          ? 0.0
+          : (statement.totalDebitGold - statement.totalCreditGold);
+      final movementCash = statement == null
+          ? 0.0
+          : (statement.totalDebitCash - statement.totalCreditCash);
+      return (
+        openingGold: statement?.openingBalanceGold ?? 0.0,
+        openingCash: statement?.openingBalanceCash ?? 0.0,
+        movementGold: movementGold,
+        movementCash: movementCash,
+        closingGold: statement?.effectiveClosingGold ?? 0.0,
+        closingCash: statement?.effectiveClosingCash ?? 0.0,
+      );
+    }
+
+    final range = _dateRange!;
+    final opening = _openingBalanceAt(range.start);
+
+    double movementGold = 0.0;
+    double movementCash = 0.0;
+
+    for (final line in statement.lines) {
+      final dt = line.date;
+      final inRange =
+          !dt.isBefore(range.start) && !dt.isAfter(range.end);
+      if (!inRange) continue;
+      movementGold += line.goldDebit - line.goldCredit;
+      movementCash += line.cashDebit - line.cashCredit;
+    }
+
+    return (
+      openingGold: opening.gold,
+      openingCash: opening.cash,
+      movementGold: movementGold,
+      movementCash: movementCash,
+      closingGold: opening.gold + movementGold,
+      closingCash: opening.cash + movementCash,
+    );
+  }
+
+  ({
+    double goldDebit,
+    double goldCredit,
+    double cashDebit,
+    double cashCredit,
+  }) _periodDebitCreditTotals() {
+    final statement = _statement;
+    if (statement == null || _dateRange == null) {
+      return (
+        goldDebit: statement?.totalDebitGold ?? 0.0,
+        goldCredit: statement?.totalCreditGold ?? 0.0,
+        cashDebit: statement?.totalDebitCash ?? 0.0,
+        cashCredit: statement?.totalCreditCash ?? 0.0,
+      );
+    }
+
+    final range = _dateRange!;
+    double goldDebit = 0.0;
+    double goldCredit = 0.0;
+    double cashDebit = 0.0;
+    double cashCredit = 0.0;
+
+    for (final line in statement.lines) {
+      final dt = line.date;
+      final inRange =
+          !dt.isBefore(range.start) && !dt.isAfter(range.end);
+      if (!inRange) continue;
+      goldDebit += line.goldDebit;
+      goldCredit += line.goldCredit;
+      cashDebit += line.cashDebit;
+      cashCredit += line.cashCredit;
+    }
+
+    return (
+      goldDebit: goldDebit,
+      goldCredit: goldCredit,
+      cashDebit: cashDebit,
+      cashCredit: cashCredit,
+    );
+  }
+
   void _clearFilters() {
     setState(() {
       _dateRange = null;
@@ -167,8 +281,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       }).toList();
 
       // Recalculate running balances for the filtered list
-      double runningGold = _statement!.openingBalanceGold;
-      double runningCash = _statement!.openingBalanceCash;
+      final openingAtStart = _openingBalanceAt(_dateRange?.start);
+      double runningGold = openingAtStart.gold;
+      double runningCash = openingAtStart.cash;
       _filteredLines = [];
       for (var line in filtered) {
         runningGold += line.goldDebit - line.goldCredit;
@@ -609,6 +724,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     }
 
     final statement = _statement!;
+    final period = _periodSummary();
+    final totals = _periodDebitCreditTotals();
     final goldUnit = 'جم';
     final cashUnit = 'ر.س';
     final viewModeLabel = switch (_viewMode) {
@@ -669,37 +786,37 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                         title: 'رصيد افتتاحي',
                         goldValue: _viewMode == 2
                             ? ''
-                            : '${statement.openingBalanceGold.toStringAsFixed(3)} $goldUnit',
+                            : '${period.openingGold.toStringAsFixed(3)} $goldUnit',
                         cashValue: _viewMode == 1
                             ? ''
-                            : '${statement.openingBalanceCash.toStringAsFixed(2)} $cashUnit',
+                            : '${period.openingCash.toStringAsFixed(2)} $cashUnit',
                       ),
                       metricCard(
                         title: 'إجمالي مدين',
                         goldValue: _viewMode == 2
                             ? ''
-                            : '${statement.totalDebitGold.toStringAsFixed(3)} $goldUnit',
+                            : '${totals.goldDebit.toStringAsFixed(3)} $goldUnit',
                         cashValue: _viewMode == 1
                             ? ''
-                            : '${statement.totalDebitCash.toStringAsFixed(2)} $cashUnit',
+                            : '${totals.cashDebit.toStringAsFixed(2)} $cashUnit',
                       ),
                       metricCard(
                         title: 'إجمالي دائن',
                         goldValue: _viewMode == 2
                             ? ''
-                            : '${statement.totalCreditGold.toStringAsFixed(3)} $goldUnit',
+                            : '${totals.goldCredit.toStringAsFixed(3)} $goldUnit',
                         cashValue: _viewMode == 1
                             ? ''
-                            : '${statement.totalCreditCash.toStringAsFixed(2)} $cashUnit',
+                            : '${totals.cashCredit.toStringAsFixed(2)} $cashUnit',
                       ),
                       metricCard(
                         title: 'رصيد ختامي',
                         goldValue: _viewMode == 2
                             ? ''
-                            : '${statement.effectiveClosingGold.toStringAsFixed(3)} $goldUnit',
+                            : '${(_dateRange == null ? statement.effectiveClosingGold : period.closingGold).toStringAsFixed(3)} $goldUnit',
                         cashValue: _viewMode == 1
                             ? ''
-                            : '${statement.effectiveClosingCash.toStringAsFixed(2)} $cashUnit',
+                            : '${(_dateRange == null ? statement.effectiveClosingCash : period.closingCash).toStringAsFixed(2)} $cashUnit',
                       ),
                     ],
                   ),
@@ -746,32 +863,34 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     if (_statement == null) return;
 
     final statement = _statement!;
+    final period = _periodSummary();
+    final totals = _periodDebitCreditTotals();
     final summary = StringBuffer()
       ..writeln('كشف حساب: ${widget.accountName}')
       ..writeln('عيار أساسي: ${statement.mainKarat}')
       ..writeln(
-        'رصيد افتتاحي ذهب: ${statement.openingBalanceGold.toStringAsFixed(3)}',
+        'رصيد افتتاحي ذهب: ${period.openingGold.toStringAsFixed(3)}',
       )
       ..writeln(
-        'رصيد افتتاحي نقد: ${statement.openingBalanceCash.toStringAsFixed(2)}',
+        'رصيد افتتاحي نقد: ${period.openingCash.toStringAsFixed(2)}',
       )
       ..writeln(
-        'إجمالي ذهب مدين: ${statement.totalDebitGold.toStringAsFixed(3)}',
+        'إجمالي ذهب مدين: ${totals.goldDebit.toStringAsFixed(3)}',
       )
       ..writeln(
-        'إجمالي ذهب دائن: ${statement.totalCreditGold.toStringAsFixed(3)}',
+        'إجمالي ذهب دائن: ${totals.goldCredit.toStringAsFixed(3)}',
       )
       ..writeln(
-        'إجمالي نقد مدين: ${statement.totalDebitCash.toStringAsFixed(2)}',
+        'إجمالي نقد مدين: ${totals.cashDebit.toStringAsFixed(2)}',
       )
       ..writeln(
-        'إجمالي نقد دائن: ${statement.totalCreditCash.toStringAsFixed(2)}',
+        'إجمالي نقد دائن: ${totals.cashCredit.toStringAsFixed(2)}',
       )
       ..writeln(
-        'رصيد ختامي ذهب (حسب الكشف): ${statement.closingBalanceGoldNormalized.toStringAsFixed(3)}',
+        'رصيد ختامي ذهب (حسب الكشف): ${(_dateRange == null ? statement.closingBalanceGoldNormalized : period.closingGold).toStringAsFixed(3)}',
       )
       ..writeln(
-        'رصيد ختامي نقد (حسب الكشف): ${statement.closingBalanceCash.toStringAsFixed(2)}',
+        'رصيد ختامي نقد (حسب الكشف): ${(_dateRange == null ? statement.closingBalanceCash : period.closingCash).toStringAsFixed(2)}',
       );
 
     if (statement.hasEntityBalances) {
@@ -941,31 +1060,39 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     final theme = Theme.of(context);
     final statement = _statement!;
 
+    final period = _periodSummary();
+
     final closingTitle = statement.hasEntityBalances
         ? 'الرصيد الحالي (من الملف)'
         : 'رصيد ختامي (موزون)';
 
+    final openingTitle = _dateRange == null
+        ? 'رصيد افتتاحي (عيار ${statement.mainKarat})'
+        : 'رصيد افتتاحي للفترة (عيار ${statement.mainKarat})';
+
+    final movementTitle = _dateRange == null ? 'إجمالي الحركة' : 'حركة الفترة';
+
     final cards = <Widget>[
       _SummaryCard(
-        title: 'رصيد افتتاحي (عيار ${statement.mainKarat})',
-        goldValue: statement.openingBalanceGold,
-        cashValue: statement.openingBalanceCash,
+        title: openingTitle,
+        goldValue: period.openingGold,
+        cashValue: period.openingCash,
         color: theme.colorScheme.primary,
         icon: Icons.lock_clock,
         mainKarat: statement.mainKarat,
       ),
       _SummaryCard(
-        title: 'إجمالي الحركة',
-        goldValue: statement.totalDebitGold - statement.totalCreditGold,
-        cashValue: statement.totalDebitCash - statement.totalCreditCash,
+        title: movementTitle,
+        goldValue: period.movementGold,
+        cashValue: period.movementCash,
         color: theme.colorScheme.secondary,
         icon: Icons.sync_alt,
         mainKarat: statement.mainKarat,
       ),
       _SummaryCard(
         title: closingTitle,
-        goldValue: statement.effectiveClosingGold,
-        cashValue: statement.effectiveClosingCash,
+        goldValue: _dateRange == null ? statement.effectiveClosingGold : period.closingGold,
+        cashValue: _dateRange == null ? statement.effectiveClosingCash : period.closingCash,
         color: theme.colorScheme.tertiary,
         icon: Icons.summarize,
         mainKarat: statement.mainKarat,
