@@ -3,6 +3,9 @@ import 'package:frontend/api_service.dart';
 import 'package:frontend/providers/settings_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'dart:convert';
 
 import '../theme/app_theme.dart';
 import '../utils/arabic_number_formatter.dart';
@@ -204,6 +207,8 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   double _totalGoldDebit = 0.0;
   double _totalGoldCredit = 0.0;
 
+  bool _checkedLocalDraft = false;
+
   @override
   void initState() {
     super.initState();
@@ -232,6 +237,175 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     }
 
     _fetchInitialData();
+  }
+
+  String _localDraftKey() {
+    return 'yasargold_journal_entry_complete_later';
+  }
+
+  Map<String, dynamic> _buildLocalDraftPayload() {
+    final linesPayload = _lines
+        // Keep account selections even if amounts are zero.
+        .where((line) => line.hasValues || line.accountId != null)
+        .map((line) {
+          final enabledKarats = <int>[];
+          for (final k in _supportedKarats) {
+            if (line.isGoldKaratEnabled(k)) enabledKarats.add(k);
+          }
+          return {
+            'account_id': line.accountId,
+            'account_name': line.accountName,
+            'account_number': line.accountNumber,
+            'cash_debit': line.cashDebitController.text,
+            'cash_credit': line.cashCreditController.text,
+            for (final k in _supportedKarats)
+              'debit_${k}k': line.goldDebitControllers[k]?.text ?? '0.0',
+            for (final k in _supportedKarats)
+              'credit_${k}k': line.goldCreditControllers[k]?.text ?? '0.0',
+            'enabled_karats': enabledKarats,
+          };
+        })
+        .toList();
+
+    return {
+      'date': _dateController.text,
+      'description': _descriptionController.text,
+      'reference_number': _referenceNumberController.text,
+      'entry_type': _selectedEntryType,
+      'reference_type': _referenceType,
+      'lines': linesPayload,
+    };
+  }
+
+  Future<void> _saveLocalDraft({bool showToast = true}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localDraftKey(), jsonEncode(_buildLocalDraftPayload()));
+    if (showToast && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ القيد لإكماله لاحقاً')),
+      );
+    }
+  }
+
+  Future<void> _clearLocalDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_localDraftKey());
+  }
+
+  Future<void> _maybePromptRestoreLocalDraft() async {
+    if (!mounted || _checkedLocalDraft) return;
+    _checkedLocalDraft = true;
+
+    // Do not restore over edit mode.
+    if (widget.entry != null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_localDraftKey());
+    if (raw == null || raw.trim().isEmpty) return;
+
+    Map<String, dynamic>? decoded;
+    try {
+      decoded = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    final bool? restore = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('مسودة محفوظة'),
+        content: const Text('يوجد قيد محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('تجاهل'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('استعادة'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (restore != true) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
+    try {
+      // Dispose old lines to avoid controller leaks.
+      for (final line in _lines) {
+        line.dispose();
+      }
+
+      final decodedLines = (decoded['lines'] as List?)?.whereType<Map>().toList() ?? [];
+      final restored = <JournalLine>[];
+      for (final rawLine in decodedLines) {
+        final map = Map<String, dynamic>.from(rawLine);
+        final enabled = (map['enabled_karats'] as List?)
+                ?.map((e) => toInt(e))
+                .whereType<int>()
+                .toSet() ??
+            <int>{};
+
+        final jl = JournalLine(
+          accountId: toInt(map['account_id']),
+          accountName: map['account_name']?.toString(),
+          accountNumber: map['account_number']?.toString(),
+          cashDebit: (map['cash_debit'] ?? '0.0').toString(),
+          cashCredit: (map['cash_credit'] ?? '0.0').toString(),
+          goldDebits: {
+            for (final k in _supportedKarats)
+              k: (map['debit_${k}k'] ?? '0.0').toString(),
+          },
+          goldCredits: {
+            for (final k in _supportedKarats)
+              k: (map['credit_${k}k'] ?? '0.0').toString(),
+          },
+          defaultGoldKarats: enabled,
+          karats: _supportedKarats,
+        );
+        restored.add(jl);
+      }
+
+      setState(() {
+        _dateController.text = (decoded?['date'] ?? _dateController.text).toString();
+        _descriptionController.text = (decoded?['description'] ?? '').toString();
+        _referenceNumberController.text = (decoded?['reference_number'] ?? '').toString();
+        _selectedEntryType = (decoded?['entry_type'] ?? _selectedEntryType).toString();
+        _referenceType = decoded?['reference_type']?.toString();
+        _lines = restored;
+      });
+
+      // Sync line transaction types if accounts already loaded.
+      if (_accounts.isNotEmpty) {
+        for (final line in _lines) {
+          if (line.accountId == null) continue;
+          try {
+            final account = _accounts.firstWhere((acc) => toInt(acc['id']) == line.accountId);
+            line.accountTransactionType = account['transaction_type'];
+          } catch (_) {
+            // ignore
+          }
+        }
+      }
+
+      _calculateTotals();
+    } catch (_) {
+      // If restore fails, clear draft to prevent looping.
+      await _clearLocalDraft();
+    }
   }
 
   @override
@@ -273,6 +447,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   }
 
   Future<void> _fetchInitialData() async {
+    await _maybePromptRestoreLocalDraft();
     await _fetchAccounts();
 
     // If no lines were provided (new entry), create two ready lines on open
@@ -521,7 +696,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   }
 
   // --- Save Logic ---
-  Future<void> _saveJournalEntry({bool isDraft = false}) async {
+  Future<void> _saveJournalEntry() async {
     // First, validate the form fields themselves
     if (!_formKey.currentState!.validate()) {
       return;
@@ -530,11 +705,8 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     // Then, perform custom validation on the lines
     if (!_validateLines()) return;
 
-    // Skip balance check if saving as draft
-    if (!isDraft) {
-      // Finally, check for balance and ask for confirmation if needed
-      if (!await _checkBalances()) return;
-    }
+    // Finally, check for balance and ask for confirmation if needed
+    if (!await _checkBalances()) return;
 
     final data = {
       'description': _descriptionController.text,
@@ -544,7 +716,6 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       'reference_number': _referenceNumberController.text.isEmpty
           ? null
           : _referenceNumberController.text,
-      'is_draft': isDraft,  // 🆕 إضافة حالة المسودة
       'lines': _lines
           .where((line) => line.hasValues)
           .map((line) => line.toMap())
@@ -558,9 +729,10 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         await _apiService.updateJournalEntry(widget.entry['id'], data);
       }
       if (mounted) {
+        await _clearLocalDraft();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(isDraft ? 'تم حفظ القيد كمسودة' : 'تم حفظ القيد بنجاح'),
+            content: const Text('تم حفظ القيد بنجاح'),
             backgroundColor: Colors.green,
           ),
         );
@@ -675,20 +847,22 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
           widget.entry == null ? 'إضافة قيد يومية' : 'تعديل قيد يومية',
         ),
         actions: [
-          // 🆕 زر حفظ كمسودة
           TextButton.icon(
-            onPressed: () => _saveJournalEntry(isDraft: true),
-            icon: Icon(Icons.edit_note, color: Colors.white70),
-            label: Text(
-              'مسودة',
+            onPressed: () async {
+              await _saveLocalDraft(showToast: true);
+              if (mounted) Navigator.of(context).pop(false);
+            },
+            icon: const Icon(Icons.schedule, color: Colors.white70),
+            label: const Text(
+              'إكمال لاحقاً',
               style: TextStyle(color: Colors.white70),
             ),
           ),
-          SizedBox(width: 8),
+          const SizedBox(width: 8),
           // زر الحفظ النهائي
           IconButton(
             icon: Icon(Icons.save),
-            onPressed: () => _saveJournalEntry(isDraft: false),
+            onPressed: _saveJournalEntry,
             tooltip: 'حفظ',
           ),
         ],

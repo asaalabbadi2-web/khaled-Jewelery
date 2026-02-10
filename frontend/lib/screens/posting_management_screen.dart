@@ -356,7 +356,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         final invoices = data['invoices'] ?? [];
         if (invoices.isNotEmpty) {
           final ids = invoices
-              .where((i) => (i is Map) && (i['status']?.toString() != 'draft'))
+              .where((i) => (i is Map))
               .map((i) => i['id'] as int)
               .toList();
           if (ids.isNotEmpty) {
@@ -429,19 +429,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           .where((inv) => _selectedInvoiceIds.contains(inv['id']))
           .toList();
 
-      final postableIds = selected
-          .where((inv) => inv['status']?.toString() != 'draft')
-          .map((inv) => inv['id'] as int)
-          .toList();
-
-      final skippedDrafts = selected
-          .where((inv) => inv['status']?.toString() == 'draft')
-          .length;
-
-      if (postableIds.isEmpty) {
-        _showError('الفواتير المحددة كلها مسودات. استخدم زر (إكمال) لكل فاتورة.');
-        return;
-      }
+        final postableIds = selected.map((inv) => inv['id'] as int).toList();
 
       final result = await _apiService.postInvoicesBatch(
         postableIds,
@@ -450,9 +438,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
 
       if (result['success'] == true) {
         _showSuccess('تم ترحيل ${result['posted_count']} فاتورة بنجاح');
-        if (skippedDrafts > 0) {
-          _showError('تم تخطي $skippedDrafts فاتورة مسودة (تحتاج إكمال).');
-        }
         _loadUnpostedInvoices();
         _loadStatistics();
       } else {
@@ -484,32 +469,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       }
     } catch (e) {
       _showError('خطأ في الترحيل: ${e.toString()}');
-    }
-  }
-
-  Future<void> _finalizeInvoice(int invoiceId) async {
-    if (!_canPostInvoices) {
-      _showError('لا تملك صلاحية إكمال وترحيل الفواتير');
-      return;
-    }
-
-    final confirm = await _confirmAction(
-      'إكمال وترحيل الفاتورة؟',
-      'سيتم ترحيل الفاتورة والقيد المرتبط وإضافة حركات الخزينة.',
-    );
-    if (!confirm) return;
-
-    try {
-      final result = await _apiService.finalizeInvoice(invoiceId);
-      if (result['success'] == true) {
-        _showSuccess('تم إكمال وترحيل الفاتورة بنجاح');
-        _loadUnpostedInvoices();
-        _loadStatistics();
-      } else {
-        _showError(result['message'] ?? 'فشل إكمال الفاتورة');
-      }
-    } catch (e) {
-      _showError('خطأ في إكمال الفاتورة: ${e.toString()}');
     }
   }
 
@@ -1425,7 +1384,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     final postedAt = invoice['posted_at'];
     final postedBy = invoice['posted_by'];
     final isSelected = _selectedInvoiceIds.contains(id);
-    final isDraft = (invoice['status']?.toString() == 'draft');
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
@@ -1442,17 +1400,15 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
             : Checkbox(
                 value: isSelected,
                 activeColor: theme.AppColors.primaryGold,
-                onChanged: isDraft
-                    ? null
-                    : (value) {
-                        setState(() {
-                          if (value == true) {
-                            _selectedInvoiceIds.add(id);
-                          } else {
-                            _selectedInvoiceIds.remove(id);
-                          }
-                        });
-                      },
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true) {
+                      _selectedInvoiceIds.add(id);
+                    } else {
+                      _selectedInvoiceIds.remove(id);
+                    }
+                  });
+                },
               ),
         title: Text(
           'فاتورة #$id - $invoiceType',
@@ -1463,15 +1419,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           children: [
             Text('المبلغ: ${total.toStringAsFixed(2)} ر.س'),
             Text('التاريخ: ${_formatDate(date)}'),
-            if (!isPosted && isDraft)
-              Text(
-                'الحالة: مسودة',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.orange.shade800,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
             if (isPosted && postedBy != null)
               Text(
                 'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
@@ -1489,23 +1436,14 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                 onPressed: () => _unpostInvoice(id),
                 tooltip: 'إلغاء الترحيل',
               )
-            : (isDraft
-                ? IconButton(
-                    icon: const Icon(
-                      Icons.playlist_add_check,
-                      color: theme.AppColors.success,
-                    ),
-                    onPressed: () => _finalizeInvoice(id),
-                    tooltip: 'إكمال وترحيل',
-                  )
-                : IconButton(
-                    icon: const Icon(
-                      Icons.check_circle,
-                      color: theme.AppColors.success,
-                    ),
-                    onPressed: () => _postInvoice(id),
-                    tooltip: 'ترحيل',
-                  )),
+            : IconButton(
+                icon: const Icon(
+                  Icons.check_circle,
+                  color: theme.AppColors.success,
+                ),
+                onPressed: () => _postInvoice(id),
+                tooltip: 'ترحيل',
+              ),
       ),
     );
   }

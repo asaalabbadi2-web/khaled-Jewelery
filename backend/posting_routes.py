@@ -285,7 +285,6 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
     if not invoice or not getattr(invoice, 'id', None):
         return []
 
-    # Avoid duplicates
     existing = (
         SafeBoxTransaction.query.filter_by(ref_type='invoice_gold', ref_id=invoice.id)
         .order_by(SafeBoxTransaction.id.desc())
@@ -294,138 +293,33 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
     if existing:
         return []
 
-
-def _direction_for_invoice_cash(invoice_type: str) -> str:
-    """Map invoice type to cash movement direction (in/out) for safebox ledger."""
-    t = (invoice_type or '').strip()
-    if t == 'بيع':
-        return 'in'
-    if t == 'مرتجع بيع':
-        return 'out'
-    if t in ('شراء من عميل', 'شراء') or ('شراء' in t and 'مورد' in t and 'مرتجع' not in t):
-        return 'out'
-    if t in ('مرتجع شراء', 'مرتجع شراء (مورد)') or ('مرتجع' in t and 'شراء' in t and 'مورد' in t):
-        return 'in'
-    return 'in'
-
-
-def _append_safe_transactions_for_invoice_payments(invoice: Invoice, created_by: str = None):
-    """Append SafeBoxTransaction rows for invoice payments (cash/bank/check ledger).
-
-    Uses InvoicePayment rows and tries to resolve safe_box_id from:
-    1) JSON stored in payment.notes (created by approval gate)
-    2) invoice.safe_box_id
-    3) payment_method.default_safe_box_id
-    """
-    if not invoice or not getattr(invoice, 'id', None):
-        return []
-
-    payments = getattr(invoice, 'payments', None) or []
-    if not payments:
-        return []
-
-    appended = []
-    for payment in payments:
-        # Avoid duplicates
-        existing = (
-            SafeBoxTransaction.query.filter_by(ref_type='invoice_payment', invoice_payment_id=payment.id)
-            .order_by(SafeBoxTransaction.id.desc())
-            .first()
-        )
-        if existing:
-            continue
-
-        pm_obj = None
-        try:
-            pm_obj = PaymentMethod.query.get(getattr(payment, 'payment_method_id', None))
-        except Exception:
-            pm_obj = None
-
-        resolved_safe_box_id = None
-
-        # Try parse JSON notes
-        raw_notes = getattr(payment, 'notes', None)
-        if raw_notes:
-            try:
-                decoded = json.loads(raw_notes) if isinstance(raw_notes, str) else None
-                if isinstance(decoded, dict) and decoded.get('safe_box_id') not in (None, '', False):
-                    resolved_safe_box_id = int(decoded.get('safe_box_id'))
-            except Exception:
-                resolved_safe_box_id = None
-
-        if resolved_safe_box_id is None:
-            resolved_safe_box_id = getattr(invoice, 'safe_box_id', None)
-        if resolved_safe_box_id is None and pm_obj is not None:
-            resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
-
-        if resolved_safe_box_id is None:
-            # Feature-toggles fallback: employee cash safe or main cash safe.
-            resolved_safe_box_id = _resolve_cash_safe_box_id_for_invoice(
-                invoice=invoice,
-                pm_obj=pm_obj,
-                explicit_safe_box_id=None,
-            )
-
-        if resolved_safe_box_id is None:
-            raise ValueError('missing_safe_box_for_payment')
-
-        safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
-        if not safe_box_obj:
-            raise ValueError('safe_box_not_found')
-
-        amount = float(getattr(payment, 'amount', 0.0) or 0.0)
-        if amount <= 0:
-            continue
-
-        st = SafeBoxTransaction(
-            safe_box_id=resolved_safe_box_id,
-            ref_type='invoice_payment',
-            ref_id=payment.id,
-            invoice_id=invoice.id,
-            invoice_payment_id=payment.id,
-            payment_method_id=getattr(payment, 'payment_method_id', None),
-            direction=_direction_for_invoice_cash(getattr(invoice, 'invoice_type', None)),
-            amount_cash=amount,
-            notes=getattr(payment, 'notes', None),
-            created_by=created_by,
-        )
-        db.session.add(st)
-        appended.append(st)
-
-    return appended
-
-    def _to_float(v):
-        try:
-            if v in (None, '', False):
-                return 0.0
-            return float(v)
-        except Exception:
-            return 0.0
-
     weights_by_karat = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
 
-    # Prefer explicit karat lines when available
-    karat_lines = getattr(invoice, 'karat_lines', None) or []
     used_karat_lines = False
     try:
-        for line in karat_lines:
-            karat = int(float(getattr(line, 'karat', 21) or 21))
-            grams = _to_float(getattr(line, 'weight_grams', 0.0))
-            if grams <= 0:
-                continue
+        karat_lines = getattr(invoice, 'karat_lines', None) or []
+        for kl in karat_lines:
+            karat_val = getattr(kl, 'karat', None)
+            try:
+                karat = int(float(karat_val or 21))
+            except Exception:
+                karat = 21
             if karat not in weights_by_karat:
                 karat = 21
-            weights_by_karat[karat] += grams
+
+            grams = _to_float(getattr(kl, 'weight_grams', 0.0) or 0.0)
+            if grams <= 0:
+                continue
+            weights_by_karat[karat] += float(grams)
             used_karat_lines = True
     except Exception:
         used_karat_lines = False
 
     if not used_karat_lines:
-        items = getattr(invoice, 'items', None) or []
-        for inv_item in items:
-            qty = getattr(inv_item, 'quantity', None) or 1
+        for inv_item in getattr(invoice, 'items', None) or []:
+            qty = getattr(inv_item, 'quantity', None)
             try:
-                qty = int(qty)
+                qty = int(qty or 1)
             except Exception:
                 qty = 1
             if qty <= 0:
@@ -448,7 +342,7 @@ def _append_safe_transactions_for_invoice_payments(invoice: Invoice, created_by:
             grams = _to_float(weight_per_unit) * float(qty)
             if grams <= 0:
                 continue
-            weights_by_karat[karat] += grams
+            weights_by_karat[karat] += float(grams)
 
     direction = _direction_for_invoice_gold(getattr(invoice, 'invoice_type', None))
     invoice_number = getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', ''))
@@ -1380,301 +1274,175 @@ def post_invoice(invoice_id):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@posting_bp.route('/invoices/finalize/<int:invoice_id>', methods=['POST'])
-@require_permission('invoice.post')
-@require_permission('journal.post')
-def finalize_invoice(invoice_id):
-    """Finalize a draft invoice.
-
-    This posts BOTH:
-    - Invoice (is_posted)
-    - The invoice-linked JournalEntry (reference_type='invoice')
-    And appends safebox ledger movements for:
-    - invoice payments (ref_type='invoice_payment')
-    - gold inventory movements (ref_type='invoice_gold')
-
-    Intended for invoices saved with `save_as_draft` (status='draft').
-    """
-    try:
-        posted_by = g.current_user.username
-
-        invoice = Invoice.query.get(invoice_id)
-        if not invoice:
-            return jsonify({'success': False, 'message': 'الفاتورة غير موجودة'}), 404
-
-        if invoice.is_posted:
-            return jsonify({'success': False, 'message': 'الفاتورة مرحلة بالفعل'}), 400
-
-        if str(getattr(invoice, 'status', '') or '').strip().lower() != 'draft':
-            return jsonify({
-                'success': False,
-                'message': 'هذه الفاتورة ليست مسودة. استخدم ترحيل الفاتورة العادي.',
-            }), 400
-
-        entry = (
-            JournalEntry.query.filter_by(reference_type='invoice', reference_id=invoice.id)
-            .filter(JournalEntry.is_deleted == False)
-            .order_by(JournalEntry.id.desc())
-            .first()
-        )
-        if not entry:
-            return jsonify({
-                'success': False,
-                'message': 'لا يوجد قيد مرتبط بهذه الفاتورة لترحيله',
-            }), 400
-
-        # Validate journal entry balance (cash + weight)
-        total_cash_debit = sum(line.cash_debit or 0 for line in entry.lines if not line.is_deleted)
-        total_cash_credit = sum(line.cash_credit or 0 for line in entry.lines if not line.is_deleted)
-        if abs(total_cash_debit - total_cash_credit) > 0.01:
-            return jsonify({
-                'success': False,
-                'message': f'القيد غير متوازن (نقد). مدين: {total_cash_debit}, دائن: {total_cash_credit}',
-            }), 400
-
-        for karat in ['18k', '21k', '22k', '24k']:
-            total_debit = sum(getattr(line, f'debit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-            total_credit = sum(getattr(line, f'credit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-            if abs(total_debit - total_credit) > 0.001:
-                return jsonify({
-                    'success': False,
-                    'message': f'القيد غير متوازن (عيار {karat}). مدين: {total_debit}, دائن: {total_credit}',
-                }), 400
-
-        # Post journal entry
-        entry.is_posted = True
-        entry.posted_at = datetime.now()
-        entry.posted_by = posted_by
-
-        # Update invoice paid amount from stored payments (if any)
-        try:
-            payments = getattr(invoice, 'payments', None) or []
-            invoice.amount_paid = round(sum(float(p.amount or 0.0) for p in payments), 2)
-        except Exception:
-            pass
-
-        invoice.is_posted = True
-        invoice.posted_at = datetime.now()
-        invoice.posted_by = posted_by
-
-        # Sync invoice status
-        try:
-            total_amount = float(invoice.total or 0.0)
-            paid_amount = float(invoice.amount_paid or 0.0)
-            barter_total_status = float(getattr(invoice, 'barter_total', 0.0) or 0.0)
-            total_settled = paid_amount + barter_total_status
-            eps = 0.01
-            if total_settled <= eps:
-                invoice.status = 'unpaid'
-            elif total_settled >= total_amount - eps:
-                invoice.status = 'paid'
-            else:
-                invoice.status = 'partially_paid'
-        except Exception:
-            pass
-
-        # Append safebox movements
-        _append_safe_transactions_for_invoice_payments(invoice, created_by=posted_by)
-        _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
-
-        db.session.commit()
-
-        # Audit
-        try:
-            AuditLog.log_action(
-                user_name=posted_by,
-                action='finalize_invoice_draft',
-                entity_type='Invoice',
-                entity_id=invoice.id,
-                entity_number=getattr(invoice, 'invoice_number', None),
-                details=json.dumps({
-                    'journal_entry_id': entry.id,
-                    'journal_entry_number': getattr(entry, 'entry_number', None),
-                }, ensure_ascii=False),
-                ip_address=request.remote_addr,
-                user_agent=request.headers.get('User-Agent'),
-                success=True,
-            )
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-        return jsonify({
-            'success': True,
-            'message': 'تم إكمال وترحيل الفاتورة بنجاح',
-            'invoice': invoice.to_dict(),
-            'journal_entry': entry.to_dict(),
-        }), 200
-
-    except Exception as e:
-        db.session.rollback()
-        try:
-            posted_by = g.current_user.username if hasattr(g, 'current_user') else 'النظام'
-            AuditLog.log_action(
-                user_name=posted_by,
-                action='finalize_invoice_draft',
-                entity_type='Invoice',
-                entity_id=invoice_id,
-                success=False,
-                error_message=str(e),
-                ip_address=request.remote_addr,
-                user_agent=request.headers.get('User-Agent'),
-            )
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
 @posting_bp.route('/invoices/approve-large-discount/<int:invoice_id>', methods=['POST'])
 @require_permission('invoice.post')
 @require_permission('journal.post')
 def approve_large_discount_invoice(invoice_id):
-    """Approve and fully post a large-discount invoice.
+    """Approve and post an unposted invoice that was saved behind an approval gate.
 
-    This posts BOTH:
-    - Invoice (is_posted)
-    - The invoice-linked JournalEntry (reference_type='invoice')
-    And appends safebox ledger movements for:
-    - invoice payments (ref_type='invoice_payment')
-    - gold inventory movements (ref_type='invoice_gold')
+    For approval-gated invoices, invoice payments are persisted but SafeBox movements
+    are intentionally deferred until approval.
     """
     try:
-        posted_by = g.current_user.username
+        approved_by = g.current_user.username
 
         invoice = Invoice.query.get(invoice_id)
         if not invoice:
             return jsonify({'success': False, 'message': 'الفاتورة غير موجودة'}), 404
 
-        if invoice.is_posted:
+        if getattr(invoice, 'is_posted', False):
             return jsonify({'success': False, 'message': 'الفاتورة مرحلة بالفعل'}), 400
 
-        entry = (
-            JournalEntry.query.filter_by(reference_type='invoice', reference_id=invoice.id)
-            .filter(JournalEntry.is_deleted == False)
-            .order_by(JournalEntry.id.desc())
-            .first()
-        )
-        if not entry:
-            return jsonify({
-                'success': False,
-                'message': 'لا يوجد قيد مرتبط بهذه الفاتورة لترحيله',
-            }), 400
+        def _direction_for_invoice_cash(t: str) -> str:
+            t = (t or '').strip()
+            if not t:
+                return 'in'
+            if t == 'بيع':
+                return 'in'
+            if t == 'مرتجع بيع':
+                return 'out'
+            if t in ('شراء من عميل', 'شراء') or ('شراء' in t and 'مورد' in t and 'مرتجع' not in t):
+                return 'out'
+            if t in ('مرتجع شراء', 'مرتجع شراء (مورد)') or ('مرتجع' in t and 'شراء' in t and 'مورد' in t):
+                return 'in'
+            return 'in'
 
-        if not entry.is_posted:
-            # Validate journal entry balance
-            total_cash_debit = sum(line.cash_debit or 0 for line in entry.lines if not line.is_deleted)
-            total_cash_credit = sum(line.cash_credit or 0 for line in entry.lines if not line.is_deleted)
-            if abs(total_cash_debit - total_cash_credit) > 0.01:
-                return jsonify({
-                    'success': False,
-                    'message': f'القيد غير متوازن (نقد). مدين: {total_cash_debit}, دائن: {total_cash_credit}',
-                }), 400
+        def _is_receivable_payment_method(pm: PaymentMethod | None) -> bool:
+            if pm is None:
+                return False
+            try:
+                pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
+                return pt == 'receivable'
+            except Exception:
+                return False
 
-            for karat in ['18k', '21k', '22k', '24k']:
-                total_debit = sum(getattr(line, f'debit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-                total_credit = sum(getattr(line, f'credit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-                if abs(total_debit - total_credit) > 0.001:
-                    return jsonify({
-                        'success': False,
-                        'message': f'القيد غير متوازن (عيار {karat}). مدين: {total_debit}, دائن: {total_credit}',
-                    }), 400
+        # Create deferred safe box transactions for invoice payments (idempotent).
+        payments = list(getattr(invoice, 'payments', []) or [])
+        for pay in payments:
+            try:
+                pay_id = int(getattr(pay, 'id', 0) or 0)
+            except Exception:
+                pay_id = 0
+            if pay_id <= 0:
+                continue
 
-            entry.is_posted = True
-            entry.posted_at = datetime.now()
-            entry.posted_by = posted_by
-
-        # Update invoice paid amount from stored payments
-        try:
-            payments = getattr(invoice, 'payments', None) or []
-            invoice.amount_paid = round(sum(float(p.amount or 0.0) for p in payments), 2)
-        except Exception:
-            pass
-
-        invoice.is_posted = True
-        invoice.posted_at = datetime.now()
-        invoice.posted_by = posted_by
-
-        # Sync invoice status
-        try:
-            total_amount = float(invoice.total or 0.0)
-            paid_amount = float(invoice.amount_paid or 0.0)
-            barter_total_status = float(getattr(invoice, 'barter_total', 0.0) or 0.0)
-            total_settled = paid_amount + barter_total_status
-            eps = 0.01
-            if total_settled <= eps:
-                invoice.status = 'unpaid'
-            elif total_settled >= total_amount - eps:
-                invoice.status = 'paid'
-            else:
-                invoice.status = 'partially_paid'
-        except Exception:
-            pass
-
-        # Append safebox movements
-        _append_safe_transactions_for_invoice_payments(invoice, created_by=posted_by)
-        _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
-
-        # Mark related alert as reviewed
-        try:
-            alert = (
-                SystemAlert.query.filter_by(alert_type='invoice_approval', entity_type='Invoice', entity_id=invoice.id)
-                .order_by(SystemAlert.id.desc())
+            exists = (
+                SafeBoxTransaction.query.filter_by(ref_type='invoice_payment', invoice_payment_id=pay_id)
+                .order_by(SafeBoxTransaction.id.desc())
                 .first()
             )
-            if alert and not alert.is_reviewed:
-                alert.is_reviewed = True
-                alert.reviewed_at = datetime.now()
-                alert.reviewed_by = posted_by
-                db.session.add(alert)
+            if exists:
+                continue
+
+            pm_obj = None
+            try:
+                pm_id = getattr(pay, 'payment_method_id', None)
+                if pm_id not in (None, '', False):
+                    pm_obj = PaymentMethod.query.get(int(pm_id))
+            except Exception:
+                pm_obj = None
+
+            if _is_receivable_payment_method(pm_obj):
+                continue
+
+            explicit_safe_box_id = None
+            notes_for_tx = None
+            try:
+                raw_notes = getattr(pay, 'notes', None)
+                if raw_notes:
+                    decoded = json.loads(raw_notes)
+                    if isinstance(decoded, dict):
+                        notes_for_tx = decoded.get('user_notes')
+                        raw_sb = decoded.get('safe_box_id')
+                        if raw_sb not in (None, '', 0, '0', False):
+                            explicit_safe_box_id = int(raw_sb)
+            except Exception:
+                notes_for_tx = getattr(pay, 'notes', None)
+
+            safe_box_id = _resolve_cash_safe_box_id_for_invoice(
+                invoice=invoice,
+                pm_obj=pm_obj,
+                explicit_safe_box_id=explicit_safe_box_id,
+            )
+            if safe_box_id is None:
+                db.session.rollback()
+                return jsonify({
+                    'success': False,
+                    'message': 'تعذر تحديد خزينة لوسيلة الدفع أثناء الاعتماد',
+                    'invoice_id': invoice_id,
+                    'invoice_payment_id': pay_id,
+                }), 400
+
+            sb = SafeBox.query.get(int(safe_box_id))
+            if not sb:
+                db.session.rollback()
+                return jsonify({
+                    'success': False,
+                    'message': 'الخزينة المحددة غير موجودة',
+                    'safe_box_id': safe_box_id,
+                    'invoice_id': invoice_id,
+                    'invoice_payment_id': pay_id,
+                }), 400
+
+            direction = _direction_for_invoice_cash(getattr(invoice, 'invoice_type', None))
+            try:
+                amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
+            except Exception:
+                amount_cash = 0.0
+
+            db.session.add(
+                SafeBoxTransaction(
+                    safe_box_id=int(safe_box_id),
+                    ref_type='invoice_payment',
+                    ref_id=pay_id,
+                    invoice_id=invoice.id,
+                    invoice_payment_id=pay_id,
+                    payment_method_id=getattr(pay, 'payment_method_id', None),
+                    direction=direction,
+                    amount_cash=amount_cash,
+                    notes=notes_for_tx,
+                    created_by=approved_by,
+                )
+            )
+
+        # Mark invoice as posted (approval implies posting).
+        invoice.is_posted = True
+        invoice.posted_at = datetime.now()
+        invoice.posted_by = approved_by
+
+        # Restore basic payment status based on persisted payments.
+        try:
+            total_paid = 0.0
+            for pay in payments:
+                try:
+                    total_paid += float(getattr(pay, 'amount', 0.0) or 0.0)
+                except Exception:
+                    pass
+            invoice.amount_paid = round(total_paid, 2)
+
+            inv_total = float(getattr(invoice, 'total', 0.0) or 0.0)
+            if total_paid <= 0.0:
+                invoice.status = 'unpaid'
+            elif inv_total > 0 and (total_paid + 0.01) < inv_total:
+                invoice.status = 'partially_paid'
+            else:
+                invoice.status = 'paid'
         except Exception:
             pass
 
-        db.session.commit()
+        # Append gold inventory movements into SafeBox ledger (append-only)
+        _append_safe_transactions_for_invoice_gold(invoice, created_by=approved_by)
 
-        try:
-            AuditLog.log_action(
-                user_name=posted_by,
-                action='approve_large_discount',
-                entity_type='Invoice',
-                entity_id=invoice.id,
-                entity_number=getattr(invoice, 'invoice_number', None),
-                details=json.dumps({
-                    'journal_entry_id': entry.id,
-                    'journal_entry_number': getattr(entry, 'entry_number', None),
-                }, ensure_ascii=False),
-                ip_address=request.remote_addr,
-                user_agent=request.headers.get('User-Agent'),
-                success=True,
-            )
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
+        db.session.commit()
 
         return jsonify({
             'success': True,
             'message': 'تم اعتماد وترحيل الفاتورة بنجاح',
             'invoice': invoice.to_dict(),
-            'journal_entry': entry.to_dict(),
         }), 200
 
     except Exception as e:
         db.session.rollback()
-        try:
-            posted_by = g.current_user.username if hasattr(g, 'current_user') else 'النظام'
-            AuditLog.log_action(
-                user_name=posted_by,
-                action='approve_large_discount',
-                entity_type='Invoice',
-                entity_id=invoice_id,
-                success=False,
-                error_message=str(e),
-                ip_address=request.remote_addr,
-                user_agent=request.headers.get('User-Agent'),
-            )
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
 

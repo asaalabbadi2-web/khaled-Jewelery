@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_service.dart';
 import '../models/employee_model.dart';
@@ -10,6 +13,8 @@ import '../theme/app_theme.dart';
 import 'voucher_preview_screen.dart';
 import '../utils.dart';
 import '../widgets/account_picker_sheet.dart';
+import '../widgets/party_picker_dialog.dart';
+import '../widgets/searchable_picker_field.dart';
 
 /// نموذج لسطر حساب في السند
 class AccountLineModel {
@@ -98,6 +103,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   DateTime _selectedDate = DateTime.now();
 
+  bool _checkedLocalDraft = false;
+
   String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
@@ -123,7 +130,168 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       _populateFromExisting(widget.existingVoucher!);
     }
 
+    if (widget.existingVoucher == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _maybePromptRestoreLocalDraft();
+      });
+    }
+
     _loadData();
+  }
+
+  String _localDraftKey() {
+    return 'yasargold_voucher_draft_${widget.voucherType}';
+  }
+
+  Map<String, dynamic> _buildLocalDraftPayload() {
+    return {
+      'voucher_type': widget.voucherType,
+      'date': _selectedDate.toIso8601String(),
+      'party_type': _partyType,
+      'customer_id': _selectedCustomerId,
+      'supplier_id': _selectedSupplierId,
+      'employee_id': _selectedEmployeeId,
+      'other_account_id': _selectedOtherAccountId,
+      'description': _descriptionController.text,
+      'notes': _notesController.text,
+      'receiver_name': _receiverNameController.text,
+      'account_lines': _accountLines.map((l) => l.toJson()).toList(),
+    };
+  }
+
+  AccountLineModel _accountLineFromJson(Map<String, dynamic> jsonLine) {
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
+    double? toDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    return AccountLineModel(
+      accountId: toInt(jsonLine['account_id']),
+      lineType: (jsonLine['line_type'] ?? 'debit').toString(),
+      amountType: (jsonLine['amount_type'] ?? 'cash').toString(),
+      amount: toDouble(jsonLine['amount']) ?? 0,
+      karat: toDouble(jsonLine['karat']),
+      description: jsonLine['description']?.toString(),
+    );
+  }
+
+  void _ensureAtLeastOneLine() {
+    if (_accountLines.isNotEmpty) return;
+    _accountLines.add(
+      AccountLineModel(
+        lineType: widget.voucherType == 'receipt' ? 'debit' : 'credit',
+        amountType: 'cash',
+      ),
+    );
+  }
+
+  Future<void> _saveLocalDraft({bool showToast = true}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = _buildLocalDraftPayload();
+    await prefs.setString(_localDraftKey(), jsonEncode(payload));
+
+    if (showToast && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ السند لإكماله لاحقاً')),
+      );
+    }
+  }
+
+  Future<void> _clearLocalDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_localDraftKey());
+  }
+
+  Future<void> _maybePromptRestoreLocalDraft() async {
+    if (!mounted || _checkedLocalDraft) return;
+    _checkedLocalDraft = true;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_localDraftKey());
+    if (raw == null || raw.trim().isEmpty) return;
+
+    Map<String, dynamic>? decoded;
+    try {
+      decoded = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      // If draft is corrupted, just remove it.
+      await _clearLocalDraft();
+      return;
+    }
+
+    final bool? restore = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('مسودة محفوظة'),
+        content: const Text('يوجد سند محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('تجاهل'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('استعادة'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (restore != true) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    try {
+      setState(() {
+        int? toInt(dynamic v) {
+          if (v is int) return v;
+          if (v is num) return v.toInt();
+          if (v is String) return int.tryParse(v);
+          return int.tryParse('${v ?? ''}');
+        }
+
+        final dateRaw = decoded?['date']?.toString();
+        if (dateRaw != null && dateRaw.isNotEmpty) {
+          _selectedDate = DateTime.tryParse(dateRaw) ?? _selectedDate;
+        }
+
+        _partyType = (decoded?['party_type'] ?? _partyType).toString();
+        _selectedCustomerId = toInt(decoded?['customer_id']);
+        _selectedSupplierId = toInt(decoded?['supplier_id']);
+        _selectedEmployeeId = toInt(decoded?['employee_id']);
+        _selectedOtherAccountId = toInt(decoded?['other_account_id']);
+
+        _descriptionController.text = (decoded?['description'] ?? '').toString();
+        _notesController.text = (decoded?['notes'] ?? '').toString();
+        _receiverNameController.text =
+            (decoded?['receiver_name'] ?? '').toString();
+
+        _accountLines.clear();
+        final rawLines = (decoded?['account_lines'] as List<dynamic>? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        for (final line in rawLines) {
+          _accountLines.add(_accountLineFromJson(line));
+        }
+        _ensureAtLeastOneLine();
+      });
+    } catch (_) {
+      // If something goes wrong during restore, discard the draft.
+      await _clearLocalDraft();
+    }
   }
 
   // Move populate/apply helpers to instance methods so they can be reused
@@ -371,6 +539,61 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     }
   }
 
+  int? _toInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString());
+  }
+
+  String? _selectedPartyName(String partyType) {
+    if (partyType == 'customer') {
+      final selected = _findById(_customers, _selectedCustomerId);
+      final name = (selected?['name'] ?? '').toString().trim();
+      return name.isEmpty ? null : name;
+    }
+    if (partyType == 'supplier') {
+      final selected = _findById(_suppliers, _selectedSupplierId);
+      final name = (selected?['name'] ?? '').toString().trim();
+      return name.isEmpty ? null : name;
+    }
+    return null;
+  }
+
+  Future<void> _pickCustomer() async {
+    if (_customers.isEmpty) return;
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => PartyPickerDialog(
+        title: 'اختيار عميل',
+        items: _customers,
+        selectedId: _selectedCustomerId,
+        emptyText: 'لا يوجد عميل مطابق',
+      ),
+    );
+    if (selected == null) return;
+    final id = _toInt(selected['id']);
+    if (id == null) return;
+    setState(() => _selectedCustomerId = id);
+  }
+
+  Future<void> _pickSupplier() async {
+    if (_suppliers.isEmpty) return;
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => PartyPickerDialog(
+        title: 'اختيار مورد',
+        items: _suppliers,
+        selectedId: _selectedSupplierId,
+        emptyText: 'لا يوجد مورد مطابق',
+      ),
+    );
+    if (selected == null) return;
+    final id = _toInt(selected['id']);
+    if (id == null) return;
+    setState(() => _selectedSupplierId = id);
+  }
+
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
@@ -584,6 +807,23 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         });
       }
     }
+  }
+
+  double? _getAvailableSafeCash(SafeBoxModel safe) {
+    final safeId = safe.id;
+    if (safeId != null) {
+      final ledger = _safeLedgerCashBalance[safeId];
+      if (ledger != null) return ledger;
+    }
+    final fallback = safe.balance?.cash;
+    return fallback != null ? fallback.toDouble() : null;
+  }
+
+  bool _isCashOutflowFromSafe(AccountLineModel line) {
+    return widget.voucherType == 'payment' &&
+        line.amountType == 'cash' &&
+        line.lineType == 'credit' &&
+        line.amount > 0;
   }
 
   EmployeeModel? _findEmployeeById(int? employeeId) {
@@ -978,13 +1218,31 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     final bool hasAmounts =
         _totalCash > 0 || _totalGoldByKarat.values.any((value) => value > 0);
 
-    final bool hasSafeOverdraft = _accountLines.any((line) {
-      if (widget.voucherType != 'payment') return false;
-      if (line.amountType != 'cash' || line.amount <= 0) return false;
+    final Map<int, double> outflowBySafeId = {};
+    for (final line in _accountLines) {
+      if (!_isCashOutflowFromSafe(line)) continue;
       final safe = _findSafeByAccountId(line.accountId);
-      if (safe == null || safe.balance == null) return false;
-      final available = safe.balance!.cash;
-      return line.amount - available > 0.0001;
+      final safeId = safe?.id;
+      if (safe == null || safeId == null) continue;
+      outflowBySafeId[safeId] = (outflowBySafeId[safeId] ?? 0.0) + line.amount;
+    }
+
+    final bool hasSafeOverdraft = outflowBySafeId.entries.any((entry) {
+      final safeId = entry.key;
+      final totalOutflow = entry.value;
+      SafeBoxModel? safe;
+      try {
+        safe = _safeBoxes.firstWhere((s) => s.id == safeId);
+      } catch (_) {
+        safe = null;
+      }
+      if (safe == null) return false;
+      final available = _getAvailableSafeCash(safe);
+      if (available == null) {
+        // Best-effort: if we don't know the available balance, don't block/flag.
+        return false;
+      }
+      return totalOutflow > available + 0.01;
     });
 
     final totalGoldText = _totalGoldByKarat.entries
@@ -1300,48 +1558,28 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             ),
             const SizedBox(height: 16),
             if (_partyType == 'customer')
-              DropdownButtonFormField<int>(
-                initialValue: _selectedCustomerId,
-                decoration: InputDecoration(
-                  labelText: 'العميل *',
-                  border: const OutlineInputBorder(),
-                  helperText: _customersAggregateAccountNumber != null
-                      ? 'سيتم القيد على الحساب التجميعي للعملاء ($_customersAggregateAccountNumber)'
-                      : 'سيتم القيد على الحساب التجميعي للعملاء',
-                ),
-                items: _customers.map<DropdownMenuItem<int>>((customer) {
-                  return DropdownMenuItem<int>(
-                    value: customer['id'],
-                    child: Text(customer['name']),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedCustomerId = value;
-                  });
-                },
+              SearchablePickerField(
+                labelText: 'العميل *',
+                valueText: _selectedPartyName('customer'),
+                hintText: _customers.isEmpty ? 'لا يوجد عملاء' : 'اضغط للبحث والاختيار',
+                helperText: _customersAggregateAccountNumber != null
+                    ? 'سيتم القيد على الحساب التجميعي للعملاء ($_customersAggregateAccountNumber)'
+                    : 'سيتم القيد على الحساب التجميعي للعملاء',
+                prefixIcon: Icons.person_outline,
+                enabled: _customers.isNotEmpty,
+                onTap: _pickCustomer,
               ),
             if (_partyType == 'supplier')
-              DropdownButtonFormField<int>(
-                initialValue: _selectedSupplierId,
-                decoration: InputDecoration(
-                  labelText: 'المورد *',
-                  border: const OutlineInputBorder(),
-                  helperText: _suppliersAggregateAccountNumber != null
-                      ? 'سيتم القيد على الحساب التجميعي للموردين ($_suppliersAggregateAccountNumber)'
-                      : 'سيتم القيد على الحساب التجميعي للموردين',
-                ),
-                items: _suppliers.map<DropdownMenuItem<int>>((supplier) {
-                  return DropdownMenuItem<int>(
-                    value: supplier['id'],
-                    child: Text(supplier['name']),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedSupplierId = value;
-                  });
-                },
+              SearchablePickerField(
+                labelText: 'المورد *',
+                valueText: _selectedPartyName('supplier'),
+                hintText: _suppliers.isEmpty ? 'لا يوجد موردين' : 'اضغط للبحث والاختيار',
+                helperText: _suppliersAggregateAccountNumber != null
+                    ? 'سيتم القيد على الحساب التجميعي للموردين ($_suppliersAggregateAccountNumber)'
+                    : 'سيتم القيد على الحساب التجميعي للموردين',
+                prefixIcon: Icons.store_mall_directory,
+                enabled: _suppliers.isNotEmpty,
+                onTap: _pickSupplier,
               ),
             if (_partyType == 'employee')
               DropdownButtonFormField<int>(
@@ -2041,7 +2279,25 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   Widget _buildSafeBalanceInfo(AccountLineModel line) {
     final safe = _findSafeByAccountId(line.accountId);
-    if (safe == null || safe.balance == null) {
+    if (safe == null) {
+      return const SizedBox.shrink();
+    }
+
+    // For cash/bank/clearing safes, prefer ledger balance (loaded on-demand).
+    final safeType = safe.safeType;
+    final isCashLikeSafe = safeType == 'cash' || safeType == 'bank' || safeType == 'clearing';
+    if (line.amountType == 'cash' && isCashLikeSafe) {
+      final safeId = safe.id;
+      if (safeId != null &&
+          !_safeLedgerCashBalance.containsKey(safeId) &&
+          !_safeLedgerCashBalanceLoading.contains(safeId)) {
+        // Lazy-load once; _ensureSafeLedgerBalanceLoaded is guarded.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _ensureSafeLedgerBalanceLoaded(safe);
+        });
+      }
+    } else if (safe.balance == null) {
+      // For gold balances we need safe.balance.weight details.
       return const SizedBox.shrink();
     }
 
@@ -2097,17 +2353,22 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           ? 'تحذير: الوزن المدخل ($formattedRequested) يتجاوز المخزون المتاح $formattedAvailable ${safe.karat != null ? '(عيار ${safe.karat})' : ''} في "${safe.name}".'
           : 'المخزون المتاح في "${safe.name}": $formattedAvailable ($karatLabel).';
     } else {
-      final double balance = safe.balance!.cash;
-      exceedsBalance = isPayment && line.amount > balance + 0.0001;
+      final available = _getAvailableSafeCash(safe);
+      final bool isOutflow = _isCashOutflowFromSafe(line);
+      exceedsBalance = isOutflow && available != null && line.amount > available + 0.01;
       bgColor = exceedsBalance ? Colors.red.shade50 : Colors.green.shade50;
       borderColor = exceedsBalance
           ? Colors.red.shade200
           : Colors.green.shade200;
       textColor = exceedsBalance ? Colors.red.shade700 : Colors.green.shade700;
 
-      message = exceedsBalance
-          ? 'تحذير: المبلغ المدخل (${_formatCash(line.amount)}) يتجاوز الرصيد المتاح ${_formatCash(balance)} في "${safe.name}".'
-          : 'الرصيد المتاح في "${safe.name}": ${_formatCash(balance)}';
+      if (available == null) {
+        message = 'رصيد الخزينة غير متاح حالياً لـ "${safe.name}".';
+      } else {
+        message = exceedsBalance
+            ? 'تحذير: المبلغ المدخل (${_formatCash(line.amount)}) يتجاوز الرصيد المتاح ${_formatCash(available)} في "${safe.name}".'
+            : 'الرصيد المتاح في "${safe.name}": ${_formatCash(available)}';
+      }
     }
 
     return Container(
@@ -2412,6 +2673,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         response = await _apiService.updateVoucher(vid, voucherData);
       } else {
         response = await _apiService.createVoucher(voucherData);
+      }
+
+      if (widget.existingVoucher == null) {
+        await _clearLocalDraft();
       }
 
       if (mounted) {
@@ -2973,6 +3238,25 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         backgroundColor: AppColors.deepGold,
         foregroundColor: Colors.white,
         elevation: 2,
+        actions: [
+          if (widget.existingVoucher == null)
+            TextButton.icon(
+              onPressed: _isSaving
+                  ? null
+                  : () async {
+                      await _saveLocalDraft();
+                      if (mounted) {
+                        Navigator.of(context).pop(false);
+                      }
+                    },
+              icon: const Icon(Icons.schedule, color: Colors.white70),
+              label: const Text(
+                'إكمال لاحقاً',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())

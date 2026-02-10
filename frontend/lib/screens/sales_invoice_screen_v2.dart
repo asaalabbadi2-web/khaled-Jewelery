@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';  // 🆕 للـ FilteringTextInputFormatter
+import 'dart:convert';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../models/safe_box_model.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import 'add_customer_screen.dart';
 import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
+import '../widgets/party_picker_dialog.dart';
+import '../widgets/searchable_picker_field.dart';
 import 'settings_screen_enhanced.dart';
 import '../utils/arabic_number_formatter.dart';
 import 'invoice_print_screen.dart';
@@ -37,6 +41,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   final _smartInputController = TextEditingController();
   final _smartInputFocus = FocusNode();
   final _customAmountController = TextEditingController(); // 🆕 للمبلغ المخصص
+
+  bool _checkedLocalDraft = false;
 
   // Customer
   int? _selectedCustomerId;
@@ -133,6 +139,263 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     _smartInputFocus.requestFocus();
   }
 
+  String _localDraftKey() => 'yasargold_sales_invoice_complete_later_v2';
+
+  Map<String, dynamic> _buildLocalDraftPayload() {
+    return {
+      'version': 1,
+      'customer_id': _selectedCustomerId,
+      'branch_id': _selectedBranchId,
+      'custom_amount': _customAmountController.text,
+      'ui_lock_price_edits': _uiLockPriceEdits,
+      'ui_disable_vat': _uiDisableVat,
+      'ui_auto_print': _uiAutoOpenPrintAfterSave,
+      'ui_paper_size': _uiPaperSize,
+      'selected_payment_method_id': _selectedPaymentMethodId,
+      'selected_safe_box_id': _selectedSafeBoxId,
+      'show_advanced_payment_options': _showAdvancedPaymentOptions,
+      'payments': _payments
+          .map(
+            (p) => {
+              'payment_method_id': p.paymentMethodId,
+              'payment_method_name': p.paymentMethodName,
+              'amount': p.amount,
+              'commission_rate': p.commissionRate,
+              'commission_amount': p.commissionAmount,
+              'commission_vat': p.commissionVat,
+              'net_amount': p.netAmount,
+              'settlement_days': p.settlementDays,
+              'notes': p.notes,
+              'safe_box_id': p.safeBoxId,
+            },
+          )
+          .toList(),
+      'items': _items
+          .map(
+            (i) => {
+              'item_id': i.id,
+              'name': i.name,
+              'barcode': i.barcode,
+              'karat': i.karat,
+              'weight': i.weight,
+              'wage': i.wage,
+              'category_id': i.categoryId,
+              'category_name': i.categoryName,
+              'count': i.count,
+              'profit': i.profit,
+              'tax_rate': i.taxRate,
+              'has_manual_total': i.hasManualTotal,
+              'manual_total': i.manualTargetTotal,
+            },
+          )
+          .toList(),
+      'enable_barter': _enableBarter,
+      'barter_gold_deposit_safe_box_id': _selectedBarterGoldDepositSafeBoxId,
+      'barter_lines': _barterLines
+          .map(
+            (l) => {
+              'karat': l.karat,
+              'standing': l.standingController.text,
+              'stones': l.stonesController.text,
+              'price_per_gram': l.pricePerGramController.text,
+              'total_amount': l.totalAmountController.text,
+            },
+          )
+          .toList(),
+    };
+  }
+
+  Future<void> _saveLocalDraft({bool showToast = true}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _localDraftKey(),
+      jsonEncode(_buildLocalDraftPayload()),
+    );
+    if (showToast && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ الفاتورة لإكمالها لاحقاً')),
+      );
+    }
+  }
+
+  Future<void> _clearLocalDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_localDraftKey());
+  }
+
+  Future<void> _maybePromptRestoreLocalDraft() async {
+    if (!mounted || _checkedLocalDraft) return;
+    _checkedLocalDraft = true;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_localDraftKey());
+    if (raw == null || raw.trim().isEmpty) return;
+
+    Map<String, dynamic>? decoded;
+    try {
+      decoded = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    final bool? restore = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('فاتورة محفوظة'),
+        content:
+            const Text('يوجد نموذج فاتورة محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('تجاهل'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('استعادة'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    if (restore != true) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
+    double toDouble(dynamic v) {
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      return double.tryParse('${v ?? ''}') ?? 0.0;
+    }
+
+    try {
+      final items = (decoded['items'] as List?)?.whereType<Map>().toList() ?? [];
+      final payments =
+          (decoded['payments'] as List?)?.whereType<Map>().toList() ?? [];
+      final barterLines =
+          (decoded['barter_lines'] as List?)?.whereType<Map>().toList() ?? [];
+
+      for (final l in _barterLines) {
+        l.dispose();
+      }
+
+      final restoredItems = <InvoiceItem>[];
+      for (final rawItem in items) {
+        final map = Map<String, dynamic>.from(rawItem);
+        final item = InvoiceItem(
+          id: toInt(map['item_id']),
+          name: (map['name'] ?? '').toString(),
+          barcode: (map['barcode'] ?? '').toString(),
+          karat: toDouble(map['karat']),
+          weight: toDouble(map['weight']),
+          wage: toDouble(map['wage']),
+          categoryId: toInt(map['category_id']),
+          categoryName: map['category_name']?.toString(),
+          count: toInt(map['count']) ?? 1,
+          goldPrice24k: _goldPrice24k,
+          mainKarat: _settingsProvider.mainKarat,
+          taxRate: toDouble(map['tax_rate']),
+          avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
+          avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
+        );
+        item.profit = toDouble(map['profit']);
+        final hasManual = map['has_manual_total'] == true;
+        final manualTotal = map['manual_total'];
+        if (hasManual && manualTotal != null) {
+          final mt = toDouble(manualTotal);
+          if (mt > 0) item.setManualTotal(mt);
+        }
+        restoredItems.add(item);
+      }
+
+      final restoredPayments = <PaymentEntry>[];
+      for (final rawPay in payments) {
+        final map = Map<String, dynamic>.from(rawPay);
+        restoredPayments.add(
+          PaymentEntry(
+            paymentMethodId: toInt(map['payment_method_id']) ?? 0,
+            paymentMethodName: (map['payment_method_name'] ?? '').toString(),
+            amount: toDouble(map['amount']),
+            commissionRate: toDouble(map['commission_rate']),
+            commissionAmount: toDouble(map['commission_amount']),
+            commissionVat: toDouble(map['commission_vat']),
+            netAmount: toDouble(map['net_amount']),
+            settlementDays: toInt(map['settlement_days']) ?? 0,
+            notes: map['notes']?.toString(),
+            safeBoxId: toInt(map['safe_box_id']),
+          ),
+        );
+      }
+
+      final restoredBarter = <_BarterLine>[];
+      for (final rawLine in barterLines) {
+        final map = Map<String, dynamic>.from(rawLine);
+        final k = toInt(map['karat']) ?? _settingsProvider.mainKarat;
+        final l = _BarterLine(karat: k);
+        l.standingController.text = (map['standing'] ?? '').toString();
+        l.stonesController.text = (map['stones'] ?? '').toString();
+        l.pricePerGramController.text = (map['price_per_gram'] ?? '').toString();
+        l.totalAmountController.text = (map['total_amount'] ?? '').toString();
+        restoredBarter.add(l);
+      }
+
+      setState(() {
+        _selectedCustomerId = toInt(decoded?['customer_id']);
+        _selectedBranchId = toInt(decoded?['branch_id']);
+        _customAmountController.text = (decoded?['custom_amount'] ?? '').toString();
+        _uiLockPriceEdits = decoded?['ui_lock_price_edits'] == true;
+        _uiDisableVat = decoded?['ui_disable_vat'] == true;
+        _uiAutoOpenPrintAfterSave = decoded?['ui_auto_print'] == true;
+        _uiPaperSize = (decoded?['ui_paper_size'] ?? _uiPaperSize).toString();
+        _selectedPaymentMethodId = toInt(decoded?['selected_payment_method_id']);
+        _selectedSafeBoxId = toInt(decoded?['selected_safe_box_id']);
+        _showAdvancedPaymentOptions =
+            decoded?['show_advanced_payment_options'] == true;
+
+        _items
+          ..clear()
+          ..addAll(restoredItems);
+        _payments
+          ..clear()
+          ..addAll(restoredPayments);
+
+        _enableBarter = decoded?['enable_barter'] == true;
+        _selectedBarterGoldDepositSafeBoxId =
+            toInt(decoded?['barter_gold_deposit_safe_box_id']);
+        _barterLines
+          ..clear()
+          ..addAll(restoredBarter);
+
+        if (_uiDisableVat) {
+          for (final item in _items) {
+            item.taxRate = 0.0;
+          }
+        }
+      });
+
+      if (_enableBarter) {
+        await _loadBarterGoldDepositSafeBoxesIfNeeded();
+      }
+    } catch (_) {
+      await _clearLocalDraft();
+    }
+  }
+
+  Future<void> _completeLater() async {
+    await _saveLocalDraft(showToast: true);
+    if (mounted) Navigator.of(context).pop();
+  }
+
   Future<void> _loadBarterGoldDepositSafeBoxesIfNeeded() async {
     if (_isLoadingBarterGoldDepositSafeBoxes) return;
 
@@ -202,6 +465,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
     _smartInputFocus.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybePromptRestoreLocalDraft();
+    });
   }
 
   Future<void> _loadInvoiceUiSettingsFromPrefs() async {
@@ -309,6 +575,43 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     if (value is int) return value;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString());
+  }
+
+  String? _selectedCustomerDisplay() {
+    final selectedId = _selectedCustomerId;
+    if (selectedId == null) return null;
+
+    for (final c in widget.customers) {
+      final id = _parseInt(c['id']);
+      if (id != selectedId) continue;
+      final name = (c['name'] ?? c['customer_name'] ?? '').toString().trim();
+      final phone =
+          (c['phone'] ?? c['phone_number'] ?? c['customer_phone'] ?? '')
+              .toString()
+              .trim();
+      if (name.isEmpty) return null;
+      if (phone.isEmpty) return name;
+      return '$name • $phone';
+    }
+    return null;
+  }
+
+  Future<void> _pickCustomer() async {
+    if (widget.customers.isEmpty) return;
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => PartyPickerDialog(
+        title: 'اختيار عميل',
+        items: widget.customers,
+        selectedId: _selectedCustomerId,
+        emptyText: 'لا يوجد عميل مطابق',
+      ),
+    );
+
+    if (selected == null) return;
+    final id = _parseInt(selected['id']);
+    if (id == null) return;
+    setState(() => _selectedCustomerId = id);
   }
 
   double _parseDouble(dynamic value) {
@@ -1813,27 +2116,21 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   }
 
   // ==================== Submit Invoice ====================
-  Future<void> _submitInvoice({bool saveAsDraft = false}) async {
-    if (!saveAsDraft) {
-      if (_items.isEmpty) {
-        _showError('يرجى إضافة أصناف للفاتورة');
-        return;
-      }
+  Future<void> _submitInvoice() async {
+    if (_items.isEmpty) {
+      _showError('يرجى إضافة أصناف للفاتورة');
+      return;
+    }
 
-      if (_selectedBranchId == null) {
-        _showError('يرجى اختيار الفرع لإكمال الفاتورة.');
-        return;
-      }
+    if (_selectedBranchId == null) {
+      _showError('يرجى اختيار الفرع لإكمال الفاتورة.');
+      return;
     }
 
     final allowPartialPayments = _settingsProvider.allowPartialInvoicePayments;
 
     // 🆕 Barter validation
     final barterTotal = _barterTotal;
-    if (saveAsDraft && _enableBarter && barterTotal > 0.01) {
-      _showError('لا يمكن حفظ مسودة مع المقايضة.');
-      return;
-    }
     if (_enableBarter) {
       if (_barterLines.isEmpty) {
         _showError('يرجى إضافة سطر مقايضة واحد على الأقل');
@@ -1902,18 +2199,43 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     final hasAnySettlement = _payments.isNotEmpty || barterTotal > 0.01;
 
-    // Draft: allow saving without any settlement/payments.
-    if (!saveAsDraft) {
-      if (!hasAnySettlement) {
+    if (!hasAnySettlement) {
+      if (!allowPartialPayments) {
+        _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
+        return;
+      }
+
+      final proceed = await _confirmDeferredInvoiceSave(
+        total: total,
+        totalPaid: totalPaid,
+        remaining: total,
+        totalCost: totalCost,
+        paidBelowCost: paidBelowCost,
+        saleBelowCost: saleBelowCost,
+      );
+      shownDeferredDialog = true;
+      if (proceed == _PreSaveDecision.cancel) return;
+      suppressPostSaveApprovalWarning =
+          proceed == _PreSaveDecision.proceedSuppressWarning;
+    } else {
+      // منع الدفع الزائد
+      if (remaining < -0.01) {
+        _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
+        return;
+      }
+
+      if (remaining > 0.01) {
         if (!allowPartialPayments) {
-          _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
+          _showError(
+            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+          );
           return;
         }
 
         final proceed = await _confirmDeferredInvoiceSave(
           total: total,
           totalPaid: totalPaid,
-          remaining: total,
+          remaining: remaining,
           totalCost: totalCost,
           paidBelowCost: paidBelowCost,
           saleBelowCost: saleBelowCost,
@@ -1922,39 +2244,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         if (proceed == _PreSaveDecision.cancel) return;
         suppressPostSaveApprovalWarning =
             proceed == _PreSaveDecision.proceedSuppressWarning;
-      } else {
-        // منع الدفع الزائد
-        if (remaining < -0.01) {
-          _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
-          return;
-        }
-
-        if (remaining > 0.01) {
-          if (!allowPartialPayments) {
-            _showError(
-              'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
-            );
-            return;
-          }
-
-          final proceed = await _confirmDeferredInvoiceSave(
-            total: total,
-            totalPaid: totalPaid,
-            remaining: remaining,
-            totalCost: totalCost,
-            paidBelowCost: paidBelowCost,
-            saleBelowCost: saleBelowCost,
-          );
-          shownDeferredDialog = true;
-          if (proceed == _PreSaveDecision.cancel) return;
-          suppressPostSaveApprovalWarning =
-              proceed == _PreSaveDecision.proceedSuppressWarning;
-        }
       }
     }
 
-    if (!saveAsDraft &&
-        !shownDeferredDialog &&
+    if (!shownDeferredDialog &&
         totalCost > 0 &&
         (paidBelowCost || saleBelowCost)) {
       final decision = await _confirmBelowCostInvoiceSave(
@@ -2032,19 +2325,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         'total_weight': totalWeight,
         'total_cost': totalCost,
         'total_tax': totalTax,
-        if (!saveAsDraft && _enableBarter && barterTotal > 0.01)
+        if (_enableBarter && barterTotal > 0.01)
           'barter_total': barterTotal,
-        'payments': saveAsDraft
-            ? <Map<String, dynamic>>[]
-            : _payments.map((p) => p.toJson()).toList(),
-        'amount_paid': saveAsDraft ? 0.0 : _totalPayments,
-        if (saveAsDraft) 'save_as_draft': true,
+        'payments': _payments.map((p) => p.toJson()).toList(),
+        'amount_paid': _totalPayments,
         'items': _items.map((item) => item.toJson()).toList(),
       };
 
       final response = await apiService.addInvoice(invoiceData);
 
-      final isDraftSaved = response['draft_saved'] == true;
       final approvalRequired = response['approval_required'] == true;
       final approvalReasons = (response['approval_reasons'] is List)
           ? List<String>.from(response['approval_reasons'])
@@ -2102,23 +2391,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             ),
           );
         }
-      }
-
-      if (saveAsDraft || isDraftSaved) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '✅ تم حفظ الفاتورة كمسودة #${response['id'] ?? ''}\nيمكنك إكمالها لاحقاً من شاشة الترحيل.',
-              ),
-              backgroundColor: Colors.blueGrey.shade800,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 4),
-            ),
-          );
-        }
-        if (mounted) _resetAfterSave();
-        return;
       }
 
       // 🆕 Auto-create linked scrap purchase invoice for barter (offset)
@@ -2260,6 +2532,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       }
 
       if (!mounted) return;
+      await _clearLocalDraft();
       _resetAfterSave();
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
@@ -3120,16 +3393,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _items.isEmpty || _selectedBranchId == null
-                                ? null
-                                : () => _submitInvoice(saveAsDraft: true),
-                            icon: const Icon(Icons.edit_note_outlined),
-                            label: const Text('حفظ كمسودة'),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -3177,16 +3440,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 ),
               ),
               const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _items.isEmpty || _selectedBranchId == null
-                      ? null
-                      : () => _submitInvoice(saveAsDraft: true),
-                  icon: const Icon(Icons.edit_note_outlined),
-                  label: const Text('حفظ كمسودة'),
-                ),
-              ),
             ],
             const SizedBox(height: 32),
             _buildCostingInsightCard(theme),
@@ -3200,6 +3453,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             iconTheme: const IconThemeData(color: Colors.white),
             title: const Text('فاتورة البيع '),
             actions: [
+              IconButton(
+                tooltip: 'إكمال لاحقاً',
+                onPressed: _completeLater,
+                icon: const Icon(Icons.schedule),
+              ),
               IconButton(
                 tooltip: 'تحديث سعر الذهب',
                 onPressed: _loadSettings,
@@ -3678,69 +3936,13 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 ),
               )
             else
-              DropdownButtonFormField<int>(
-                initialValue: _selectedCustomerId,
-                items: widget.customers
-                    .map((customer) {
-                      final rawId = customer['id'];
-                      if (rawId == null) return null;
-                      final id = rawId is int
-                          ? rawId
-                          : int.tryParse(rawId.toString());
-                      if (id == null) return null;
-                      final name = (customer['name'] ?? 'عميل').toString();
-                      final phone =
-                          (customer['phone'] ?? customer['phone_number'] ?? '')
-                              .toString();
-                      final isCashCustomer = name.trim() == 'نقدي';
-                      final accentColor = isCashCustomer
-                          ? AppColors.success
-                          : colorScheme.primary;
-
-                      return DropdownMenuItem<int>(
-                        value: id,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.badge, color: accentColor, size: 20),
-                            const SizedBox(width: 10),
-                            Flexible(
-                              child: Text(
-                                name,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (phone.isNotEmpty)
-                              Flexible(
-                                child: Text(
-                                  phone,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.textTheme.bodySmall?.color
-                                        ?.withValues(alpha: 0.7),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                          ],
-                        ),
-                      );
-                    })
-                    .whereType<DropdownMenuItem<int>>()
-                    .toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedCustomerId = value;
-                  });
-                },
-                decoration: InputDecoration(
-                  labelText: 'اختر العميل',
-                  prefixIcon: Icon(Icons.people, color: colorScheme.primary),
-                ),
-                dropdownColor: theme.cardColor,
-                icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
+              SearchablePickerField(
+                labelText: 'اختر العميل',
+                valueText: _selectedCustomerDisplay(),
+                hintText: 'اضغط للبحث والاختيار',
+                prefixIcon: Icons.people,
+                enabled: widget.customers.isNotEmpty,
+                onTap: _pickCustomer,
               ),
 
             const SizedBox(height: 14),

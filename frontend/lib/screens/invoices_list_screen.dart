@@ -383,9 +383,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         trimmed == 'مدفوعة جزئياً') {
       return 'partially_paid';
     }
-    if (lower == 'draft' || trimmed == 'مسودة') {
-      return 'draft';
-    }
+    // Invoice drafts are not supported.
     if (lower == 'cancelled' || lower == 'canceled' || trimmed == 'ملغاة') {
       return 'cancelled';
     }
@@ -645,8 +643,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         return isArabic ? 'غير مدفوعة' : 'Unpaid';
       case 'partially_paid':
         return isArabic ? 'مدفوعة جزئياً' : 'Partially Paid';
-      case 'draft':
-        return isArabic ? 'مسودة' : 'Draft';
       case 'cancelled':
         return isArabic ? 'ملغاة' : 'Cancelled';
       default:
@@ -1346,7 +1342,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         'label': isArabic ? 'مدفوعة جزئياً' : 'Partially Paid',
       },
       {'value': 'unpaid', 'label': isArabic ? 'غير مدفوعة' : 'Unpaid'},
-      {'value': 'draft', 'label': isArabic ? 'مسودة' : 'Draft'},
+      // Invoice drafts are not supported.
       {'value': 'cancelled', 'label': isArabic ? 'ملغاة' : 'Cancelled'},
     ];
   }

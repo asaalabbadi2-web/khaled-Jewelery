@@ -12,6 +12,8 @@ import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/invoice_settings_sheet.dart';
+import '../widgets/party_picker_dialog.dart';
+import '../widgets/searchable_picker_field.dart';
 import 'add_supplier_screen.dart';
 import 'invoice_print_screen.dart';
 import '../utils.dart';
@@ -47,6 +49,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   bool _uiDisableVat = false;
   bool _uiAutoOpenPrintAfterSave = false;
   String _uiPaperSize = 'A4';
+
+  bool _checkedLocalDraft = false;
 
   // Branches (فروع المعرض/المحل)
   bool _isLoadingBranches = false;
@@ -136,6 +140,263 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedGoldPaidKarat = _mainKaratFromSettings();
       _applyTotals(_KaratTotals.zero);
     });
+  }
+
+  String _localDraftKey() => 'yasargold_purchase_invoice_complete_later';
+
+  Map<String, dynamic> _buildLocalDraftPayload() {
+    String modeToString(_PurchaseSettlementMode m) {
+      switch (m) {
+        case _PurchaseSettlementMode.credit:
+          return 'credit';
+        case _PurchaseSettlementMode.barter:
+          return 'barter';
+        case _PurchaseSettlementMode.partial:
+          return 'partial';
+      }
+    }
+
+    return {
+      'version': 1,
+      'supplier_id': _selectedSupplierId,
+      'branch_id': _selectedBranchId,
+      'manual_pricing': _manualPricing,
+      'apply_vat_on_gold': _applyVatOnGold,
+      'wage_posting_mode': _wagePostingMode,
+      'ui_lock_price_edits': _uiLockPriceEdits,
+      'ui_disable_vat': _uiDisableVat,
+      'ui_auto_print': _uiAutoOpenPrintAfterSave,
+      'ui_paper_size': _uiPaperSize,
+      'show_advanced_payment_options': _showAdvancedPaymentOptions,
+      'selected_payment_method_id': _selectedPaymentMethodId,
+      'selected_safe_box_id': _selectedSafeBoxId,
+      'settlement_mode': modeToString(_settlementMode),
+      'cash_paid': _cashPaidController.text,
+      'gold_paid_weight': _goldPaidWeightController.text,
+      'selected_gold_safe_box_id': _selectedGoldSafeBoxId,
+      'selected_gold_paid_karat': _selectedGoldPaidKarat,
+      'karat_lines': _karatLines
+          .map(
+            (l) => {
+              'karat': l.karat,
+              'weight_grams': l.weightGrams,
+              'wage_per_gram': l.wagePerGram,
+              'gold_value_override': l.goldValueOverride,
+              'wage_cash_override': l.wageCashOverride,
+              'gold_tax_override': l.goldTaxOverride,
+              'wage_tax_override': l.wageTaxOverride,
+              'description': l.description,
+            },
+          )
+          .toList(),
+      'inline_items': _inlineItems
+          .map(
+            (i) => {
+              'name': i.name,
+              'karat': i.karat,
+              'weight_grams': i.weightGrams,
+              'wage_per_gram': i.wagePerGram,
+              'description': i.description,
+              'has_stones': i.hasStones,
+              'stones_weight': i.stonesWeight,
+              'stones_value': i.stonesValue,
+              'item_code': i.itemCode,
+              'barcode': i.barcode,
+              'category': i.category,
+              'category_id': i.categoryId,
+              'entry_type': i.entryType == PurchaseInlineEntryType.category
+                  ? 'category'
+                  : 'item',
+            },
+          )
+          .toList(),
+    };
+  }
+
+  Future<void> _saveLocalDraft({bool showToast = true}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localDraftKey(), jsonEncode(_buildLocalDraftPayload()));
+    if (showToast && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ الفاتورة لإكمالها لاحقاً')),
+      );
+    }
+  }
+
+  Future<void> _clearLocalDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_localDraftKey());
+  }
+
+  Future<void> _maybePromptRestoreLocalDraft() async {
+    if (!mounted || _checkedLocalDraft) return;
+    _checkedLocalDraft = true;
+
+    // If screen is opened to create for a specific supplier, still allow restore.
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_localDraftKey());
+    if (raw == null || raw.trim().isEmpty) return;
+
+    Map<String, dynamic>? decoded;
+    try {
+      decoded = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    final bool? restore = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('فاتورة محفوظة'),
+        content: const Text('يوجد نموذج فاتورة شراء محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('تجاهل'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('استعادة'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    if (restore != true) {
+      await _clearLocalDraft();
+      return;
+    }
+
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return int.tryParse('${v ?? ''}');
+    }
+
+    double toDouble(dynamic v) {
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      return double.tryParse('${v ?? ''}') ?? 0.0;
+    }
+
+    _PurchaseSettlementMode modeFromString(String? s) {
+      switch (s) {
+        case 'barter':
+          return _PurchaseSettlementMode.barter;
+        case 'partial':
+          return _PurchaseSettlementMode.partial;
+        case 'credit':
+        default:
+          return _PurchaseSettlementMode.credit;
+      }
+    }
+
+    final payload = decoded;
+
+    try {
+      final decodedKaratLines =
+          (payload['karat_lines'] as List?)?.whereType<Map>().toList() ?? [];
+      final decodedInlineItems =
+          (payload['inline_items'] as List?)?.whereType<Map>().toList() ?? [];
+
+      final restoredKaratLines = <PurchaseKaratLine>[];
+      for (final rawLine in decodedKaratLines) {
+        final map = Map<String, dynamic>.from(rawLine);
+        restoredKaratLines.add(
+          PurchaseKaratLine(
+            karat: toDouble(map['karat']),
+            weightGrams: toDouble(map['weight_grams']),
+            wagePerGram: toDouble(map['wage_per_gram']),
+            goldValueOverride: map['gold_value_override'] == null
+                ? null
+                : toDouble(map['gold_value_override']),
+            wageCashOverride: map['wage_cash_override'] == null
+                ? null
+                : toDouble(map['wage_cash_override']),
+            goldTaxOverride: map['gold_tax_override'] == null
+                ? null
+                : toDouble(map['gold_tax_override']),
+            wageTaxOverride: map['wage_tax_override'] == null
+                ? null
+                : toDouble(map['wage_tax_override']),
+            description: map['description']?.toString(),
+          ),
+        );
+      }
+
+      final restoredInlineItems = <PurchaseInlineItem>[];
+      for (final rawItem in decodedInlineItems) {
+        final map = Map<String, dynamic>.from(rawItem);
+        final entryType = (map['entry_type']?.toString() == 'category')
+            ? PurchaseInlineEntryType.category
+            : PurchaseInlineEntryType.item;
+        restoredInlineItems.add(
+          PurchaseInlineItem(
+            name: (map['name'] ?? '').toString(),
+            karat: toDouble(map['karat']),
+            weightGrams: toDouble(map['weight_grams']),
+            wagePerGram: toDouble(map['wage_per_gram']),
+            description: map['description']?.toString(),
+            hasStones: map['has_stones'] == true,
+            stonesWeight: toDouble(map['stones_weight']),
+            stonesValue: toDouble(map['stones_value']),
+            itemCode: map['item_code']?.toString(),
+            barcode: map['barcode']?.toString(),
+            category: map['category']?.toString(),
+            categoryId: toInt(map['category_id']),
+            entryType: entryType,
+          ),
+        );
+      }
+
+      setState(() {
+        _selectedSupplierId = toInt(payload['supplier_id']);
+        _selectedBranchId = toInt(payload['branch_id']);
+        _manualPricing = payload['manual_pricing'] == true;
+        _applyVatOnGold = payload['apply_vat_on_gold'] == true;
+        final wageMode = payload['wage_posting_mode']?.toString();
+        if (wageMode == 'inventory' || wageMode == 'expense') {
+          _wagePostingMode = wageMode!;
+        }
+        _uiLockPriceEdits = payload['ui_lock_price_edits'] == true;
+        _uiDisableVat = payload['ui_disable_vat'] == true;
+        _uiAutoOpenPrintAfterSave = payload['ui_auto_print'] == true;
+        _uiPaperSize = (payload['ui_paper_size'] ?? _uiPaperSize).toString();
+
+        _showAdvancedPaymentOptions =
+          payload['show_advanced_payment_options'] == true;
+        _selectedPaymentMethodId =
+          toInt(payload['selected_payment_method_id']);
+        _selectedSafeBoxId = toInt(payload['selected_safe_box_id']);
+
+        _settlementMode =
+          modeFromString(payload['settlement_mode']?.toString());
+        _cashPaidController.text = (payload['cash_paid'] ?? '').toString();
+        _goldPaidWeightController.text =
+          (payload['gold_paid_weight'] ?? '').toString();
+        _selectedGoldSafeBoxId = toInt(payload['selected_gold_safe_box_id']);
+        _selectedGoldPaidKarat =
+          toInt(payload['selected_gold_paid_karat']) ?? _selectedGoldPaidKarat;
+
+        _karatLines = restoredKaratLines;
+        _inlineItems = restoredInlineItems;
+      });
+
+      _syncGoldPaidKaratWithSafeIfNeeded();
+      _applyCombinedTotals();
+    } catch (_) {
+      await _clearLocalDraft();
+    }
+  }
+
+  Future<void> _completeLater() async {
+    await _saveLocalDraft(showToast: true);
+    if (mounted) Navigator.of(context).pop();
   }
 
   double _vatRateFromSettings() {
@@ -342,6 +603,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     _loadGoldSafeBoxes();
     _loadSettings();
     _applyTotals(_KaratTotals.zero);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybePromptRestoreLocalDraft();
+    });
   }
 
   Future<void> _loadInvoiceUiSettingsFromPrefs() async {
@@ -819,6 +1083,42 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     return int.tryParse(value.toString());
   }
 
+  String? _selectedSupplierName() {
+    final selectedId = _selectedSupplierId;
+    if (selectedId == null) return null;
+    for (final s in _suppliers) {
+      if (_parseId(s['id']) == selectedId) {
+        final name = (s['name'] ?? '').toString().trim();
+        return name.isEmpty ? null : name;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _pickSupplier() async {
+    if (_isLoadingSuppliers) return;
+    if (_suppliers.isEmpty) return;
+
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => PartyPickerDialog(
+        title: 'اختيار مورد',
+        items: _suppliers,
+        selectedId: _selectedSupplierId,
+        emptyText: 'لا يوجد مورد مطابق',
+      ),
+    );
+
+    if (selected == null) return;
+    final id = _parseId(selected['id']);
+    if (id == null) return;
+
+    setState(() {
+      _selectedSupplierId = id;
+      _supplierError = null;
+    });
+  }
+
   int? _parseInt(dynamic value) {
     if (value == null) return null;
     if (value is int) return value;
@@ -1153,22 +1453,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     (sum, item) => sum + (item.weightGrams * item.wagePerGram),
   );
 
-  Map<double, _InlineKaratAggregate> _inlineKaratAggregates() {
-    final Map<double, _InlineKaratAggregate> aggregates = {};
-    for (final item in _inlineItems) {
-      final line = PurchaseKaratLine(
-        karat: item.karat,
-        weightGrams: item.weightGrams,
-        wagePerGram: item.wagePerGram,
-      );
-      final snapshot = _snapshotFor(line);
-      aggregates
-          .putIfAbsent(line.karat, () => _InlineKaratAggregate())
-          .add(snapshot);
-    }
-    return aggregates;
-  }
-
   String _normalizeKaratKey(double karat) {
     if (karat.isNaN || !karat.isFinite) return '0';
     final rounded = karat.round();
@@ -1290,7 +1574,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     return true;
   }
 
-  Map<String, dynamic> _buildInvoicePayload({bool forDraft = false}) {
+  Map<String, dynamic> _buildInvoicePayload() {
+    // IMPORTANT:
+    // Backend enforces strict weight integrity in some contexts (scrap/barter/settlement).
+    // To avoid double-counting and payload conflicts, we keep `karat_lines` sourced ONLY
+    // from explicit karat lines (and keep `items` sourced ONLY from inline items).
     final linePayloads = _karatLines.map((line) {
       final snapshot = _snapshotFor(line);
       return {
@@ -1305,22 +1593,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       };
     }).toList();
 
-    final inlineAggregates = _inlineKaratAggregates();
-    inlineAggregates.forEach((karat, aggregate) {
-      linePayloads.add({
-        'karat': karat,
-        'weight_grams': _round(aggregate.weight, 3),
-        'gold_value_cash': _round(aggregate.goldValue, 2),
-        'manufacturing_wage_cash': _round(aggregate.wageCash, 2),
-        'gold_tax': _round(aggregate.goldTax, 2),
-        'wage_tax': _round(aggregate.wageTax, 2),
-        'description': 'تفاصيل الأصناف المضافة داخل الفاتورة',
-      });
-    });
-
-    final inlineItemsPayload = _inlineItems
-        .map((item) => item.toPayload())
-        .toList();
+    final inlineItemsPayload = _inlineItems.map((item) => item.toPayload()).toList();
     final inlineWeights = _aggregateInlineWeightByKarat();
     final weightByKarat = _aggregateWeightByKarat();
     final supplierGoldLines = weightByKarat.entries
@@ -1397,11 +1670,15 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       },
     };
 
-    if (forDraft) {
-      payload['save_as_draft'] = true;
-      payload['amount_paid'] = 0.0;
-      return payload;
+    // Weight-sensitive settlement (gold barter/partial): keep ONE source of weight.
+    // If user filled both explicit karat_lines and inline items, prefer karat_lines.
+    final isWeightSensitiveSettlement = paidGoldWeight > 0;
+    if (isWeightSensitiveSettlement && linePayloads.isNotEmpty && inlineItemsPayload.isNotEmpty) {
+      payload['items'] = <dynamic>[];
+      payload['inline_items_omitted_reason'] = 'weight_sensitive_settlement';
     }
+
+    // Invoice drafts are not supported.
 
     // Cash settlement (جزئي): use payments[] so backend can support partial cash.
     if (_settlementMode == _PurchaseSettlementMode.partial &&
@@ -1508,6 +1785,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       }
 
       if (!mounted) return;
+      await _clearLocalDraft();
       _resetAfterSave();
     } catch (e) {
       if (!mounted) return;
@@ -1526,48 +1804,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     }
   }
 
-  Future<void> _saveInvoiceDraft() async {
-    if (_isSavingInvoice) return;
-    if (!_validateBeforeSave(forDraft: true)) return;
 
-    setState(() {
-      _isSavingInvoice = true;
-    });
-
-    try {
-      final payload = _buildInvoicePayload(forDraft: true);
-      final response = await _api.addInvoice(payload);
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '✅ تم حفظ الفاتورة كمسودة #${response['id'] ?? ''}\nيمكنك إكمالها لاحقاً من شاشة الترحيل.',
-          ),
-          backgroundColor: Colors.blueGrey.shade800,
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-
-      _resetAfterSave();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('فشل حفظ المسودة: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSavingInvoice = false;
-        });
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1596,14 +1833,17 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _buildSettlementCard(),
       const SizedBox(height: 20),
       _buildSaveInvoiceButton(),
-      const SizedBox(height: 12),
-      _buildSaveDraftInvoiceButton(),
     ];
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('فاتورة شراء جديدة'),
         actions: [
+          IconButton(
+            tooltip: 'إكمال لاحقاً',
+            icon: const Icon(Icons.schedule),
+            onPressed: _completeLater,
+          ),
           IconButton(
             tooltip: 'تحديث سعر الذهب',
             icon: const Icon(Icons.refresh),
@@ -1786,33 +2026,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 },
               ),
             const SizedBox(height: 16),
-            DropdownButtonFormField<int>(
-              initialValue: _selectedSupplierId,
-              items: _suppliers
-                  .map(
-                    (supplier) => DropdownMenuItem<int>(
-                      value: supplier['id'] as int,
-                      child: Text(supplier['name']?.toString() ?? 'بدون اسم'),
-                    ),
-                  )
-                  .toList(),
-              decoration: InputDecoration(
-                labelText: 'اختر المورد',
-                border: const OutlineInputBorder(),
-                prefixIcon: Icon(
-                  Icons.store_mall_directory,
-                  color: colorScheme.primary,
-                ),
-                errorText: _supplierError,
-              ),
-              dropdownColor: theme.cardColor,
-              icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
-              onChanged: (value) {
-                setState(() {
-                  _selectedSupplierId = value;
-                  _supplierError = null;
-                });
-              },
+            SearchablePickerField(
+              labelText: 'اختر المورد',
+              valueText: _selectedSupplierName(),
+              hintText: 'اضغط للبحث والاختيار',
+              errorText: _supplierError,
+              prefixIcon: Icons.store_mall_directory,
+              enabled: _suppliers.isNotEmpty,
+              onTap: _pickSupplier,
             ),
             const Text(
               'طريقة السداد',
@@ -2941,31 +3162,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
               textStyle: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSaveDraftInvoiceButton() {
-    final theme = Theme.of(context);
-    return Card(
-      elevation: theme.brightness == Brightness.dark ? 1 : 1,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: _isSavingInvoice ? null : _saveInvoiceDraft,
-            icon: const Icon(Icons.edit_note_outlined),
-            label: const Text('حفظ كمسودة'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              textStyle: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -5379,22 +5575,6 @@ class _KaratTotals {
   double get subtotal => goldSubtotal + wageSubtotal;
   double get taxTotal => goldTaxTotal + wageTaxTotal;
   double get grandTotal => subtotal + taxTotal;
-}
-
-class _InlineKaratAggregate {
-  double weight = 0;
-  double goldValue = 0;
-  double wageCash = 0;
-  double goldTax = 0;
-  double wageTax = 0;
-
-  void add(_KaratLineSnapshot snapshot) {
-    weight += snapshot.weight;
-    goldValue += snapshot.goldValue;
-    wageCash += snapshot.wageCash;
-    goldTax += snapshot.goldTax;
-    wageTax += snapshot.wageTax;
-  }
 }
 
 class PurchaseInlineItem {

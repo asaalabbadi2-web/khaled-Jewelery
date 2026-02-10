@@ -3845,42 +3845,212 @@ def delete_customer(id):
 
 @api.route('/customers/<int:id>/statement', methods=['GET'])
 def get_customer_statement(id):
+    """كشف حساب العميل (صيغة موحدة لشاشة كشف الحساب في Flutter).
+
+    IMPORTANT:
+    The Flutter screen expects the same schema as `/accounts/<id>/statement`:
+      - opening_balance_cash/opening_balance_gold_normalized/opening_balance_gold_details
+      - lines[] with cash_debit/cash_credit/gold_debit/gold_credit + karat breakdown
+      - totals + closing balances
+
+    We keep the older shape under legacy_* keys for backward compatibility.
     """
-    كشف حساب العميل - عرض جميع القيود اليومية المتعلقة بالعميل
-    """
+
     customer = Customer.query.get_or_404(id)
-    
-    # Get all journal entry lines linked to this customer
-    lines = JournalEntryLine.query.filter_by(customer_id=id).join(
-        JournalEntry
-    ).order_by(JournalEntry.date.desc(), JournalEntry.id.desc()).all()
-    
-    # Format the statement
+    main_karat = get_main_karat()
+
+    def _safe_dt(value, fallback=None):
+        if value is None:
+            return fallback
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, time.min)
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return fallback
+
+    def _iso_or_none(value):
+        dt = _safe_dt(value)
+        return dt.isoformat() if dt else None
+
+    running_balance_cash = 0.0
+    running_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+    opening_balance_cash = 0.0
+    opening_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+    # Opening balance from افتتاحي entries (best-effort).
+    opening_filters = [
+        JournalEntryLine.customer_id == id,
+        JournalEntry.entry_type == 'افتتاحي',
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        opening_filters.append(JournalEntry.is_draft == False)
+
+    opening_journal_lines = (
+        JournalEntryLine.query
+        .join(JournalEntry)
+        .join(Account, JournalEntryLine.account_id == Account.id)
+        # For customer statements, only keep receivable-like lines to avoid cancellation.
+        .filter(*opening_filters)
+        .filter(Account.type == 'Asset')
+        .filter(Account.account_number.like('12%'))
+        .all()
+    )
+
+    for line in opening_journal_lines:
+        opening_balance_cash += float(line.cash_debit or 0.0) - float(line.cash_credit or 0.0)
+        opening_balances_gold['18k'] += float(line.debit_18k or 0.0) - float(line.credit_18k or 0.0)
+        opening_balances_gold['21k'] += float(line.debit_21k or 0.0) - float(line.credit_21k or 0.0)
+        opening_balances_gold['22k'] += float(line.debit_22k or 0.0) - float(line.credit_22k or 0.0)
+        opening_balances_gold['24k'] += float(line.debit_24k or 0.0) - float(line.credit_24k or 0.0)
+
+    opening_balance_gold_normalized = (
+        convert_to_main_karat(opening_balances_gold['18k'], 18) +
+        convert_to_main_karat(opening_balances_gold['21k'], 21) +
+        convert_to_main_karat(opening_balances_gold['22k'], 22) +
+        convert_to_main_karat(opening_balances_gold['24k'], 24)
+    )
+
+    running_balance_cash = float(opening_balance_cash or 0.0)
+    running_balances_gold = opening_balances_gold.copy()
+
+    journal_filters = [
+        JournalEntryLine.customer_id == id,
+        JournalEntry.entry_type != 'افتتاحي',
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        journal_filters.append(JournalEntry.is_draft == False)
+
+    # IMPORTANT:
+    # The DB may tag `customer_id` on multiple lines within the same journal entry
+    # (inventory/tax/etc). For a customer statement we only want the line(s)
+    # affecting receivable accounts, otherwise debits/credits cancel out.
+    journal_lines = (
+        JournalEntryLine.query
+        .join(JournalEntry)
+        .join(Account, JournalEntryLine.account_id == Account.id)
+        .filter(*journal_filters)
+        .filter(Account.type == 'Asset')
+        .filter(Account.account_number.like('12%'))
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .all()
+    )
+
     statement_lines = []
-    for line in lines:
-        entry = line.journal_entry
+    total_cash_debit = 0.0
+    total_cash_credit = 0.0
+    total_gold_debit_normalized = 0.0
+    total_gold_credit_normalized = 0.0
+
+    legacy_lines = []
+
+    for line in journal_lines:
+        je = getattr(line, 'journal_entry', None)
+        if not je:
+            continue
+
+        # Update running balances for each karat
+        running_balances_gold['18k'] += float(line.debit_18k or 0.0) - float(line.credit_18k or 0.0)
+        running_balances_gold['21k'] += float(line.debit_21k or 0.0) - float(line.credit_21k or 0.0)
+        running_balances_gold['22k'] += float(line.debit_22k or 0.0) - float(line.credit_22k or 0.0)
+        running_balances_gold['24k'] += float(line.debit_24k or 0.0) - float(line.credit_24k or 0.0)
+        running_balance_cash += float(line.cash_debit or 0.0) - float(line.cash_credit or 0.0)
+
+        gold_debit_normalized = (
+            convert_to_main_karat(line.debit_18k or 0.0, 18) +
+            convert_to_main_karat(line.debit_21k or 0.0, 21) +
+            convert_to_main_karat(line.debit_22k or 0.0, 22) +
+            convert_to_main_karat(line.debit_24k or 0.0, 24)
+        )
+        gold_credit_normalized = (
+            convert_to_main_karat(line.credit_18k or 0.0, 18) +
+            convert_to_main_karat(line.credit_21k or 0.0, 21) +
+            convert_to_main_karat(line.credit_22k or 0.0, 22) +
+            convert_to_main_karat(line.credit_24k or 0.0, 24)
+        )
+
         statement_lines.append({
             'id': line.id,
-            'date': entry.date.isoformat(),
-            'entry_number': entry.entry_number,
-            'description': entry.description,
+            'date': _iso_or_none(getattr(je, 'date', None) or getattr(je, 'created_at', None)),
+            'description': (line.description or je.description or ''),
+            'journal_entry_id': line.journal_entry_id,
+            'entry_number': je.entry_number,
+            'reference_type': je.reference_type,
+            'reference_id': je.reference_id,
+            'reference_number': je.reference_number,
+            'cash_debit': float(line.cash_debit or 0.0),
+            'cash_credit': float(line.cash_credit or 0.0),
+            'gold_debit': float(gold_debit_normalized or 0.0),
+            'gold_credit': float(gold_credit_normalized or 0.0),
+            'debit_18k': float(line.debit_18k or 0.0),
+            'credit_18k': float(line.credit_18k or 0.0),
+            'debit_21k': float(line.debit_21k or 0.0),
+            'credit_21k': float(line.credit_21k or 0.0),
+            'debit_22k': float(line.debit_22k or 0.0),
+            'credit_22k': float(line.credit_22k or 0.0),
+            'debit_24k': float(line.debit_24k or 0.0),
+            'credit_24k': float(line.credit_24k or 0.0),
+        })
+
+        total_cash_debit += float(line.cash_debit or 0.0)
+        total_cash_credit += float(line.cash_credit or 0.0)
+        total_gold_debit_normalized += float(gold_debit_normalized or 0.0)
+        total_gold_credit_normalized += float(gold_credit_normalized or 0.0)
+
+        # Legacy output (older mobile clients / tools).
+        legacy_lines.append({
+            'id': line.id,
+            'date': _iso_or_none(getattr(je, 'date', None) or getattr(je, 'created_at', None)),
+            'entry_number': je.entry_number,
+            'description': je.description,
             'account_number': line.account.account_number if line.account else None,
             'account_name': line.account.name if line.account else None,
-            'debit_cash': float(line.debit_cash) if line.debit_cash else 0.0,
-            'credit_cash': float(line.credit_cash) if line.credit_cash else 0.0,
-            'debit_gold_18k': float(line.debit_gold_18k) if line.debit_gold_18k else 0.0,
-            'credit_gold_18k': float(line.credit_gold_18k) if line.credit_gold_18k else 0.0,
-            'debit_gold_21k': float(line.debit_gold_21k) if line.debit_gold_21k else 0.0,
-            'credit_gold_21k': float(line.credit_gold_21k) if line.credit_gold_21k else 0.0,
-            'debit_gold_22k': float(line.debit_gold_22k) if line.debit_gold_22k else 0.0,
-            'credit_gold_22k': float(line.credit_gold_22k) if line.credit_gold_22k else 0.0,
-            'debit_gold_24k': float(line.debit_gold_24k) if line.debit_gold_24k else 0.0,
-            'credit_gold_24k': float(line.credit_gold_24k) if line.credit_gold_24k else 0.0,
+            'debit_cash': float(line.cash_debit or 0.0),
+            'credit_cash': float(line.cash_credit or 0.0),
+            'debit_gold_18k': float(line.debit_18k or 0.0),
+            'credit_gold_18k': float(line.credit_18k or 0.0),
+            'debit_gold_21k': float(line.debit_21k or 0.0),
+            'credit_gold_21k': float(line.credit_21k or 0.0),
+            'debit_gold_22k': float(line.debit_22k or 0.0),
+            'credit_gold_22k': float(line.credit_22k or 0.0),
+            'debit_gold_24k': float(line.debit_24k or 0.0),
+            'credit_gold_24k': float(line.credit_24k or 0.0),
         })
-    
+
+    closing_balance_gold_normalized = (
+        convert_to_main_karat(running_balances_gold['18k'], 18) +
+        convert_to_main_karat(running_balances_gold['21k'], 21) +
+        convert_to_main_karat(running_balances_gold['22k'], 22) +
+        convert_to_main_karat(running_balances_gold['24k'], 24)
+    )
+
     return jsonify({
-        'customer': customer.to_dict(),
-        'statement': statement_lines
+        'account_name': customer.name,
+        'main_karat': main_karat,
+        'opening_balance_cash': float(opening_balance_cash or 0.0),
+        'opening_balance_gold_normalized': float(opening_balance_gold_normalized or 0.0),
+        'opening_balance_gold_details': opening_balances_gold,
+        'lines': statement_lines,
+        'totals': {
+            'cash_debit': float(total_cash_debit or 0.0),
+            'cash_credit': float(total_cash_credit or 0.0),
+            'gold_debit_normalized': float(total_gold_debit_normalized or 0.0),
+            'gold_credit_normalized': float(total_gold_credit_normalized or 0.0),
+        },
+        'closing_balance_cash': float(running_balance_cash or 0.0),
+        'closing_balance_gold_normalized': float(closing_balance_gold_normalized or 0.0),
+        'closing_balance_gold_details': running_balances_gold,
+
+        # Backward compatible fields
+        'legacy_customer': customer.to_dict(),
+        'legacy_statement': legacy_lines,
     })
 
 @api.route('/customers/next-code', methods=['GET'])
@@ -6616,21 +6786,6 @@ def add_invoice():
     if not isinstance(data, dict):
         return jsonify({'error': 'Invalid or missing JSON body'}), 400
 
-    def _truthy(val) -> bool:
-        if val in (None, False, 0):
-            return False
-        if isinstance(val, str):
-            return val.strip().lower() in ('1', 'true', 'yes', 'on', 'y', 't')
-        return bool(val)
-
-    # Draft invoices: save now, finalize/post later.
-    # Drafts are created as unposted and should not create SafeBox movements.
-    save_as_draft = _truthy(
-        data.get('save_as_draft')
-        or data.get('save_draft')
-        or data.get('is_draft')
-    )
-
     # 🆕 خيار أمني: رفض إنشاء الفاتورة بدون توكن
     # يمكن تفعيله من (متغير البيئة) أو من (الإعدادات) عبر الواجهة
     current_user = get_current_user()
@@ -7664,20 +7819,14 @@ def add_invoice():
         approval_required = bool(approval_reasons)
         approval_reason = approval_reasons[0] if approval_reasons else None
 
-        # Draft invoices are intentionally unposted and should not trigger approval alerts at creation time.
-        # They will be finalized later via posting endpoints.
-        unposted_mode = bool(approval_required) or bool(save_as_draft)
-        if save_as_draft:
-            approval_required = False
-            approval_reason = None
-            approval_reasons = []
+        unposted_mode = bool(approval_required)
 
         if unposted_mode:
             # Do not treat as settled/paid until approved/posting occurs.
             try:
                 new_invoice.is_posted = False
                 new_invoice.amount_paid = 0.0
-                new_invoice.status = 'draft' if save_as_draft else 'unpaid'
+                new_invoice.status = 'unpaid'
                 db.session.add(new_invoice)
                 db.session.flush()
             except Exception:
@@ -10572,24 +10721,6 @@ def add_invoice():
             resp['threshold_pct'] = float(large_discount_pct_threshold or 0.0)
             return jsonify(resp), 201
 
-        if save_as_draft:
-            print("✅ Balance verified! Draft requested; skipping posting/safebox effects...")
-
-            new_invoice.is_posted = False
-            if not new_invoice.posted_by:
-                new_invoice.posted_by = posted_by_username or 'system'
-
-            journal_entry.is_posted = False
-            if hasattr(journal_entry, 'posted_at'):
-                journal_entry.posted_at = None
-            if hasattr(journal_entry, 'posted_by'):
-                journal_entry.posted_by = None
-
-            db.session.commit()
-            resp = new_invoice.to_dict()
-            resp['draft_saved'] = True
-            return jsonify(resp), 201
-
         print(f"✅ Balance verified! Marking invoice and journal entry as posted...")
         new_invoice.is_posted = True
         if not new_invoice.posted_at:
@@ -11660,8 +11791,9 @@ def add_journal_entry():
     - القاعدة: الوزن = المبلغ النقدي ÷ سعر الذهب المباشر
     - يمكن تعطيل القاعدة بإرسال apply_golden_rule=false
     """
-    data = request.get_json()
-    lines_data = data.get('lines', [])
+    data = request.get_json() or {}
+    lines_data = data.get('lines', []) or []
+    requested_is_draft = bool(data.get('is_draft', False))
     
     # 🆕 التحقق من طلب تطبيق القاعدة الذهبية
     apply_golden_rule = data.get('apply_golden_rule', False)
@@ -11709,97 +11841,99 @@ def add_journal_entry():
         if has_values and not line.get('account_id'):
             return jsonify({'error': 'Each line must have an associated account.'}), 400
 
-    if not lines_data or len(lines_data) < 2:
-        return jsonify({'error': 'يجب أن يحتوي قيد اليومية على سطرين على الأقل.'}), 400
+    if not requested_is_draft:
+        if not lines_data or len(lines_data) < 2:
+            return jsonify({'error': 'يجب أن يحتوي قيد اليومية على سطرين على الأقل.'}), 400
 
-    # --- Balance Validation ---
-    total_cash_debit = sum(line.get('cash_debit', 0) for line in lines_data)
-    total_cash_credit = sum(line.get('cash_credit', 0) for line in lines_data)
+    if not requested_is_draft:
+        # --- Balance Validation ---
+        total_cash_debit = sum(line.get('cash_debit', 0) for line in lines_data)
+        total_cash_credit = sum(line.get('cash_credit', 0) for line in lines_data)
 
-    if round(total_cash_debit, 3) != round(total_cash_credit, 3):
-        return jsonify({'error': 'Cash debits and credits must be balanced.'}), 400
+        if round(total_cash_debit, 3) != round(total_cash_credit, 3):
+            return jsonify({'error': 'Cash debits and credits must be balanced.'}), 400
 
-    # --- Gold Balance Calculation and Auto-Balancing ---
-    total_gold_debit_normalized = sum(
-        convert_to_main_karat(line.get('debit_18k', 0), 18) +
-        convert_to_main_karat(line.get('debit_21k', 0), 21) +
-        convert_to_main_karat(line.get('debit_22k', 0), 22) +
-        convert_to_main_karat(line.get('debit_24k', 0), 24)
-        for line in lines_data
-    )
-    total_gold_credit_normalized = sum(
-        convert_to_main_karat(line.get('credit_18k', 0), 18) +
-        convert_to_main_karat(line.get('credit_21k', 0), 21) +
-        convert_to_main_karat(line.get('credit_22k', 0), 22) +
-        convert_to_main_karat(line.get('credit_24k', 0), 24)
-        for line in lines_data
-    )
+        # --- Gold Balance Calculation and Auto-Balancing ---
+        total_gold_debit_normalized = sum(
+            convert_to_main_karat(line.get('debit_18k', 0), 18) +
+            convert_to_main_karat(line.get('debit_21k', 0), 21) +
+            convert_to_main_karat(line.get('debit_22k', 0), 22) +
+            convert_to_main_karat(line.get('debit_24k', 0), 24)
+            for line in lines_data
+        )
+        total_gold_credit_normalized = sum(
+            convert_to_main_karat(line.get('credit_18k', 0), 18) +
+            convert_to_main_karat(line.get('credit_21k', 0), 21) +
+            convert_to_main_karat(line.get('credit_22k', 0), 22) +
+            convert_to_main_karat(line.get('credit_24k', 0), 24)
+            for line in lines_data
+        )
 
-    gold_difference = total_gold_debit_normalized - total_gold_credit_normalized
+        gold_difference = total_gold_debit_normalized - total_gold_credit_normalized
 
-    # Auto-balance if the difference is negligible (less than 0.01)
-    if 0 < abs(gold_difference) < 0.01:
-        adjustment_applied = False
-        # If debit is greater, increase a credit line
-        if gold_difference > 0:
-            for line in lines_data:
-                # Find a line with any credit amount to adjust
-                if any(line.get(f'credit_{k}k', 0) > 0 for k in [18, 21, 22, 24]):
-                    # Adjust the first available credit karat (prefer 21k)
-                    if line.get('credit_21k', 0) > 0:
-                        line['credit_21k'] += convert_from_main_karat(gold_difference, 21)
-                    elif line.get('credit_18k', 0) > 0:
-                        line['credit_18k'] += convert_from_main_karat(gold_difference, 18)
-                    elif line.get('credit_22k', 0) > 0:
-                        line['credit_22k'] += convert_from_main_karat(gold_difference, 22)
-                    elif line.get('credit_24k', 0) > 0:
-                        line['credit_24k'] += convert_from_main_karat(gold_difference, 24)
-                    adjustment_applied = True
-                    break
-        # If credit is greater, increase a debit line
-        else: # gold_difference < 0
-            for line in lines_data:
-                # Find a line with any debit amount to adjust
-                if any(line.get(f'debit_{k}k', 0) > 0 for k in [18, 21, 22, 24]):
-                    # Adjust the first available debit karat (prefer 21k)
-                    if line.get('debit_21k', 0) > 0:
-                        line['debit_21k'] -= convert_from_main_karat(gold_difference, 21) # subtract negative diff
-                    elif line.get('debit_18k', 0) > 0:
-                        line['debit_18k'] -= convert_from_main_karat(gold_difference, 18)
-                    elif line.get('debit_22k', 0) > 0:
-                        line['debit_22k'] -= convert_from_main_karat(gold_difference, 22)
-                    elif line.get('debit_24k', 0) > 0:
-                        line['debit_24k'] -= convert_from_main_karat(gold_difference, 24)
-                    adjustment_applied = True
-                    break
-        
-        # Recalculate totals if an adjustment was made
-        if adjustment_applied:
-            total_gold_debit_normalized = sum(
-                convert_to_main_karat(line.get('debit_18k', 0), 18) +
-                convert_to_main_karat(line.get('debit_21k', 0), 21) +
-                convert_to_main_karat(line.get('debit_22k', 0), 22) +
-                convert_to_main_karat(line.get('debit_24k', 0), 24)
-                for line in lines_data
-            )
-            total_gold_credit_normalized = sum(
-                convert_to_main_karat(line.get('credit_18k', 0), 18) +
-                convert_to_main_karat(line.get('credit_21k', 0), 21) +
-                convert_to_main_karat(line.get('credit_22k', 0), 22) +
-                convert_to_main_karat(line.get('credit_24k', 0), 24)
-                for line in lines_data
-            )
+        # Auto-balance if the difference is negligible (less than 0.01)
+        if 0 < abs(gold_difference) < 0.01:
+            adjustment_applied = False
+            # If debit is greater, increase a credit line
+            if gold_difference > 0:
+                for line in lines_data:
+                    # Find a line with any credit amount to adjust
+                    if any(line.get(f'credit_{k}k', 0) > 0 for k in [18, 21, 22, 24]):
+                        # Adjust the first available credit karat (prefer 21k)
+                        if line.get('credit_21k', 0) > 0:
+                            line['credit_21k'] += convert_from_main_karat(gold_difference, 21)
+                        elif line.get('credit_18k', 0) > 0:
+                            line['credit_18k'] += convert_from_main_karat(gold_difference, 18)
+                        elif line.get('credit_22k', 0) > 0:
+                            line['credit_22k'] += convert_from_main_karat(gold_difference, 22)
+                        elif line.get('credit_24k', 0) > 0:
+                            line['credit_24k'] += convert_from_main_karat(gold_difference, 24)
+                        adjustment_applied = True
+                        break
+            # If credit is greater, increase a debit line
+            else:  # gold_difference < 0
+                for line in lines_data:
+                    # Find a line with any debit amount to adjust
+                    if any(line.get(f'debit_{k}k', 0) > 0 for k in [18, 21, 22, 24]):
+                        # Adjust the first available debit karat (prefer 21k)
+                        if line.get('debit_21k', 0) > 0:
+                            line['debit_21k'] -= convert_from_main_karat(gold_difference, 21)  # subtract negative diff
+                        elif line.get('debit_18k', 0) > 0:
+                            line['debit_18k'] -= convert_from_main_karat(gold_difference, 18)
+                        elif line.get('debit_22k', 0) > 0:
+                            line['debit_22k'] -= convert_from_main_karat(gold_difference, 22)
+                        elif line.get('debit_24k', 0) > 0:
+                            line['debit_24k'] -= convert_from_main_karat(gold_difference, 24)
+                        adjustment_applied = True
+                        break
 
-    # Final check for gold balance after potential auto-balancing
-    if round(total_gold_debit_normalized, 3) != round(total_gold_credit_normalized, 3):
-        return jsonify({'error': f'Gold debits and credits must be balanced when normalized to main karat. Debit: {total_gold_debit_normalized}, Credit: {total_gold_credit_normalized}'}), 400
-    # --- End Balance Validation ---
+            # Recalculate totals if an adjustment was made
+            if adjustment_applied:
+                total_gold_debit_normalized = sum(
+                    convert_to_main_karat(line.get('debit_18k', 0), 18) +
+                    convert_to_main_karat(line.get('debit_21k', 0), 21) +
+                    convert_to_main_karat(line.get('debit_22k', 0), 22) +
+                    convert_to_main_karat(line.get('debit_24k', 0), 24)
+                    for line in lines_data
+                )
+                total_gold_credit_normalized = sum(
+                    convert_to_main_karat(line.get('credit_18k', 0), 18) +
+                    convert_to_main_karat(line.get('credit_21k', 0), 21) +
+                    convert_to_main_karat(line.get('credit_22k', 0), 22) +
+                    convert_to_main_karat(line.get('credit_24k', 0), 24)
+                    for line in lines_data
+                )
+
+        # Final check for gold balance after potential auto-balancing
+        if round(total_gold_debit_normalized, 3) != round(total_gold_credit_normalized, 3):
+            return jsonify({'error': f'Gold debits and credits must be balanced when normalized to main karat. Debit: {total_gold_debit_normalized}, Credit: {total_gold_credit_normalized}'}), 400
+        # --- End Balance Validation ---
 
     try:
         new_entry = JournalEntry(
             date=datetime.fromisoformat(data['date']),
             description=data['description'],
-            is_draft=data.get('is_draft', True),  # 🆕 دعم المسودات (افتراضياً مسودة)
+            is_draft=requested_is_draft,
             entry_type=data.get('entry_type', 'عادي'),  # 🆕 نوع القيد
             reference_type=data.get('reference_type'),
             reference_number=data.get('reference_number'),
@@ -11828,8 +11962,9 @@ def add_journal_entry():
 
         db.session.flush()
         
-        # 🆕 تحديث أرصدة الحسابات
-        _update_account_balances_from_journal_lines(created_lines)
+        # Update balances only for non-draft entries.
+        if not requested_is_draft:
+            _update_account_balances_from_journal_lines(created_lines)
 
         db.session.commit()
         return jsonify(new_entry.to_dict()), 201
@@ -11877,43 +12012,70 @@ def get_journal_entry(id):
 @require_permission('journal.edit')
 def update_journal_entry(id):
     entry = JournalEntry.query.get_or_404(id)
-    data = request.get_json()
+    data = request.get_json() or {}
+    target_is_draft = bool(data.get('is_draft', getattr(entry, 'is_draft', False)))
 
-    if not data.get('lines') or len(data.get('lines')) < 2:
-        return jsonify({'error': 'A journal entry must have at least two lines.'}), 400
+    incoming_lines = data.get('lines', []) or []
 
-    # --- Balance Validation ---
-    total_cash_debit = sum(line.get('cash_debit', 0) for line in data['lines'])
-    total_cash_credit = sum(line.get('cash_credit', 0) for line in data['lines'])
+    # Filter out completely empty lines
+    incoming_lines = [
+        line for line in incoming_lines if any([
+            line.get('cash_debit', 0), line.get('cash_credit', 0),
+            line.get('debit_18k', 0), line.get('credit_18k', 0),
+            line.get('debit_21k', 0), line.get('credit_21k', 0),
+            line.get('debit_22k', 0), line.get('credit_22k', 0),
+            line.get('debit_24k', 0), line.get('credit_24k', 0)
+        ]) or line.get('account_id')
+    ]
 
-    if round(total_cash_debit, 3) != round(total_cash_credit, 3):
-        return jsonify({'error': 'Cash debits and credits must be balanced.'}), 400
+    # Lines with values must have an account
+    for line in incoming_lines:
+        has_values = any([
+            line.get('cash_debit', 0), line.get('cash_credit', 0),
+            line.get('debit_18k', 0), line.get('credit_18k', 0),
+            line.get('debit_21k', 0), line.get('credit_21k', 0),
+            line.get('debit_22k', 0), line.get('credit_22k', 0),
+            line.get('debit_24k', 0), line.get('credit_24k', 0)
+        ])
+        if has_values and not line.get('account_id'):
+            return jsonify({'error': 'Each line must have an associated account.'}), 400
 
-    total_gold_debit_normalized = sum(
-        convert_to_main_karat(line.get('debit_18k', 0), 18) +
-        convert_to_main_karat(line.get('debit_21k', 0), 21) +
-        convert_to_main_karat(line.get('debit_22k', 0), 22) +
-        convert_to_main_karat(line.get('debit_24k', 0), 24)
-        for line in data['lines']
-    )
-    total_gold_credit_normalized = sum(
-        convert_to_main_karat(line.get('credit_18k', 0), 18) +
-        convert_to_main_karat(line.get('credit_21k', 0), 21) +
-        convert_to_main_karat(line.get('credit_22k', 0), 22) +
-        convert_to_main_karat(line.get('credit_24k', 0), 24)
-        for line in data['lines']
-    )
+    if not target_is_draft:
+        if not incoming_lines or len(incoming_lines) < 2:
+            return jsonify({'error': 'A journal entry must have at least two lines.'}), 400
 
-    if round(total_gold_debit_normalized, 3) != round(total_gold_credit_normalized, 3):
-        return jsonify({'error': f'Gold debits and credits must be balanced when normalized to main karat. Debit: {total_gold_debit_normalized}, Credit: {total_gold_credit_normalized}'}), 400
-    # --- End Balance Validation ---
+        # --- Balance Validation ---
+        total_cash_debit = sum(line.get('cash_debit', 0) for line in incoming_lines)
+        total_cash_credit = sum(line.get('cash_credit', 0) for line in incoming_lines)
+
+        if round(total_cash_debit, 3) != round(total_cash_credit, 3):
+            return jsonify({'error': 'Cash debits and credits must be balanced.'}), 400
+
+        total_gold_debit_normalized = sum(
+            convert_to_main_karat(line.get('debit_18k', 0), 18) +
+            convert_to_main_karat(line.get('debit_21k', 0), 21) +
+            convert_to_main_karat(line.get('debit_22k', 0), 22) +
+            convert_to_main_karat(line.get('debit_24k', 0), 24)
+            for line in incoming_lines
+        )
+        total_gold_credit_normalized = sum(
+            convert_to_main_karat(line.get('credit_18k', 0), 18) +
+            convert_to_main_karat(line.get('credit_21k', 0), 21) +
+            convert_to_main_karat(line.get('credit_22k', 0), 22) +
+            convert_to_main_karat(line.get('credit_24k', 0), 24)
+            for line in incoming_lines
+        )
+
+        if round(total_gold_debit_normalized, 3) != round(total_gold_credit_normalized, 3):
+            return jsonify({'error': f'Gold debits and credits must be balanced when normalized to main karat. Debit: {total_gold_debit_normalized}, Credit: {total_gold_credit_normalized}'}), 400
+        # --- End Balance Validation ---
 
     try:
         entry.date = datetime.fromisoformat(data['date'])
         entry.description = data['description']
         # 🆕 تحديث حالة المسودة إذا تم إرسالها
         if 'is_draft' in data:
-            entry.is_draft = data['is_draft']
+            entry.is_draft = bool(data['is_draft'])
 
         # حفظ معرفات الحسابات المتأثرة من الأسطر القديمة
         old_account_ids = {line.account_id for line in entry.lines if line.account_id}
@@ -11926,7 +12088,7 @@ def update_journal_entry(id):
 
         # Add new lines
         new_lines = []
-        for line_data in data['lines']:
+        for line_data in incoming_lines:
             new_line = JournalEntryLine(
                 journal_entry_id=entry.id,
                 account_id=line_data['account_id'],
