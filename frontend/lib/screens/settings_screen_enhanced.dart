@@ -1009,7 +1009,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               onChanged: (value) => setState(() => _voucherAutoPost = value),
               title: const Text('ترحيل السندات تلقائياً عند الحفظ'),
               subtitle: const Text(
-                'عند التفعيل سيتم إنشاء قيد محاسبي فور حفظ السند. عند الإيقاف ستُحفظ السندات كمسودة وتحتاج للموافقة يدوياً.',
+                'عند التفعيل سيتم إنشاء قيد محاسبي فور حفظ السند. عند الإيقاف ستُحفظ السندات غير مُرحّلة وتحتاج للترحيل/الموافقة يدوياً.',
               ),
               thumbColor: _thumbColorFor(_primaryColor),
               trackColor: _trackColorFor(_primaryColor),

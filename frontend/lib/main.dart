@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/quick_actions_provider.dart';
 import 'providers/auth_provider.dart';
+import 'app_route_observer.dart';
 import 'theme/app_theme.dart'; // 🆕 نظام الثيم الموحد
 import 'screens/home_screen_enhanced.dart';
 import 'screens/add_item_screen_enhanced.dart';
@@ -101,6 +102,7 @@ class _MyAppState extends State<MyApp> {
     return IdleLogoutWrapper(
       child: MaterialApp(
         title: 'مجوهرات خالد',
+        navigatorObservers: [routeObserver],
         builder: (context, widget) {
           // تخصيص widget الخطأ
           ErrorWidget.builder = (FlutterErrorDetails errorDetails) {

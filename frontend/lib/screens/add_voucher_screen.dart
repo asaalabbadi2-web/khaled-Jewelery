@@ -232,7 +232,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     final bool? restore = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('مسودة محفوظة'),
+        title: const Text('محفوظ للإكمال لاحقاً'),
         content: const Text('يوجد سند محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
         actions: [
           TextButton(

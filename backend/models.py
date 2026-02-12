@@ -1628,8 +1628,9 @@ class JournalEntry(db.Model):
     recurring_template_id = db.Column(db.Integer, db.ForeignKey('recurring_journal_template.id'), nullable=True)  # ربط بالقالب الدوري
     created_by = db.Column(db.String(100))
     
-    # 🆕 نظام المسودات (Draft System)
-    is_draft = db.Column(db.Boolean, default=True, nullable=False, index=True)  # هل القيد مسودة؟
+    # نظام المسودات (Draft) أصبح غير مُعتمد؛ يتم الاعتماد على نظام الترحيل (Posting).
+    # نُبقي الحقل للتوافق مع قواعد بيانات قديمة/واجهات قديمة، لكن الافتراضي الآن: ليس مسودة.
+    is_draft = db.Column(db.Boolean, default=False, nullable=False, index=True)  # هل القيد مسودة؟
     
     # 🆕 نظام الترحيل (Posting System)
     is_posted = db.Column(db.Boolean, default=False, nullable=False, index=True)  # هل تم ترحيل القيد؟

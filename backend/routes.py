@@ -3330,7 +3330,9 @@ def get_account_statement(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
 
     opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
@@ -3361,7 +3363,9 @@ def get_account_statement(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
 
     journal_lines = (
@@ -3571,7 +3575,9 @@ def get_account_statement_merged(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
 
     opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
@@ -3590,7 +3596,9 @@ def get_account_statement_merged(account_id):
             JournalEntry.is_deleted == False,
             JournalEntryLine.is_deleted == False,
         ]
-        if _db_has_column('journal_entry', 'is_draft'):
+        if _db_has_column('journal_entry', 'is_posted'):
+            memo_opening_filters.append(JournalEntry.is_posted == True)
+        elif _db_has_column('journal_entry', 'is_draft'):
             memo_opening_filters.append(JournalEntry.is_draft == False)
 
         memo_opening_lines = (
@@ -3626,7 +3634,9 @@ def get_account_statement_merged(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
 
     journal_lines = (
@@ -3888,7 +3898,9 @@ def get_customer_statement(id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
 
     opening_journal_lines = (
@@ -3925,7 +3937,9 @@ def get_customer_statement(id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
 
     # IMPORTANT:
@@ -11813,7 +11827,12 @@ def get_journal_entries():
             'description': entry.description,
             'entry_number': entry.entry_number,
             'entry_type': getattr(entry, 'entry_type', None),
-            'is_draft': bool(getattr(entry, 'is_draft', False)),
+            # Draft system is deprecated in favor of posting.
+            # Keep `is_draft` for backward compatibility, but ensure posted entries aren't flagged as drafts.
+            'is_draft': bool(getattr(entry, 'is_draft', False)) and not bool(getattr(entry, 'is_posted', False)),
+            'is_posted': bool(getattr(entry, 'is_posted', False)),
+            'posted_at': entry.posted_at.isoformat() if getattr(entry, 'posted_at', None) else None,
+            'posted_by': getattr(entry, 'posted_by', None),
             'reference_type': getattr(entry, 'reference_type', None),
             'reference_id': getattr(entry, 'reference_id', None),
             'reference_number': getattr(entry, 'reference_number', None),
@@ -11914,7 +11933,9 @@ def _recalculate_account_balances_for_accounts(account_ids):
             JournalEntry.is_deleted == False,
             JournalEntryLine.is_deleted == False,
         ]
-        if _db_has_column('journal_entry', 'is_draft'):
+        if _db_has_column('journal_entry', 'is_posted'):
+            filters.append(JournalEntry.is_posted == True)
+        elif _db_has_column('journal_entry', 'is_draft'):
             filters.append(JournalEntry.is_draft == False)
 
         # Posted + not deleted journal lines only (exclude drafts when available)
@@ -11970,7 +11991,9 @@ def _rebuild_all_account_balances() -> dict:
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_posted'):
+        jl_filters.append(JournalEntry.is_posted == True)
+    elif _db_has_column('journal_entry', 'is_draft'):
         jl_filters.append(JournalEntry.is_draft == False)
 
     journal_rows = (

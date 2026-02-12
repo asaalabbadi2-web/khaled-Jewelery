@@ -6,6 +6,7 @@ import '../widgets/account_picker_sheet.dart';
 import 'journal_entry_form.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
+import '../app_route_observer.dart';
 
 /// Enhanced Journal Entries List Screen with professional features
 class JournalEntriesListScreen extends StatefulWidget {
@@ -18,7 +19,8 @@ class JournalEntriesListScreen extends StatefulWidget {
       _JournalEntriesListScreenState();
 }
 
-class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
+class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
+  with RouteAware {
   final ApiService _apiService = ApiService();
   List<dynamic> _allEntries = [];
   List<dynamic> _filteredEntries = [];
@@ -55,6 +57,12 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    routeObserver.unsubscribe(this);
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      routeObserver.subscribe(this, route);
+    }
+
     final settings = Provider.of<SettingsProvider>(context);
 
     final newSymbol = settings.currencySymbol;
@@ -80,9 +88,16 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
 
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _searchController.removeListener(_applyFilters);
     _searchController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // Returned to this screen; refresh so posting status is up-to-date.
+    _refreshData();
   }
 
   Future<void> _refreshData() async {
@@ -1070,38 +1085,52 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen> {
                             ),
                           ),
                         ),
-                        // 🆕 Draft Badge
-                        if (entry['is_draft'] == true) ...[
-                          SizedBox(width: 8),
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.orange.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Colors.orange,
-                                width: 1,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.edit_note, size: 14, color: Colors.orange),
-                                SizedBox(width: 4),
-                                Text(
-                                  'مسودة',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: Colors.orange,
-                                    fontWeight: FontWeight.w600,
+                          // Posting Status Badge (Draft system deprecated)
+                          ...(() {
+                            final hasIsPosted = entry.containsKey('is_posted');
+                            final bool isPosted = hasIsPosted
+                                ? (entry['is_posted'] == true)
+                                : (entry['is_draft'] != true);
+
+                            final Color statusColor =
+                                isPosted ? Colors.green : Colors.orange;
+                            final IconData statusIcon =
+                                isPosted ? Icons.verified : Icons.pending_actions;
+                            final String statusText =
+                                isPosted ? 'مُرحّل' : 'غير مُرحّل';
+
+                            return [
+                              SizedBox(width: 8),
+                              Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: statusColor.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: statusColor,
+                                    width: 1,
                                   ),
                                 ),
-                              ],
-                            ),
-                          ),
-                        ],
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(statusIcon, size: 14, color: statusColor),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      statusText,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: statusColor,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ];
+                          })(),
                         if (entry['entry_type'] != null &&
                             entry['entry_type'] != 'عادي') ...[
                           SizedBox(width: 8),

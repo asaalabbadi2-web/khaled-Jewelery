@@ -1696,6 +1696,8 @@ def post_journal_entry(entry_id):
         entry.is_posted = True
         entry.posted_at = datetime.now()
         entry.posted_by = posted_by
+        if hasattr(entry, 'is_draft'):
+            entry.is_draft = False
         
         # تسجيل العملية الناجحة
         AuditLog.log_action(
@@ -1796,6 +1798,8 @@ def post_journal_entries_batch():
                 entry.is_posted = True
                 entry.posted_at = datetime.now()
                 entry.posted_by = posted_by
+                if hasattr(entry, 'is_draft'):
+                    entry.is_draft = False
                 posted_count += 1
                 
                 # تسجيل كل عملية ناجحة

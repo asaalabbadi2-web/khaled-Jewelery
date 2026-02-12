@@ -314,7 +314,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     final bool? restore = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('مسودة محفوظة'),
+        title: const Text('محفوظ للإكمال لاحقاً'),
         content: const Text('يوجد قيد محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
         actions: [
           TextButton(
