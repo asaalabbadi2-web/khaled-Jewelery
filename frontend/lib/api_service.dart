@@ -1509,6 +1509,25 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getAccountById(int accountId) async {
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/accounts/$accountId'),
+    ).timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        throw Exception('Connection timeout - تأكد من تشغيل Backend');
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      throw Exception('Invalid account payload');
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
   Future<Map<String, dynamic>> getAccountsBalances() async {
     try {
       final response =

@@ -90,6 +90,7 @@ class Account(db.Model):
             'account_number_external': self.account_number_external,
             'account_type': self.account_type,
             'tracks_weight': self.tracks_weight,
+            'memo_account_id': self.memo_account_id,
         }
         
         # إضافة الأرصدة (النظام المزدوج)

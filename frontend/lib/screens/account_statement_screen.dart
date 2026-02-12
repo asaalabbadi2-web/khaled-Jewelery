@@ -50,6 +50,35 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _includeBreakdown = true;
   bool _isExporting = false;
   bool _useMergedView = false; // Toggle for merged statement
+  bool _resolvedMergedDefault = false;
+
+  bool _truthy(dynamic v) {
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    if (v is String) {
+      final s = v.trim().toLowerCase();
+      return s == 'true' || s == '1' || s == 'yes' || s == 'on';
+    }
+    return false;
+  }
+
+  bool _shouldDefaultToMergedView(Map<String, dynamic> account) {
+    try {
+      final memoId = account['memo_account_id'];
+      if (memoId != null && memoId.toString().trim().isNotEmpty) return true;
+    } catch (_) {}
+
+    try {
+      if (_truthy(account['tracks_weight'])) return true;
+    } catch (_) {}
+
+    try {
+      final num = (account['account_number'] ?? '').toString().trim();
+      if (num.startsWith('7')) return true; // memo accounts are typically 7xxxx
+    } catch (_) {}
+
+    return false;
+  }
 
   ({double gold, double cash}) _openingBalanceAt(DateTime? start) {
     final statement = _statement;
@@ -208,6 +237,20 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       } else if (widget.entityType == 'supplier') {
         data = await ApiService().getSupplierStatement(widget.accountId);
       } else {
+        // Auto-default merged view for memo/dual accounts once per screen.
+        if (!_resolvedMergedDefault) {
+          _resolvedMergedDefault = true;
+          try {
+            final account = await ApiService().getAccountById(widget.accountId);
+            final wantsMerged = _shouldDefaultToMergedView(account);
+            if (wantsMerged && mounted) {
+              setState(() => _useMergedView = true);
+            }
+          } catch (_) {
+            // If account metadata fetch fails, keep current toggle.
+          }
+        }
+
         // Use merged view if enabled, otherwise regular statement
         if (_useMergedView) {
           data = await ApiService().getAccountStatementMerged(widget.accountId);

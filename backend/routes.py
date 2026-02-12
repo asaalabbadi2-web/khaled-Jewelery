@@ -4706,14 +4706,43 @@ def get_supplier_weight_statement(supplier_id):
     # The DB may tag `supplier_id` on multiple lines within the same journal entry
     # (inventory/tax/etc). For a supplier statement we only want the line(s)
     # affecting supplier payable accounts, otherwise debits/credits cancel out.
+    # IMPORTANT:
+    # The DB may tag `supplier_id` on multiple lines within the same journal entry.
+    # For a supplier statement we only want:
+    # - Supplier payable cash lines (legacy filter: liability 21%)
+    # - Supplier memo (weight) lines (gold payables + gold settlements)
+    supplier_fin_account_id = getattr(supplier, 'account_id', None)
+    supplier_memo_account_id = None
+    try:
+        fin_acc = Account.query.get(int(supplier_fin_account_id)) if supplier_fin_account_id else None
+        supplier_memo_account_id = getattr(fin_acc, 'memo_account_id', None) if fin_acc else None
+    except Exception:
+        supplier_memo_account_id = None
+
+    payable_filter = and_(Account.type == 'Liability', Account.account_number.like('21%'))
+    allowed_ids = []
+    try:
+        if supplier_fin_account_id not in (None, '', 0, '0', False):
+            allowed_ids.append(int(supplier_fin_account_id))
+    except Exception:
+        pass
+    try:
+        if supplier_memo_account_id not in (None, '', 0, '0', False):
+            allowed_ids.append(int(supplier_memo_account_id))
+    except Exception:
+        pass
+
+    account_filter = payable_filter
+    if allowed_ids:
+        account_filter = or_(Account.id.in_(allowed_ids), payable_filter)
+
     journal_lines = (
         JournalEntryLine.query
         .join(JournalEntry)
         .join(Account, JournalEntryLine.account_id == Account.id)
         .filter(JournalEntryLine.supplier_id == supplier_id)
         .filter(JournalEntryLine.is_deleted == False)  # noqa: E712
-        .filter(Account.type == 'Liability')
-        .filter(Account.account_number.like('21%'))
+        .filter(account_filter)
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
@@ -7041,12 +7070,27 @@ def add_invoice():
         except Exception:
             settled_gold_w = 0.0
 
+        # New: allow multiple gold settlements (multi-safe).
+        # Payload example: gold_settlements: [{'safe_box_id': 1, 'karat': 21, 'weight': 1.234}, ...]
+        gold_settlements_w = 0.0
+        try:
+            raw = payload.get('gold_settlements')
+            if isinstance(raw, list):
+                for ln in raw:
+                    if isinstance(ln, dict):
+                        gold_settlements_w += _to_float_request(
+                            ln.get('weight', ln.get('weight_grams', 0.0)),
+                            0.0,
+                        )
+        except Exception:
+            gold_settlements_w = 0.0
+
         # Scrap purchase and barter are the primary high-risk weight contexts.
         if gt == 'scrap':
             return True
         if inv_t == 'شراء من عميل':
             return True
-        if bt > 0.01 or has_barter_link or settled_gold_w > 0.0:
+        if bt > 0.01 or has_barter_link or settled_gold_w > 0.0 or gold_settlements_w > 0.0:
             return True
         return False
 
@@ -8156,9 +8200,25 @@ def add_invoice():
         settled_gold_karat = _to_float_request(data.get('settled_gold_karat', 0.0))
         settled_gold_safe_box_id = data.get('settled_gold_safe_box_id')
 
+        gold_settlements_data = data.get('gold_settlements')
+        if gold_settlements_data in (None, '', False):
+            # Backward-compat aliases (if any older client uses a different key)
+            gold_settlements_data = data.get('settled_gold_lines')
+        if not isinstance(gold_settlements_data, list):
+            gold_settlements_data = []
+
+        # We may need to reflect gold settlements in statements (built off JournalEntryLine).
+        # SafeBoxTransaction alone won't appear in party statements.
+        resolved_gold_settlements_lines = []  # [{safe_box_id, karat, weight}]
+
         # For unposted invoices (drafts/approval-required), do not allow gold settlement inputs (would require safe movements).
         if unposted_mode:
-            if settled_gold_weight > 0 or settled_gold_karat > 0 or settled_gold_safe_box_id not in (None, '', False):
+            if (
+                settled_gold_weight > 0
+                or settled_gold_karat > 0
+                or settled_gold_safe_box_id not in (None, '', False)
+                or (gold_settlements_data and len(gold_settlements_data) > 0)
+            ):
                 db.session.rollback()
                 return jsonify({
                     'error': 'unposted_no_gold_settlement',
@@ -8166,6 +8226,199 @@ def add_invoice():
                     'approval_required': bool(approval_required),
                     'reason': approval_reason,
                 }), 400
+
+        # Multi-safe gold settlements.
+        # If provided, this takes precedence over the legacy settled_gold_* fields.
+        if gold_settlements_data and isinstance(gold_settlements_data, list):
+            # Resolve/override rules depend on Settings and employee gold safe configuration.
+            try:
+                srow = Settings.query.first()
+            except Exception:
+                srow = None
+
+            employee_gold_enabled = bool(getattr(srow, 'employee_gold_safes_enabled', False)) if srow else False
+            emp_gold_safe_id = None
+            try:
+                emp = getattr(new_invoice, 'employee', None)
+                if not emp and getattr(new_invoice, 'employee_id', None):
+                    emp = Employee.query.get(int(new_invoice.employee_id))
+                raw_emp_gold = getattr(emp, 'gold_safe_box_id', None) if emp else None
+                if raw_emp_gold not in (None, '', 0, '0', False):
+                    emp_gold_safe_id = int(raw_emp_gold)
+            except Exception:
+                emp_gold_safe_id = None
+
+            def _resolve_gold_safe_id(requested_safe_id):
+                """Resolve the target gold safe.
+
+                Rules (compatible with legacy behavior):
+                - If employee gold safes enabled and employee has a linked gold safe: enforce using it.
+                  If client explicitly selected a different safe, fail.
+                - Otherwise: use requested_safe_id, falling back to main scrap gold safe.
+                - If employee gold safes disabled: prevent routing into employee gold safe (reroute to main scrap).
+                """
+                if employee_gold_enabled and emp_gold_safe_id:
+                    if requested_safe_id not in (None, '', False):
+                        try:
+                            if int(requested_safe_id) != int(emp_gold_safe_id):
+                                db.session.rollback()
+                                return None, jsonify({
+                                    'error': 'gold_settlement_forced_employee_safe',
+                                    'message': 'تم تفعيل خزائن ذهب الموظفين، ويجب أن يتم سداد الذهب على خزينة ذهب الموظف فقط',
+                                    'employee_gold_safe_box_id': emp_gold_safe_id,
+                                    'requested_safe_box_id': requested_safe_id,
+                                }), 400
+                        except Exception:
+                            db.session.rollback()
+                            return None, jsonify({
+                                'error': 'invalid_gold_safe_box_id',
+                                'message': 'خزينة الذهب غير صحيحة',
+                            }), 400
+                    return int(emp_gold_safe_id), None
+
+                # Not forced: honor request if present.
+                resolved = requested_safe_id
+                if resolved in (None, '', False):
+                    resolved = getattr(srow, 'main_scrap_gold_safe_box_id', None) if srow else None
+
+                try:
+                    resolved = int(resolved)
+                except Exception:
+                    db.session.rollback()
+                    return None, jsonify({
+                        'error': 'missing_or_invalid_gold_safe_box',
+                        'message': 'يجب تحديد خزينة ذهب صحيحة للمقايضة/السداد بالذهب',
+                    }), 400
+
+                # If employee gold safes are disabled, prevent routing into employee gold safe.
+                try:
+                    if (not employee_gold_enabled) and emp_gold_safe_id and int(resolved) == int(emp_gold_safe_id):
+                        main_scrap = getattr(srow, 'main_scrap_gold_safe_box_id', None) if srow else None
+                        if main_scrap not in (None, '', 0, '0', False):
+                            resolved = int(main_scrap)
+                except Exception:
+                    pass
+
+                return resolved, None
+
+            total_main_equiv = 0.0
+            created_any = False
+
+            for idx, line in enumerate(gold_settlements_data):
+                if not isinstance(line, dict):
+                    continue
+
+                line_weight = _to_float_request(line.get('weight', line.get('weight_grams', 0.0)), 0.0)
+                line_karat = _to_float_request(line.get('karat', line.get('gold_karat', 0.0)), 0.0)
+                if line_weight <= 0 or line_karat <= 0:
+                    continue
+
+                safe_id, err = _resolve_gold_safe_id(line.get('safe_box_id'))
+                if err is not None:
+                    return err
+                if safe_id is None:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'missing_or_invalid_gold_safe_box',
+                        'message': 'يجب تحديد خزينة ذهب صحيحة للمقايضة/السداد بالذهب',
+                    }), 400
+
+                gold_safe = SafeBox.query.get(safe_id)
+                if not gold_safe:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'gold_safe_box_not_found',
+                        'message': 'خزينة الذهب المحددة غير موجودة',
+                        'safe_box_id': safe_id,
+                    }), 400
+
+                safe_type = getattr(gold_safe, 'safe_type', None) or getattr(gold_safe, 'safeType', None)
+                if safe_type != 'gold':
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'safe_box_not_gold',
+                        'message': 'الخزينة المحددة ليست خزينة ذهب',
+                        'safe_box_id': safe_id,
+                        'safe_type': safe_type,
+                    }), 400
+
+                karat_int = int(round(float(line_karat)))
+
+                # Validation: if the safe is fixed to a single karat, enforce it.
+                try:
+                    safe_karat = int(getattr(gold_safe, 'karat', None) or 0)
+                except Exception:
+                    safe_karat = 0
+                if safe_karat in (18, 21, 22, 24) and karat_int != safe_karat:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'karat_mismatch_for_safe_box',
+                        'message': f'الخزينة المحددة مخصصة لعيار {safe_karat} ولا تقبل عيار {karat_int}',
+                        'safe_box_id': safe_id,
+                        'allowed_karat': safe_karat,
+                        'karat': karat_int,
+                    }), 400
+
+                weight_kwargs = {
+                    'weight_18k': 0.0,
+                    'weight_21k': 0.0,
+                    'weight_22k': 0.0,
+                    'weight_24k': 0.0,
+                }
+                if karat_int == 18:
+                    weight_kwargs['weight_18k'] = float(line_weight)
+                elif karat_int == 21:
+                    weight_kwargs['weight_21k'] = float(line_weight)
+                elif karat_int == 22:
+                    weight_kwargs['weight_22k'] = float(line_weight)
+                elif karat_int == 24:
+                    weight_kwargs['weight_24k'] = float(line_weight)
+                else:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'invalid_gold_karat',
+                        'message': 'عيار الذهب غير مدعوم للمقايضة/السداد',
+                        'karat': line_karat,
+                    }), 400
+
+                # Aggregate settled weight in MAIN karat on the invoice.
+                try:
+                    main_equiv = convert_to_main_karat(float(line_weight), karat_int)
+                except Exception:
+                    main_equiv = float(line_weight) * (karat_int / 21.0) if karat_int > 0 else 0.0
+                total_main_equiv += float(main_equiv or 0.0)
+
+                try:
+                    resolved_gold_settlements_lines.append({
+                        'safe_box_id': int(safe_id),
+                        'karat': int(karat_int),
+                        'weight': float(line_weight),
+                    })
+                except Exception:
+                    pass
+
+                db.session.add(
+                    SafeBoxTransaction(
+                        safe_box_id=safe_id,
+                        ref_type='invoice_gold_settlement',
+                        ref_id=new_invoice.id,
+                        invoice_id=new_invoice.id,
+                        direction=_direction_for_invoice_type(new_invoice.invoice_type),
+                        amount_cash=0.0,
+                        notes=f'gold settlement ({idx + 1})',
+                        created_by=posted_by_username,
+                        **weight_kwargs,
+                    )
+                )
+                created_any = True
+
+            if created_any:
+                new_invoice.settled_gold_weight = round(float(total_main_equiv), 3)
+
+            # Avoid double-posting via legacy settled_gold_* fields.
+            settled_gold_weight = 0.0
+            settled_gold_karat = 0.0
+            settled_gold_safe_box_id = None
 
         if settled_gold_weight > 0 and settled_gold_karat > 0:
             # Resolve/override the target gold safe based on Settings.
@@ -8280,6 +8533,15 @@ def add_invoice():
                 main_equiv = float(settled_gold_weight) * (karat_int / 21.0) if karat_int > 0 else 0.0
 
             new_invoice.settled_gold_weight = round(float(main_equiv), 3)
+
+            try:
+                resolved_gold_settlements_lines.append({
+                    'safe_box_id': int(settled_gold_safe_box_id),
+                    'karat': int(karat_int),
+                    'weight': float(settled_gold_weight),
+                })
+            except Exception:
+                pass
 
             db.session.add(
                 SafeBoxTransaction(
@@ -10409,6 +10671,89 @@ def add_invoice():
                         apply_golden_rule=False,
                         description="التزام المورد - أجور مصنعية + ضريبة الأجور",
                     )
+
+                # --- Gold settlements: reflect in journal lines for statements ---
+                # `gold_settlements[]` previously created only SafeBoxTransaction rows, which do not show
+                # up in supplier statements (statements are derived from JournalEntryLine).
+                # We also book weight-only lines:
+                # - Supplier memo (weight) side: payable decreases when gold goes out (debit)
+                # - Gold safe (weight) side: safe gold decreases when gold goes out (credit)
+                try:
+                    settlement_direction = _direction_for_invoice_type(new_invoice.invoice_type)
+                except Exception:
+                    settlement_direction = 'out'
+
+                supplier_side = 'debit' if settlement_direction == 'out' else 'credit'
+                safe_side = 'credit' if settlement_direction == 'out' else 'debit'
+
+                if supplier_memo_account_id and resolved_gold_settlements_lines:
+                    aggregated = {}
+                    for row in resolved_gold_settlements_lines:
+                        try:
+                            safe_id = int(row.get('safe_box_id'))
+                            karat_int = int(row.get('karat'))
+                            weight_val = float(row.get('weight') or 0.0)
+                        except Exception:
+                            continue
+                        if weight_val <= 0 or karat_int not in (18, 21, 22, 24):
+                            continue
+                        aggregated[(safe_id, karat_int)] = aggregated.get((safe_id, karat_int), 0.0) + weight_val
+
+                    for (safe_id, karat_int), weight_val in aggregated.items():
+                        if weight_val <= 0:
+                            continue
+
+                        safe_box = None
+                        safe_name = None
+                        safe_weight_account_id = None
+
+                        try:
+                            safe_box = SafeBox.query.get(int(safe_id))
+                            safe_name = getattr(safe_box, 'name', None)
+                        except Exception:
+                            safe_box = None
+
+                        try:
+                            safe_account_id = int(getattr(safe_box, 'account_id', None) or 0)
+                        except Exception:
+                            safe_account_id = 0
+
+                        if safe_account_id:
+                            try:
+                                safe_acc = Account.query.get(safe_account_id)
+                            except Exception:
+                                safe_acc = None
+                            if safe_acc and getattr(safe_acc, 'memo_account_id', None):
+                                safe_weight_account_id = safe_acc.memo_account_id
+                            else:
+                                safe_weight_account_id = safe_account_id
+
+                        if not safe_weight_account_id:
+                            continue
+
+                        _ensure_weight_tracking_account(safe_weight_account_id)
+
+                        supplier_kwargs = _weight_kwargs_for_karat(karat_int, round(float(weight_val), 3), supplier_side)
+                        safe_kwargs = _weight_kwargs_for_karat(karat_int, round(float(weight_val), 3), safe_side)
+                        if not supplier_kwargs or not safe_kwargs:
+                            continue
+
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=supplier_memo_account_id,
+                            apply_golden_rule=False,
+                            description=f"سداد ذهب للمورد{' - ' + safe_name if safe_name else ''} - عيار {karat_int}",
+                            **supplier_kwargs,
+                        )
+
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=safe_weight_account_id,
+                            apply_golden_rule=False,
+                            exclude_from_ledger=True,
+                            description=f"سداد ذهب للمورد{' - ' + supplier.name if supplier else ''} - عيار {karat_int}",
+                            **safe_kwargs,
+                        )
                 
                 # 🆕 التحقق من توازن حساب الجسر بعد الفاتورة
                 db.session.flush()  # تطبيق التغييرات قبل التحقق
@@ -10843,6 +11188,17 @@ def get_accounts():
         result.append(account_dict)
     
     return jsonify(result)
+
+
+@api.route('/accounts/<int:id>', methods=['GET'])
+@_wrap_api_exceptions('account_get_failed', 'Failed to load account')
+def get_account(id):
+    """Fetch a single account by id.
+
+    Returns the same shape as `Account.to_dict()` (plus any extras included there).
+    """
+    account = Account.query.get_or_404(id)
+    return jsonify(account.to_dict())
 
 
 @api.route('/accounts/export', methods=['GET'])
@@ -17233,6 +17589,45 @@ def create_journal_entry_from_voucher(voucher):
             print(f"Warning: No account lines found for voucher {voucher.id}")
             return None
         
+        # Cache SafeBox account ids so we do not remap those.
+        safe_account_ids = set()
+        try:
+            line_account_ids = list({l.account_id for l in account_lines if getattr(l, 'account_id', None) is not None})
+            if line_account_ids:
+                for sb in SafeBox.query.filter(SafeBox.account_id.in_(line_account_ids)).all():
+                    if getattr(sb, 'account_id', None) is not None:
+                        safe_account_ids.add(int(sb.account_id))
+        except Exception:
+            safe_account_ids = set()
+
+        def _resolve_account_id_for_amount_type(account_id: int, amount_type: str) -> int:
+            """Resolve the posting account id for voucher lines.
+
+            Dual/memo rules:
+            - cash lines stay on the selected account
+            - gold lines should post to the memo (weight) account when the selected
+              account is a financial account linked via memo_account_id.
+            - never remap SafeBox accounts (they are the physical custody accounts)
+            """
+            if not account_id:
+                return account_id
+            if int(account_id) in safe_account_ids:
+                return int(account_id)
+            if (amount_type or '').strip().lower() != 'gold':
+                return int(account_id)
+            try:
+                acc = Account.query.get(int(account_id))
+            except Exception:
+                acc = None
+            if not acc:
+                return int(account_id)
+            try:
+                if (not bool(getattr(acc, 'tracks_weight', False))) and getattr(acc, 'memo_account_id', None):
+                    return int(acc.memo_account_id)
+            except Exception:
+                return int(account_id)
+            return int(account_id)
+
         # إنشاء سطور القيد المحاسبي من سطور السند
         for account_line in account_lines:
             # تحديد المبالغ حسب نوع السطر (مدين/دائن) ونوع المبلغ (نقد/ذهب)
@@ -17295,10 +17690,15 @@ def create_journal_entry_from_voucher(voucher):
             if getattr(voucher, 'party_type', None) == 'supplier' and getattr(voucher, 'supplier_id', None):
                 supplier_id = voucher.supplier_id
 
+            target_account_id = _resolve_account_id_for_amount_type(
+                int(account_line.account_id),
+                str(account_line.amount_type or ''),
+            )
+
             # إنشاء سطر القيد
             journal_line = JournalEntryLine(
                 journal_entry_id=journal_entry.id,
-                account_id=account_line.account_id,
+                account_id=target_account_id,
                 customer_id=customer_id,
                 supplier_id=supplier_id,
                 cash_debit=cash_debit,
