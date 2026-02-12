@@ -1582,15 +1582,17 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 onTap: _pickSupplier,
               ),
             if (_partyType == 'employee')
-              DropdownButtonFormField<int>(
-                initialValue: _selectedEmployeeId,
+              DropdownButtonFormField<int?>(
+                initialValue: _employees.any((e) => e.id == _selectedEmployeeId)
+                    ? _selectedEmployeeId
+                    : null,
                 decoration: const InputDecoration(
                   labelText: 'الموظف *',
                   border: OutlineInputBorder(),
                   helperText: 'اختر الموظف المرتبط بالسند',
                 ),
-                items: _employees.map<DropdownMenuItem<int>>((employee) {
-                  return DropdownMenuItem<int>(
+                items: _employees.map<DropdownMenuItem<int?>>((employee) {
+                  return DropdownMenuItem<int?>(
                     value: employee.id,
                     child: Text(
                       employee.name.isNotEmpty

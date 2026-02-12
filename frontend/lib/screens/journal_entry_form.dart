@@ -968,7 +968,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             Expanded(
               flex: 2,
               child: DropdownButtonFormField<String>(
-                initialValue: _selectedEntryType,
+                initialValue: ['عادي', 'افتتاحي', 'دوري', 'إقفال', 'تسوية', 'تعديل'].contains(_selectedEntryType)
+                    ? _selectedEntryType
+                    : 'عادي',
                 decoration: InputDecoration(
                   labelText: 'نوع القيد',
                   border: OutlineInputBorder(
@@ -998,7 +1000,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             Expanded(
               flex: 2,
               child: DropdownButtonFormField<String?>(
-                initialValue: _referenceType,
+                initialValue: [null, 'فاتورة', 'سند', 'شيك', 'أمر دفع', 'recurring_template', 'أخرى'].contains(_referenceType)
+                    ? _referenceType
+                    : null,
                 decoration: InputDecoration(
                   labelText: 'نوع المرجع',
                   border: OutlineInputBorder(
