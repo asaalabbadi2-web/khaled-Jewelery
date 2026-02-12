@@ -816,7 +816,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       if (ledger != null) return ledger;
     }
     final fallback = safe.balance?.cash;
-    return fallback != null ? fallback.toDouble() : null;
+    return fallback?.toDouble();
   }
 
   bool _isCashOutflowFromSafe(AccountLineModel line) {
@@ -868,6 +868,37 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     } catch (_) {
       return null;
     }
+  }
+
+  bool _shouldShowSafeBoxesForLineType(String? lineType) {
+    if (lineType == null) return false;
+    final bool isReceipt = widget.voucherType == 'receipt';
+    return (isReceipt && lineType == 'debit') || (!isReceipt && lineType == 'credit');
+  }
+
+  bool _safeMatchesAmountType(SafeBoxModel safe, String amountType) {
+    if (amountType == 'gold') return safe.safeType == 'gold';
+    return safe.safeType == 'cash' ||
+        safe.safeType == 'bank' ||
+        safe.safeType == 'clearing' ||
+        safe.safeType == 'check';
+  }
+
+  SafeBoxModel? _defaultSafeForAmountType({
+    required String? lineType,
+    required String amountType,
+  }) {
+    if (!_shouldShowSafeBoxesForLineType(lineType)) return null;
+    final candidates = _safeBoxes
+        .where((sb) => _safeMatchesAmountType(sb, amountType))
+        .toList();
+    if (candidates.isEmpty) return null;
+
+    final def = candidates.firstWhere(
+      (sb) => sb.isDefault == true,
+      orElse: () => candidates.first,
+    );
+    return def;
   }
 
   void _ensureFirstLineConfiguration({
@@ -2821,6 +2852,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             const Divider(height: 24),
             // Account selection with Autocomplete
             Autocomplete<Map<String, dynamic>>(
+              key: ValueKey(
+                'voucher_line_autocomplete_${index}_${line.lineType}_${line.amountType}_${line.accountId ?? 'none'}',
+              ),
               optionsBuilder: (TextEditingValue textEditingValue) {
                 final List<Map<String, dynamic>> accounts =
                     List<Map<String, dynamic>>.from(
@@ -2995,10 +3029,48 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   return;
                 }
                 setState(() {
+                  final oldAmountType = line.amountType;
                   line.amountType = value;
+
                   if (value == 'gold') {
-                    line.karat ??= _mainKarat
-                        .toDouble(); // Use main karat from settings
+                    line.karat ??= _mainKarat.toDouble();
+                  } else {
+                    line.karat = null;
+                  }
+
+                  // If the selected account is a safe-backed account and it no
+                  // longer matches the selected amount type, switch to a
+                  // suitable default safe (or clear).
+                  final existingSafe = _findSafeByAccountId(line.accountId);
+                  if (existingSafe != null) {
+                    final matches = _safeMatchesAmountType(existingSafe, value);
+                    if (!matches) {
+                      final def = _defaultSafeForAmountType(
+                        lineType: line.lineType,
+                        amountType: value,
+                      );
+                      line.accountId = def?.accountId;
+                    }
+                  } else if (oldAmountType != value &&
+                      _shouldShowSafeBoxesForLineType(line.lineType)) {
+                    // If this line is expected to point to a safe account,
+                    // auto-select a default when switching types.
+                    final def = _defaultSafeForAmountType(
+                      lineType: line.lineType,
+                      amountType: value,
+                    );
+                    if (def != null) {
+                      line.accountId = def.accountId;
+                    }
+                  }
+
+                  // If a gold safe is selected with fixed karat, sync line karat.
+                  if (value == 'gold') {
+                    final safe = _findSafeByAccountId(line.accountId);
+                    final fixed = safe?.karat;
+                    if (safe != null && safe.safeType == 'gold' && fixed != null && fixed > 0) {
+                      line.karat = fixed.toDouble();
+                    }
                   }
                 });
               },

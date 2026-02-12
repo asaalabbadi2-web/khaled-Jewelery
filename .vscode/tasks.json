@@ -339,6 +339,53 @@
 			"type": "shell",
 			"command": "curl -s http://127.0.0.1:8001/api/weight-closing/profiles | python3 -c 'import sys,json; d=json.load(sys.stdin); p=(d.get(\"profiles\") or []); print(\"profiles\",len(p));\nif p: \n  x=p[0]; print(\"first_keys\", sorted(list(x.keys()))); \n  print(\"key\", x.get(\"key\")); meta=x.get(\"meta\") or {}; print(\"display\", meta.get(\"display_name\"));\n'",
 			"isBackground": false
+		},
+		{
+			"label": "Flutter: Analyze",
+			"type": "shell",
+			"command": "cd frontend && flutter analyze",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Flutter: Analyze",
+			"type": "shell",
+			"command": "cd frontend && flutter analyze",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Flutter: Analyze",
+			"type": "shell",
+			"command": "cd frontend && flutter analyze",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Flutter: Analyze",
+			"type": "shell",
+			"command": "cd frontend && flutter analyze",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Flutter: Analyze (after payment UI move)",
+			"type": "shell",
+			"command": "cd frontend && flutter analyze",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Devtool: Verify Supplier Gold Settlement Voucher",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/verify_supplier_purchase_gold_settlement.py || python3 devtools/verify_supplier_purchase_gold_settlement.py )",
+			"isBackground": false
+		},
+		{
+			"label": "Devtool: Verify Supplier Gold Settlement Voucher",
+			"type": "shell",
+			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/verify_supplier_purchase_gold_settlement.py || python3 devtools/verify_supplier_purchase_gold_settlement.py )",
+			"isBackground": false
 		}
 	]
 }

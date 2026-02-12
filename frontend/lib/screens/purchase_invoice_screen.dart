@@ -22,10 +22,12 @@ enum _PurchaseSettlementMode { credit, barter, partial }
 
 class _GoldSettlementLine {
   int? safeBoxId;
+  int? karat;
   final TextEditingController weightController;
 
   _GoldSettlementLine({
     this.safeBoxId,
+    this.karat,
     String initialWeight = '',
   }) : weightController = TextEditingController(text: initialWeight);
 
@@ -104,16 +106,33 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       return;
     }
 
-    final total = _goldSettlementLinesTotalWeight();
+    final total = _goldSettlementLinesTotalMainEquivalent();
     _goldPaidWeightController.text =
         total > 0 ? total.toStringAsFixed(3) : '';
   }
 
-  double _goldSettlementLinesTotalWeight() {
+  int _effectiveGoldSettlementLineKarat(_GoldSettlementLine line) {
+    final raw = line.karat ?? _selectedGoldPaidKarat;
+    if ({18, 21, 22, 24}.contains(raw)) return raw;
+    final main = _mainKaratFromSettings();
+    return {18, 21, 22, 24}.contains(main) ? main : 21;
+  }
+
+  double _goldSettlementLineWeight(_GoldSettlementLine line) {
+    final normalized = normalizeNumber(line.weightController.text).trim();
+    return _toDouble(normalized);
+  }
+
+  double _goldSettlementLinesTotalMainEquivalent() {
+    final mainKarat = _mainKaratFromSettings();
+    if (mainKarat <= 0) return 0.0;
+
     double total = 0.0;
     for (final line in _goldSettlementLines) {
-      final normalized = normalizeNumber(line.weightController.text).trim();
-      total += _toDouble(normalized);
+      final weight = _goldSettlementLineWeight(line);
+      if (weight <= 0) continue;
+      final karat = _effectiveGoldSettlementLineKarat(line);
+      total += weight * (karat / mainKarat);
     }
     return _round(total, 3);
   }
@@ -153,6 +172,17 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         .toList();
   }
 
+  int? _defaultGoldSafeIdForKarat(int karat) {
+    final candidates = _goldSafeBoxesForKarat(karat);
+    if (candidates.isEmpty) return null;
+
+    final def = candidates.firstWhere(
+      (b) => b.isDefault == true && b.id != null,
+      orElse: () => candidates.first,
+    );
+    return def.id;
+  }
+
   int? _defaultGoldSafeIdForCurrentKarat() {
     final karat = _selectedGoldPaidKarat;
     final candidates = _goldSafeBoxesForKarat(karat);
@@ -163,26 +193,28 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       return selected;
     }
 
-    final def = candidates.firstWhere(
-      (b) => b.isDefault == true && b.id != null,
-      orElse: () => candidates.first,
-    );
-    return def.id;
+    return _defaultGoldSafeIdForKarat(karat);
+  }
+
+  String _goldSafeLabel(SafeBoxModel box) {
+    final k = box.karat;
+    if (k != null && k > 0) {
+      return '${box.name} (عيار $k)';
+    }
+    return box.name;
   }
 
   Widget _buildGoldSettlementsEditor({required bool requiredSettlement}) {
     if (!_isGoldSettlementContext) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
-    final karat = _selectedGoldPaidKarat;
-    final availableSafes = _goldSafeBoxesForKarat(karat);
-    final totalLinesWeight = _goldSettlementLinesTotalWeight();
+    final totalLinesMainEquiv = _goldSettlementLinesTotalMainEquivalent();
 
-    if (availableSafes.isEmpty) {
+    if (_goldSafeBoxes.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(top: 10),
         child: Text(
-          'لا توجد خزائن ذهب متاحة لهذا العيار',
+          'لا توجد خزائن ذهب متاحة',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.error,
             fontWeight: FontWeight.w700,
@@ -218,6 +250,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           ),
         ...List.generate(_goldSettlementLines.length, (index) {
           final line = _goldSettlementLines[index];
+          final lineKarat = _effectiveGoldSettlementLineKarat(line);
+          final availableSafes = _goldSafeBoxesForKarat(lineKarat);
           final safeValue = (line.safeBoxId != null &&
                   availableSafes.any((b) => b.id == line.safeBoxId))
               ? line.safeBoxId
@@ -242,7 +276,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           (box) => DropdownMenuItem<int>(
                             value: box.id!,
                             child: Text(
-                              box.name,
+                              _goldSafeLabel(box),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -251,14 +285,59 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                     onChanged: (value) {
                       setState(() {
                         line.safeBoxId = value;
+
+                        final picked = _findGoldSafeBoxById(value);
+                        final fixed = picked?.karat;
+                        if (fixed != null && {18, 21, 22, 24}.contains(fixed)) {
+                          line.karat = fixed;
+                        } else {
+                          line.karat ??= _selectedGoldPaidKarat;
+                        }
+
                         if (index == 0) {
                           _selectedGoldSafeBoxId = value;
                         }
+
+                        _refreshGoldPaidTotalFromLines();
                       });
                     },
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 110,
+                  child: DropdownButtonFormField<int>(
+                    value: lineKarat,
+                    decoration: const InputDecoration(
+                      labelText: 'العيار',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: const [24, 22, 21, 18]
+                        .map(
+                          (k) => DropdownMenuItem<int>(
+                            value: k,
+                            child: Text('عيار $k'),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        line.karat = value;
+
+                        final box = _findGoldSafeBoxById(line.safeBoxId);
+                        if (box != null && !_goldSafeAcceptsKarat(box, value)) {
+                          line.safeBoxId = null;
+                        }
+
+                        line.safeBoxId ??= _defaultGoldSafeIdForKarat(value);
+                        _refreshGoldPaidTotalFromLines();
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   flex: 2,
                   child: TextFormField(
@@ -308,10 +387,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             TextButton.icon(
               onPressed: () {
                 setState(() {
-                  final defaultSafeId = _defaultGoldSafeIdForCurrentKarat();
+                  final defaultKarat = _selectedGoldPaidKarat;
+                  final defaultSafeId = _defaultGoldSafeIdForKarat(defaultKarat);
                   _goldSettlementLines.add(
                     _GoldSettlementLine(
                       safeBoxId: defaultSafeId,
+                      karat: defaultKarat,
                       initialWeight: '',
                     ),
                   );
@@ -323,13 +404,15 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             ),
             const Spacer(),
             Text(
-              'الإجمالي (مدفوع): ${_formatWeight(totalLinesWeight)}',
+              'الإجمالي (مكافئ): ${_formatWeight(totalLinesMainEquiv)}',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: totalLinesWeight > 0
+                color: totalLinesMainEquiv > 0
                     ? theme.colorScheme.tertiary
                     : Colors.black54,
                 fontWeight:
-                    totalLinesWeight > 0 ? FontWeight.w800 : FontWeight.normal,
+                    totalLinesMainEquiv > 0
+                        ? FontWeight.w800
+                        : FontWeight.normal,
               ),
             ),
           ],
@@ -339,8 +422,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   }
 
   void _clearIncompatibleGoldSettlementSafes() {
-    final karat = _selectedGoldPaidKarat;
     for (final line in _goldSettlementLines) {
+      final karat = _effectiveGoldSettlementLineKarat(line);
       final box = _findGoldSafeBoxById(line.safeBoxId);
       if (box == null) continue;
       if (!_goldSafeAcceptsKarat(box, karat)) {
@@ -454,6 +537,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           .map(
             (l) => {
               'safe_box_id': l.safeBoxId,
+              'karat': l.karat,
               'weight': l.weightController.text,
             },
           )
@@ -647,6 +731,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           restoredGoldSettlements.add(
             _GoldSettlementLine(
               safeBoxId: toInt(map['safe_box_id']),
+              karat: toInt(map['karat']),
               initialWeight: (map['weight'] ?? '').toString(),
             ),
           );
@@ -797,13 +882,18 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   double _goldPaidWeight() {
     if (_isGoldSettlementContext) {
-      return _goldSettlementLinesTotalWeight();
+      return _goldSettlementLinesTotalMainEquivalent();
     }
     final normalized = normalizeNumber(_goldPaidWeightController.text).trim();
     return _round(_toDouble(normalized), 3);
   }
 
   double _goldPaidMainEquivalent() {
+    // When gold settlements are entered as lines, the paid field is already main-equivalent.
+    if (_isGoldSettlementContext) {
+      return _goldSettlementLinesTotalMainEquivalent();
+    }
+
     final paidWeight = _goldPaidWeight();
     if (paidWeight <= 0) return 0.0;
     final karat = _selectedGoldPaidKarat;
@@ -867,7 +957,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         // Ensure settlement lines get a sensible default safe after loading.
         _clearIncompatibleGoldSettlementSafes();
         for (final line in _goldSettlementLines) {
-          line.safeBoxId ??= _defaultGoldSafeIdForCurrentKarat();
+          line.karat ??= _effectiveGoldSettlementLineKarat(line);
+          final k = _effectiveGoldSettlementLineKarat(line);
+          line.safeBoxId ??= _defaultGoldSafeIdForKarat(k);
         }
 
         _refreshGoldPaidTotalFromLines();
@@ -897,10 +989,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         _cashPaidController.text = '';
         final dueGoldMain = _supplierMainEquivalentWeight();
         _clearGoldSettlementLines();
-        final defaultSafeId = _defaultGoldSafeIdForCurrentKarat();
+        final defaultKarat = _selectedGoldPaidKarat;
+        final defaultSafeId = _defaultGoldSafeIdForKarat(defaultKarat);
         _goldSettlementLines.add(
           _GoldSettlementLine(
             safeBoxId: defaultSafeId,
+            karat: defaultKarat,
             initialWeight: dueGoldMain > 0 ? dueGoldMain.toStringAsFixed(3) : '',
           ),
         );
@@ -1878,7 +1972,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
     if (_isGoldSettlementContext) {
       final requiresGold = _settlementMode == _PurchaseSettlementMode.barter;
-      final totalLines = _goldSettlementLinesTotalWeight();
+      final totalLines = _goldSettlementLinesTotalMainEquivalent();
 
       if (requiresGold && totalLines <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1969,7 +2063,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         ? _cashPaid()
         : 0.0;
     final paidGoldWeight = _isGoldSettlementContext
-        ? _goldSettlementLinesTotalWeight()
+      ? _goldSettlementLinesTotalMainEquivalent()
         : 0.0;
 
     String settlementMethod;
@@ -2054,27 +2148,38 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       payload['amount_paid'] = 0.0;
     }
 
-    // Gold settlement (مقايضة/جزئي): post one row per safe.
+    // Gold settlement (مقايضة/جزئي): post one row per (safe, karat).
     if (paidGoldWeight > 0) {
-      final Map<int, double> bySafe = {};
+      final Map<String, double> bySafeAndKarat = {};
+      final Map<String, int> safeIdByKey = {};
+      final Map<String, int> karatByKey = {};
       for (final line in _goldSettlementLines) {
         final safeId = line.safeBoxId;
         if (safeId == null) continue;
+        final karat = _effectiveGoldSettlementLineKarat(line);
         final weight = _toDouble(
           normalizeNumber(line.weightController.text).trim(),
         );
         if (weight <= 0) continue;
-        bySafe[safeId] = (bySafe[safeId] ?? 0) + weight;
+
+        final key = '${safeId}_$karat';
+        safeIdByKey[key] = safeId;
+        karatByKey[key] = karat;
+        bySafeAndKarat[key] = (bySafeAndKarat[key] ?? 0) + weight;
       }
 
-      payload['gold_settlements'] = bySafe.entries
-          .map(
-            (e) => {
-              'safe_box_id': e.key,
-              'karat': _selectedGoldPaidKarat,
+      payload['gold_settlements'] = bySafeAndKarat.entries
+          .map((e) {
+            final safeId = safeIdByKey[e.key];
+            final karat = karatByKey[e.key];
+            if (safeId == null || karat == null) return null;
+            return {
+              'safe_box_id': safeId,
+              'karat': karat,
               'weight': _round(e.value, 3),
-            },
-          )
+            };
+          })
+          .whereType<Map<String, dynamic>>()
           .toList();
     }
 
@@ -2192,6 +2297,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         const SizedBox(height: 24),
         _buildKaratLinesSection(),
       ],
+      const SizedBox(height: 24),
+      _buildPaymentSection(),
     ];
 
     final rightColumn = <Widget>[
@@ -2408,6 +2515,50 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               enabled: _suppliers.isNotEmpty,
               onTap: _pickSupplier,
             ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: _loadSuppliers,
+              icon: const Icon(Icons.refresh),
+              label: const Text('تحديث قائمة الموردين'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentSection() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Card(
+      elevation: isDark ? 2 : 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shadowColor: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'الدفع',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'حدد طريقة السداد (آجل/مقايضة/جزئي) ثم أدخل تفاصيل الدفع إن وجدت.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
             const Text(
               'طريقة السداد',
               style: TextStyle(fontWeight: FontWeight.bold),
@@ -2447,7 +2598,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
             if (_settlementMode == _PurchaseSettlementMode.partial) ...[
               const SizedBox(height: 16),
-              // In جزئي: show cash payment method (and optionally cash safebox).
               if (_paymentMethods.isNotEmpty) ...[
                 Builder(
                   builder: (context) {
@@ -2504,20 +2654,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               _buildBarterSettlementInputs(),
             ],
 
+            const SizedBox(height: 16),
             Row(
               children: [
-                OutlinedButton.icon(
-                  onPressed: _loadSuppliers,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('تحديث قائمة الموردين'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                ),
-                const Spacer(),
                 if (_settlementMode == _PurchaseSettlementMode.partial &&
                     _safeBoxes.isNotEmpty)
                   OutlinedButton.icon(
@@ -2527,9 +2666,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                               _showAdvancedPaymentOptions =
                                   !_showAdvancedPaymentOptions;
 
-                              // Ensure the selected safebox exists in the list before
-                              // rendering the dropdown; otherwise Flutter will throw
-                              // repeatedly (appearing like an infinite loop).
                               if (_showAdvancedPaymentOptions &&
                                   _safeBoxes.isNotEmpty) {
                                 final safeBoxesWithIds = _safeBoxes
@@ -2588,6 +2724,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   ),
               ],
             ),
+
             if (_settlementMode == _PurchaseSettlementMode.partial &&
                 _safeBoxes.isNotEmpty &&
                 _showAdvancedPaymentOptions &&

@@ -8527,8 +8527,10 @@ def add_invoice():
             gold_settlements_data = []
 
         # We may need to reflect gold settlements in statements (built off JournalEntryLine).
-        # SafeBoxTransaction alone won't appear in party statements.
+        # We now prefer generating an approved Voucher (payment/receipt) for gold settlements
+        # so the movement is visible both as a سند and as JournalEntryLine (via voucher posting).
         resolved_gold_settlements_lines = []  # [{safe_box_id, karat, weight}]
+        gold_settlement_voucher_created = False
 
         # For unposted invoices (drafts/approval-required), do not allow gold settlement inputs (would require safe movements).
         if unposted_mode:
@@ -8716,19 +8718,6 @@ def add_invoice():
                 except Exception:
                     pass
 
-                db.session.add(
-                    SafeBoxTransaction(
-                        safe_box_id=safe_id,
-                        ref_type='invoice_gold_settlement',
-                        ref_id=new_invoice.id,
-                        invoice_id=new_invoice.id,
-                        direction=_direction_for_invoice_type(new_invoice.invoice_type),
-                        amount_cash=0.0,
-                        notes=f'gold settlement ({idx + 1})',
-                        created_by=posted_by_username,
-                        **weight_kwargs,
-                    )
-                )
                 created_any = True
 
             if created_any:
@@ -8862,19 +8851,155 @@ def add_invoice():
             except Exception:
                 pass
 
-            db.session.add(
-                SafeBoxTransaction(
-                    safe_box_id=settled_gold_safe_box_id,
-                    ref_type='invoice_gold_settlement',
-                    ref_id=new_invoice.id,
-                    invoice_id=new_invoice.id,
-                    direction=_direction_for_invoice_type(new_invoice.invoice_type),
+            # SafeBoxTransaction is written via the auto-created settlement voucher.
+
+        # If we have gold settlement lines, generate an approved voucher so the movement
+        # exists as (سند صرف/قبض) + produces JournalEntryLines + SafeBoxTransaction.
+        if (not unposted_mode) and resolved_gold_settlements_lines and (not gold_settlement_voucher_created):
+            try:
+                settlement_direction = _direction_for_invoice_type(new_invoice.invoice_type)
+            except Exception:
+                settlement_direction = 'out'
+
+            voucher_type = 'receipt' if settlement_direction == 'in' else 'payment'
+
+            party_type = None
+            party_id = None
+            party_account_id = None
+            try:
+                if getattr(new_invoice, 'supplier_id', None):
+                    party_type = 'supplier'
+                    party_id = int(new_invoice.supplier_id)
+                    supplier = Supplier.query.get(party_id)
+                    if not supplier:
+                        db.session.rollback()
+                        return jsonify({'error': 'supplier_not_found'}), 404
+                    party_account_id = int(ensure_supplier_accounts(supplier).financial.id)
+                elif getattr(new_invoice, 'customer_id', None):
+                    party_type = 'customer'
+                    party_id = int(new_invoice.customer_id)
+                    customer = Customer.query.get(party_id)
+                    if not customer:
+                        db.session.rollback()
+                        return jsonify({'error': 'customer_not_found'}), 404
+                    party_account_id = int(ensure_customer_accounts(customer).financial.id)
+                else:
+                    db.session.rollback()
+                    return jsonify({'error': 'missing_party_for_gold_settlement_voucher'}), 400
+            except Exception:
+                db.session.rollback()
+                return jsonify({'error': 'missing_party_for_gold_settlement_voucher'}), 400
+
+            # Aggregate by (safe_box_id, karat) for safe lines and by karat for party line(s)
+            safe_agg = {}  # (safe_id, karat) -> weight
+            party_agg = {}  # karat -> weight
+            for row in resolved_gold_settlements_lines:
+                try:
+                    safe_id = int(row.get('safe_box_id'))
+                    karat_int = int(row.get('karat'))
+                    weight_val = float(row.get('weight') or 0.0)
+                except Exception:
+                    continue
+                if safe_id <= 0 or weight_val <= 0 or karat_int not in (18, 21, 22, 24):
+                    continue
+                safe_agg[(safe_id, karat_int)] = float(safe_agg.get((safe_id, karat_int), 0.0) or 0.0) + float(weight_val)
+                party_agg[karat_int] = float(party_agg.get(karat_int, 0.0) or 0.0) + float(weight_val)
+
+            if safe_agg and party_agg:
+                voucher_number = generate_voucher_number(voucher_type)
+                voucher_date = datetime.now()
+                try:
+                    voucher_date = new_invoice.date or voucher_date
+                except Exception:
+                    pass
+
+                voucher_notes = None
+                try:
+                    voucher_notes = json.dumps({
+                        'source': 'invoice_gold_settlement',
+                        'invoice_id': int(new_invoice.id),
+                        'settlement_method': (getattr(new_invoice, 'settlement_method', None) or data.get('settlement_method') or data.get('settlement_mode')),
+                        'gold_settlements': resolved_gold_settlements_lines,
+                    }, ensure_ascii=False)
+                except Exception:
+                    voucher_notes = None
+
+                total_gold_weight = round(sum(float(v or 0.0) for v in party_agg.values()), 3)
+
+                voucher = Voucher(
+                    voucher_number=voucher_number,
+                    voucher_type=voucher_type,
+                    date=voucher_date,
+                    party_type=party_type,
+                    customer_id=party_id if party_type == 'customer' else None,
+                    supplier_id=party_id if party_type == 'supplier' else None,
                     amount_cash=0.0,
-                    notes='gold settlement',
-                    created_by=posted_by_username,
-                    **weight_kwargs,
+                    amount_gold=float(total_gold_weight),
+                    gold_karat=None,
+                    description=f"سداد ذهب للمورد - فاتورة {getattr(new_invoice, 'invoice_type_id', '')}".strip(),
+                    reference_type='invoice',
+                    reference_id=int(new_invoice.id),
+                    reference_number=str(getattr(new_invoice, 'invoice_type_id', '') or '') or None,
+                    notes=voucher_notes,
+                    created_by=posted_by_username or 'system',
+                    status='pending',
                 )
-            )
+                db.session.add(voucher)
+                db.session.flush()
+
+                # Determine line types based on direction
+                safe_line_type = 'debit' if settlement_direction == 'in' else 'credit'
+                party_line_type = 'credit' if settlement_direction == 'in' else 'debit'
+
+                # Safe lines (gold)
+                for (safe_id, karat_int), weight_val in safe_agg.items():
+                    if weight_val <= 0:
+                        continue
+                    gold_safe = SafeBox.query.get(int(safe_id))
+                    if not gold_safe:
+                        db.session.rollback()
+                        return jsonify({'error': 'gold_safe_box_not_found', 'safe_box_id': safe_id}), 400
+                    safe_account_id = getattr(gold_safe, 'account_id', None)
+                    if not safe_account_id:
+                        db.session.rollback()
+                        return jsonify({'error': 'safe_box_missing_account_id', 'safe_box_id': safe_id}), 400
+                    db.session.add(VoucherAccountLine(
+                        voucher_id=voucher.id,
+                        account_id=int(safe_account_id),
+                        line_type=safe_line_type,
+                        amount_type='gold',
+                        amount=round(float(weight_val), 3),
+                        karat=int(karat_int),
+                        description=f'خزينة ذهب: {getattr(gold_safe, "name", "")}'.strip() or None,
+                    ))
+
+                # Party lines (gold) - aggregated by karat
+                for karat_int, weight_val in party_agg.items():
+                    if weight_val <= 0:
+                        continue
+                    db.session.add(VoucherAccountLine(
+                        voucher_id=voucher.id,
+                        account_id=int(party_account_id),
+                        line_type=party_line_type,
+                        amount_type='gold',
+                        amount=round(float(weight_val), 3),
+                        karat=int(karat_int),
+                        description='طرف السداد',
+                    ))
+
+                db.session.flush()
+
+                journal_entry = create_journal_entry_from_voucher(voucher)
+                if not journal_entry:
+                    db.session.rollback()
+                    return jsonify({'error': 'gold_settlement_voucher_post_failed', 'message': 'فشل إنشاء القيد من سند سداد الذهب'}), 500
+
+                voucher.status = 'approved'
+                voucher.approved_at = datetime.now()
+                voucher.approved_by = posted_by_username or 'system'
+                voucher.journal_entry_id = journal_entry.id
+                _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
+                gold_settlement_voucher_created = True
 
         # --- 2. Aggregate Gold and Cash Totals ---
         total_cash = new_invoice.total
@@ -11105,7 +11230,7 @@ def add_invoice():
                 supplier_side = 'debit' if settlement_direction == 'out' else 'credit'
                 safe_side = 'credit' if settlement_direction == 'out' else 'debit'
 
-                if supplier_memo_account_id and resolved_gold_settlements_lines:
+                if supplier_memo_account_id and resolved_gold_settlements_lines and (not gold_settlement_voucher_created):
                     aggregated = {}
                     for row in resolved_gold_settlements_lines:
                         try:
