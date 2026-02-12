@@ -2787,6 +2787,8 @@ class ApiService {
     String? dateFrom,
     String? dateTo,
     String? search,
+    String? referenceType, // invoice, voucher, journal_entry, manual
+    int? referenceId,
   }) async {
     final Map<String, String> queryParameters = {
       'page': page.toString(),
@@ -2809,6 +2811,13 @@ class ApiService {
       queryParameters['search'] = search;
     }
 
+    if (referenceType != null && referenceType.isNotEmpty) {
+      queryParameters['reference_type'] = referenceType;
+    }
+    if (referenceId != null) {
+      queryParameters['reference_id'] = referenceId.toString();
+    }
+
     final uri = Uri.parse(
       '$_baseUrl/vouchers',
     ).replace(queryParameters: queryParameters);
@@ -2819,6 +2828,27 @@ class ApiService {
     } else {
       throw Exception('Failed to load vouchers');
     }
+  }
+
+  Future<List<Map<String, dynamic>>> getVouchersForInvoice(
+    int invoiceId, {
+    int page = 1,
+    int perPage = 50,
+  }) async {
+    final result = await getVouchers(
+      page: page,
+      perPage: perPage,
+      referenceType: 'invoice',
+      referenceId: invoiceId,
+    );
+    final raw = result['vouchers'];
+    if (raw is List) {
+      return raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+    return <Map<String, dynamic>>[];
   }
 
   /// Get single voucher by ID

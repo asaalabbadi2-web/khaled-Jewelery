@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
@@ -11,6 +12,7 @@ import 'purchase_invoice_screen.dart';
 import 'sales_invoice_screen_v2.dart';
 import 'scrap_purchase_invoice_screen.dart';
 import 'scrap_sales_invoice_screen.dart';
+import 'voucher_details_screen.dart';
 // import 'add_invoice_screen.dart'; // TODO: Uncomment when implementing add invoice
 
 enum _InvoiceCreationTarget {
@@ -1995,6 +1997,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         ? (invoice['items'] as List)
         : const [];
 
+    final payments = (invoice['payments'] is List)
+      ? (invoice['payments'] as List)
+      : const [];
+
     final auth = Provider.of<AuthProvider>(sheetContext, listen: false);
     final canSeeLogs = auth.isManager;
 
@@ -2322,6 +2328,156 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                       ),
                     ),
 
+                    if (payments.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        isAr ? 'الدفعات' : 'Payments',
+                        style: textTheme.titleMedium?.copyWith(
+                          color: colorScheme.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Card(
+                        elevation: 0,
+                        color: colorScheme.surfaceContainerHighest.withValues(
+                          alpha: theme.brightness == Brightness.dark
+                              ? 0.35
+                              : 0.6,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            children: payments.map<Widget>((raw) {
+                              final Map<String, dynamic> payment = raw is Map
+                                  ? raw
+                                      .map((k, v) => MapEntry(k.toString(), v))
+                                  : <String, dynamic>{};
+
+                              final paymentId = _tryParseInt(payment['id']);
+                              final amount = _tryParseDouble(payment['amount']);
+                              final methodName =
+                                  (payment['payment_method_name'] ?? '')
+                                      .toString();
+                              final createdAt = (payment['created_at'] ?? '')
+                                  .toString();
+                              final notes =
+                                  (payment['notes'] ?? '').toString().trim();
+
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                Icons.payments_outlined,
+                                                size: 18,
+                                                color: colorScheme.primary,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  methodName.isNotEmpty
+                                                      ? methodName
+                                                      : (isAr
+                                                            ? 'وسيلة دفع'
+                                                            : 'Payment method'),
+                                                  style: textTheme.bodyMedium
+                                                      ?.copyWith(
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                      ),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              Text(
+                                                NumberFormat(
+                                                  '#,##0.00',
+                                                  isAr ? 'ar' : 'en',
+                                                ).format(amount),
+                                                style: textTheme.bodyMedium
+                                                    ?.copyWith(
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                      color:
+                                                          colorScheme.primary,
+                                                    ),
+                                              ),
+                                            ],
+                                          ),
+                                          if (createdAt.isNotEmpty) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              isAr
+                                                  ? 'تاريخ: ${_formatDate(createdAt, isAr)}'
+                                                  : 'Date: ${_formatDate(createdAt, isAr)}',
+                                              style: textTheme.bodySmall
+                                                  ?.copyWith(
+                                                    color: colorScheme
+                                                        .onSurface
+                                                        .withValues(
+                                                          alpha: 0.7,
+                                                        ),
+                                                    fontWeight:
+                                                        FontWeight.w600,
+                                                  ),
+                                            ),
+                                          ],
+                                          if (notes.isNotEmpty) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              notes,
+                                              style: textTheme.bodySmall
+                                                  ?.copyWith(
+                                                    color: colorScheme
+                                                        .onSurface
+                                                        .withValues(
+                                                          alpha: 0.7,
+                                                        ),
+                                                    fontStyle:
+                                                        FontStyle.italic,
+                                                  ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    IconButton(
+                                      onPressed: paymentId == null
+                                          ? null
+                                          : () => _openLinkedVoucherForPayment(
+                                              sheetContext: sheetContext,
+                                              invoice: invoice,
+                                              invoicePaymentId: paymentId,
+                                            ),
+                                      tooltip: isAr
+                                          ? 'عرض السند المرتبط'
+                                          : 'View linked voucher',
+                                      icon: Icon(
+                                        Icons.receipt_long,
+                                        color: colorScheme.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+
                     if (canSettle) ...[
                       const SizedBox(height: 12),
                       SizedBox(
@@ -2478,6 +2634,98 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         );
       },
     );
+  }
+
+  Future<void> _openLinkedVoucherForPayment({
+    required BuildContext sheetContext,
+    required Map<String, dynamic> invoice,
+    required int invoicePaymentId,
+  }) async {
+    final isAr = widget.isArabic;
+
+    final invoiceIdValue = invoice['id'];
+    final invoiceId = invoiceIdValue is int
+        ? invoiceIdValue
+        : int.tryParse(invoiceIdValue?.toString() ?? '');
+    if (invoiceId == null) {
+      _showSnackBar(
+        isAr ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+        isError: true,
+      );
+      return;
+    }
+
+    var loaderVisible = true;
+    showDialog(
+      context: sheetContext,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    ).then((_) => loaderVisible = false);
+
+    try {
+      final vouchers = await _apiService.getVouchersForInvoice(
+        invoiceId,
+        perPage: 100,
+      );
+
+      int? linkedVoucherId;
+      for (final v in vouchers) {
+        final notesRaw = (v['notes'] ?? '').toString().trim();
+        if (!notesRaw.startsWith('{')) continue;
+        try {
+          final parsed = json.decode(notesRaw);
+          if (parsed is Map) {
+            final pid = parsed['invoice_payment_id'];
+            final parsedPid = pid is int ? pid : int.tryParse(pid?.toString() ?? '');
+            if (parsedPid == invoicePaymentId) {
+              final vid = v['id'];
+              linkedVoucherId = vid is int ? vid : int.tryParse(vid?.toString() ?? '');
+              if (linkedVoucherId != null) break;
+            }
+          }
+        } catch (_) {
+          // ignore
+        }
+      }
+
+      // Fallback: open latest linked voucher for this invoice
+      linkedVoucherId ??= (() {
+        if (vouchers.isEmpty) return null;
+        final vid = vouchers.first['id'];
+        return vid is int ? vid : int.tryParse(vid?.toString() ?? '');
+      })();
+
+      if (loaderVisible && mounted) {
+        Navigator.of(sheetContext, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+
+      if (linkedVoucherId == null) {
+        _showSnackBar(
+          isAr ? 'لا يوجد سند مرتبط بهذه الدفعة' : 'No linked voucher found',
+          isError: true,
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => VoucherDetailsScreen(voucherId: linkedVoucherId!),
+        ),
+      );
+    } catch (e) {
+      if (loaderVisible && mounted) {
+        Navigator.of(sheetContext, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+      if (mounted) {
+        _showSnackBar(
+          isAr ? 'فشل فتح السند: $e' : 'Failed to open voucher: $e',
+          isError: true,
+        );
+      }
+    }
   }
 
   DateTime? _tryParseDateTime(dynamic value) {

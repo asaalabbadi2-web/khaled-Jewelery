@@ -4258,7 +4258,33 @@ def add_customer():
 @api.route('/suppliers', methods=['GET'])
 def get_suppliers():
     suppliers = Supplier.query.all()
-    return jsonify([s.to_dict() for s in suppliers])
+
+    # Prefer live balances from linked accounts to avoid stale cached supplier balances.
+    # This keeps the suppliers list consistent with the ledger/statement screens.
+    results = []
+    for s in suppliers:
+        data = s.to_dict()
+        try:
+            financial = Account.query.get(s.account_id) if s.account_id else None
+            memo = None
+            if financial and financial.memo_account_id:
+                memo = Account.query.get(financial.memo_account_id)
+
+            if financial is not None:
+                data['balance_cash'] = round(float(financial.balance_cash or 0.0), 2)
+
+            if memo is not None:
+                data['balance_gold_18k'] = round(float(memo.balance_18k or 0.0), 3)
+                data['balance_gold_21k'] = round(float(memo.balance_21k or 0.0), 3)
+                data['balance_gold_22k'] = round(float(memo.balance_22k or 0.0), 3)
+                data['balance_gold_24k'] = round(float(memo.balance_24k or 0.0), 3)
+        except Exception:
+            # Fall back to stored supplier balances if linkage is missing.
+            pass
+
+        results.append(data)
+
+    return jsonify(results)
 
 
 @api.route('/suppliers', methods=['POST'])
@@ -4750,11 +4776,23 @@ def get_supplier_weight_statement(supplier_id):
     if allowed_ids:
         account_filter = or_(Account.id.in_(allowed_ids), payable_filter)
 
+    # Prefer explicit supplier tagging. As a robustness fallback (older data or mis-tagged imports),
+    # also include lines posted directly to the supplier's own payable accounts.
+    supplier_line_filter = (JournalEntryLine.supplier_id == supplier_id)
+    if allowed_ids:
+        supplier_line_filter = or_(
+            supplier_line_filter,
+            and_(
+                JournalEntryLine.account_id.in_(allowed_ids),
+                JournalEntryLine.customer_id == None,  # noqa: E711
+            ),
+        )
+
     journal_lines = (
         JournalEntryLine.query
         .join(JournalEntry)
         .join(Account, JournalEntryLine.account_id == Account.id)
-        .filter(JournalEntryLine.supplier_id == supplier_id)
+        .filter(supplier_line_filter)
         .filter(JournalEntryLine.is_deleted == False)  # noqa: E712
         .filter(account_filter)
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
@@ -6180,20 +6218,105 @@ def add_invoice_payment(invoice_id: int):
             created_by_name = None
 
         db.session.flush()  # ensure payment.id is available
-        db.session.add(
-            SafeBoxTransaction(
-                safe_box_id=resolved_safe_box_id,
-                ref_type='invoice_payment',
-                ref_id=payment.id,
-                invoice_id=invoice.id,
-                invoice_payment_id=payment.id,
-                payment_method_id=pm_id,
-                direction=_direction_for_invoice_type(getattr(invoice, 'invoice_type', None)),
-                amount_cash=amount,
-                notes=notes,
-                created_by=created_by_name,
-            )
+
+        # Auto-create + approve a voucher for this payment (for auditing/printing and ledger impact).
+        safe_account_id = getattr(safe_box_obj, 'account_id', None)
+        if not safe_account_id:
+            raise ValueError('safe_box_missing_account_id')
+
+        direction = _direction_for_invoice_type(getattr(invoice, 'invoice_type', None))
+        voucher_type = 'receipt' if direction == 'in' else 'payment'
+
+        party_type = None
+        party_id = None
+        party_account_id = None
+        if getattr(invoice, 'supplier_id', None):
+            party_type = 'supplier'
+            party_id = int(invoice.supplier_id)
+            supplier = Supplier.query.get(party_id)
+            if not supplier:
+                raise ValueError('supplier_not_found')
+            party_account_id = int(ensure_supplier_accounts(supplier).financial.id)
+        elif getattr(invoice, 'customer_id', None):
+            party_type = 'customer'
+            party_id = int(invoice.customer_id)
+            customer = Customer.query.get(party_id)
+            if not customer:
+                raise ValueError('customer_not_found')
+            party_account_id = int(ensure_customer_accounts(customer).financial.id)
+        else:
+            raise ValueError('missing_party_for_payment_voucher')
+
+        voucher_number = generate_voucher_number(voucher_type)
+        voucher_date = datetime.now()
+        try:
+            voucher_date = invoice.date or voucher_date
+        except Exception:
+            pass
+
+        voucher_notes = None
+        try:
+            voucher_notes = json.dumps({
+                'source': 'invoice_payment',
+                'invoice_id': int(invoice.id),
+                'invoice_payment_id': int(payment.id),
+                'payment_method_id': int(pm_id),
+            }, ensure_ascii=False)
+        except Exception:
+            voucher_notes = None
+
+        voucher = Voucher(
+            voucher_number=voucher_number,
+            voucher_type=voucher_type,
+            date=voucher_date,
+            party_type=party_type,
+            customer_id=party_id if party_type == 'customer' else None,
+            supplier_id=party_id if party_type == 'supplier' else None,
+            amount_cash=float(amount),
+            amount_gold=0.0,
+            description=f"دفعة فاتورة {getattr(invoice, 'invoice_type_id', '')}".strip(),
+            reference_type='invoice',
+            reference_id=int(invoice.id),
+            reference_number=str(getattr(invoice, 'invoice_type_id', '') or '') or None,
+            notes=voucher_notes,
+            created_by=created_by_name or 'system',
+            status='pending',
         )
+
+        db.session.add(voucher)
+        db.session.flush()
+
+        safe_line_type = 'debit' if direction == 'in' else 'credit'
+        party_line_type = 'credit' if direction == 'in' else 'debit'
+
+        db.session.add(VoucherAccountLine(
+            voucher_id=voucher.id,
+            account_id=int(safe_account_id),
+            line_type=safe_line_type,
+            amount_type='cash',
+            amount=float(amount),
+            description=notes,
+        ))
+        db.session.add(VoucherAccountLine(
+            voucher_id=voucher.id,
+            account_id=int(party_account_id),
+            line_type=party_line_type,
+            amount_type='cash',
+            amount=float(amount),
+            description=notes,
+        ))
+        db.session.flush()
+
+        journal_entry = create_journal_entry_from_voucher(voucher)
+        if not journal_entry:
+            raise Exception('Failed to create journal entry from voucher')
+
+        voucher.status = 'approved'
+        voucher.approved_at = datetime.now()
+        voucher.approved_by = created_by_name or 'system'
+        voucher.journal_entry_id = journal_entry.id
+
+        _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
 
         new_paid = paid_amount + amount
         invoice.amount_paid = round(new_paid, 2)
@@ -8098,20 +8221,111 @@ def add_invoice():
                 db.session.flush()
 
                 if (not unposted_mode) and (not is_receivable):
-                    db.session.add(
-                        SafeBoxTransaction(
-                            safe_box_id=resolved_safe_box_id,
-                            ref_type='invoice_payment',
-                            ref_id=payment_row.id,
-                            invoice_id=new_invoice.id,
-                            invoice_payment_id=payment_row.id,
-                            payment_method_id=pm_id,
-                            direction=_direction_for_invoice_type(new_invoice.invoice_type),
-                            amount_cash=pm_amount,
-                            notes=payment.get('notes'),
-                            created_by=created_by_name,
-                        )
+                    safe_account_id = getattr(safe_box_obj, 'account_id', None)
+                    if not safe_account_id:
+                        db.session.rollback()
+                        return jsonify({
+                            'error': 'safe_box_missing_account_id',
+                            'message': 'الخزينة المحددة لا تحتوي على حساب مرتبط (account_id)',
+                            'safe_box_id': resolved_safe_box_id,
+                        }), 400
+
+                    direction = _direction_for_invoice_type(new_invoice.invoice_type)
+                    voucher_type = 'receipt' if direction == 'in' else 'payment'
+
+                    party_type = None
+                    party_id = None
+                    party_account_id = None
+                    if getattr(new_invoice, 'supplier_id', None):
+                        party_type = 'supplier'
+                        party_id = int(new_invoice.supplier_id)
+                        supplier = Supplier.query.get(party_id)
+                        if not supplier:
+                            db.session.rollback()
+                            return jsonify({'error': 'supplier_not_found'}), 404
+                        party_account_id = int(ensure_supplier_accounts(supplier).financial.id)
+                    elif getattr(new_invoice, 'customer_id', None):
+                        party_type = 'customer'
+                        party_id = int(new_invoice.customer_id)
+                        customer = Customer.query.get(party_id)
+                        if not customer:
+                            db.session.rollback()
+                            return jsonify({'error': 'customer_not_found'}), 404
+                        party_account_id = int(ensure_customer_accounts(customer).financial.id)
+                    else:
+                        db.session.rollback()
+                        return jsonify({'error': 'missing_party_for_payment_voucher'}), 400
+
+                    voucher_number = generate_voucher_number(voucher_type)
+                    voucher_date = datetime.now()
+                    try:
+                        voucher_date = new_invoice.date or voucher_date
+                    except Exception:
+                        pass
+
+                    voucher_notes = None
+                    try:
+                        voucher_notes = json.dumps({
+                            'source': 'invoice_payment',
+                            'invoice_id': int(new_invoice.id),
+                            'invoice_payment_id': int(payment_row.id),
+                            'payment_method_id': int(pm_id),
+                        }, ensure_ascii=False)
+                    except Exception:
+                        voucher_notes = None
+
+                    voucher = Voucher(
+                        voucher_number=voucher_number,
+                        voucher_type=voucher_type,
+                        date=voucher_date,
+                        party_type=party_type,
+                        customer_id=party_id if party_type == 'customer' else None,
+                        supplier_id=party_id if party_type == 'supplier' else None,
+                        amount_cash=float(pm_amount),
+                        amount_gold=0.0,
+                        description=f"دفعة فاتورة {getattr(new_invoice, 'invoice_type_id', '')}".strip(),
+                        reference_type='invoice',
+                        reference_id=int(new_invoice.id),
+                        reference_number=str(getattr(new_invoice, 'invoice_type_id', '') or '') or None,
+                        notes=voucher_notes,
+                        created_by=created_by_name or 'system',
+                        status='pending',
                     )
+                    db.session.add(voucher)
+                    db.session.flush()
+
+                    safe_line_type = 'debit' if direction == 'in' else 'credit'
+                    party_line_type = 'credit' if direction == 'in' else 'debit'
+
+                    db.session.add(VoucherAccountLine(
+                        voucher_id=voucher.id,
+                        account_id=int(safe_account_id),
+                        line_type=safe_line_type,
+                        amount_type='cash',
+                        amount=float(pm_amount),
+                        description=payment.get('notes'),
+                    ))
+                    db.session.add(VoucherAccountLine(
+                        voucher_id=voucher.id,
+                        account_id=int(party_account_id),
+                        line_type=party_line_type,
+                        amount_type='cash',
+                        amount=float(pm_amount),
+                        description=payment.get('notes'),
+                    ))
+                    db.session.flush()
+
+                    journal_entry = create_journal_entry_from_voucher(voucher)
+                    if not journal_entry:
+                        db.session.rollback()
+                        return jsonify({'error': 'voucher_post_failed', 'message': 'فشل إنشاء القيد من السند'}), 500
+
+                    voucher.status = 'approved'
+                    voucher.approved_at = datetime.now()
+                    voucher.approved_by = created_by_name or 'system'
+                    voucher.journal_entry_id = journal_entry.id
+
+                    _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
         
         # وسيلة دفع واحدة (للتوافق مع الكود القديم)
         elif payment_method_id:
@@ -8187,20 +8401,111 @@ def add_invoice():
             db.session.flush()
 
             if (not unposted_mode) and (not is_receivable):
-                db.session.add(
-                    SafeBoxTransaction(
-                        safe_box_id=resolved_safe_box_id,
-                        ref_type='invoice_payment',
-                        ref_id=payment_row.id,
-                        invoice_id=new_invoice.id,
-                        invoice_payment_id=payment_row.id,
-                        payment_method_id=payment_method_id,
-                        direction=_direction_for_invoice_type(new_invoice.invoice_type),
-                        amount_cash=_extract_float('total', 0.0),
-                        notes=None,
-                        created_by=posted_by_username,
-                    )
+                safe_account_id = getattr(safe_box_obj, 'account_id', None)
+                if not safe_account_id:
+                    db.session.rollback()
+                    return jsonify({
+                        'error': 'safe_box_missing_account_id',
+                        'message': 'الخزينة المحددة لا تحتوي على حساب مرتبط (account_id)',
+                        'safe_box_id': resolved_safe_box_id,
+                    }), 400
+
+                direction = _direction_for_invoice_type(new_invoice.invoice_type)
+                voucher_type = 'receipt' if direction == 'in' else 'payment'
+                amount_value = float(_extract_float('total', 0.0))
+
+                party_type = None
+                party_id = None
+                party_account_id = None
+                if getattr(new_invoice, 'supplier_id', None):
+                    party_type = 'supplier'
+                    party_id = int(new_invoice.supplier_id)
+                    supplier = Supplier.query.get(party_id)
+                    if not supplier:
+                        db.session.rollback()
+                        return jsonify({'error': 'supplier_not_found'}), 404
+                    party_account_id = int(ensure_supplier_accounts(supplier).financial.id)
+                elif getattr(new_invoice, 'customer_id', None):
+                    party_type = 'customer'
+                    party_id = int(new_invoice.customer_id)
+                    customer = Customer.query.get(party_id)
+                    if not customer:
+                        db.session.rollback()
+                        return jsonify({'error': 'customer_not_found'}), 404
+                    party_account_id = int(ensure_customer_accounts(customer).financial.id)
+                else:
+                    db.session.rollback()
+                    return jsonify({'error': 'missing_party_for_payment_voucher'}), 400
+
+                voucher_number = generate_voucher_number(voucher_type)
+                voucher_date = datetime.now()
+                try:
+                    voucher_date = new_invoice.date or voucher_date
+                except Exception:
+                    pass
+
+                voucher_notes = None
+                try:
+                    voucher_notes = json.dumps({
+                        'source': 'invoice_payment',
+                        'invoice_id': int(new_invoice.id),
+                        'invoice_payment_id': int(payment_row.id),
+                        'payment_method_id': int(payment_method_id),
+                    }, ensure_ascii=False)
+                except Exception:
+                    voucher_notes = None
+
+                voucher = Voucher(
+                    voucher_number=voucher_number,
+                    voucher_type=voucher_type,
+                    date=voucher_date,
+                    party_type=party_type,
+                    customer_id=party_id if party_type == 'customer' else None,
+                    supplier_id=party_id if party_type == 'supplier' else None,
+                    amount_cash=float(amount_value),
+                    amount_gold=0.0,
+                    description=f"دفعة فاتورة {getattr(new_invoice, 'invoice_type_id', '')}".strip(),
+                    reference_type='invoice',
+                    reference_id=int(new_invoice.id),
+                    reference_number=str(getattr(new_invoice, 'invoice_type_id', '') or '') or None,
+                    notes=voucher_notes,
+                    created_by=posted_by_username or 'system',
+                    status='pending',
                 )
+                db.session.add(voucher)
+                db.session.flush()
+
+                safe_line_type = 'debit' if direction == 'in' else 'credit'
+                party_line_type = 'credit' if direction == 'in' else 'debit'
+
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=int(safe_account_id),
+                    line_type=safe_line_type,
+                    amount_type='cash',
+                    amount=float(amount_value),
+                    description=None,
+                ))
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=int(party_account_id),
+                    line_type=party_line_type,
+                    amount_type='cash',
+                    amount=float(amount_value),
+                    description=None,
+                ))
+                db.session.flush()
+
+                journal_entry = create_journal_entry_from_voucher(voucher)
+                if not journal_entry:
+                    db.session.rollback()
+                    return jsonify({'error': 'voucher_post_failed', 'message': 'فشل إنشاء القيد من السند'}), 500
+
+                voucher.status = 'approved'
+                voucher.approved_at = datetime.now()
+                voucher.approved_by = posted_by_username or 'system'
+                voucher.journal_entry_id = journal_entry.id
+                _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
 
         # --- Gold settlement (barter/partial) ---
         try:
@@ -10315,6 +10620,14 @@ def add_invoice():
                 
                 print(f"✅ DEBUG: actual_gold_weights_for_memo (physical gold only) = {actual_gold_weights_for_memo}")
 
+                # Weight source used for posting physical gold purchase lines.
+                # Some clients do not send `karat_lines` for supplier purchases; in that case,
+                # fall back to supplier_gold_by_karat derived from items/request.
+                physical_gold_weights_for_posting = dict(actual_gold_weights_for_memo or {})
+                if not physical_gold_weights_for_posting:
+                    physical_gold_weights_for_posting = dict(supplier_gold_by_karat or {})
+                print(f"✅ DEBUG: physical_gold_weights_for_posting = {physical_gold_weights_for_posting}")
+
                 # Track which karats had an inventory weight debit posted.
                 posted_weight_debits = set()
                 
@@ -10380,7 +10693,7 @@ def add_invoice():
                         )
                         
                         # 🆕 القيد الوزني: استخدام الوزن الفعلي من karat_lines (بدون المصنعية)
-                        actual_weight_for_karat = actual_gold_weights_for_memo.get(karat, 0.0)
+                        actual_weight_for_karat = physical_gold_weights_for_posting.get(karat, 0.0)
                         if actual_weight_for_karat > 0:
                             # حاول استخدام حساب مذكرة مرتبط بحساب المخزون المالي
                             # وإذا لم يوجد، استخدم fallback ثم الحساب المالي نفسه لمنع عدم توازن الوزن.
@@ -10431,7 +10744,7 @@ def add_invoice():
                 # --- Safety net: ensure physical weight is always balanced ---
                 # If a karat weight exists but inventory mapping was missing, we still need a debit
                 # to balance the supplier payable weight credit.
-                for karat_key, weight_val in (actual_gold_weights_for_memo or {}).items():
+                for karat_key, weight_val in (physical_gold_weights_for_posting or {}).items():
                     karat_str = str(karat_key)
                     if weight_val <= 0 or karat_str in posted_weight_debits:
                         continue
@@ -10618,13 +10931,13 @@ def add_invoice():
                 if supplier_memo_account_id and supplier_gold_by_karat:
                     # 🆕 استخدام الأوزان الفعلية (بدون المصنعية) لقيد المورد الوزني
                     print(f"🟢 DEBUG supplier_weight_kwargs calculation:")
-                    print(f"   actual_gold_weights_for_memo = {actual_gold_weights_for_memo}")
+                    print(f"   physical_gold_weights_for_posting = {physical_gold_weights_for_posting}")
                     print(f"   supplier_gold_by_karat (request/fallback) = {supplier_gold_by_karat}")
                     print(f"   dual_entry_params = {list(dual_entry_params)}")
                     
                     supplier_weight_kwargs = {
                         f'weight_{karat}k_credit': round(weight, 3)
-                        for karat, weight in actual_gold_weights_for_memo.items()  # ← استخدام الأوزان الفعلية
+                        for karat, weight in physical_gold_weights_for_posting.items()  # ← أوزان الذهب الفعلية
                         if weight > 0 and f'weight_{karat}k_credit' in dual_entry_params
                     }
                     
@@ -10632,13 +10945,13 @@ def add_invoice():
 
                     # إن لم تُطابق أسماء الوسائط (عيار غير مدعوم)، نحاول تحويله إلى العيار الرئيسي
                     unsupported_karats = [
-                        karat for karat in actual_gold_weights_for_memo  # ← استخدام الأوزان الفعلية
+                        karat for karat in physical_gold_weights_for_posting  # ← أوزان الذهب الفعلية
                         if f'weight_{karat}k_credit' not in dual_entry_params
                     ]
 
                     additional_21k = 0.0
                     for karat in unsupported_karats:
-                        weight = actual_gold_weights_for_memo.get(karat, 0)  # ← استخدام الأوزان الفعلية
+                        weight = physical_gold_weights_for_posting.get(karat, 0)  # ← أوزان الذهب الفعلية
                         additional_21k += convert_to_main_karat(weight, int(round(float(karat))))
 
                     if additional_21k > 0:
@@ -10685,6 +10998,98 @@ def add_invoice():
                         apply_golden_rule=False,
                         description="التزام المورد - أجور مصنعية + ضريبة الأجور",
                     )
+
+                # --- Cash payments: reflect in journal lines for supplier statements ---
+                # InvoicePayment/SafeBoxTransaction rows record the cash movement, but supplier statements
+                # are derived from JournalEntryLine, so we mirror payment movements into the journal.
+                try:
+                    db.session.flush()
+                except Exception:
+                    pass
+
+                payment_movements = []
+                try:
+                    payment_movements = (
+                        SafeBoxTransaction.query
+                        .filter_by(invoice_id=new_invoice.id, ref_type='invoice_payment')
+                        .all()
+                    )
+                except Exception:
+                    payment_movements = []
+
+                if supplier_fin_account_id and payment_movements:
+                    # Aggregate by safe account and direction to reduce noise.
+                    aggregated_by_safe = {}  # (safe_acc_id, direction) -> amount
+                    for mv in payment_movements:
+                        try:
+                            amount_cash = _to_float(getattr(mv, 'amount_cash', 0.0), 0.0)
+                        except Exception:
+                            amount_cash = 0.0
+                        if amount_cash <= 0:
+                            continue
+
+                        direction = (getattr(mv, 'direction', None) or 'out').strip().lower()
+                        if direction not in ('in', 'out'):
+                            direction = 'out'
+
+                        safe_acc_id = None
+                        try:
+                            sb_id = getattr(mv, 'safe_box_id', None)
+                            sb = SafeBox.query.get(int(sb_id)) if sb_id not in (None, '', False) else None
+                        except Exception:
+                            sb = None
+
+                        try:
+                            safe_acc_id = int(getattr(sb, 'account_id', None) or 0) if sb else 0
+                        except Exception:
+                            safe_acc_id = 0
+
+                        if not safe_acc_id:
+                            safe_acc_id = (
+                                get_account_id_for_mapping('شراء', 'cash')
+                                or (cash_account.id if cash_account else None)
+                            )
+
+                        if not safe_acc_id:
+                            continue
+
+                        key = (int(safe_acc_id), direction)
+                        aggregated_by_safe[key] = round(float(aggregated_by_safe.get(key, 0.0) or 0.0) + float(amount_cash), 2)
+
+                    for (safe_acc_id, direction), amount_cash in aggregated_by_safe.items():
+                        if amount_cash <= 0:
+                            continue
+
+                        # For supplier purchase payments:
+                        # - direction='out': cash leaves the safe -> credit safe, debit supplier payable
+                        # - direction='in' : cash returns to the safe -> debit safe, credit supplier payable
+                        supplier_kwargs = {}
+                        safe_kwargs = {}
+                        if direction == 'out':
+                            supplier_kwargs['cash_debit'] = amount_cash
+                            safe_kwargs['cash_credit'] = amount_cash
+                            desc = 'سداد نقدي للمورد - شراء'
+                        else:
+                            supplier_kwargs['cash_credit'] = amount_cash
+                            safe_kwargs['cash_debit'] = amount_cash
+                            desc = 'استرداد نقدي من المورد - شراء'
+
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=supplier_fin_account_id,
+                            apply_golden_rule=False,
+                            description=desc,
+                            **supplier_kwargs,
+                        )
+
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=safe_acc_id,
+                            apply_golden_rule=False,
+                            exclude_from_ledger=True,
+                            description=desc,
+                            **safe_kwargs,
+                        )
 
                 # --- Gold settlements: reflect in journal lines for statements ---
                 # `gold_settlements[]` previously created only SafeBoxTransaction rows, which do not show
@@ -17651,6 +18056,20 @@ def create_journal_entry_from_voucher(voucher):
                 return int(account_id)
             return int(account_id)
 
+        # Resolve expected party account id (so we can tag it even if misconfigured as a SafeBox account).
+        expected_party_account_id = None
+        try:
+            if getattr(voucher, 'party_type', None) == 'supplier' and getattr(voucher, 'supplier_id', None):
+                supplier = Supplier.query.get(int(voucher.supplier_id))
+                if supplier:
+                    expected_party_account_id = int(ensure_supplier_accounts(supplier).financial.id)
+            elif getattr(voucher, 'party_type', None) == 'customer' and getattr(voucher, 'customer_id', None):
+                customer = Customer.query.get(int(voucher.customer_id))
+                if customer:
+                    expected_party_account_id = int(ensure_customer_accounts(customer).financial.id)
+        except Exception:
+            expected_party_account_id = None
+
         # إنشاء سطور القيد المحاسبي من سطور السند
         for account_line in account_lines:
             # تحديد المبالغ حسب نوع السطر (مدين/دائن) ونوع المبلغ (نقد/ذهب)
@@ -17705,13 +18124,25 @@ def create_journal_entry_from_voucher(voucher):
                     else:
                         credit_21k = amount
             
-            # Tag party on journal lines so statements/ledgers can pick them up.
+            # Tag party only on non-safe lines.
+            # SafeBox accounts should NOT be tagged to avoid polluting party ledgers.
+            # However, if the line targets the expected party account, always tag it.
+            should_tag_party = True
+            try:
+                if expected_party_account_id and int(account_line.account_id) == int(expected_party_account_id):
+                    should_tag_party = True
+                elif int(account_line.account_id) in safe_account_ids:
+                    should_tag_party = False
+            except Exception:
+                should_tag_party = True
+
             customer_id = None
             supplier_id = None
-            if getattr(voucher, 'party_type', None) == 'customer' and getattr(voucher, 'customer_id', None):
-                customer_id = voucher.customer_id
-            if getattr(voucher, 'party_type', None) == 'supplier' and getattr(voucher, 'supplier_id', None):
-                supplier_id = voucher.supplier_id
+            if should_tag_party:
+                if getattr(voucher, 'party_type', None) == 'customer' and getattr(voucher, 'customer_id', None):
+                    customer_id = voucher.customer_id
+                if getattr(voucher, 'party_type', None) == 'supplier' and getattr(voucher, 'supplier_id', None):
+                    supplier_id = voucher.supplier_id
 
             target_account_id = _resolve_account_id_for_amount_type(
                 int(account_line.account_id),
@@ -17784,6 +18215,30 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
             if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe_id:
                 pm_by_safe_id[pm.default_safe_box_id] = pm.id
 
+    # Best-effort link back to invoice/payment when voucher was auto-created.
+    linked_invoice_id = None
+    linked_invoice_payment_id = None
+    linked_payment_method_id = None
+
+    try:
+        if (getattr(voucher, 'reference_type', None) == 'invoice') and getattr(voucher, 'reference_id', None):
+            linked_invoice_id = int(voucher.reference_id)
+    except Exception:
+        linked_invoice_id = None
+
+    try:
+        raw_notes = getattr(voucher, 'notes', None)
+        if raw_notes:
+            parsed = json.loads(raw_notes)
+            if isinstance(parsed, dict):
+                if parsed.get('invoice_payment_id') not in (None, '', False):
+                    linked_invoice_payment_id = int(parsed.get('invoice_payment_id'))
+                if parsed.get('payment_method_id') not in (None, '', False):
+                    linked_payment_method_id = int(parsed.get('payment_method_id'))
+    except Exception:
+        linked_invoice_payment_id = None
+        linked_payment_method_id = None
+
     created = []
     for line in lines:
         sb = safe_by_account_id.get(line.account_id)
@@ -17811,7 +18266,9 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
             safe_box_id=sb.id,
             ref_type='voucher',
             ref_id=voucher.id,
-            payment_method_id=pm_by_safe_id.get(sb.id),
+            invoice_id=linked_invoice_id,
+            invoice_payment_id=linked_invoice_payment_id,
+            payment_method_id=linked_payment_method_id or pm_by_safe_id.get(sb.id),
             direction=direction,
             notes=f"Voucher {voucher.voucher_number} - {voucher.voucher_type}",
             created_by=created_by or voucher.created_by,
@@ -17893,6 +18350,8 @@ def get_vouchers():
     - customer_id: int
     - supplier_id: int
     - search: string (searches voucher_number and description)
+    - reference_type: string (invoice, voucher, journal_entry, manual)
+    - reference_id: int
     """
     # Pagination parameters
     page = request.args.get('page', 1, type=int)
@@ -17936,6 +18395,17 @@ def get_vouchers():
     supplier_id = request.args.get('supplier_id')
     if supplier_id:
         query = query.filter(Voucher.supplier_id == int(supplier_id))
+
+    reference_type = request.args.get('reference_type')
+    if reference_type:
+        query = query.filter(Voucher.reference_type == reference_type)
+
+    reference_id = request.args.get('reference_id')
+    if reference_id not in (None, '', False):
+        try:
+            query = query.filter(Voucher.reference_id == int(reference_id))
+        except Exception:
+            pass
         
     search = request.args.get('search')
     if search:
