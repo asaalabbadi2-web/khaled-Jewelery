@@ -70,6 +70,7 @@ from dual_system_helpers import (
 )
 from services.journals import create_wage_weight_release_journal
 from services.weight_execution import list_weight_profiles, resolve_weight_profile
+from services.live_balances import live_balances_by_account_ids
 from gold_costing_service import GoldCostingService
 from category_weight_tracking import (
     get_category_weight_balances,
@@ -3330,10 +3331,11 @@ def get_account_statement(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_posted'):
-        opening_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
+    elif _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
 
     opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
 
@@ -3359,26 +3361,20 @@ def get_account_statement(account_id):
     # Get regular journal lines (excluding opening entries)
     journal_filters = [
         JournalEntryLine.account_id == account_id,
-        JournalEntry.entry_type != 'افتتاحي',
+        or_(JournalEntry.entry_type.is_(None), JournalEntry.entry_type != 'افتتاحي'),
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_posted'):
-        journal_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
+    elif _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
 
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(*journal_filters)
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
-        .all()
-    )
-
-    voucher_lines = (
-        VoucherAccountLine.query.join(Voucher)
-        .filter(VoucherAccountLine.account_id == account_id)
-        .order_by(Voucher.date.asc(), Voucher.id.asc(), VoucherAccountLine.id.asc())
         .all()
     )
 
@@ -3393,47 +3389,9 @@ def get_account_statement(account_id):
         je = getattr(line, 'journal_entry', None)
         dt = _safe_dt(getattr(je, 'date', None), _safe_dt(getattr(je, 'created_at', None), datetime.min))
         merged.append(('journal', dt, getattr(je, 'id', 0) or 0, line.id, line))
-    for line in voucher_lines:
-        v = getattr(line, 'voucher', None)
-        dt = _safe_dt(getattr(v, 'date', None), _safe_dt(getattr(v, 'created_at', None), datetime.min))
-        merged.append(('voucher', dt, getattr(v, 'id', 0) or 0, line.id, line))
     merged.sort(key=lambda x: (x[1], x[2], x[3]))
 
     for kind, _, _, _, line in merged:
-        if kind == 'voucher':
-            if not getattr(line, 'voucher', None):
-                continue
-            cash_debit = float(line.amount or 0) if line.line_type == 'debit' else 0.0
-            cash_credit = float(line.amount or 0) if line.line_type == 'credit' else 0.0
-            running_balance_cash += cash_debit - cash_credit
-
-            statement_lines.append({
-                'id': -int(line.id),
-                'date': _iso_or_none(getattr(line.voucher, 'date', None) or getattr(line.voucher, 'created_at', None)),
-                'description': (line.voucher.description or (line.description or '')),
-                'journal_entry_id': line.voucher.journal_entry_id,
-                'entry_number': line.voucher.journal_entry.entry_number if line.voucher.journal_entry else None,
-                'reference_type': 'voucher',
-                'reference_id': line.voucher.id,
-                'reference_number': line.voucher.voucher_number,
-                'cash_debit': cash_debit,
-                'cash_credit': cash_credit,
-                'gold_debit': 0.0,
-                'gold_credit': 0.0,
-                'debit_18k': 0.0,
-                'credit_18k': 0.0,
-                'debit_21k': 0.0,
-                'credit_21k': 0.0,
-                'debit_22k': 0.0,
-                'credit_22k': 0.0,
-                'debit_24k': 0.0,
-                'credit_24k': 0.0,
-            })
-
-            total_cash_debit += cash_debit
-            total_cash_credit += cash_credit
-            continue
-
         # Update running balances for each karat
         running_balances_gold['18k'] += (line.debit_18k or 0) - (line.credit_18k or 0)
         running_balances_gold['21k'] += (line.debit_21k or 0) - (line.credit_21k or 0)
@@ -3575,10 +3533,11 @@ def get_account_statement_merged(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_posted'):
-        opening_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
+    elif _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
 
     opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
 
@@ -3596,10 +3555,11 @@ def get_account_statement_merged(account_id):
             JournalEntry.is_deleted == False,
             JournalEntryLine.is_deleted == False,
         ]
-        if _db_has_column('journal_entry', 'is_posted'):
-            memo_opening_filters.append(JournalEntry.is_posted == True)
-        elif _db_has_column('journal_entry', 'is_draft'):
+        # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+        if _db_has_column('journal_entry', 'is_draft'):
             memo_opening_filters.append(JournalEntry.is_draft == False)
+        elif _db_has_column('journal_entry', 'is_posted'):
+            memo_opening_filters.append(JournalEntry.is_posted == True)
 
         memo_opening_lines = (
             JournalEntryLine.query.join(JournalEntry)
@@ -3630,27 +3590,20 @@ def get_account_statement_merged(account_id):
 
     journal_filters = [
         JournalEntryLine.account_id.in_(account_ids),
-        JournalEntry.entry_type != 'افتتاحي',
+        or_(JournalEntry.entry_type.is_(None), JournalEntry.entry_type != 'افتتاحي'),
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    if _db_has_column('journal_entry', 'is_posted'):
-        journal_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
+    elif _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
 
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(*journal_filters)
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
-        .all()
-    )
-
-    # Get voucher lines (only from main account, not memo)
-    voucher_lines = (
-        VoucherAccountLine.query.join(Voucher)
-        .filter(VoucherAccountLine.account_id == primary_account_id)
-        .order_by(Voucher.date.asc(), Voucher.id.asc(), VoucherAccountLine.id.asc())
         .all()
     )
 
@@ -3704,40 +3657,6 @@ def get_account_statement_merged(account_id):
     total_cash_credit = 0
     total_gold_debit_normalized = 0
     total_gold_credit_normalized = 0
-
-    # Add voucher lines first
-    for line in voucher_lines:
-        if not getattr(line, 'voucher', None):
-            continue
-        cash_debit = float(line.amount or 0) if line.line_type == 'debit' else 0.0
-        cash_credit = float(line.amount or 0) if line.line_type == 'credit' else 0.0
-        running_balance_cash += cash_debit - cash_credit
-
-        statement_lines.append({
-            'id': -int(line.id),
-            'date': _iso_or_none(getattr(line.voucher, 'date', None) or getattr(line.voucher, 'created_at', None)),
-            'description': line.voucher.description or (line.description or ''),
-            'journal_entry_id': line.voucher.journal_entry_id,
-            'entry_number': line.voucher.journal_entry.entry_number if line.voucher.journal_entry else None,
-            'reference_type': 'voucher',
-            'reference_id': line.voucher.id,
-            'reference_number': line.voucher.voucher_number,
-            'cash_debit': cash_debit,
-            'cash_credit': cash_credit,
-            'gold_debit': 0.0,
-            'gold_credit': 0.0,
-            'debit_18k': 0.0,
-            'credit_18k': 0.0,
-            'debit_21k': 0.0,
-            'credit_21k': 0.0,
-            'debit_22k': 0.0,
-            'credit_22k': 0.0,
-            'debit_24k': 0.0,
-            'credit_24k': 0.0,
-        })
-
-        total_cash_debit += cash_debit
-        total_cash_credit += cash_credit
 
     # Add merged journal entries
     for entry_data in merged_lines:
@@ -4259,25 +4178,145 @@ def add_customer():
 def get_suppliers():
     suppliers = Supplier.query.all()
 
-    # Prefer live balances from linked accounts to avoid stale cached supplier balances.
-    # This keeps the suppliers list consistent with the ledger/statement screens.
+    # Compute *live* balances from journal lines (aggregated in batches).
+    # We avoid relying on stored Account.balance_* fields because they can be stale.
+    # We also avoid naive supplier_id-only aggregation because the DB may tag
+    # supplier_id on multiple lines per JE (inventory/tax/etc) which cancels out;
+    # instead we emulate the supplier statement filtering:
+    # - include supplier payable liability lines (21%)
+    # - include the supplier's own financial + memo accounts
+    # - as a robustness fallback, include mis-tagged lines posted to the supplier's
+    #   own accounts even when supplier_id is NULL.
     results = []
+
+    supplier_ids = [int(s.id) for s in suppliers if getattr(s, 'id', None) is not None]
+
+    supplier_fin_account_ids = [int(s.account_id) for s in suppliers if s.account_id]
+    financial_accounts = {}
+    if supplier_fin_account_ids:
+        for a in Account.query.filter(Account.id.in_(supplier_fin_account_ids)).all():
+            financial_accounts[int(a.id)] = a
+
+    # Build per-supplier allowed account ids (financial + memo).
+    allowed_account_to_supplier = {}
+    for s in suppliers:
+        sid = int(s.id)
+        fin_id = None
+        try:
+            fin_id = int(s.account_id) if s.account_id else None
+        except Exception:
+            fin_id = None
+
+        if fin_id:
+            allowed_account_to_supplier[fin_id] = sid
+            fin_acc = financial_accounts.get(fin_id)
+            memo_id = None
+            try:
+                memo_id = int(fin_acc.memo_account_id) if fin_acc and fin_acc.memo_account_id else None
+            except Exception:
+                memo_id = None
+            if memo_id:
+                allowed_account_to_supplier[memo_id] = sid
+
+    allowed_account_ids = list({int(x) for x in allowed_account_to_supplier.keys() if x})
+
+    # Posted/non-draft journal filters (best-effort across DB versions)
+    jl_filters = [
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    # Compatibility note:
+    # Some DBs have both columns but only maintain `is_draft` (always false for real operations).
+    # If we filter strictly on `is_posted == True`, balances will look like "first transaction".
+    if _db_has_column('journal_entry', 'is_draft'):
+        jl_filters.append(JournalEntry.is_draft == False)
+    elif _db_has_column('journal_entry', 'is_posted'):
+        jl_filters.append(JournalEntry.is_posted == True)
+
+    balances_by_supplier = {}
+
+    payable_filter = and_(Account.type == 'Liability', Account.account_number.like('21%'))
+    account_filter = payable_filter
+    if allowed_account_ids:
+        account_filter = or_(Account.id.in_(allowed_account_ids), payable_filter)
+
+    # (A) Tagged lines: group by supplier_id.
+    if supplier_ids:
+        tagged_rows = (
+            db.session.query(
+                JournalEntryLine.supplier_id.label('supplier_id'),
+                (func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0) - func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0)).label('cash'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0)).label('b18'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0)).label('b21'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0)).label('b22'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0)).label('b24'),
+            )
+            .join(JournalEntry)
+            .join(Account, JournalEntryLine.account_id == Account.id)
+            .filter(JournalEntryLine.supplier_id.in_(supplier_ids))
+            .filter(JournalEntry.is_deleted == False)
+            .filter(*jl_filters)
+            .filter(account_filter)
+            .group_by(JournalEntryLine.supplier_id)
+            .all()
+        )
+        for r in tagged_rows:
+            sid = int(r.supplier_id)
+            balances_by_supplier[sid] = {
+                'cash': float(r.cash or 0.0),
+                '18k': float(r.b18 or 0.0),
+                '21k': float(r.b21 or 0.0),
+                '22k': float(r.b22 or 0.0),
+                '24k': float(r.b24 or 0.0),
+            }
+
+    # (B) Mis-tagged lines posted to a supplier's own accounts (supplier_id is NULL).
+    if allowed_account_ids:
+        untagged_rows = (
+            db.session.query(
+                JournalEntryLine.account_id.label('account_id'),
+                (func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0) - func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0)).label('cash'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0)).label('b18'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0)).label('b21'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0)).label('b22'),
+                (func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0)).label('b24'),
+            )
+            .join(JournalEntry)
+            .filter(JournalEntryLine.supplier_id.is_(None))
+            .filter(JournalEntryLine.customer_id.is_(None))
+            .filter(JournalEntryLine.account_id.in_(allowed_account_ids))
+            .filter(JournalEntry.is_deleted == False)
+            .filter(*jl_filters)
+            .group_by(JournalEntryLine.account_id)
+            .all()
+        )
+
+        for r in untagged_rows:
+            acc_id = int(r.account_id)
+            sid = allowed_account_to_supplier.get(acc_id)
+            if not sid:
+                continue
+            cur = balances_by_supplier.get(sid)
+            if not cur:
+                cur = {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+                balances_by_supplier[sid] = cur
+            cur['cash'] += float(r.cash or 0.0)
+            cur['18k'] += float(r.b18 or 0.0)
+            cur['21k'] += float(r.b21 or 0.0)
+            cur['22k'] += float(r.b22 or 0.0)
+            cur['24k'] += float(r.b24 or 0.0)
+
     for s in suppliers:
         data = s.to_dict()
         try:
-            financial = Account.query.get(s.account_id) if s.account_id else None
-            memo = None
-            if financial and financial.memo_account_id:
-                memo = Account.query.get(financial.memo_account_id)
-
-            if financial is not None:
-                data['balance_cash'] = round(float(financial.balance_cash or 0.0), 2)
-
-            if memo is not None:
-                data['balance_gold_18k'] = round(float(memo.balance_18k or 0.0), 3)
-                data['balance_gold_21k'] = round(float(memo.balance_21k or 0.0), 3)
-                data['balance_gold_22k'] = round(float(memo.balance_22k or 0.0), 3)
-                data['balance_gold_24k'] = round(float(memo.balance_24k or 0.0), 3)
+            sid = int(s.id)
+            bal = balances_by_supplier.get(sid)
+            if bal is not None:
+                data['balance_cash'] = round(float(bal.get('cash', 0.0) or 0.0), 2)
+                data['balance_gold_18k'] = round(float(bal.get('18k', 0.0) or 0.0), 3)
+                data['balance_gold_21k'] = round(float(bal.get('21k', 0.0) or 0.0), 3)
+                data['balance_gold_22k'] = round(float(bal.get('22k', 0.0) or 0.0), 3)
+                data['balance_gold_24k'] = round(float(bal.get('24k', 0.0) or 0.0), 3)
         except Exception:
             # Fall back to stored supplier balances if linkage is missing.
             pass
@@ -6560,8 +6599,32 @@ def list_safe_box_balances():
         }
 
     results = []
+    live_by_id = live_balances_by_account_ids([
+        sb.account_id for sb in safes if getattr(sb, 'account_id', None) is not None
+    ])
     for sb in safes:
-        sb_dict = sb.to_dict(include_account=True, include_balance=True)
+        sb_dict = sb.to_dict(include_account=True, include_balance=False)
+
+        live = live_by_id.get(int(sb.account_id)) if getattr(sb, 'account_id', None) is not None else None
+        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+        balance = {
+            'cash': round(float(live.get('cash') or 0.0), 2),
+        }
+        account = getattr(sb, 'account', None)
+        if bool(getattr(account, 'tracks_weight', False)):
+            w18 = float(live.get('18k') or 0.0)
+            w21 = float(live.get('21k') or 0.0)
+            w22 = float(live.get('22k') or 0.0)
+            w24 = float(live.get('24k') or 0.0)
+            balance['weight'] = {
+                '18k': round(w18, 3),
+                '21k': round(w21, 3),
+                '22k': round(w22, 3),
+                '24k': round(w24, 3),
+                'total': round(w18 + w21 + w22 + w24, 3),
+            }
+        sb_dict['balance'] = balance
+
         sb_dict.update(_ledger_balance_for_safe(sb.id))
         results.append(sb_dict)
 
@@ -11702,11 +11765,33 @@ def get_accounts():
     الحصول على جميع الحسابات مع دعم الهيكل الهرمي (parent-child)
     """
     accounts = Account.query.all()
+
+    # One source of truth for balances: journal-derived aggregation.
+    live_by_id = live_balances_by_account_ids([a.id for a in accounts])
     
     result = []
     for acc in accounts:
         # استخدام to_dict() من Model
         account_dict = acc.to_dict()
+
+        # Override stored balances with live, journal-derived balances.
+        live = live_by_id.get(int(acc.id)) if getattr(acc, 'id', None) is not None else None
+        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+        account_dict['balances'] = {
+            'cash': round(float(live.get('cash') or 0.0), 2),
+        }
+        if bool(getattr(acc, 'tracks_weight', False)):
+            w18 = float(live.get('18k') or 0.0)
+            w21 = float(live.get('21k') or 0.0)
+            w22 = float(live.get('22k') or 0.0)
+            w24 = float(live.get('24k') or 0.0)
+            account_dict['balances']['weight'] = {
+                '18k': round(w18, 3),
+                '21k': round(w21, 3),
+                '22k': round(w22, 3),
+                '24k': round(w24, 3),
+                'total': round(w18 + w21 + w22 + w24, 3),
+            }
         
         # إضافة معلومات الحساب الأب إن وجد
         if acc.parent_id:
@@ -11742,7 +11827,27 @@ def get_account(id):
     Returns the same shape as `Account.to_dict()` (plus any extras included there).
     """
     account = Account.query.get_or_404(id)
-    return jsonify(account.to_dict())
+    payload = account.to_dict()
+
+    live = live_balances_by_account_ids([account.id]).get(int(account.id))
+    live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+    payload['balances'] = {
+        'cash': round(float(live.get('cash') or 0.0), 2),
+    }
+    if bool(getattr(account, 'tracks_weight', False)):
+        w18 = float(live.get('18k') or 0.0)
+        w21 = float(live.get('21k') or 0.0)
+        w22 = float(live.get('22k') or 0.0)
+        w24 = float(live.get('24k') or 0.0)
+        payload['balances']['weight'] = {
+            '18k': round(w18, 3),
+            '21k': round(w21, 3),
+            '22k': round(w22, 3),
+            '24k': round(w24, 3),
+            'total': round(w18 + w21 + w22 + w24, 3),
+        }
+
+    return jsonify(payload)
 
 
 @api.route('/accounts/export', methods=['GET'])
@@ -11921,42 +12026,32 @@ def get_accounts_balances():
     """
     # جلب جميع الحسابات
     accounts = Account.query.all()
-    
+
     balances = {}
-    
+    live_by_id = live_balances_by_account_ids([a.id for a in accounts])
+
     for acc in accounts:
-        # حساب الأرصدة من journal_entry_line
-        account_lines = db.session.query(
-            func.sum(JournalEntryLine.cash_debit - JournalEntryLine.cash_credit).label('balance_cash'),
-            func.sum(JournalEntryLine.debit_18k - JournalEntryLine.credit_18k).label('balance_18k'),
-            func.sum(JournalEntryLine.debit_21k - JournalEntryLine.credit_21k).label('balance_21k'),
-            func.sum(JournalEntryLine.debit_22k - JournalEntryLine.credit_22k).label('balance_22k'),
-            func.sum(JournalEntryLine.debit_24k - JournalEntryLine.credit_24k).label('balance_24k')
-        ).filter(
-            JournalEntryLine.account_id == acc.id,
-            JournalEntryLine.is_deleted == False
-        ).first()
-        
-        # تحويل None إلى 0
-        balance_cash = account_lines.balance_cash or 0.0
-        balance_18k = account_lines.balance_18k or 0.0
-        balance_21k = account_lines.balance_21k or 0.0
-        balance_22k = account_lines.balance_22k or 0.0
-        balance_24k = account_lines.balance_24k or 0.0
-        
-        # حفظ الأرصدة
+        live = live_by_id.get(int(acc.id)) if getattr(acc, 'id', None) is not None else None
+        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+        cash = float(live.get('cash') or 0.0)
+        g18 = float(live.get('18k') or 0.0)
+        g21 = float(live.get('21k') or 0.0)
+        g22 = float(live.get('22k') or 0.0)
+        g24 = float(live.get('24k') or 0.0)
+
         balances[acc.id] = {
             'account_id': acc.id,
             'account_number': acc.account_number,
             'account_name': acc.name,
-            'cash': round(balance_cash, 2),
-            'gold_18k': round(balance_18k, 3),
-            'gold_21k': round(balance_21k, 3),
-            'gold_22k': round(balance_22k, 3),
-            'gold_24k': round(balance_24k, 3),
-            'has_balance': abs(balance_cash) > 0.01 or abs(balance_18k) > 0.001 or abs(balance_21k) > 0.001 or abs(balance_22k) > 0.001 or abs(balance_24k) > 0.001
+            'cash': round(cash, 2),
+            'gold_18k': round(g18, 3),
+            'gold_21k': round(g21, 3),
+            'gold_22k': round(g22, 3),
+            'gold_24k': round(g24, 3),
+            'has_balance': abs(cash) > 0.01 or abs(g18) > 0.001 or abs(g21) > 0.001 or abs(g22) > 0.001 or abs(g24) > 0.001,
         }
-    
+
     return jsonify(balances)
 
 
@@ -20290,8 +20385,41 @@ def list_safe_boxes():
     
     include_account = request.args.get('include_account', 'false').lower() == 'true'
     include_balance = request.args.get('include_balance', 'true').lower() == 'true'
-    
-    return jsonify([sb.to_dict(include_account=include_account, include_balance=include_balance) for sb in safe_boxes])
+
+    live_by_id = {}
+    if include_balance:
+        live_by_id = live_balances_by_account_ids([
+            sb.account_id for sb in safe_boxes if getattr(sb, 'account_id', None) is not None
+        ])
+
+    results = []
+    for sb in safe_boxes:
+        sb_dict = sb.to_dict(include_account=include_account, include_balance=False)
+        if include_balance:
+            live = live_by_id.get(int(sb.account_id)) if getattr(sb, 'account_id', None) is not None else None
+            live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+            balance = {
+                'cash': round(float(live.get('cash') or 0.0), 2),
+            }
+            account = getattr(sb, 'account', None)
+            if bool(getattr(account, 'tracks_weight', False)):
+                w18 = float(live.get('18k') or 0.0)
+                w21 = float(live.get('21k') or 0.0)
+                w22 = float(live.get('22k') or 0.0)
+                w24 = float(live.get('24k') or 0.0)
+                balance['weight'] = {
+                    '18k': round(w18, 3),
+                    '21k': round(w21, 3),
+                    '22k': round(w22, 3),
+                    '24k': round(w24, 3),
+                    'total': round(w18 + w21 + w22 + w24, 3),
+                }
+            sb_dict['balance'] = balance
+
+        results.append(sb_dict)
+
+    return jsonify(results)
 
 
 @api.route('/safe-boxes/<int:safe_box_id>', methods=['GET'])
@@ -20301,8 +20429,31 @@ def get_safe_box(safe_box_id):
     safe_box = SafeBox.query.get_or_404(safe_box_id)
     include_account = request.args.get('include_account', 'true').lower() == 'true'
     include_balance = request.args.get('include_balance', 'true').lower() == 'true'
-    
-    return jsonify(safe_box.to_dict(include_account=include_account, include_balance=include_balance))
+
+    payload = safe_box.to_dict(include_account=include_account, include_balance=False)
+    if include_balance:
+        live = live_balances_by_account_ids([safe_box.account_id]).get(int(safe_box.account_id))
+        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+        balance = {
+            'cash': round(float(live.get('cash') or 0.0), 2),
+        }
+        account = getattr(safe_box, 'account', None)
+        if bool(getattr(account, 'tracks_weight', False)):
+            w18 = float(live.get('18k') or 0.0)
+            w21 = float(live.get('21k') or 0.0)
+            w22 = float(live.get('22k') or 0.0)
+            w24 = float(live.get('24k') or 0.0)
+            balance['weight'] = {
+                '18k': round(w18, 3),
+                '21k': round(w21, 3),
+                '22k': round(w22, 3),
+                '24k': round(w24, 3),
+                'total': round(w18 + w21 + w22 + w24, 3),
+            }
+        payload['balance'] = balance
+
+    return jsonify(payload)
 
 
 @api.route('/safe-boxes', methods=['POST'])
@@ -20385,8 +20536,28 @@ def create_safe_box():
         
         db.session.add(safe_box)
         db.session.commit()
-        
-        return jsonify(safe_box.to_dict(include_account=True, include_balance=True)), 201
+
+        payload = safe_box.to_dict(include_account=True, include_balance=False)
+        live = live_balances_by_account_ids([safe_box.account_id]).get(int(safe_box.account_id))
+        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+        balance = {
+            'cash': round(float(live.get('cash') or 0.0), 2),
+        }
+        if bool(getattr(account, 'tracks_weight', False)):
+            w18 = float(live.get('18k') or 0.0)
+            w21 = float(live.get('21k') or 0.0)
+            w22 = float(live.get('22k') or 0.0)
+            w24 = float(live.get('24k') or 0.0)
+            balance['weight'] = {
+                '18k': round(w18, 3),
+                '21k': round(w21, 3),
+                '22k': round(w22, 3),
+                '24k': round(w24, 3),
+                'total': round(w18 + w21 + w22 + w24, 3),
+            }
+        payload['balance'] = balance
+
+        return jsonify(payload), 201
     
     except Exception as e:
         db.session.rollback()
@@ -20514,7 +20685,29 @@ def update_safe_box(safe_box_id):
             safe_box.notes = data['notes']
         
         db.session.commit()
-        return jsonify(safe_box.to_dict(include_account=True, include_balance=True))
+
+        payload = safe_box.to_dict(include_account=True, include_balance=False)
+        live = live_balances_by_account_ids([safe_box.account_id]).get(int(safe_box.account_id))
+        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+        balance = {
+            'cash': round(float(live.get('cash') or 0.0), 2),
+        }
+        account = Account.query.get(safe_box.account_id)
+        if bool(getattr(account, 'tracks_weight', False)):
+            w18 = float(live.get('18k') or 0.0)
+            w21 = float(live.get('21k') or 0.0)
+            w22 = float(live.get('22k') or 0.0)
+            w24 = float(live.get('24k') or 0.0)
+            balance['weight'] = {
+                '18k': round(w18, 3),
+                '21k': round(w21, 3),
+                '22k': round(w22, 3),
+                '24k': round(w24, 3),
+                'total': round(w18 + w21 + w22 + w24, 3),
+            }
+        payload['balance'] = balance
+
+        return jsonify(payload)
     
     except Exception as e:
         db.session.rollback()
@@ -20576,8 +20769,29 @@ def get_default_safe_box(safe_type):
     
     if not safe_box:
         return jsonify({'error': f'لا توجد خزينة افتراضية من نوع {safe_type}'}), 404
-    
-    return jsonify(safe_box.to_dict(include_account=True, include_balance=True))
+
+    payload = safe_box.to_dict(include_account=True, include_balance=False)
+    live = live_balances_by_account_ids([safe_box.account_id]).get(int(safe_box.account_id))
+    live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+    balance = {
+        'cash': round(float(live.get('cash') or 0.0), 2),
+    }
+    account = getattr(safe_box, 'account', None)
+    if bool(getattr(account, 'tracks_weight', False)):
+        w18 = float(live.get('18k') or 0.0)
+        w21 = float(live.get('21k') or 0.0)
+        w22 = float(live.get('22k') or 0.0)
+        w24 = float(live.get('24k') or 0.0)
+        balance['weight'] = {
+            '18k': round(w18, 3),
+            '21k': round(w21, 3),
+            '22k': round(w22, 3),
+            '24k': round(w24, 3),
+            'total': round(w18 + w21 + w22 + w24, 3),
+        }
+    payload['balance'] = balance
+
+    return jsonify(payload)
 
 
 @api.route('/safe-boxes/gold/<int:karat>', methods=['GET'])
@@ -20588,8 +20802,29 @@ def get_gold_safe_box_by_karat(karat):
     
     if not safe_box:
         return jsonify({'error': f'لا توجد خزينة ذهب لعيار {karat}'}), 404
-    
-    return jsonify(safe_box.to_dict(include_account=True, include_balance=True))
+
+    payload = safe_box.to_dict(include_account=True, include_balance=False)
+    live = live_balances_by_account_ids([safe_box.account_id]).get(int(safe_box.account_id))
+    live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+    balance = {
+        'cash': round(float(live.get('cash') or 0.0), 2),
+    }
+    account = getattr(safe_box, 'account', None)
+    if bool(getattr(account, 'tracks_weight', False)):
+        w18 = float(live.get('18k') or 0.0)
+        w21 = float(live.get('21k') or 0.0)
+        w22 = float(live.get('22k') or 0.0)
+        w24 = float(live.get('24k') or 0.0)
+        balance['weight'] = {
+            '18k': round(w18, 3),
+            '21k': round(w21, 3),
+            '22k': round(w22, 3),
+            '24k': round(w24, 3),
+            'total': round(w18 + w21 + w22 + w24, 3),
+        }
+    payload['balance'] = balance
+
+    return jsonify(payload)
 
 
 @api.route('/safe-boxes/gold/unify', methods=['POST'])
@@ -24249,34 +24484,17 @@ def get_admin_dashboard():
     safe_boxes_summary = []
     try:
         safe_boxes = SafeBox.query.filter(SafeBox.is_active.is_(True)).all()
+        live_by_account = live_balances_by_account_ids([sb.account_id for sb in safe_boxes if getattr(sb, 'account_id', None)])
         for sb in safe_boxes:
-            sb_data = sb.to_dict(include_balance=True)
-            bal = (sb_data.get('balance') or {}) if isinstance(sb_data, dict) else {}
-            cash = 0.0
-            try:
-                cash = float(bal.get('cash') or 0.0)
-            except Exception:
-                cash = 0.0
+            # NOTE: use live journal-derived balances for consistency across screens.
+            live = live_by_account.get(int(sb.account_id)) if getattr(sb, 'account_id', None) is not None else None
+            live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
 
-            w = bal.get('weight') if isinstance(bal, dict) else None
-            w = w if isinstance(w, dict) else {}
-
-            try:
-                g18 = float(w.get('18k') or 0.0)
-            except Exception:
-                g18 = 0.0
-            try:
-                g21 = float(w.get('21k') or 0.0)
-            except Exception:
-                g21 = 0.0
-            try:
-                g22 = float(w.get('22k') or 0.0)
-            except Exception:
-                g22 = 0.0
-            try:
-                g24 = float(w.get('24k') or 0.0)
-            except Exception:
-                g24 = 0.0
+            cash = float(live.get('cash') or 0.0)
+            g18 = float(live.get('18k') or 0.0)
+            g21 = float(live.get('21k') or 0.0)
+            g22 = float(live.get('22k') or 0.0)
+            g24 = float(live.get('24k') or 0.0)
 
             total_main = 0.0
             try:

@@ -10,6 +10,7 @@ from models import (
 )
 from office_supplier_service import ensure_office_supplier
 from office_account_service import ensure_office_account
+from services.live_balances import live_balances_by_account_ids
 
 # إنشاء Blueprint
 offices_bp = Blueprint('offices', __name__, url_prefix='/api/offices')
@@ -240,12 +241,21 @@ def get_office_balance(office_id):
         if office.account_category_id:
             linked_account = Account.query.get(office.account_category_id)
 
-        # Prefer ledger-backed Account balances when available.
-        balance_cash = (linked_account.balance_cash if linked_account is not None else office.balance_cash) or 0.0
-        bal_18k = (linked_account.balance_18k if linked_account is not None else office.balance_gold_18k) or 0.0
-        bal_21k = (linked_account.balance_21k if linked_account is not None else office.balance_gold_21k) or 0.0
-        bal_22k = (linked_account.balance_22k if linked_account is not None else office.balance_gold_22k) or 0.0
-        bal_24k = (linked_account.balance_24k if linked_account is not None else office.balance_gold_24k) or 0.0
+        # Canonical source of truth: journal-derived aggregation for linked accounts.
+        if linked_account is not None:
+            live = live_balances_by_account_ids([linked_account.id]).get(int(linked_account.id))
+            live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+            balance_cash = float(live.get('cash') or 0.0)
+            bal_18k = float(live.get('18k') or 0.0)
+            bal_21k = float(live.get('21k') or 0.0)
+            bal_22k = float(live.get('22k') or 0.0)
+            bal_24k = float(live.get('24k') or 0.0)
+        else:
+            balance_cash = float(office.balance_cash or 0.0)
+            bal_18k = float(office.balance_gold_18k or 0.0)
+            bal_21k = float(office.balance_gold_21k or 0.0)
+            bal_22k = float(office.balance_gold_22k or 0.0)
+            bal_24k = float(office.balance_gold_24k or 0.0)
         
         balance_data = {
             'office_id': office.id,

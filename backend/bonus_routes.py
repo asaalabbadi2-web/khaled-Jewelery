@@ -21,6 +21,7 @@ from datetime import datetime, date
 from auth_decorators import require_auth, require_permission, require_any_permission
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
+from services.live_balances import live_balances_by_account_ids
 
 bonus_bp = Blueprint('bonuses', __name__)
 
@@ -1022,6 +1023,40 @@ def pay_bonus(bonus_id):
                     'voucher_id': existing_voucher.id
                 }), 409
             raise
+
+        safe_box_payload = None
+        office_payload = None
+        treasury_balance_after = None
+
+        if safe_box is not None:
+            # Canonical source of truth: journal-derived balances.
+            live_treasury = live_balances_by_account_ids([treasury_account.id]).get(int(treasury_account.id))
+            live_treasury = live_treasury if isinstance(live_treasury, dict) else {'cash': 0.0}
+            treasury_balance_after = round(float(live_treasury.get('cash') or 0.0), 2)
+
+            safe_box_payload = safe_box.to_dict(include_account=True, include_balance=False)
+            live_sb = live_balances_by_account_ids([safe_box.account_id]).get(int(safe_box.account_id))
+            live_sb = live_sb if isinstance(live_sb, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+            balance = {
+                'cash': round(float(live_sb.get('cash') or 0.0), 2),
+            }
+            account = getattr(safe_box, 'account', None)
+            if bool(getattr(account, 'tracks_weight', False)):
+                w18 = float(live_sb.get('18k') or 0.0)
+                w21 = float(live_sb.get('21k') or 0.0)
+                w22 = float(live_sb.get('22k') or 0.0)
+                w24 = float(live_sb.get('24k') or 0.0)
+                balance['weight'] = {
+                    '18k': round(w18, 3),
+                    '21k': round(w21, 3),
+                    '22k': round(w22, 3),
+                    '24k': round(w24, 3),
+                    'total': round(w18 + w21 + w22 + w24, 3),
+                }
+            safe_box_payload['balance'] = balance
+        else:
+            treasury_balance_after = float(getattr(office, 'balance_cash', 0.0) or 0.0)
+            office_payload = {'id': office.id, 'name': office.name, 'balance_after': office.balance_cash}
         
         return jsonify({
             'success': True,
@@ -1036,9 +1071,9 @@ def pay_bonus(bonus_id):
                 'kind': 'safe_box' if safe_box is not None else 'office',
                 'id': safe_box.id if safe_box is not None else office.id,
                 'name': treasury_name,
-                'balance_after': float(getattr(treasury_account, 'balance_cash', 0.0) or 0.0) if safe_box is not None else float(getattr(office, 'balance_cash', 0.0) or 0.0)
+                'balance_after': float(treasury_balance_after or 0.0)
             },
-            **({'safe_box': safe_box.to_dict(include_account=True, include_balance=True)} if safe_box is not None else {'office': {'id': office.id, 'name': office.name, 'balance_after': office.balance_cash}})
+            **({'safe_box': safe_box_payload} if safe_box is not None else {'office': office_payload})
         }), 200
         
     except Exception as e:
