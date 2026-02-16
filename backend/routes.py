@@ -1342,16 +1342,127 @@ def _generate_reservation_code(prefix='RES'):
     return f"{prefix}-{timestamp}-{total:04d}"
 
 
-def _generate_journal_entry_number(prefix='JE'):
-    today = datetime.utcnow()
-    year = today.year
-    yearly_count = (
-        db.session.query(func.count(JournalEntry.id))
-        .filter(db.extract('year', JournalEntry.date) == year)
-        .scalar()
-        or 0
-    ) + 1
-    return f"{prefix}-{year}-{yearly_count:05d}"
+def _generate_journal_entry_number(prefix='JE', entry_date=None):
+    """Generate a unique, sequential journal entry number.
+
+    Format: `{prefix}-{year}-{seq:05d}`.
+
+    Important:
+    - Uses the *entry_date year* (not always current year) so backdated entries
+      don't break numbering.
+    - Uses MAX(entry_number) rather than COUNT() to avoid duplicates when some
+      entries are deleted or when multiple entries are created in one request.
+    - Keeps an app-context cache so multiple calls in the same request/app-context
+      remain unique even before commit.
+
+    Backward compatibility:
+    - Some code historically called `_generate_journal_entry_number(date)`.
+      If `prefix` is a datetime, we treat it as `entry_date`.
+    """
+    # Back-compat: allow calling with a datetime as first argument.
+    if isinstance(prefix, datetime):
+        entry_date = prefix
+        prefix = 'JE'
+
+    dt = entry_date or datetime.utcnow()
+    year = int(getattr(dt, 'year', datetime.utcnow().year))
+    prefix_str = str(prefix)
+    number_prefix = f"{prefix_str}-{year}-"
+
+    # Cache: prefer session.info (works everywhere), fallback to flask.g.
+    cache = None
+    try:
+        cache = db.session.info.setdefault('_entry_number_seq_cache', {})
+    except Exception:
+        cache = None
+
+    if cache is None:
+        try:
+            from flask import g
+
+            cache = getattr(g, '_entry_number_seq_cache', None)
+            if cache is None:
+                cache = {}
+                setattr(g, '_entry_number_seq_cache', cache)
+        except Exception:
+            cache = {}
+
+    cache_key = (prefix_str, year)
+    last_seq = cache.get(cache_key)
+
+    if last_seq is None:
+        row = (
+            db.session.query(JournalEntry.entry_number)
+            .filter(JournalEntry.entry_number.like(f"{number_prefix}%"))
+            .order_by(JournalEntry.entry_number.desc())
+            .first()
+        )
+        if row and row[0]:
+            try:
+                last_seq = int(str(row[0]).split('-')[-1])
+            except Exception:
+                last_seq = 0
+        else:
+            last_seq = 0
+
+    next_seq = int(last_seq) + 1
+
+    # Guard against collisions (DBs without the unique index may already have duplicates)
+    while True:
+        candidate = f"{number_prefix}{next_seq:05d}"
+        exists = (
+            db.session.query(JournalEntry.id)
+            .filter(JournalEntry.entry_number == candidate)
+            .first()
+            is not None
+        )
+        if not exists:
+            cache[cache_key] = next_seq
+            return candidate
+        next_seq += 1
+
+
+def _next_invoice_type_id(invoice_types):
+    """Allocate the next sequential `Invoice.invoice_type_id` for given invoice_type(s).
+
+    Notes:
+    - We intentionally keep existing semantics: sequence is per invoice_type (or group of
+      invoice types), not per-year.
+    - Uses MAX() + a session cache so multiple invoices created in the same request/flush
+      don't collide.
+    """
+    try:
+        types = [str(t) for t in (invoice_types or []) if str(t).strip()]
+    except Exception:
+        types = []
+
+    if not types:
+        # Fallback: global sequence
+        types = []
+
+    cache = None
+    try:
+        cache = db.session.info.setdefault('_invoice_type_id_cache', {})
+    except Exception:
+        cache = {}
+
+    cache_key = tuple(sorted(types))
+    last_seq = cache.get(cache_key)
+    if last_seq is None:
+        q = db.session.query(func.max(Invoice.invoice_type_id))
+        if types:
+            q = q.filter(Invoice.invoice_type.in_(types))
+        last_seq = int(q.scalar() or 0)
+
+    next_seq = int(last_seq) + 1
+    while True:
+        exists_q = Invoice.query.filter(Invoice.invoice_type_id == next_seq)
+        if types:
+            exists_q = exists_q.filter(Invoice.invoice_type.in_(types))
+        if not exists_q.first():
+            cache[cache_key] = next_seq
+            return next_seq
+        next_seq += 1
 
 
 def _record_memo_weight_transfer(journal_entry_id, *, debit_account_id=None, credit_account_id=None, weight_main_karat=0.0):
@@ -4178,6 +4289,27 @@ def add_customer():
 def get_suppliers():
     suppliers = Supplier.query.all()
 
+    # Mark suppliers that are actually closing offices.
+    office_by_supplier_id = {}
+    try:
+        office_rows = (
+            db.session.query(Office.id, Office.office_code, Office.supplier_id)
+            .filter(Office.supplier_id.isnot(None))
+            .all()
+        )
+        for oid, ocode, sid in office_rows:
+            if sid is None:
+                continue
+            try:
+                office_by_supplier_id[int(sid)] = {
+                    'office_id': int(oid) if oid is not None else None,
+                    'office_code': str(ocode) if ocode is not None else None,
+                }
+            except Exception:
+                continue
+    except Exception:
+        office_by_supplier_id = {}
+
     # Compute *live* balances from journal lines (aggregated in batches).
     # We avoid relying on stored Account.balance_* fields because they can be stale.
     # We also avoid naive supplier_id-only aggregation because the DB may tag
@@ -4308,6 +4440,21 @@ def get_suppliers():
 
     for s in suppliers:
         data = s.to_dict()
+
+        try:
+            office_info = office_by_supplier_id.get(int(s.id))
+            if office_info:
+                data['is_closing_office'] = True
+                data['closing_office_id'] = office_info.get('office_id')
+                data['closing_office_code'] = office_info.get('office_code')
+            else:
+                data['is_closing_office'] = False
+                data['closing_office_id'] = None
+                data['closing_office_code'] = None
+        except Exception:
+            data['is_closing_office'] = False
+            data['closing_office_id'] = None
+            data['closing_office_code'] = None
         try:
             sid = int(s.id)
             bal = balances_by_supplier.get(sid)
@@ -4324,6 +4471,130 @@ def get_suppliers():
         results.append(data)
 
     return jsonify(results)
+
+
+@api.route('/suppliers/<int:supplier_id>/repair-historical-balances', methods=['POST'])
+@_wrap_api_exceptions('supplier_repair_failed', 'Failed to repair supplier balances')
+def repair_supplier_historical_balances(supplier_id):
+    """Recalculate and persist supplier cached balances from the ledger.
+
+    This is useful for legacy data imports and historical inconsistencies.
+    Display screens should still rely on ledger/live balances.
+    """
+
+    supplier = Supplier.query.get_or_404(supplier_id)
+    payload = request.get_json(silent=True) or {}
+
+    def _boolish(value, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+        return bool(value)
+
+    ensure_accounts = _boolish(payload.get('ensure_accounts', True), default=True)
+    if request.args.get('ensure_accounts') is not None:
+        ensure_accounts = _boolish(request.args.get('ensure_accounts'), default=True)
+
+    if ensure_accounts:
+        from party_account_service import ensure_supplier_accounts
+
+        ensure_supplier_accounts(supplier)
+
+    supplier_fin_account_id = getattr(supplier, 'account_id', None)
+    supplier_memo_account_id = None
+    try:
+        fin_acc = Account.query.get(int(supplier_fin_account_id)) if supplier_fin_account_id else None
+        supplier_memo_account_id = getattr(fin_acc, 'memo_account_id', None) if fin_acc else None
+    except Exception:
+        supplier_memo_account_id = None
+
+    allowed_ids = []
+    try:
+        if supplier_fin_account_id not in (None, '', 0, '0', False):
+            allowed_ids.append(int(supplier_fin_account_id))
+    except Exception:
+        pass
+    try:
+        if supplier_memo_account_id not in (None, '', 0, '0', False):
+            allowed_ids.append(int(supplier_memo_account_id))
+    except Exception:
+        pass
+
+    payable_filter = and_(Account.type == 'Liability', Account.account_number.like('21%'))
+    account_filter = payable_filter
+    if allowed_ids:
+        account_filter = or_(Account.id.in_(allowed_ids), payable_filter)
+
+    supplier_line_filter = (JournalEntryLine.supplier_id == supplier_id)
+    if allowed_ids:
+        supplier_line_filter = or_(
+            supplier_line_filter,
+            and_(
+                JournalEntryLine.account_id.in_(allowed_ids),
+                JournalEntryLine.customer_id == None,  # noqa: E711
+            ),
+        )
+
+    jl_filters = [
+        JournalEntry.is_deleted == False,
+        JournalEntryLine.is_deleted == False,
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        jl_filters.append(JournalEntry.is_draft == False)
+    elif _db_has_column('journal_entry', 'is_posted'):
+        jl_filters.append(JournalEntry.is_posted == True)
+
+    rows = (
+        db.session.query(
+            (func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0) - func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0)).label('cash'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0)).label('b18'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0)).label('b21'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0)).label('b22'),
+            (func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0) - func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0)).label('b24'),
+            func.max(JournalEntry.date).label('last_dt'),
+        )
+        .join(JournalEntry)
+        .join(Account, JournalEntryLine.account_id == Account.id)
+        .filter(supplier_line_filter)
+        .filter(*jl_filters)
+        .filter(account_filter)
+        .first()
+    )
+
+    cash = float(getattr(rows, 'cash', 0.0) or 0.0)
+    b18 = float(getattr(rows, 'b18', 0.0) or 0.0)
+    b21 = float(getattr(rows, 'b21', 0.0) or 0.0)
+    b22 = float(getattr(rows, 'b22', 0.0) or 0.0)
+    b24 = float(getattr(rows, 'b24', 0.0) or 0.0)
+    last_dt = getattr(rows, 'last_dt', None)
+
+    supplier.balance_cash = round(cash, 2)
+    supplier.balance_gold_18k = round(b18, 3)
+    supplier.balance_gold_21k = round(b21, 3)
+    supplier.balance_gold_22k = round(b22, 3)
+    supplier.balance_gold_24k = round(b24, 3)
+    if last_dt is not None:
+        supplier.last_gold_transaction_date = last_dt
+
+    db.session.add(supplier)
+    db.session.commit()
+
+    return jsonify({
+        'message': 'تم إصلاح الأرصدة التاريخية بنجاح',
+        'supplier_id': supplier.id,
+        'balances': {
+            'balance_cash': supplier.balance_cash,
+            'balance_gold_18k': supplier.balance_gold_18k,
+            'balance_gold_21k': supplier.balance_gold_21k,
+            'balance_gold_22k': supplier.balance_gold_22k,
+            'balance_gold_24k': supplier.balance_gold_24k,
+        },
+    }), 200
 
 
 @api.route('/suppliers', methods=['POST'])
@@ -6713,71 +6984,106 @@ def get_account_id_for_mapping(operation_type, account_type):
         if default_mapping:
             return default_mapping.account_id
     
-    # 3. fallback لأرقام افتراضية داخلية (عند عدم وجود أي ربط محفوظ)
-    DEFAULT_ACCOUNTS = {
-        # المخزون النقدي (حسب العيار)
-        'inventory_18k': 1300,  # مخزون ذهب عيار 18
-        'inventory_21k': 1310,  # مخزون ذهب عيار 21  
-        'inventory_22k': 1320,  # مخزون ذهب عيار 22
-        'inventory_24k': 1330,  # مخزون ذهب عيار 24
-        
-        # 🆕 مخزون أجور المصنعية
-        'manufacturing_wage_inventory': 1320,  # مخزون أجور المصنعية
-        
-        # المخزون الوزني (حسب العيار) - حسابات المذكرة
-        'inventory_weight_18k': 7300,  # مخزون وزني عيار 18
-        'inventory_weight_21k': 7310,  # مخزون وزني عيار 21
-        'inventory_weight_22k': 7320,  # مخزون وزني عيار 22
-        'inventory_weight_24k': 7330,  # مخزون وزني عيار 24
-        
-        # النقدية والبنوك
-        'cash': 1100,           # الصندوق
-        'bank': 1110,           # بنك الأهلي
-        'bank_rajhi': 1120,     # بنك الراجحي
-        
-        # العملاء والموردين
-        'customers': 1200,      # عملاء بيع ذهب
-        'customers_scrap': 1210,  # عملاء شراء كسر
-        'suppliers': 210,       # موردو ذهب خام
-        'suppliers_processed': 220,  # موردو ذهب مشغول
-        
-        # الإيرادات
-        'revenue': 40,          # إيرادات بيع ذهب
-        'sales_gold_new': 40,   # إيرادات بيع ذهب
-        'sales_wage': 41,       # إيرادات مصنعية
-    'sales_returns': 40,    # مردودات المبيعات (تخفيض الإيراد)
-        
-        # التكاليف
-        'cost': 50,             # تكلفة المبيعات
-        'cost_of_sales': 50,    # تكلفة المبيعات
-    'purchase_returns': 50, # مردودات المشتريات (تعديل التكلفة)
-
-    # الضرائب والعمولات
-    'vat_payable': 2210,        # ضريبة القيمة المضافة المستحقة
-    'vat_receivable': 1500,     # ضريبة القيمة المضافة (مدفوعة)
-    'commission': 5150,         # مصروف عمولات الدفع الإلكتروني
-    'commission_vat': 1501,     # ضريبة عمولات نقاط البيع (مدفوعة)
-        
-        # المصروفات
-        'operating_expenses': 51,  # مصاريف تشغيلية
-        
-        # حقوق الملكية
-        'capital': 31,          # رأس المال
-        'retained_earnings': 32,  # الأرباح المحتجزة
-        
-        # حسابات للجسر والمصنعية في مشتريات الموردين
-        'supplier_bridge': None,
-    'manufacturing_wage': 510,  # مصروفات أجور المصنعية
-    }
-    
-    default_account_number = DEFAULT_ACCOUNTS.get(account_type)
-    if default_account_number is None:
+    def _first_existing_account_id_by_numbers(numbers):
+        for n in numbers:
+            if n in (None, '', False):
+                continue
+            acc = Account.query.filter_by(account_number=str(n)).first()
+            if acc:
+                return acc.id
         return None
 
-    # أرقام fallback تمثل account_number وليس المعرف الفعلي، لذلك نحولها هنا
-    account = Account.query.filter_by(account_number=str(default_account_number)).first()
-    if account:
-        return account.id
+    def _first_existing_account_id_by_names(names):
+        for nm in names:
+            if not nm:
+                continue
+            acc = Account.query.filter_by(name=str(nm)).first()
+            if acc:
+                return acc.id
+        return None
+
+    # 3. fallback لأرقام افتراضية داخلية (عند عدم وجود أي ربط محفوظ)
+    # ملاحظة: أرقام الحسابات تختلف بين قواعد البيانات (نتائج renumbering/dual COA).
+    # لذلك نستخدم "قائمة مرشحين" + fallback بالأسماء العربية الشائعة.
+    DEFAULT_ACCOUNT_NUMBER_CANDIDATES = {
+        # المخزون النقدي (حسب العيار)
+        'inventory_18k': ['1300'],
+        'inventory_21k': ['1220', '1310'],
+        'inventory_22k': ['1320'],
+        'inventory_24k': ['1200', '1330', '1340'],
+
+        # مخزون أجور المصنعية
+        'manufacturing_wage_inventory': ['1340', '1350', '1320'],
+
+        # المخزون الوزني (حسب العيار) - حسابات المذكرة
+        'inventory_weight_18k': ['71300', '7300'],
+        'inventory_weight_21k': ['71310', '7310'],
+        'inventory_weight_22k': ['71320', '7320'],
+        'inventory_weight_24k': ['71330', '7330'],
+
+        # النقدية والبنوك
+        'cash': ['15', '1100'],
+        'bank': ['1110'],
+        'bank_rajhi': ['1120'],
+
+        # العملاء والموردين
+        'customers': ['1200'],
+        'customers_scrap': ['1210'],
+        'suppliers': ['210'],
+        'suppliers_processed': ['220'],
+
+        # الإيرادات
+        'revenue': ['400', '40'],
+        'sales_gold_new': ['400', '40'],
+        'sales_wage': ['41'],
+        'sales_returns': ['40'],
+
+        # التكاليف
+        'cost': ['521', '50'],
+        'cost_of_sales': ['521', '50'],
+        'purchase_returns': ['50'],
+
+        # الضرائب والعمولات
+        'vat_payable': ['2210'],
+        'vat_receivable': ['1500'],
+        'commission': ['5150'],
+        'commission_vat': ['1501'],
+
+        # المصروفات
+        'operating_expenses': ['51'],
+
+        # حقوق الملكية
+        'capital': ['31'],
+        'retained_earnings': ['32'],
+
+        # حسابات للجسر والمصنعية في مشتريات الموردين
+        'supplier_bridge': [None],
+        'manufacturing_wage': ['510'],
+    }
+
+    DEFAULT_ACCOUNT_NAME_CANDIDATES = {
+        'cash': ['صندوق النقدية'],
+        'sales_gold_new': ['مبيعات ذهب جديد'],
+        'revenue': ['مبيعات ذهب جديد'],
+        'cost_of_sales': ['تكلفة مبيعات الذهب'],
+        'cost': ['تكلفة مبيعات الذهب'],
+        'inventory_21k': ['مخزون ذهب عيار 21'],
+        'inventory_24k': ['مخزون ذهب عيار 24'],
+        'suppliers': ['موردو ذهب'],
+        'customers': ['أرصدة ذهب العملاء'],
+    }
+
+    numbers = DEFAULT_ACCOUNT_NUMBER_CANDIDATES.get(account_type)
+    if numbers:
+        hit = _first_existing_account_id_by_numbers(numbers)
+        if hit:
+            return hit
+
+    names = DEFAULT_ACCOUNT_NAME_CANDIDATES.get(account_type)
+    if names:
+        hit = _first_existing_account_id_by_names(names)
+        if hit:
+            return hit
 
     if account_type == 'manufacturing_wage':
         return _ensure_manufacturing_wage_expense_account()
@@ -7532,8 +7838,7 @@ def add_invoice():
     try:
         # --- 1. Create Invoice and Items ---
         print(f"🟢 Step 1: Creating invoice...")
-        last_invoice = Invoice.query.filter_by(invoice_type=invoice_type).order_by(Invoice.invoice_type_id.desc()).first()
-        next_invoice_type_id = (last_invoice.invoice_type_id + 1) if last_invoice else 1
+        next_invoice_type_id = _next_invoice_type_id([invoice_type])
 
         def _extract_float(key, default=0.0):
             if key not in data:
@@ -9357,12 +9662,8 @@ def add_invoice():
         if new_invoice.original_invoice_id:
             journal_desc += f" (مرتبطة بفاتورة #{new_invoice.original_invoice_id})"
         
-        # 🔧 توليد رقم القيد
-        year = new_invoice.date.year
-        entry_count = JournalEntry.query.filter(
-            db.extract('year', JournalEntry.date) == year
-        ).count() + 1
-        entry_number_str = f'JE-{year}-{entry_count:05d}'
+        # 🔧 توليد رقم القيد (موحّد وآمن ضد التكرار)
+        entry_number_str = _generate_journal_entry_number(entry_date=new_invoice.date)
         
         journal_entry = JournalEntry(
             entry_number=entry_number_str,
@@ -9431,6 +9732,41 @@ def add_invoice():
                     inv_acc_id = get_account_id_for_mapping('بيع', f'inventory_{karat}k')
                     if inv_acc_id:
                         inventory_accounts[karat] = inv_acc_id
+
+            # ✅ تحقق مبكر: منع إنشاء قيود بحساب None وإرجاع رسالة واضحة
+            missing = []
+            if not sales_gold_new_acc_id:
+                missing.append({'mapping': 'sales_gold_new/revenue', 'operation_type': 'بيع'})
+            if not cost_of_sales_acc_id:
+                missing.append({'mapping': 'cost_of_sales', 'operation_type': 'بيع'})
+
+            # تحقق من حساب المخزون المطلوب فعلياً حسب عناصر الفاتورة
+            try:
+                required_karats = {
+                    str(_to_float(item.get('karat', 0), 0.0)).split('.')[0]
+                    for item in (data.get('items') or [])
+                    if _to_float(item.get('weight', 0), 0.0) > 0
+                }
+            except Exception:
+                required_karats = set()
+
+            for k in sorted(required_karats):
+                if k in {'18', '21', '22', '24'} and not inventory_accounts.get(k):
+                    missing.append({'mapping': f'inventory_{k}k', 'operation_type': 'بيع'})
+
+            if missing:
+                db.session.rollback()
+                return jsonify({
+                    'error': 'account_mapping_missing',
+                    'message': 'نقص في ربط الحسابات المطلوبة لإنشاء قيد فاتورة البيع. الرجاء ضبط Accounting Mapping أو التأكد من وجود الحسابات الافتراضية.',
+                    'missing': missing,
+                    'resolved': {
+                        'cash_acc_id': cash_acc_id,
+                        'sales_gold_new_acc_id': sales_gold_new_acc_id,
+                        'cost_of_sales_acc_id': cost_of_sales_acc_id,
+                        'inventory_accounts': inventory_accounts,
+                    },
+                }), 400
             
             # ============================================
             # القيد الأول: إثبات الإيراد (المبلغ الكامل)
@@ -18156,13 +18492,18 @@ def delete_attendance(attendance_id):
         return jsonify({'error': f'فشل حذف سجل الحضور: {str(exc)}'}), 500
 
 
-def generate_voucher_number(voucher_type, year=None):
+def generate_voucher_number(voucher_type, year=None, voucher_date=None):
     """
     توليد رقم سند تلقائي
     RV-2025-00001 (Receipt Voucher)
     PV-2025-00001 (Payment Voucher)
     AV-2025-00001 (Adjustment Voucher)
     """
+    if voucher_date is not None:
+        try:
+            year = int(getattr(voucher_date, 'year', datetime.now().year))
+        except Exception:
+            year = datetime.now().year
     if year is None:
         year = datetime.now().year
     
@@ -18174,23 +18515,39 @@ def generate_voucher_number(voucher_type, year=None):
     }
     prefix = prefix_map.get(voucher_type, 'V')
     
-    # البحث عن آخر رقم في نفس السنة والنوع
-    pattern = f'{prefix}-{year}-%'
-    last_voucher = Voucher.query.filter(
-        Voucher.voucher_number.like(pattern)
-    ).order_by(Voucher.voucher_number.desc()).first()
-    
-    if last_voucher:
-        # استخراج الرقم التسلسلي
-        try:
-            last_num = int(last_voucher.voucher_number.split('-')[-1])
-            new_num = last_num + 1
-        except:
-            new_num = 1
-    else:
-        new_num = 1
-    
-    return f'{prefix}-{year}-{new_num:05d}'
+    # Cache: avoid duplicates when multiple vouchers are created in one request/transaction.
+    try:
+        cache = db.session.info.setdefault('_voucher_number_seq_cache', {})
+    except Exception:
+        cache = {}
+
+    cache_key = (prefix, int(year))
+    last_seq = cache.get(cache_key)
+
+    if last_seq is None:
+        pattern = f'{prefix}-{year}-%'
+        last_voucher = (
+            Voucher.query
+            .filter(Voucher.voucher_number.like(pattern))
+            .order_by(Voucher.voucher_number.desc())
+            .first()
+        )
+
+        if last_voucher and last_voucher.voucher_number:
+            try:
+                last_seq = int(str(last_voucher.voucher_number).split('-')[-1])
+            except Exception:
+                last_seq = 0
+        else:
+            last_seq = 0
+
+    next_seq = int(last_seq) + 1
+    while True:
+        candidate = f'{prefix}-{year}-{next_seq:05d}'
+        if not Voucher.query.filter_by(voucher_number=candidate).first():
+            cache[cache_key] = next_seq
+            return candidate
+        next_seq += 1
 
 
 def create_journal_entry_from_voucher(voucher):
@@ -18210,12 +18567,8 @@ def create_journal_entry_from_voucher(voucher):
     - دائن: حسابات متعددة (صندوق، ذهب عيار 24، ذهب عيار 21، إلخ)
     """
     try:
-        # توليد رقم القيد
-        year = voucher.date.year
-        entry_number = JournalEntry.query.filter(
-            db.extract('year', JournalEntry.date) == year
-        ).count() + 1
-        entry_number_str = f'JE-{year}-{entry_number:05d}'
+        # توليد رقم القيد (موحّد وآمن ضد التكرار)
+        entry_number_str = _generate_journal_entry_number(entry_date=voucher.date)
         
         # إنشاء القيد
         journal_entry = JournalEntry(
@@ -18756,11 +19109,11 @@ def create_voucher():
             if not account:
                 return jsonify({'error': f'Account {line["account_id"]} not found'}), 404
         
-        # Generate voucher number
-        voucher_number = generate_voucher_number(data['voucher_type'])
-        
         # Parse date
         voucher_date = datetime.fromisoformat(data.get('date', datetime.now().isoformat()))
+
+        # Generate voucher number (date-aware)
+        voucher_number = generate_voucher_number(data['voucher_type'], voucher_date=voucher_date)
         
         # حساب المجاميع للسند (للعرض)
         amount_cash = total_debit_cash  # أو total_credit_cash (متساوية)
@@ -21135,15 +21488,7 @@ def create_safe_box_transfer_voucher():
         ))
 
     try:
-        # Generate voucher number with collision guard (rare)
-        voucher_number = None
-        for _ in range(5):
-            candidate = generate_voucher_number('adjustment', year=voucher_dt.year)
-            if not Voucher.query.filter_by(voucher_number=candidate).first():
-                voucher_number = candidate
-                break
-        if not voucher_number:
-            return jsonify({'error': 'voucher_number_generation_failed'}), 500
+        voucher_number = generate_voucher_number('adjustment', voucher_date=voucher_dt)
 
         voucher = Voucher(
             voucher_number=voucher_number,
@@ -21403,14 +21748,7 @@ def _create_clearing_settlement_voucher(
     if clearing_balance < gross_amount:
         raise ValueError('insufficient_clearing_balance')
 
-    voucher_number = None
-    for _ in range(3):
-        candidate = generate_voucher_number('adjustment', year=settlement_dt.year)
-        if not Voucher.query.filter_by(voucher_number=candidate).first():
-            voucher_number = candidate
-            break
-    if not voucher_number:
-        raise RuntimeError('Failed to generate unique voucher number')
+    voucher_number = generate_voucher_number('adjustment', voucher_date=settlement_dt)
 
     if description_override:
         description = description_override
@@ -21779,15 +22117,7 @@ def create_bnpl_settlement():
 
     # Create adjustment voucher + lines and a journal entry for audit.
     try:
-        # Guard against rare voucher_number collision
-        voucher_number = None
-        for _ in range(3):
-            candidate = generate_voucher_number('adjustment', year=settlement_dt.year)
-            if not Voucher.query.filter_by(voucher_number=candidate).first():
-                voucher_number = candidate
-                break
-        if not voucher_number:
-            return jsonify({'error': 'Failed to generate unique voucher number'}), 500
+        voucher_number = generate_voucher_number('adjustment', voucher_date=settlement_dt)
 
         provider_label = 'تابي' if provider == 'tabby' else ('تمارا' if provider == 'tamara' else 'BNPL')
         description = (
@@ -22442,12 +22772,7 @@ def create_office_reservation():
 
         legacy_supplier_purchase = 'شراء' + ' من ' + 'مورد'
 
-        last_invoice = (
-            Invoice.query.filter(Invoice.invoice_type.in_(['شراء', legacy_supplier_purchase]))
-            .order_by(Invoice.invoice_type_id.desc())
-            .first()
-        )
-        next_invoice_type_id = (last_invoice.invoice_type_id + 1) if last_invoice else 1
+        next_invoice_type_id = _next_invoice_type_id(['شراء', legacy_supplier_purchase])
 
         purchase_invoice = Invoice(
             invoice_type_id=next_invoice_type_id,

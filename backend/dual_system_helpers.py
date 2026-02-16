@@ -108,6 +108,17 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
     
     db = current_app.extensions['sqlalchemy']
 
+    if account_id is None:
+        raise ValueError(
+            "Account id is None while creating dual journal entry "
+            f"(journal_entry_id={journal_entry_id}, description={description!r}, "
+            f"cash_debit={cash_debit}, cash_credit={cash_credit}, "
+            f"w18d={weight_18k_debit}, w18c={weight_18k_credit}, "
+            f"w21d={weight_21k_debit}, w21c={weight_21k_credit}, "
+            f"w22d={weight_22k_debit}, w22c={weight_22k_credit}, "
+            f"w24d={weight_24k_debit}, w24c={weight_24k_credit})"
+        )
+
     account = db.session.query(Account).filter_by(id=account_id).first()
     if not account:
         raise ValueError(f"Account {account_id} not found while creating dual journal entry")

@@ -18,8 +18,6 @@ import 'settings_screen_enhanced.dart';
 import '../utils/arabic_number_formatter.dart';
 import 'invoice_print_screen.dart';
 
-enum _PreSaveDecision { cancel, proceed, proceedSuppressWarning }
-
 /// شاشة فاتورة البيع - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
 class SalesInvoiceScreenV2 extends StatefulWidget {
@@ -2116,6 +2114,183 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   }
 
   // ==================== Submit Invoice ====================
+  Future<bool> _showPreSaveInvoiceSummary({
+    required String customerLabel,
+    required int itemsCount,
+    required double total,
+    required double totalWeight,
+    required double totalTax,
+    required double totalCost,
+    required double paidCash,
+    required double barterTotal,
+    required double remaining,
+    required bool allowPartialPayments,
+  }) async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final warnings = <String>[];
+    if (!allowPartialPayments && remaining.abs() > 0.01) {
+      warnings.add('⚠️ هذا الإعداد يتطلب سداد كامل الفاتورة قبل الحفظ.');
+    }
+    if (remaining > 0.01) {
+      warnings.add('⚠️ الفاتورة آجل/جزئي: يوجد مبلغ متبقي.');
+    }
+    if (totalCost > 0 && total + 0.01 < totalCost) {
+      warnings.add('⚠️ سعر البيع أقل من التكلفة (قد تحتاج اعتماد مدير).');
+    }
+
+    Widget line(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                ),
+              ),
+            ),
+            Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: colorScheme.surface,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+          ),
+          builder: (sheetContext) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 14,
+                  bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGold.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(Icons.receipt_long),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'ملخص الفاتورة قبل الحفظ',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetContext, false),
+                          icon: const Icon(Icons.close),
+                          tooltip: 'إغلاق',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (customerLabel.trim().isNotEmpty)
+                      line('العميل', customerLabel.trim()),
+                    line('عدد الأصناف', itemsCount.toString()),
+                    const Divider(height: 18),
+                    line(
+                      'الإجمالي',
+                      '${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    if (totalTax > 0)
+                      line(
+                        'الضريبة',
+                        '${totalTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      ),
+                    if (totalWeight > 0)
+                      line(
+                        'إجمالي الوزن',
+                        '${totalWeight.toStringAsFixed(3)} جم',
+                      ),
+                    line(
+                      'المدفوع (نقدي)',
+                      '${paidCash.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    if (barterTotal > 0.01)
+                      line(
+                        'المقايضة',
+                        '${barterTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      ),
+                    line(
+                      'المتبقي',
+                      '${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    if (warnings.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: AppColors.warning.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Text(
+                          warnings.join('\n'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () =>
+                                Navigator.pop(sheetContext, false),
+                            child: const Text('رجوع'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () =>
+                                Navigator.pop(sheetContext, true),
+                            icon: const Icon(Icons.save),
+                            label: const Text('حفظ الفاتورة'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ) ??
+        false;
+  }
+
   Future<void> _submitInvoice() async {
     if (_items.isEmpty) {
       _showError('يرجى إضافة أصناف للفاتورة');
@@ -2129,58 +2304,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     final allowPartialPayments = _settingsProvider.allowPartialInvoicePayments;
 
-    // 🆕 Barter validation
-    final barterTotal = _barterTotal;
-    if (_enableBarter) {
-      if (_barterLines.isEmpty) {
-        _showError('يرجى إضافة سطر مقايضة واحد على الأقل');
-        return;
-      }
-
-      for (final line in _barterLines) {
-        if (!{18, 21, 22, 24}.contains(line.karat)) {
-          _showError('يرجى اختيار عيار صحيح للمقايضة');
-          return;
-        }
-
-        final standing = line.standingWeight(_parseDouble);
-        final stones = line.stonesWeight(_parseDouble);
-        final net = line.netWeight(_parseDouble);
-        final enteredPrice = line.pricePerGram(_parseDouble);
-        final effectivePrice = line.effectivePricePerGram(
-          _parseDouble,
-          _goldPrice24k,
-        );
-
-        if (standing <= 0) {
-          _showError('يرجى إدخال الوزن القائم لكل سطر مقايضة');
-          return;
-        }
-        if (stones < 0) {
-          _showError('وزن الفصوص لا يمكن أن يكون سالباً');
-          return;
-        }
-        if (stones > standing + 1e-9) {
-          _showError('وزن الفصوص لا يمكن أن يتجاوز الوزن القائم');
-          return;
-        }
-        if (net <= 0) {
-          _showError('الصافي يجب أن يكون أكبر من صفر');
-          return;
-        }
-        if (enteredPrice <= 0 && _goldPrice24k <= 0) {
-          _showError('يرجى إدخال سعر الذهب أو سعر شراء/جرام للمقايضة');
-          return;
-        }
-        if (effectivePrice <= 0) {
-          _showError('سعر الجرام غير صالح للمقايضة');
-          return;
-        }
-      }
-    }
-
-    // 🆕 التحقق من الدفع (مع دعم البيع الآجل عند تفعيل الإعداد)
     final total = _calculateGrandTotal();
+    final barterTotal = _barterTotal;
     if (barterTotal > total + 0.01) {
       _showError('قيمة المقايضة أكبر من إجمالي الفاتورة');
       return;
@@ -2191,76 +2316,59 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final remaining = total - totalPaid;
 
     final totalCost = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
-    final paidBelowCost = totalPaid + 0.01 < totalCost;
-    final saleBelowCost = total + 0.01 < totalCost;
 
-    var suppressPostSaveApprovalWarning = false;
-    var shownDeferredDialog = false;
+    // منع الدفع الزائد
+    if (remaining < -0.01) {
+      _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
+      return;
+    }
 
+    // سياسة الدفعات الجزئية
     final hasAnySettlement = _payments.isNotEmpty || barterTotal > 0.01;
+    if (!hasAnySettlement && !allowPartialPayments) {
+      _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
+      return;
+    }
 
-    if (!hasAnySettlement) {
-      if (!allowPartialPayments) {
-        _showError('يرجى إضافة وسيلة دفع واحدة على الأقل');
-        return;
-      }
-
-      final proceed = await _confirmDeferredInvoiceSave(
-        total: total,
-        totalPaid: totalPaid,
-        remaining: total,
-        totalCost: totalCost,
-        paidBelowCost: paidBelowCost,
-        saleBelowCost: saleBelowCost,
+    if (remaining > 0.01 && !allowPartialPayments) {
+      _showError(
+        'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
       );
-      shownDeferredDialog = true;
-      if (proceed == _PreSaveDecision.cancel) return;
-      suppressPostSaveApprovalWarning =
-          proceed == _PreSaveDecision.proceedSuppressWarning;
-    } else {
-      // منع الدفع الزائد
-      if (remaining < -0.01) {
-        _showError('مجموع الدفعات أكبر من إجمالي الفاتورة');
-        return;
-      }
+      return;
+    }
 
-      if (remaining > 0.01) {
-        if (!allowPartialPayments) {
-          _showError(
-            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
-          );
-          return;
-        }
-
-        final proceed = await _confirmDeferredInvoiceSave(
-          total: total,
-          totalPaid: totalPaid,
-          remaining: remaining,
-          totalCost: totalCost,
-          paidBelowCost: paidBelowCost,
-          saleBelowCost: saleBelowCost,
+    // ✅ ملخص قبل الحفظ (حفظ/رجوع)
+    String customerLabel = 'عميل نقدي';
+    if (_selectedCustomerId != null) {
+      try {
+        final match = widget.customers.firstWhere(
+          (c) => c['id'].toString() == _selectedCustomerId.toString(),
         );
-        shownDeferredDialog = true;
-        if (proceed == _PreSaveDecision.cancel) return;
-        suppressPostSaveApprovalWarning =
-            proceed == _PreSaveDecision.proceedSuppressWarning;
+        customerLabel = (match['name'] ?? match['customer_name'] ?? 'عميل')
+            .toString();
+      } catch (_) {
+        customerLabel = 'عميل';
       }
     }
 
-    if (!shownDeferredDialog &&
-        totalCost > 0 &&
-        (paidBelowCost || saleBelowCost)) {
-      final decision = await _confirmBelowCostInvoiceSave(
-        total: total,
-        totalPaid: totalPaid,
-        totalCost: totalCost,
-        paidBelowCost: paidBelowCost,
-        saleBelowCost: saleBelowCost,
-      );
-      if (decision == _PreSaveDecision.cancel) return;
-      suppressPostSaveApprovalWarning =
-          decision == _PreSaveDecision.proceedSuppressWarning;
-    }
+    final totalWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
+    final totalTax = _items.fold<double>(0.0, (sum, item) => sum + item.tax);
+
+    final proceed = await _showPreSaveInvoiceSummary(
+      customerLabel: customerLabel,
+      itemsCount: _items.length,
+      total: total,
+      totalWeight: totalWeight,
+      totalTax: totalTax,
+      totalCost: totalCost,
+      paidCash: totalPaidCash,
+      barterTotal: barterTotal,
+      remaining: remaining,
+      allowPartialPayments: allowPartialPayments,
+    );
+    if (!proceed) return;
+
+    final suppressPostSaveApprovalWarning = false;
 
     try {
       final apiService = ApiService();
@@ -2271,14 +2379,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       Map<String, dynamic>? cashCustomer = _findCashCustomer();
 
       if (_selectedCustomerId == null) {
-        final proceedWithCash = await _confirmUseCashCustomer();
-        if (!proceedWithCash) {
-          _showError(
-            'يرجى اختيار عميل لإكمال الفاتورة أو الاستمرار مع العميل النقدي.',
-          );
-          return;
-        }
-
         cashCustomer ??= await _getOrCreateCashCustomer(promptIfMissing: false);
         if (cashCustomer == null || cashCustomer['id'] == null) {
           _showError(
@@ -2297,14 +2397,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       // حساب الإجماليات
       final totalAmount = _calculateGrandTotal();
-      final totalWeight = _items.fold<double>(
-        0.0,
-        (sum, item) => sum + item.weight,
-      );
-      final totalCost = _items.fold<double>(
-        0.0,
-        (sum, item) => sum + item.cost,
-      );
+      final totalWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
+      final totalCost = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
       final totalTax = _items.fold<double>(0.0, (sum, item) => sum + item.tax);
 
       if (!mounted) return;
@@ -2487,34 +2581,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       final shouldPrint = _uiAutoOpenPrintAfterSave
           ? true
-          : await showDialog<bool>(
-              context: context,
-              barrierDismissible: false,
-              builder: (dialogContext) {
-                return AlertDialog(
-                  title: Text(
-                    approvalRequired
-                        ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
-                        : 'تم حفظ الفاتورة',
-                  ),
-                  content: Text(
-                    '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
-                    '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
-                    '\n\nهل تريد طباعتها الآن؟',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      child: const Text('تم'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      icon: const Icon(Icons.print),
-                      label: const Text('طباعة'),
-                    ),
-                  ],
-                );
-              },
+          : await _showPostSaveInvoiceSummary(
+              invoice: invoiceForPrint,
+              approvalRequired: approvalRequired,
+              approvalWarning: approvalWarning,
             );
 
       if (!mounted) return;
@@ -2537,202 +2607,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }
-  }
-
-  Future<_PreSaveDecision> _confirmDeferredInvoiceSave({
-    required double total,
-    required double totalPaid,
-    required double remaining,
-    required double totalCost,
-    required bool paidBelowCost,
-    required bool saleBelowCost,
-  }) async {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    final lines = <String>[
-      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-    ];
-
-    if (paidBelowCost || saleBelowCost) {
-      lines.add('');
-      lines.add('⚠️ تحذير:');
-      if (saleBelowCost) {
-        lines.add(
-          'سعر البيع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
-        );
-      } else if (paidBelowCost) {
-        lines.add(
-          'المدفوع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
-        );
-      }
-    }
-
-    final content = lines.join('\n');
-
-    return await showDialog<_PreSaveDecision>(
-          context: context,
-          builder: (dialogContext) {
-            return AlertDialog(
-              backgroundColor: colorScheme.surface,
-              title: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.warning_amber,
-                      color: AppColors.warning,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'حفظ كفاتورة آجل؟',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              content: Text(content, style: theme.textTheme.bodyMedium),
-              actions: [
-                TextButton(
-                  onPressed: () =>
-                      Navigator.pop(dialogContext, _PreSaveDecision.cancel),
-                  child: Text(
-                    'إلغاء',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.secondary,
-                    ),
-                  ),
-                ),
-                if (paidBelowCost || saleBelowCost)
-                  TextButton(
-                    onPressed: () => Navigator.pop(
-                      dialogContext,
-                      _PreSaveDecision.proceedSuppressWarning,
-                    ),
-                    child: const Text('حفظ بدون تحذير'),
-                  ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: colorScheme.primary,
-                    foregroundColor: colorScheme.onPrimary,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 12,
-                    ),
-                  ),
-                  onPressed: () =>
-                      Navigator.pop(dialogContext, _PreSaveDecision.proceed),
-                  child: const Text('حفظ'),
-                ),
-              ],
-            );
-          },
-        ) ??
-        _PreSaveDecision.cancel;
-  }
-
-  Future<_PreSaveDecision> _confirmBelowCostInvoiceSave({
-    required double total,
-    required double totalPaid,
-    required double totalCost,
-    required bool paidBelowCost,
-    required bool saleBelowCost,
-  }) async {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    final lines = <String>[
-      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      '',
-      '⚠️ تحذير قبل الحفظ:',
-      if (saleBelowCost) 'سعر البيع أقل من تكلفة الأصناف.',
-      if (!saleBelowCost && paidBelowCost) 'المدفوع أقل من تكلفة الأصناف.',
-      '',
-      'يمكنك المتابعة، وسيتم حفظ الفاتورة لكن قد تحتاج اعتماد مدير قبل الترحيل.',
-    ];
-
-    return await showDialog<_PreSaveDecision>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) {
-            return AlertDialog(
-              backgroundColor: colorScheme.surface,
-              title: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.warning_amber,
-                      color: AppColors.warning,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'تحذير قبل الحفظ',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              content: Text(
-                lines.join('\n'),
-                style: theme.textTheme.bodyMedium,
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () =>
-                      Navigator.pop(dialogContext, _PreSaveDecision.cancel),
-                  child: Text(
-                    'إلغاء',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.secondary,
-                    ),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(
-                    dialogContext,
-                    _PreSaveDecision.proceedSuppressWarning,
-                  ),
-                  child: const Text('حفظ بدون تحذير'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: colorScheme.primary,
-                    foregroundColor: colorScheme.onPrimary,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 12,
-                    ),
-                  ),
-                  onPressed: () =>
-                      Navigator.pop(dialogContext, _PreSaveDecision.proceed),
-                  child: const Text('حفظ'),
-                ),
-              ],
-            );
-          },
-        ) ??
-        _PreSaveDecision.cancel;
   }
 
   // ==================== Calculations ====================
@@ -2858,66 +2732,176 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
   }
 
-  Future<bool> _confirmUseCashCustomer() async {
+  Future<bool> _showPostSaveInvoiceSummary({
+    required Map<String, dynamic> invoice,
+    required bool approvalRequired,
+    String? approvalWarning,
+  }) async {
+    double asDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '') ?? 0.0;
+    }
+
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return await showDialog<bool>(
+    final total = asDouble(invoice['total']);
+    final paid = asDouble(invoice['amount_paid']);
+    final remaining = total - paid;
+    final totalWeight = asDouble(invoice['total_weight']);
+    final totalTax = asDouble(invoice['total_tax']);
+    final invoiceId = invoice['id']?.toString() ?? '';
+
+    final customerName = (invoice['customer_name'] ?? invoice['customer'] ?? '')
+        .toString()
+        .trim();
+
+    Widget line(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                ),
+              ),
+            ),
+            Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return await showModalBottomSheet<bool>(
           context: context,
-          builder: (dialogContext) {
-            return AlertDialog(
-              backgroundColor: colorScheme.surface,
-              title: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
+          isScrollControlled: true,
+          backgroundColor: colorScheme.surface,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+          ),
+          builder: (sheetContext) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 14,
+                  bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.success.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(
+                            Icons.check_circle,
+                            color: AppColors.success,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            approvalRequired
+                                ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                                : 'تم حفظ الفاتورة',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetContext, false),
+                          icon: const Icon(Icons.close),
+                          tooltip: 'إغلاق',
+                        ),
+                      ],
                     ),
-                    child: const Icon(
-                      Icons.warning_amber,
-                      color: AppColors.warning,
+                    const SizedBox(height: 10),
+                    if (invoiceId.isNotEmpty)
+                      line('رقم الفاتورة', '#$invoiceId'),
+                    if (customerName.isNotEmpty)
+                      line('العميل', customerName),
+                    const Divider(height: 18),
+                    line(
+                      'الإجمالي',
+                      '${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'لم يتم اختيار عميل',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
+                    line(
+                      'المدفوع',
+                      '${paid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    line(
+                      'المتبقي',
+                      '${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    if (totalWeight > 0)
+                      line(
+                        'إجمالي الوزن',
+                        '${totalWeight.toStringAsFixed(3)} جم',
                       ),
+                    if (totalTax > 0)
+                      line(
+                        'الضريبة',
+                        '${totalTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      ),
+                    if ((approvalWarning ?? '').trim().isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: AppColors.warning.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Text(
+                          approvalWarning!,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextButton(
+                            onPressed: () =>
+                                Navigator.pop(sheetContext, false),
+                            child: const Text('تم'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () =>
+                                Navigator.pop(sheetContext, true),
+                            icon: const Icon(Icons.print),
+                            label: const Text('طباعة'),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-              content: Text(
-                'لم يتم اختيار عميل لهذه الفاتورة. يمكنك العودة لاختيار العميل الصحيح أو الاستمرار وتقييد الفاتورة باسم العميل النقدي.',
-                style: theme.textTheme.bodyMedium,
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                  child: Text(
-                    'تراجع',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.secondary,
-                    ),
-                  ),
+                  ],
                 ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 12,
-                    ),
-                  ),
-                  onPressed: () => Navigator.pop(dialogContext, true),
-                  child: const Text('استمرار مع عميل نقدي'),
-                ),
-              ],
+              ),
             );
           },
         ) ??

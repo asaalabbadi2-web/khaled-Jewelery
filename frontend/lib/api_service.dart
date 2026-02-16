@@ -537,19 +537,14 @@ class ApiService {
 
   // Office Methods (مكاتب تسكير الذهب)
   Future<List<dynamic>> getOffices({bool? activeOnly}) async {
-    final token = await _requireAuthToken();
-    String url = '$_baseUrl/offices';
-    if (activeOnly != null) {
-      url += '?active=$activeOnly';
-    }
-    final response = await http.get(
-      Uri.parse(url),
-      headers: _jsonHeaders(token: token),
+    final uri = Uri.parse('$_baseUrl/offices').replace(
+      queryParameters: activeOnly == null ? null : {'active': '$activeOnly'},
     );
+    final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load offices');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -559,7 +554,7 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load office');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -574,7 +569,7 @@ class ApiService {
     if (response.statusCode == 201) {
       return json.decode(response.body);
     } else {
-      throw Exception('Failed to add office: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -585,14 +580,14 @@ class ApiService {
       body: json.encode(officeData),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to update office');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
   Future<void> deleteOffice(int id) async {
     final response = await _authedDelete(Uri.parse('$_baseUrl/offices/$id'));
     if (response.statusCode != 200) {
-      throw Exception('Failed to delete office');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -601,7 +596,7 @@ class ApiService {
       Uri.parse('$_baseUrl/offices/$id/activate'),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to activate office');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1404,10 +1399,7 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception(
-        'Failed to load account statement (HTTP ${response.statusCode}): '
-        '${utf8.decode(response.bodyBytes)}',
-      );
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1418,10 +1410,7 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception(
-        'Failed to load merged account statement (HTTP ${response.statusCode}): '
-        '${utf8.decode(response.bodyBytes)}',
-      );
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1432,7 +1421,7 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load customer statement: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
     }
   }
 
@@ -1443,8 +1432,32 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load supplier statement: ${response.body}');
+      throw Exception(_errorMessageFromResponse(response));
     }
+  }
+
+  Future<Map<String, dynamic>> repairSupplierHistoricalBalances(
+    int supplierId, {
+    bool ensureAccounts = true,
+  }) async {
+    final uri = Uri.parse(
+      '$_baseUrl/suppliers/$supplierId/repair-historical-balances',
+    ).replace(
+      queryParameters: ensureAccounts ? {'ensure_accounts': '1'} : null,
+    );
+
+    final response = await _authedPost(
+      uri,
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({}),
+    );
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      return decoded is Map<String, dynamic>
+          ? decoded
+          : Map<String, dynamic>.from(decoded as Map);
+    }
+    throw Exception(_errorMessageFromResponse(response));
   }
 
   Future<Map<String, dynamic>> getSupplierLedger(

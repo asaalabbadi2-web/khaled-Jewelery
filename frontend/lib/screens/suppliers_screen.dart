@@ -8,6 +8,7 @@ import '../theme/app_theme.dart' as app_theme;
 
 import 'account_statement_screen.dart';
 import 'add_supplier_screen.dart';
+import 'supplier_ledger_screen.dart';
 
 class SuppliersScreen extends StatefulWidget {
   final ApiService api;
@@ -432,6 +433,12 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                         itemBuilder: (context, index) {
                           final supplier = suppliers[index];
                           final supplierId = supplier['id'] as int?;
+                          final supplierAccountIdRaw = supplier['account_id'];
+                          final supplierAccountId = supplierAccountIdRaw is int
+                              ? supplierAccountIdRaw
+                              : int.tryParse(
+                                  (supplierAccountIdRaw ?? '').toString(),
+                                );
                           final supplierName = (supplier['name'] ?? '')
                               .toString();
                           final supplierCode = (supplier['supplier_code'] ?? '')
@@ -439,6 +446,13 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                           final phone = (supplier['phone'] ?? '').toString();
                           final tax = (supplier['tax_number'] ?? '').toString();
                           final active = (supplier['active'] ?? true) == true;
+
+                          final isClosingOffice =
+                              (supplier['is_closing_office'] ?? false) == true;
+                          final defaultSafeBoxName =
+                              (supplier['default_safe_box_name'] ?? '')
+                                  .toString()
+                                  .trim();
 
                           final cash = _toDouble(supplier['balance_cash']);
                           final goldMain = _goldMainEquivalent(supplier);
@@ -525,6 +539,110 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                             ],
                                           ],
                                         ),
+
+                                        if (isClosingOffice ||
+                                            defaultSafeBoxName.isNotEmpty)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 8,
+                                            ),
+                                            child: Wrap(
+                                              spacing: 8,
+                                              runSpacing: 8,
+                                              alignment: isAr
+                                                  ? WrapAlignment.end
+                                                  : WrapAlignment.start,
+                                              children: [
+                                                if (isClosingOffice)
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 10,
+                                                          vertical: 6,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: app_theme
+                                                          .AppColors
+                                                          .info
+                                                          .withValues(
+                                                            alpha: 0.12,
+                                                          ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            999,
+                                                          ),
+                                                      border: Border.all(
+                                                        color: app_theme
+                                                            .AppColors
+                                                            .info
+                                                            .withValues(
+                                                              alpha: 0.35,
+                                                            ),
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      isAr
+                                                          ? 'مكتب تسكير'
+                                                          : 'Closing Office',
+                                                      style: theme
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight.w800,
+                                                            color: app_theme
+                                                                .AppColors
+                                                                .info,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                if (defaultSafeBoxName
+                                                    .isNotEmpty)
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 10,
+                                                          vertical: 6,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: theme
+                                                          .colorScheme
+                                                          .surfaceContainerHighest
+                                                          .withValues(
+                                                            alpha: 0.55,
+                                                          ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            999,
+                                                          ),
+                                                      border: Border.all(
+                                                        color: theme
+                                                            .dividerColor
+                                                            .withValues(
+                                                              alpha: 0.65,
+                                                            ),
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      isAr
+                                                          ? 'الخزنة: $defaultSafeBoxName'
+                                                          : 'SafeBox: $defaultSafeBoxName',
+                                                      style: theme
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            color: theme
+                                                                .textTheme
+                                                                .bodySmall
+                                                                ?.color,
+                                                          ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
 
                                         if (phone.isNotEmpty)
                                           Padding(
@@ -616,8 +734,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                         IconButton(
                                           icon: const Icon(Icons.receipt_long),
                                           tooltip: isAr
-                                              ? 'كشف حساب المورد'
-                                              : 'Supplier Ledger',
+                                              ? 'حركات المورد'
+                                              : 'Supplier movements',
                                           color: app_theme.AppColors.info,
                                           onPressed: actionsEnabled
                                               ? () {
@@ -625,13 +743,41 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                                     context,
                                                     MaterialPageRoute(
                                                       builder: (context) =>
+                                                          SupplierLedgerScreen(
+                                                            api: widget.api,
+                                                            supplierId:
+                                                                supplierId,
+                                                            supplierName:
+                                                                supplierName,
+                                                            isArabic: isAr,
+                                                          ),
+                                                    ),
+                                                  );
+                                                }
+                                              : null,
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.layers_outlined,
+                                          ),
+                                          tooltip: isAr
+                                              ? 'كشف حساب مدمج (مالي + مذكرة)'
+                                              : 'Merged statement (financial + memo)',
+                                          color:
+                                              app_theme.AppColors.primaryGold,
+                                          onPressed: (supplierAccountId != null)
+                                              ? () {
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) =>
                                                           AccountStatementScreen(
                                                             accountId:
-                                                                supplierId,
+                                                                supplierAccountId,
                                                             accountName:
                                                                 supplierName,
                                                             entityType:
-                                                                'supplier',
+                                                                'account',
                                                           ),
                                                     ),
                                                   );

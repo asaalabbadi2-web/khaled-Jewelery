@@ -7,9 +7,11 @@ from models import (
     db,
     Office,
     Account,
+    SafeBox,
 )
 from office_supplier_service import ensure_office_supplier
 from office_account_service import ensure_office_account
+from party_account_service import ensure_supplier_accounts
 from services.live_balances import live_balances_by_account_ids
 
 # إنشاء Blueprint
@@ -111,7 +113,37 @@ def create_office():
             ensure_office_account(office)
 
         # Ensure a supplier exists for this office to keep reservations consistent
-        ensure_office_supplier(office)
+        supplier = ensure_office_supplier(office)
+
+        # Optional: set default settlement SafeBox for the linked supplier
+        proposed_sb = data.get('supplier_default_safe_box_id', data.get('default_safe_box_id'))
+        if proposed_sb in (None, '', 0, '0', False):
+            proposed_sb = None
+        if proposed_sb is not None:
+            try:
+                proposed_sb = int(proposed_sb)
+            except Exception:
+                return jsonify({'error': 'معرف الخزنة غير صالح'}), 400
+            sb = SafeBox.query.get(proposed_sb)
+            if not sb:
+                return jsonify({'error': 'الخزنة غير موجودة'}), 400
+            supplier.default_safe_box_id = sb.id
+            db.session.add(supplier)
+
+        # Optional: ensure supplier has financial + memo accounts (dual chart)
+        def _boolish(value, default: bool = False) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+            return bool(value)
+
+        if _boolish(data.get('ensure_supplier_accounts'), default=False):
+            ensure_supplier_accounts(supplier)
 
         db.session.commit()
         
@@ -177,6 +209,39 @@ def update_office(office_id):
         if 'active' in data:
             office.active = data['active']
         
+        # Optional: update linked supplier default SafeBox
+        if office.supplier:
+            proposed_sb = data.get('supplier_default_safe_box_id', data.get('default_safe_box_id'))
+            if 'supplier_default_safe_box_id' in data or 'default_safe_box_id' in data:
+                if proposed_sb in (None, '', 0, '0', False):
+                    office.supplier.default_safe_box_id = None
+                else:
+                    try:
+                        proposed_sb = int(proposed_sb)
+                    except Exception:
+                        return jsonify({'error': 'معرف الخزنة غير صالح'}), 400
+                    sb = SafeBox.query.get(proposed_sb)
+                    if not sb:
+                        return jsonify({'error': 'الخزنة غير موجودة'}), 400
+                    office.supplier.default_safe_box_id = sb.id
+                db.session.add(office.supplier)
+
+        # Optional: ensure supplier accounts
+        if office.supplier and data.get('ensure_supplier_accounts'):
+            def _boolish(value, default: bool = False) -> bool:
+                if value is None:
+                    return default
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, (int, float)):
+                    return bool(value)
+                if isinstance(value, str):
+                    return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+                return bool(value)
+
+            if _boolish(data.get('ensure_supplier_accounts'), default=False):
+                ensure_supplier_accounts(office.supplier)
+
         db.session.commit()
         
         print(f"✅ تم تحديث المكتب: {office.office_code} - {office.name}")

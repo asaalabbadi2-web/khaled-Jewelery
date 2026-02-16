@@ -133,7 +133,7 @@ class RecurringJournalTemplate(db.Model):
         from backend.routes import _generate_journal_entry_number
         
         # إنشاء القيد الرئيسي
-        entry_number = _generate_journal_entry_number(self.next_run_date)
+        entry_number = _generate_journal_entry_number(entry_date=self.next_run_date)
         
         new_entry = JournalEntry(
             entry_number=entry_number,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart';
+import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
 import '../utils.dart';
 
@@ -24,6 +25,12 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
 
+  bool _isLoadingSafeBoxes = false;
+  List<SafeBoxModel> _safeBoxes = const [];
+  int? _selectedSafeBoxId;
+
+  bool _ensureSupplierAccounts = true;
+
   // Controllers
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
@@ -47,6 +54,28 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
     if (widget.office != null) {
       _loadOfficeData();
     }
+
+    _loadSafeBoxes();
+  }
+
+  Future<void> _loadSafeBoxes() async {
+    setState(() => _isLoadingSafeBoxes = true);
+    try {
+      final boxes = await widget.api.getSafeBoxes(
+        safeType: 'cash',
+        isActive: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _safeBoxes = boxes;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('خطأ في تحميل الخزائن: $e', isError: true);
+    } finally {
+      if (!mounted) return;
+      setState(() => _isLoadingSafeBoxes = false);
+    }
   }
 
   void _loadOfficeData() {
@@ -65,6 +94,13 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
     _taxNumberController.text = office['tax_number'] ?? '';
     _notesController.text = office['notes'] ?? '';
     _active = office['active'] ?? true;
+
+    final rawSafeBoxId = office['supplier_default_safe_box_id'];
+    if (rawSafeBoxId is int) {
+      _selectedSafeBoxId = rawSafeBoxId;
+    } else {
+      _selectedSafeBoxId = int.tryParse((rawSafeBoxId ?? '').toString());
+    }
   }
 
   @override
@@ -107,6 +143,10 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
         'tax_number': _taxNumberController.text.trim(),
         'notes': _notesController.text.trim(),
         'active': _active,
+
+        // Applies to the linked supplier (closing office supplier)
+        'supplier_default_safe_box_id': _selectedSafeBoxId,
+        'ensure_supplier_accounts': _ensureSupplierAccounts,
       };
 
       if (widget.office == null) {
@@ -181,6 +221,58 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                         }
                         return null;
                       },
+                    ),
+                    const SizedBox(height: 16),
+
+                    DropdownButtonFormField<int?>(
+                      value: _selectedSafeBoxId,
+                      decoration: InputDecoration(
+                        labelText: isAr
+                            ? 'الخزنة الافتراضية (تسويات)'
+                            : 'Default SafeBox (settlements)',
+                        prefixIcon: const Icon(Icons.account_balance_wallet),
+                        border: const OutlineInputBorder(),
+                        helperText: _isLoadingSafeBoxes
+                            ? (isAr
+                                  ? 'جارٍ تحميل الخزائن...'
+                                  : 'Loading safeboxes...')
+                            : null,
+                      ),
+                      items: [
+                        DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text(isAr ? 'بدون خزنة' : 'No SafeBox'),
+                        ),
+                        ..._safeBoxes.map((sb) {
+                          return DropdownMenuItem<int?>(
+                            value: sb.id,
+                            child: Text(sb.name),
+                          );
+                        }),
+                      ],
+                      onChanged: _isLoadingSafeBoxes
+                          ? null
+                          : (value) {
+                              setState(() => _selectedSafeBoxId = value);
+                            },
+                    ),
+                    const SizedBox(height: 12),
+
+                    SwitchListTile.adaptive(
+                      value: _ensureSupplierAccounts,
+                      onChanged: (v) =>
+                          setState(() => _ensureSupplierAccounts = v),
+                      title: Text(
+                        isAr
+                            ? 'إنشاء/ربط حسابات المورد تلقائياً (مالي + مذكرة)'
+                            : 'Ensure supplier accounts (financial + memo)',
+                      ),
+                      subtitle: Text(
+                        isAr
+                            ? 'مفيد لتفعيل كشف الحساب المدمج وربط المذكرة'
+                            : 'Helps enable merged statements and memo linking',
+                      ),
+                      contentPadding: EdgeInsets.zero,
                     ),
                     const SizedBox(height: 16),
 

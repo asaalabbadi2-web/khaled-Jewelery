@@ -7,7 +7,7 @@ except ImportError:  # Local scripts running from backend/ directory
 from datetime import datetime, date, time
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
-from sqlalchemy import event
+from sqlalchemy import event, text
 
 db = SQLAlchemy()
 
@@ -492,6 +492,11 @@ class Office(db.Model):
     reservations = db.relationship('OfficeReservation', backref='office', lazy=True, cascade='all, delete-orphan')
 
     def to_dict(self):
+        supplier_default_safe_box = None
+        try:
+            supplier_default_safe_box = self.supplier.default_safe_box if self.supplier else None
+        except Exception:
+            supplier_default_safe_box = None
         return {
             'id': self.id,
             'office_code': self.office_code,
@@ -515,6 +520,8 @@ class Office(db.Model):
             'supplier_id': self.supplier_id,
             'supplier_code': self.supplier.supplier_code if self.supplier else None,
             'supplier_name': self.supplier.name if self.supplier else None,
+            'supplier_default_safe_box_id': getattr(self.supplier, 'default_safe_box_id', None) if self.supplier else None,
+            'supplier_default_safe_box_name': supplier_default_safe_box.name if supplier_default_safe_box else None,
             'balance_cash': self.balance_cash,
             'balance_gold_18k': self.balance_gold_18k,
             'balance_gold_21k': self.balance_gold_21k,
@@ -1697,34 +1704,49 @@ class JournalEntry(db.Model):
 
 
 # Auto-generate `entry_number` for JournalEntry when not provided.
-def _generate_journal_entry_number_for_date(entry_date: datetime) -> str:
-    year = entry_date.year
-    prefix = f'JE-{year}-'
+def _generate_journal_entry_number_for_date(connection, entry_date: datetime, prefix: str = 'JE') -> str:
+    """Generate a unique sequential entry_number inside the current DB transaction.
 
-    last_entry = (
-        JournalEntry.query
-        .filter(JournalEntry.entry_number.like(f"{prefix}%"))
-        .order_by(JournalEntry.entry_number.desc())
-        .first()
-    )
+    Uses MAX(entry_number) (not COUNT) + a per-connection cache to avoid duplicates
+    when multiple JournalEntry rows are inserted within the same flush.
+    """
+    year = int(entry_date.year)
+    prefix_str = str(prefix)
+    number_prefix = f'{prefix_str}-{year}-'
 
-    if last_entry:
-        try:
-            last_sequence = int(str(last_entry.entry_number).split('-')[-1])
-        except (ValueError, AttributeError):
-            # Fallback: count entries in the year
-            start_of_year = datetime(year, 1, 1)
-            end_of_year = datetime(year + 1, 1, 1)
-            last_sequence = (
-                JournalEntry.query
-                .filter(JournalEntry.date >= start_of_year, JournalEntry.date < end_of_year)
-                .count()
-            )
-    else:
-        last_sequence = 0
+    cache = connection.info.setdefault('_je_entry_number_seq_cache', {})
+    cache_key = (prefix_str, year)
+    last_seq = cache.get(cache_key)
 
-    next_sequence = last_sequence + 1
-    return f'{prefix}{next_sequence:05d}'
+    if last_seq is None:
+        row = connection.execute(
+            text(
+                "SELECT entry_number FROM journal_entry "
+                "WHERE entry_number LIKE :p "
+                "ORDER BY entry_number DESC LIMIT 1"
+            ),
+            {"p": f"{number_prefix}%"},
+        ).fetchone()
+
+        if row and row[0]:
+            try:
+                last_seq = int(str(row[0]).split('-')[-1])
+            except Exception:
+                last_seq = 0
+        else:
+            last_seq = 0
+
+    next_seq = int(last_seq) + 1
+    while True:
+        candidate = f'{number_prefix}{next_seq:05d}'
+        exists = connection.execute(
+            text("SELECT 1 FROM journal_entry WHERE entry_number = :n LIMIT 1"),
+            {"n": candidate},
+        ).fetchone()
+        if not exists:
+            cache[cache_key] = next_seq
+            return candidate
+        next_seq += 1
 
 
 @event.listens_for(JournalEntry, 'before_insert')
@@ -1733,7 +1755,7 @@ def _ensure_entry_number(mapper, connection, target):
     if not getattr(target, 'entry_number', None):
         entry_dt = getattr(target, 'date', None) or datetime.utcnow()
         try:
-            target.entry_number = _generate_journal_entry_number_for_date(entry_dt)
+            target.entry_number = _generate_journal_entry_number_for_date(connection, entry_dt)
         except Exception:
             # As a last resort, set a placeholder to avoid NOT NULL failure
             target.entry_number = f'JE-{datetime.utcnow().year}-00000'

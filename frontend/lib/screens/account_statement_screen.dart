@@ -42,6 +42,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   String _filterType = 'all'; // 'all', 'credit', 'debit'
   // int? _expandedTransactionId; // Removed: unused
 
+  bool _isRepairingBalances = false;
+
   final ScrollController _horizontalController = ScrollController();
   final ScrollController _verticalController = ScrollController();
 
@@ -109,7 +111,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     double movementCash,
     double closingGold,
     double closingCash,
-  }) _periodSummary() {
+  })
+  _periodSummary() {
     final statement = _statement;
     if (statement == null || _dateRange == null) {
       final movementGold = statement == null
@@ -136,8 +139,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     for (final line in statement.lines) {
       final dt = line.date;
-      final inRange =
-          !dt.isBefore(range.start) && !dt.isAfter(range.end);
+      final inRange = !dt.isBefore(range.start) && !dt.isAfter(range.end);
       if (!inRange) continue;
       movementGold += line.goldDebit - line.goldCredit;
       movementCash += line.cashDebit - line.cashCredit;
@@ -153,12 +155,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     );
   }
 
-  ({
-    double goldDebit,
-    double goldCredit,
-    double cashDebit,
-    double cashCredit,
-  }) _periodDebitCreditTotals() {
+  ({double goldDebit, double goldCredit, double cashDebit, double cashCredit})
+  _periodDebitCreditTotals() {
     final statement = _statement;
     if (statement == null || _dateRange == null) {
       return (
@@ -177,8 +175,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     for (final line in statement.lines) {
       final dt = line.date;
-      final inRange =
-          !dt.isBefore(range.start) && !dt.isAfter(range.end);
+      final inRange = !dt.isBefore(range.start) && !dt.isAfter(range.end);
       if (!inRange) continue;
       goldDebit += line.goldDebit;
       goldCredit += line.goldCredit;
@@ -270,7 +267,138 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load statement: $e')));
+      ).showSnackBar(SnackBar(content: Text('تعذر تحميل كشف الحساب: $e')));
+    }
+  }
+
+  String _statementTitle() {
+    switch (widget.entityType) {
+      case 'supplier':
+        return 'كشف حساب المورد: ${widget.accountName}';
+      case 'customer':
+        return 'كشف حساب العميل: ${widget.accountName}';
+      default:
+        return 'كشف حساب ${widget.accountName}';
+    }
+  }
+
+  Future<void> _confirmAndRepairSupplierBalances() async {
+    if (widget.entityType != 'supplier') return;
+    if (_isRepairingBalances) return;
+
+    var ensureAccounts = true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text('إصلاح الأرصدة التاريخية'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'سيقوم هذا الإجراء بإعادة احتساب الأرصدة المخزنة للمورد من دفتر الأستاذ وقد يساعد في تصحيح البيانات القديمة.',
+                  ),
+                  const SizedBox(height: 12),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: ensureAccounts,
+                    onChanged: (value) {
+                      setStateDialog(() {
+                        ensureAccounts = value ?? true;
+                      });
+                    },
+                    title: const Text(
+                      'تأكد من إنشاء حسابات المورد (مالي + مذكرة)',
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('إلغاء'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  icon: const Icon(Icons.build_circle_outlined),
+                  label: const Text('تنفيذ'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _isRepairingBalances = true;
+    });
+
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (context) {
+        return const AlertDialog(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              SizedBox(width: 16),
+              Expanded(child: Text('جارٍ إصلاح الأرصدة...')),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      final result = await ApiService().repairSupplierHistoricalBalances(
+        widget.accountId,
+        ensureAccounts: ensureAccounts,
+      );
+
+      if (!mounted) return;
+      if (rootNavigator.canPop()) {
+        rootNavigator.pop();
+      }
+
+      final message = (result['message'] is String)
+          ? result['message'] as String
+          : 'تم إصلاح الأرصدة بنجاح';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.green),
+      );
+
+      await _fetchAccountStatement();
+    } catch (e) {
+      if (!mounted) return;
+      if (rootNavigator.canPop()) {
+        rootNavigator.pop();
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('فشل إصلاح الأرصدة: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRepairingBalances = false;
+        });
+      }
     }
   }
 
@@ -726,10 +854,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           children: [
             pw.Text(label, style: const pw.TextStyle(fontSize: 9)),
             pw.SizedBox(width: 6),
-            pw.Text(
-              value,
-              style: pw.TextStyle(font: boldFont, fontSize: 9),
-            ),
+            pw.Text(value, style: pw.TextStyle(font: boldFont, fontSize: 9)),
           ],
         ),
       );
@@ -749,10 +874,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         child: pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.end,
           children: [
-            pw.Text(
-              title,
-              style: pw.TextStyle(font: boldFont, fontSize: 11),
-            ),
+            pw.Text(title, style: pw.TextStyle(font: boldFont, fontSize: 11)),
             pw.SizedBox(height: 6),
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -818,7 +940,10 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                         value: _showOnlyMovement ? 'نعم' : 'لا',
                       ),
                       infoChip(label: 'الفترة', value: dateRangeText),
-                      infoChip(label: 'العيار الأساسي', value: '${statement.mainKarat}'),
+                      infoChip(
+                        label: 'العيار الأساسي',
+                        value: '${statement.mainKarat}',
+                      ),
                     ],
                   ),
                   pw.SizedBox(height: 12),
@@ -911,24 +1036,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     final summary = StringBuffer()
       ..writeln('كشف حساب: ${widget.accountName}')
       ..writeln('عيار أساسي: ${statement.mainKarat}')
-      ..writeln(
-        'رصيد افتتاحي ذهب: ${period.openingGold.toStringAsFixed(3)}',
-      )
-      ..writeln(
-        'رصيد افتتاحي نقد: ${period.openingCash.toStringAsFixed(2)}',
-      )
-      ..writeln(
-        'إجمالي ذهب مدين: ${totals.goldDebit.toStringAsFixed(3)}',
-      )
-      ..writeln(
-        'إجمالي ذهب دائن: ${totals.goldCredit.toStringAsFixed(3)}',
-      )
-      ..writeln(
-        'إجمالي نقد مدين: ${totals.cashDebit.toStringAsFixed(2)}',
-      )
-      ..writeln(
-        'إجمالي نقد دائن: ${totals.cashCredit.toStringAsFixed(2)}',
-      )
+      ..writeln('رصيد افتتاحي ذهب: ${period.openingGold.toStringAsFixed(3)}')
+      ..writeln('رصيد افتتاحي نقد: ${period.openingCash.toStringAsFixed(2)}')
+      ..writeln('إجمالي ذهب مدين: ${totals.goldDebit.toStringAsFixed(3)}')
+      ..writeln('إجمالي ذهب دائن: ${totals.goldCredit.toStringAsFixed(3)}')
+      ..writeln('إجمالي نقد مدين: ${totals.cashDebit.toStringAsFixed(2)}')
+      ..writeln('إجمالي نقد دائن: ${totals.cashCredit.toStringAsFixed(2)}')
       ..writeln(
         'رصيد ختامي ذهب (حسب الكشف): ${(_dateRange == null ? statement.closingBalanceGoldNormalized : period.closingGold).toStringAsFixed(3)}',
       )
@@ -956,7 +1069,19 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('كشف حساب ${widget.accountName}')),
+      appBar: AppBar(
+        title: Text(_statementTitle()),
+        actions: [
+          if (widget.entityType == 'supplier')
+            IconButton(
+              icon: const Icon(Icons.build_circle_outlined),
+              tooltip: 'إصلاح الأرصدة',
+              onPressed: (_isLoading || _isRepairingBalances)
+                  ? null
+                  : _confirmAndRepairSupplierBalances,
+            ),
+        ],
+      ),
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
@@ -1134,8 +1259,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       ),
       _SummaryCard(
         title: closingTitle,
-        goldValue: _dateRange == null ? statement.effectiveClosingGold : period.closingGold,
-        cashValue: _dateRange == null ? statement.effectiveClosingCash : period.closingCash,
+        goldValue: _dateRange == null
+            ? statement.effectiveClosingGold
+            : period.closingGold,
+        cashValue: _dateRange == null
+            ? statement.effectiveClosingCash
+            : period.closingCash,
         color: theme.colorScheme.tertiary,
         icon: Icons.summarize,
         mainKarat: statement.mainKarat,
