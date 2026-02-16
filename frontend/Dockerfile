@@ -2,7 +2,8 @@
 # Produces a self-contained image that serves Flutter Web and proxies /api to backend.
 
 # 1) Build Flutter web
-FROM ghcr.io/cirruslabs/flutter:stable AS build
+ARG FLUTTER_IMAGE=ghcr.io/cirruslabs/flutter:3.35.4
+FROM ${FLUTTER_IMAGE} AS build
 
 WORKDIR /app
 
