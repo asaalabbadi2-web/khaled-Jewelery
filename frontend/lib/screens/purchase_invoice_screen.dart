@@ -25,11 +25,8 @@ class _GoldSettlementLine {
   int? karat;
   final TextEditingController weightController;
 
-  _GoldSettlementLine({
-    this.safeBoxId,
-    this.karat,
-    String initialWeight = '',
-  }) : weightController = TextEditingController(text: initialWeight);
+  _GoldSettlementLine({this.safeBoxId, this.karat, String initialWeight = ''})
+    : weightController = TextEditingController(text: initialWeight);
 
   void dispose() {
     weightController.dispose();
@@ -94,7 +91,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   int? _selectedGoldSafeBoxId;
   int _selectedGoldPaidKarat = 21;
 
-  final List<_GoldSettlementLine> _goldSettlementLines = <_GoldSettlementLine>[];
+  final List<_GoldSettlementLine> _goldSettlementLines =
+      <_GoldSettlementLine>[];
 
   bool get _isGoldSettlementContext =>
       _settlementMode == _PurchaseSettlementMode.partial ||
@@ -102,13 +100,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   void _refreshGoldPaidTotalFromLines() {
     if (!_isGoldSettlementContext) {
-      _goldPaidWeightController.text = '';
+      _goldPaidWeightController.text = '0.000';
       return;
     }
 
     final total = _goldSettlementLinesTotalMainEquivalent();
-    _goldPaidWeightController.text =
-        total > 0 ? total.toStringAsFixed(3) : '';
+    _goldPaidWeightController.text = total.toStringAsFixed(3);
   }
 
   int _effectiveGoldSettlementLineKarat(_GoldSettlementLine line) {
@@ -252,7 +249,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           final line = _goldSettlementLines[index];
           final lineKarat = _effectiveGoldSettlementLineKarat(line);
           final availableSafes = _goldSafeBoxesForKarat(lineKarat);
-          final safeValue = (line.safeBoxId != null &&
+          final safeValue =
+              (line.safeBoxId != null &&
                   availableSafes.any((b) => b.id == line.safeBoxId))
               ? line.safeBoxId
               : null;
@@ -365,13 +363,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 const SizedBox(width: 8),
                 IconButton(
                   tooltip: 'حذف',
-                  onPressed: (requiredSettlement &&
-                              _goldSettlementLines.length <= 1)
+                  onPressed:
+                      (requiredSettlement && _goldSettlementLines.length <= 1)
                       ? null
                       : () {
                           setState(() {
-                            final removed =
-                                _goldSettlementLines.removeAt(index);
+                            final removed = _goldSettlementLines.removeAt(
+                              index,
+                            );
                             removed.dispose();
                             _refreshGoldPaidTotalFromLines();
                           });
@@ -388,7 +387,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               onPressed: () {
                 setState(() {
                   final defaultKarat = _selectedGoldPaidKarat;
-                  final defaultSafeId = _defaultGoldSafeIdForKarat(defaultKarat);
+                  final defaultSafeId = _defaultGoldSafeIdForKarat(
+                    defaultKarat,
+                  );
                   _goldSettlementLines.add(
                     _GoldSettlementLine(
                       safeBoxId: defaultSafeId,
@@ -409,10 +410,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 color: totalLinesMainEquiv > 0
                     ? theme.colorScheme.tertiary
                     : Colors.black54,
-                fontWeight:
-                    totalLinesMainEquiv > 0
-                        ? FontWeight.w800
-                        : FontWeight.normal,
+                fontWeight: totalLinesMainEquiv > 0
+                    ? FontWeight.w800
+                    : FontWeight.normal,
               ),
             ),
           ],
@@ -582,7 +582,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   Future<void> _saveLocalDraft({bool showToast = true}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_localDraftKey(), jsonEncode(_buildLocalDraftPayload()));
+    await prefs.setString(
+      _localDraftKey(),
+      jsonEncode(_buildLocalDraftPayload()),
+    );
     if (showToast && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم حفظ الفاتورة لإكمالها لاحقاً')),
@@ -617,7 +620,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('فاتورة محفوظة'),
-        content: const Text('يوجد نموذج فاتورة شراء محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
+        content: const Text(
+          'يوجد نموذج فاتورة شراء محفوظ لإكماله لاحقاً. هل تريد استعادته؟',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -725,7 +730,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       try {
         final raw =
             (payload['gold_settlements'] as List?)?.whereType<Map>().toList() ??
-                [];
+            [];
         for (final rawLine in raw) {
           final map = Map<String, dynamic>.from(rawLine);
           restoredGoldSettlements.add(
@@ -762,19 +767,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         _uiPaperSize = (payload['ui_paper_size'] ?? _uiPaperSize).toString();
 
         _showAdvancedPaymentOptions =
-          payload['show_advanced_payment_options'] == true;
-        _selectedPaymentMethodId =
-          toInt(payload['selected_payment_method_id']);
+            payload['show_advanced_payment_options'] == true;
+        _selectedPaymentMethodId = toInt(payload['selected_payment_method_id']);
         _selectedSafeBoxId = toInt(payload['selected_safe_box_id']);
 
-        _settlementMode =
-          modeFromString(payload['settlement_mode']?.toString());
+        _settlementMode = modeFromString(
+          payload['settlement_mode']?.toString(),
+        );
         _cashPaidController.text = (payload['cash_paid'] ?? '').toString();
-        _goldPaidWeightController.text =
-          (payload['gold_paid_weight'] ?? '').toString();
+        _goldPaidWeightController.text = (payload['gold_paid_weight'] ?? '')
+            .toString();
         _selectedGoldSafeBoxId = toInt(payload['selected_gold_safe_box_id']);
         _selectedGoldPaidKarat =
-          toInt(payload['selected_gold_paid_karat']) ?? _selectedGoldPaidKarat;
+            toInt(payload['selected_gold_paid_karat']) ??
+            _selectedGoldPaidKarat;
 
         _karatLines = restoredKaratLines;
         _inlineItems = restoredInlineItems;
@@ -930,7 +936,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           _selectedGoldPaidKarat = mainKarat;
         }
 
-        final hasSelected = _selectedGoldSafeBoxId != null &&
+        final hasSelected =
+            _selectedGoldSafeBoxId != null &&
             _goldSafeBoxes.any((b) => b.id == _selectedGoldSafeBoxId);
 
         // Prefer the employee-linked gold safe (if configured).
@@ -979,15 +986,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedGoldPaidKarat = mainKarat;
 
       if (mode == _PurchaseSettlementMode.partial) {
-        final dueCash = _cashDueForSupplier();
-        _cashPaidController.text = dueCash > 0
-            ? dueCash.toStringAsFixed(2)
-            : '';
+        _cashPaidController.text = '0.00';
         _clearGoldSettlementLines();
-        _goldPaidWeightController.text = '';
+        _goldPaidWeightController.text = '0.000';
       } else if (mode == _PurchaseSettlementMode.barter) {
-        _cashPaidController.text = '';
-        final dueGoldMain = _supplierMainEquivalentWeight();
+        _cashPaidController.text = '0.00';
         _clearGoldSettlementLines();
         final defaultKarat = _selectedGoldPaidKarat;
         final defaultSafeId = _defaultGoldSafeIdForKarat(defaultKarat);
@@ -995,13 +998,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           _GoldSettlementLine(
             safeBoxId: defaultSafeId,
             karat: defaultKarat,
-            initialWeight: dueGoldMain > 0 ? dueGoldMain.toStringAsFixed(3) : '',
+            initialWeight: '0.000',
           ),
         );
         _refreshGoldPaidTotalFromLines();
       } else {
-        _cashPaidController.text = '';
-        _goldPaidWeightController.text = '';
+        _cashPaidController.text = '0.00';
+        _goldPaidWeightController.text = '0.000';
         _clearGoldSettlementLines();
       }
 
@@ -1017,6 +1020,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   void initState() {
     super.initState();
     _selectedSupplierId = widget.supplierId;
+    _cashPaidController.text = '0.00';
+    _goldPaidWeightController.text = '0.000';
     _loadUiDefaultsFromPrefs();
     _loadInvoiceUiSettingsFromPrefs();
     _loadBranches();
@@ -1975,9 +1980,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       final totalLines = _goldSettlementLinesTotalMainEquivalent();
 
       if (requiresGold && totalLines <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('أضف سداد ذهب قبل الحفظ')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('أضف سداد ذهب قبل الحفظ')));
         return false;
       }
 
@@ -2047,7 +2052,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       };
     }).toList();
 
-    final inlineItemsPayload = _inlineItems.map((item) => item.toPayload()).toList();
+    final inlineItemsPayload = _inlineItems
+        .map((item) => item.toPayload())
+        .toList();
     final inlineWeights = _aggregateInlineWeightByKarat();
     final weightByKarat = _aggregateWeightByKarat();
     final supplierGoldLines = weightByKarat.entries
@@ -2063,7 +2070,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         ? _cashPaid()
         : 0.0;
     final paidGoldWeight = _isGoldSettlementContext
-      ? _goldSettlementLinesTotalMainEquivalent()
+        ? _goldSettlementLinesTotalMainEquivalent()
         : 0.0;
 
     String settlementMethod;
@@ -2125,7 +2132,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     // Weight-sensitive settlement (gold barter/partial): keep ONE source of weight.
     // If user filled both explicit karat_lines and inline items, prefer karat_lines.
     final isWeightSensitiveSettlement = paidGoldWeight > 0;
-    if (isWeightSensitiveSettlement && linePayloads.isNotEmpty && inlineItemsPayload.isNotEmpty) {
+    if (isWeightSensitiveSettlement &&
+        linePayloads.isNotEmpty &&
+        inlineItemsPayload.isNotEmpty) {
       payload['items'] = <dynamic>[];
       payload['inline_items_omitted_reason'] = 'weight_sensitive_settlement';
     }
@@ -2198,6 +2207,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     if (_isSavingInvoice) return;
     if (!_validateBeforeSave()) return;
 
+    final shouldProceed = await _confirmPreSaveSummary();
+    if (!shouldProceed) return;
+
+    if (!mounted) return;
+
     setState(() {
       _isSavingInvoice = true;
     });
@@ -2252,12 +2266,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) =>
-                InvoicePrintScreen(
-                  invoice: invoiceForPrint,
-                  isArabic: true,
-                  printSettings: {'paperSize': _uiPaperSize},
-                ),
+            builder: (_) => InvoicePrintScreen(
+              invoice: invoiceForPrint,
+              isArabic: true,
+              printSettings: {'paperSize': _uiPaperSize},
+            ),
           ),
         );
       }
@@ -2282,7 +2295,244 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     }
   }
 
+  String _settlementModeLabel(_PurchaseSettlementMode mode) {
+    switch (mode) {
+      case _PurchaseSettlementMode.credit:
+        return 'آجل';
+      case _PurchaseSettlementMode.barter:
+        return 'مقايضة';
+      case _PurchaseSettlementMode.partial:
+        return 'جزئي';
+    }
+  }
 
+  String _fmtMoney(double value) => value.toStringAsFixed(2);
+  String _fmtWeight(double value) => value.toStringAsFixed(3);
+
+  Future<bool> _confirmPreSaveSummary() async {
+    if (!mounted) return false;
+    final supplierId = _selectedSupplierId;
+    if (supplierId == null) return true;
+
+    // Invoice summary (based on current UI state)
+    final totalWeight = _round(_totalWeight, 3);
+    final goldSubtotal = _round(_goldSubtotal, 2);
+    final wageSubtotal = _round(_wageSubtotal, 2);
+    final taxTotal = _round(_taxTotal, 2);
+    final grandTotal = _round(_grandTotal, 2);
+
+    final dueCash = _cashDueForSupplier();
+    final paidCash = _cashPaid();
+    final netCashDue = _round(dueCash - paidCash, 2);
+
+    final dueGoldMain = _supplierMainEquivalentWeight();
+    final paidGoldMain = _goldPaidMainEquivalent();
+    final netGoldDueMain = _round(dueGoldMain - paidGoldMain, 3);
+
+    final mainKarat = _mainKaratFromSettings();
+
+    Map<String, dynamic>? supplierStatement;
+    String? statementError;
+    try {
+      supplierStatement = await _api.getSupplierStatement(supplierId);
+    } catch (e) {
+      statementError = e.toString();
+    }
+
+    double? currentCashBalance;
+    double? currentGoldBalanceMain;
+    double? projectedCashBalance;
+    double? projectedGoldBalanceMain;
+
+    if (supplierStatement != null) {
+      try {
+        currentCashBalance = _toDouble(
+          normalizeNumber('${supplierStatement['closing_balance_cash'] ?? 0}'),
+        );
+        currentGoldBalanceMain = _toDouble(
+          normalizeNumber(
+            '${supplierStatement['closing_balance_gold_normalized'] ?? 0}',
+          ),
+        );
+
+        // Supplier statement running balance uses (debit - credit).
+        // A purchase invoice increases supplier payable (credit), which decreases the balance.
+        // Payments reduce payable (debit), which increases the balance.
+        projectedCashBalance = _round(currentCashBalance - netCashDue, 2);
+        projectedGoldBalanceMain = _round(
+          currentGoldBalanceMain - netGoldDueMain,
+          3,
+        );
+      } catch (_) {
+        // Keep balances null if parsing fails.
+      }
+    }
+
+    String supplierName = '';
+    try {
+      final supplier = _suppliers.firstWhere((s) => s['id'] == supplierId);
+      supplierName = (supplier['name'] ?? supplier['supplier_name'] ?? '')
+          .toString();
+    } catch (_) {
+      supplierName = '';
+    }
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        final theme = Theme.of(dialogContext);
+
+        Widget balanceRow(
+          String label,
+          double? value, {
+          required bool isWeight,
+        }) {
+          final text = value == null
+              ? 'غير متاح'
+              : (isWeight
+                    ? '${_fmtWeight(value)} جم'
+                    : '${_fmtMoney(value)} ر.س');
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(label, style: theme.textTheme.bodyMedium),
+                Text(
+                  text,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return AlertDialog(
+          title: const Text('ملخص قبل الحفظ'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (supplierName.isNotEmpty)
+                    Text(
+                      supplierName,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                      textAlign: TextAlign.start,
+                    ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'نوع التسوية: ${_settlementModeLabel(_settlementMode)}',
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 10),
+
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'ملخص الفاتورة',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        balanceRow('إجمالي الوزن', totalWeight, isWeight: true),
+                        balanceRow(
+                          'إجمالي الذهب',
+                          goldSubtotal,
+                          isWeight: false,
+                        ),
+                        balanceRow('الأجور', wageSubtotal, isWeight: false),
+                        balanceRow('الضريبة', taxTotal, isWeight: false),
+                        const Divider(height: 16),
+                        balanceRow('الإجمالي', grandTotal, isWeight: false),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'سيصبح رصيد المورد بعد الحفظ',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        balanceRow(
+                          'نقدًا',
+                          projectedCashBalance,
+                          isWeight: false,
+                        ),
+                        balanceRow(
+                          'ذهب (عيار $mainKarat)',
+                          projectedGoldBalanceMain,
+                          isWeight: true,
+                        ),
+                        if (statementError != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'تعذر جلب الرصيد الحالي من السيرفر. سيتم الحفظ بدون عرض الرصيد التفصيلي.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.error,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            'الرصيد الحالي (قبل الحفظ): نقد ${_fmtMoney(currentCashBalance ?? 0)} ر.س | ذهب ${_fmtWeight(currentGoldBalanceMain ?? 0)} جم',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.black54,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('رجوع'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('حفظ'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return proceed == true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2807,8 +3057,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final paidCash = _cashPaid();
     final paidGoldMain = _goldPaidMainEquivalent();
 
-    final remainingCash = _round(math.max(0.0, dueCash - paidCash), 2);
-    final remainingGold = _round(math.max(0.0, dueGoldMain - paidGoldMain), 3);
+    final remainingCash = _round(dueCash - paidCash, 2);
+    final remainingGold = _round(dueGoldMain - paidGoldMain, 3);
 
     final theme = Theme.of(context);
     final paidColor = theme.colorScheme.tertiary;
@@ -2899,8 +3149,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 ),
                 valueCell(
                   _formatCurrency(remainingCash),
-                  color: remainingCash > 0.01 ? remainingColor : null,
-                  fontWeight: remainingCash > 0.01 ? FontWeight.w800 : null,
+                  color: remainingCash.abs() > 0.01 ? remainingColor : null,
+                  fontWeight: remainingCash.abs() > 0.01
+                      ? FontWeight.w800
+                      : null,
                 ),
               ],
             ),
@@ -2965,8 +3217,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 ),
                 valueCell(
                   _formatWeight(remainingGold),
-                  color: remainingGold > 0.0005 ? remainingColor : null,
-                  fontWeight: remainingGold > 0.0005 ? FontWeight.w800 : null,
+                  color: remainingGold.abs() > 0.0005 ? remainingColor : null,
+                  fontWeight: remainingGold.abs() > 0.0005
+                      ? FontWeight.w800
+                      : null,
                 ),
               ],
             ),
@@ -2980,7 +3234,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   Widget _buildBarterSettlementInputs() {
     final dueGoldMain = _supplierMainEquivalentWeight();
     final paidGoldMain = _goldPaidMainEquivalent();
-    final remainingGold = _round(math.max(0.0, dueGoldMain - paidGoldMain), 3);
+    final remainingGold = _round(dueGoldMain - paidGoldMain, 3);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3938,7 +4192,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             void submit() {
               final name = nameController.text.trim();
               final parsedWeight = double.tryParse(weightController.text) ?? 0;
-              final parsedWagePerGram = double.tryParse(wageController.text) ?? 0;
+              final parsedWagePerGram =
+                  double.tryParse(wageController.text) ?? 0;
               final parsedWageTotal =
                   double.tryParse(wageTotalController.text) ?? 0;
 
@@ -3946,8 +4201,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               final hasCategoryValue = categoryItems.any(
                 (item) => item.value == selectedCategoryName,
               );
-              final effectiveCategoryName =
-                  hasCategoryValue ? selectedCategoryName : null;
+              final effectiveCategoryName = hasCategoryValue
+                  ? selectedCategoryName
+                  : null;
               final effectiveCategoryId = _categoryIdForName(
                 effectiveCategoryName,
               );
@@ -3961,22 +4217,19 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   ? (parsedWeight > 0 ? (parsedWageTotal / parsedWeight) : 0.0)
                   : parsedWagePerGram;
 
-              final isCategoryOnly = entryType == PurchaseInlineEntryType.category;
+              final isCategoryOnly =
+                  entryType == PurchaseInlineEntryType.category;
 
               if (parsedWeight <= 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('الوزن مطلوب'),
-                  ),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('الوزن مطلوب')));
                 return;
               }
 
               if (!isCategoryOnly && name.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('اسم الصنف مطلوب لإضافة صنف'),
-                  ),
+                  const SnackBar(content: Text('اسم الصنف مطلوب لإضافة صنف')),
                 );
                 return;
               }
@@ -3986,15 +4239,15 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                       effectiveCategoryName == null ||
                       effectiveCategoryName.trim().isEmpty)) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('اختر تصنيفاً قبل الحفظ'),
-                  ),
+                  const SnackBar(content: Text('اختر تصنيفاً قبل الحفظ')),
                 );
                 return;
               }
 
               final resolvedName = isCategoryOnly
-                  ? (name.isNotEmpty ? name : (effectiveCategoryName ?? 'تصنيف'))
+                  ? (name.isNotEmpty
+                        ? name
+                        : (effectiveCategoryName ?? 'تصنيف'))
                   : name;
 
               Navigator.of(dialogContext).pop(
@@ -4009,13 +4262,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   itemCode: isCategoryOnly
                       ? null
                       : (itemCodeController.text.trim().isEmpty
-                          ? null
-                          : itemCodeController.text.trim()),
+                            ? null
+                            : itemCodeController.text.trim()),
                   barcode: isCategoryOnly
                       ? null
                       : (barcodeController.text.trim().isEmpty
-                          ? null
-                          : barcodeController.text.trim()),
+                            ? null
+                            : barcodeController.text.trim()),
                   category: effectiveCategoryName,
                   categoryId: effectiveCategoryId,
                   hasStones: hasStones,
@@ -4105,7 +4358,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                   children: [
                                     ToggleButtons(
                                       isSelected: [
-                                        entryType == PurchaseInlineEntryType.item,
+                                        entryType ==
+                                            PurchaseInlineEntryType.item,
                                         entryType ==
                                             PurchaseInlineEntryType.category,
                                       ],
@@ -4178,8 +4432,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                           const TextInputType.numberWithOptions(
                                             decimal: true,
                                           ),
-                                      textInputAction:
-                                          TextInputAction.next,
+                                      textInputAction: TextInputAction.next,
                                       inputFormatters: [
                                         NormalizeNumberFormatter(),
                                         FilteringTextInputFormatter.allow(
@@ -4604,7 +4857,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                   children: [
                                     ToggleButtons(
                                       isSelected: [
-                                        entryType == PurchaseInlineEntryType.item,
+                                        entryType ==
+                                            PurchaseInlineEntryType.item,
                                         entryType ==
                                             PurchaseInlineEntryType.category,
                                       ],
@@ -4910,9 +5164,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                   dropdownCategoryValue ?? 'بدون تصنيف',
                                 ),
                                 if (!isCategoryOnly &&
-                                    itemCodeController.text
-                                        .trim()
-                                        .isNotEmpty)
+                                    itemCodeController.text.trim().isNotEmpty)
                                   _previewRow(
                                     'كود الصنف',
                                     itemCodeController.text.trim(),
@@ -4986,8 +5238,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
                     final resolvedName = isCategoryOnly
                         ? (name.isNotEmpty
-                            ? name
-                            : (effectiveCategoryName ?? 'تصنيف'))
+                              ? name
+                              : (effectiveCategoryName ?? 'تصنيف'))
                         : name;
 
                     Navigator.of(dialogContext).pop(
@@ -5002,13 +5254,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         itemCode: isCategoryOnly
                             ? null
                             : (itemCodeController.text.trim().isEmpty
-                                ? null
-                                : itemCodeController.text.trim()),
+                                  ? null
+                                  : itemCodeController.text.trim()),
                         barcode: isCategoryOnly
                             ? null
                             : (barcodeController.text.trim().isEmpty
-                                ? null
-                                : barcodeController.text.trim()),
+                                  ? null
+                                  : barcodeController.text.trim()),
                         category: effectiveCategoryName,
                         categoryId: effectiveCategoryId,
                         entryType: entryType,
@@ -5346,8 +5598,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      textInputAction:
-                          _manualPricing ? TextInputAction.next : TextInputAction.done,
+                      textInputAction: _manualPricing
+                          ? TextInputAction.next
+                          : TextInputAction.done,
                       inputFormatters: [
                         NormalizeNumberFormatter(),
                         FilteringTextInputFormatter.allow(
@@ -5366,7 +5619,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                               final weightValue =
                                   double.tryParse(weightController.text) ?? 0;
                               final wageValue =
-                                  double.tryParse(wagePerGramController.text) ?? 0;
+                                  double.tryParse(wagePerGramController.text) ??
+                                  0;
                               if (weightValue <= 0) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
@@ -5391,17 +5645,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                   karat: karat,
                                   weightGrams: weightValue,
                                   wagePerGram: wageValue,
-                                  goldValueOverride:
-                                      _manualPricing ? manualGoldValue : null,
-                                  wageCashOverride:
-                                      _manualPricing ? manualWageCash : null,
-                                  goldTaxOverride:
-                                      _manualPricing ? manualGoldTax : null,
-                                  wageTaxOverride:
-                                      _manualPricing ? manualWageTax : null,
-                                  description: notesController.text
-                                          .trim()
-                                          .isEmpty
+                                  goldValueOverride: _manualPricing
+                                      ? manualGoldValue
+                                      : null,
+                                  wageCashOverride: _manualPricing
+                                      ? manualWageCash
+                                      : null,
+                                  goldTaxOverride: _manualPricing
+                                      ? manualGoldTax
+                                      : null,
+                                  wageTaxOverride: _manualPricing
+                                      ? manualWageTax
+                                      : null,
+                                  description:
+                                      notesController.text.trim().isEmpty
                                       ? null
                                       : notesController.text.trim(),
                                 ),
@@ -5494,7 +5751,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                 final weightValue =
                                     double.tryParse(weightController.text) ?? 0;
                                 final wageValue =
-                                    double.tryParse(wagePerGramController.text) ?? 0;
+                                    double.tryParse(
+                                      wagePerGramController.text,
+                                    ) ??
+                                    0;
                                 if (weightValue <= 0) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
@@ -5519,17 +5779,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     karat: karat,
                                     weightGrams: weightValue,
                                     wagePerGram: wageValue,
-                                    goldValueOverride:
-                                        _manualPricing ? manualGoldValue : null,
-                                    wageCashOverride:
-                                        _manualPricing ? manualWageCash : null,
-                                    goldTaxOverride:
-                                        _manualPricing ? manualGoldTax : null,
-                                    wageTaxOverride:
-                                        _manualPricing ? manualWageTax : null,
-                                    description: notesController.text
-                                            .trim()
-                                            .isEmpty
+                                    goldValueOverride: _manualPricing
+                                        ? manualGoldValue
+                                        : null,
+                                    wageCashOverride: _manualPricing
+                                        ? manualWageCash
+                                        : null,
+                                    goldTaxOverride: _manualPricing
+                                        ? manualGoldTax
+                                        : null,
+                                    wageTaxOverride: _manualPricing
+                                        ? manualWageTax
+                                        : null,
+                                    description:
+                                        notesController.text.trim().isEmpty
                                         ? null
                                         : notesController.text.trim(),
                                   ),
