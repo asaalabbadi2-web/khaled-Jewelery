@@ -1033,7 +1033,7 @@ class ApiService {
   // Invoice Methods
   Future<Map<String, dynamic>> getInvoices({
     int page = 1,
-    int perPage = 10,
+    int perPage = 50,
     String sortBy = 'date',
     String sortOrder = 'desc',
     String search = '',

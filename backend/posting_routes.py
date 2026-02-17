@@ -44,6 +44,58 @@ from auth_decorators import require_permission, optional_auth
 posting_bp = Blueprint('posting', __name__)
 
 
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _main_karat_value() -> float:
+    settings_row = _get_settings_row()
+    try:
+        main_karat = _to_float(getattr(settings_row, 'main_karat', None), 21.0)
+    except Exception:
+        main_karat = 21.0
+    return main_karat if main_karat > 0 else 21.0
+
+
+def _convert_to_main_karat(weight: float, karat: float, main_karat: float) -> float:
+    w = _to_float(weight, 0.0)
+    k = _to_float(karat, 0.0)
+    mk = _to_float(main_karat, 21.0)
+    if w == 0.0 or k == 0.0 or mk == 0.0:
+        return 0.0
+    return (w * k) / mk
+
+
+def _journal_entry_gold_totals_main_karat(entry: JournalEntry) -> tuple[float, float, float, float]:
+    """Return (main_karat, debit_main, credit_main, diff_main) for a journal entry."""
+    main_karat = _main_karat_value()
+    debit_main = 0.0
+    credit_main = 0.0
+    for line in (entry.lines or []):
+        if getattr(line, 'is_deleted', False):
+            continue
+        debit_main += (
+            _convert_to_main_karat(getattr(line, 'debit_18k', 0) or 0, 18, main_karat)
+            + _convert_to_main_karat(getattr(line, 'debit_21k', 0) or 0, 21, main_karat)
+            + _convert_to_main_karat(getattr(line, 'debit_22k', 0) or 0, 22, main_karat)
+            + _convert_to_main_karat(getattr(line, 'debit_24k', 0) or 0, 24, main_karat)
+        )
+        credit_main += (
+            _convert_to_main_karat(getattr(line, 'credit_18k', 0) or 0, 18, main_karat)
+            + _convert_to_main_karat(getattr(line, 'credit_21k', 0) or 0, 21, main_karat)
+            + _convert_to_main_karat(getattr(line, 'credit_22k', 0) or 0, 22, main_karat)
+            + _convert_to_main_karat(getattr(line, 'credit_24k', 0) or 0, 24, main_karat)
+        )
+
+    diff_main = debit_main - credit_main
+    return main_karat, debit_main, credit_main, diff_main
+
+
 # ==========================================
 # 🧾 إغلاق اليومية (Shift Closing)
 # ==========================================
@@ -1681,16 +1733,22 @@ def post_journal_entry(entry_id):
                 'message': f'القيد غير متوازن (نقد). مدين: {total_cash_debit}, دائن: {total_cash_credit}'
             }), 400
         
-        # التحقق من توازن الذهب لكل عيار
-        for karat in ['18k', '21k', '22k', '24k']:
-            total_debit = sum(getattr(line, f'debit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-            total_credit = sum(getattr(line, f'credit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-            
-            if abs(total_debit - total_credit) > 0.001:  # هامش خطأ أصغر للذهب
-                return jsonify({
-                    'success': False,
-                    'message': f'القيد غير متوازن (عيار {karat}). مدين: {total_debit}, دائن: {total_credit}'
-                }), 400
+        # التحقق من توازن الذهب بعد التحويل للعيار الرئيسي (يدعم القيود متعددة العيارات)
+        main_karat, debit_main, credit_main, diff_main = _journal_entry_gold_totals_main_karat(entry)
+        if abs(diff_main) > 0.01:  # هامش خطأ صغير بالعيار الرئيسي
+            return jsonify({
+                'success': False,
+                'message': (
+                    f'القيد غير متوازن (ذهب بعد التحويل لعيار {int(round(main_karat))}). '
+                    f'مدين: {round(debit_main, 3)}, دائن: {round(credit_main, 3)}'
+                ),
+                'details': {
+                    'main_karat': int(round(main_karat)),
+                    'debit_main_karat': round(debit_main, 6),
+                    'credit_main_karat': round(credit_main, 6),
+                    'diff_main_karat': round(diff_main, 6),
+                },
+            }), 400
         
         # ترحيل القيد
         entry.is_posted = True
@@ -1780,19 +1838,13 @@ def post_journal_entries_batch():
                     skipped_count += 1
                     continue
                 
-                # التحقق من توازن الذهب
-                is_balanced = True
-                for karat in ['18k', '21k', '22k', '24k']:
-                    total_debit = sum(getattr(line, f'debit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-                    total_credit = sum(getattr(line, f'credit_{karat}', 0) or 0 for line in entry.lines if not line.is_deleted)
-                    
-                    if abs(total_debit - total_credit) > 0.001:
-                        errors.append(f"القيد {entry.entry_number} غير متوازن (عيار {karat})")
-                        skipped_count += 1
-                        is_balanced = False
-                        break
-                
-                if not is_balanced:
+                # التحقق من توازن الذهب بعد التحويل للعيار الرئيسي (يدعم القيود متعددة العيارات)
+                main_karat, debit_main, credit_main, diff_main = _journal_entry_gold_totals_main_karat(entry)
+                if abs(diff_main) > 0.01:
+                    errors.append(
+                        f"القيد {entry.entry_number} غير متوازن (ذهب بعد التحويل لعيار {int(round(main_karat))})"
+                    )
+                    skipped_count += 1
                     continue
                 
                 entry.is_posted = True
