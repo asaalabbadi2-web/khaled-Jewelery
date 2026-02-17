@@ -1788,12 +1788,14 @@ class ApiService {
     final uri = Uri.parse(
       '$_baseUrl/general_ledger_all',
     ).replace(queryParameters: queryParams);
-    final response = await http.get(uri);
+    final response = await _authedGet(uri);
 
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load general ledger');
+      throw Exception(
+        'Failed to load general ledger: ${response.statusCode} ${_errorMessageFromResponse(response)}',
+      );
     }
   }
 

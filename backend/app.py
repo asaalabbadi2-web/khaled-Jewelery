@@ -1,6 +1,7 @@
 import sys
 import os
 import warnings
+from datetime import datetime
 
 # Silence a common macOS dev warning when Python is compiled against LibreSSL.
 # This warning is noisy but not actionable for local development.
@@ -200,6 +201,33 @@ else:
 db.init_app(app)
 
 
+def _compute_backend_build() -> str:
+	"""Best-effort build identifier for troubleshooting deployments.
+
+	Prefer explicit env vars; fall back to git (if available); otherwise 'unknown'.
+	"""
+	build = (os.getenv('APP_BUILD') or os.getenv('BACKEND_BUILD') or os.getenv('GIT_SHA') or '').strip()
+	if build:
+		return build
+	try:
+		# Don't fail app startup if git isn't available in production.
+		import subprocess
+		out = subprocess.check_output(
+			['git', 'rev-parse', '--short', 'HEAD'],
+			stderr=subprocess.DEVNULL,
+			cwd=os.path.dirname(__file__),
+			timeout=0.5,
+		)
+		sha = out.decode('utf-8').strip()
+		return sha or 'unknown'
+	except Exception:
+		return 'unknown'
+
+
+_BACKEND_BUILD = _compute_backend_build()
+_BACKEND_STARTED_AT = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+
+
 @app.after_request
 def _ensure_cors_headers(response):
 	"""Ensure CORS headers exist for Flutter web (dev usage).
@@ -209,6 +237,8 @@ def _ensure_cors_headers(response):
 	"""
 	# Debug marker (safe to keep; helps verify proxy/browser issues)
 	response.headers.setdefault('X-Backend-AfterRequest', '1')
+	response.headers.setdefault('X-Backend-Build', _BACKEND_BUILD)
+	response.headers.setdefault('X-Backend-Started-At', _BACKEND_STARTED_AT)
 	try:
 		from flask import request
 		origin = request.headers.get('Origin')
