@@ -4913,12 +4913,54 @@ def get_supplier_ledger(supplier_id):
     date_from_dt = datetime.combine(date_from_value, datetime.min.time()) if date_from_value else None
     date_to_dt = datetime.combine(date_to_value, datetime.min.time()) + timedelta(days=1) if date_to_value else None
 
+    # Keep ledger totals consistent with the supplier statement endpoint.
+    # We intentionally restrict to supplier payable lines (and supplier's own accounts)
+    # because a single journal entry might have multiple lines tagged with supplier_id
+    # (inventory/tax/etc) that would cancel out and confuse the statement/ledger UI.
+    supplier_fin_account_id = getattr(supplier, 'account_id', None)
+    supplier_memo_account_id = None
+    try:
+        fin_acc = Account.query.get(int(supplier_fin_account_id)) if supplier_fin_account_id else None
+        supplier_memo_account_id = getattr(fin_acc, 'memo_account_id', None) if fin_acc else None
+    except Exception:
+        supplier_memo_account_id = None
+
+    payable_filter = and_(Account.type == 'Liability', Account.account_number.like('21%'))
+
+    allowed_ids = []
+    try:
+        if supplier_fin_account_id not in (None, '', 0, '0', False):
+            allowed_ids.append(int(supplier_fin_account_id))
+    except Exception:
+        pass
+    try:
+        if supplier_memo_account_id not in (None, '', 0, '0', False):
+            allowed_ids.append(int(supplier_memo_account_id))
+    except Exception:
+        pass
+
+    account_filter = payable_filter
+    if allowed_ids:
+        account_filter = or_(Account.id.in_(allowed_ids), payable_filter)
+
+    supplier_line_filter = (JournalEntryLine.supplier_id == supplier_id)
+    if allowed_ids:
+        supplier_line_filter = or_(
+            supplier_line_filter,
+            and_(
+                JournalEntryLine.account_id.in_(allowed_ids),
+                JournalEntryLine.customer_id.is_(None),
+            ),
+        )
+
     base_query = (
         JournalEntryLine.query
         .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
-        .filter(JournalEntryLine.supplier_id == supplier_id)
+        .join(Account, JournalEntryLine.account_id == Account.id)
+        .filter(supplier_line_filter)
         .filter(JournalEntryLine.is_deleted.is_(False))
         .filter(JournalEntry.is_deleted.is_(False))
+        .filter(account_filter)
     )
 
     if date_from_dt:
