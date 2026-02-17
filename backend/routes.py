@@ -6230,36 +6230,143 @@ def get_invoices():
     # Base query
     query = Invoice.query
 
+    customer_joined = False
+    supplier_joined = False
+
+    def _ensure_party_outerjoins():
+        nonlocal query, customer_joined, supplier_joined
+        if not customer_joined:
+            query = query.outerjoin(Customer, Invoice.customer_id == Customer.id)
+            customer_joined = True
+        if not supplier_joined:
+            query = query.outerjoin(Supplier, Invoice.supplier_id == Supplier.id)
+            supplier_joined = True
+
     # Filtering
     if search:
-        query = query.join(Customer).filter(
-            (Invoice.invoice_type_id.ilike(f'%{search}%')) |
-            (Customer.name.ilike(f'%{search}%'))
-        )
+        search = (search or '').strip()
+        if search:
+            _ensure_party_outerjoins()
+            like = f'%{search}%'
+            clauses = [
+                Invoice.invoice_type.ilike(like),
+                Customer.name.ilike(like),
+                Supplier.name.ilike(like),
+            ]
+
+            try:
+                search_int = int(search)
+                clauses.extend([
+                    Invoice.id == search_int,
+                    Invoice.invoice_type_id == search_int,
+                ])
+            except Exception:
+                pass
+
+            query = query.filter(or_(*clauses))
+
     if status and status != 'all':
-        # This assumes you add a 'status' column to the Invoice model
         query = query.filter(Invoice.status == status)
-    if invoice_type and invoice_type != 'الكل':
+
+    if invoice_type and invoice_type not in ('الكل', 'all'):
         query = query.filter(Invoice.invoice_type == invoice_type)
+
+    def _parse_iso_date(v: str):
+        if not v:
+            return None
+        cleaned = v.strip()
+        if cleaned.endswith('Z'):
+            cleaned = cleaned[:-1] + '+00:00'
+        return datetime.fromisoformat(cleaned)
+
     if date_from_str:
-        date_from = datetime.fromisoformat(date_from_str)
-        query = query.filter(Invoice.date >= date_from)
+        date_from = _parse_iso_date(date_from_str)
+        if date_from is not None:
+            query = query.filter(Invoice.date >= date_from)
+
     if date_to_str:
-        date_to = datetime.fromisoformat(date_to_str)
-        query = query.filter(Invoice.date <= date_to)
+        date_to = _parse_iso_date(date_to_str)
+        if date_to is not None:
+            query = query.filter(Invoice.date <= date_to)
 
     # Sorting
     if sort_by == 'date':
-        order = Invoice.date.desc() if sort_order == 'desc' else Invoice.date.asc()
+        if sort_order == 'desc':
+            query = query.order_by(Invoice.date.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(Invoice.date.asc(), Invoice.id.asc())
+        order = None
     elif sort_by == 'customer':
-        order = Customer.name.desc() if sort_order == 'desc' else Customer.name.asc()
-        query = query.join(Customer)
+        _ensure_party_outerjoins()
+        party_name = func.coalesce(Customer.name, Supplier.name, '')
+        if sort_order == 'desc':
+            query = query.order_by(party_name.desc(), Invoice.date.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(party_name.asc(), Invoice.date.desc(), Invoice.id.desc())
+        order = None
     elif sort_by == 'amount':
-        order = Invoice.total.desc() if sort_order == 'desc' else Invoice.total.asc()
+        if sort_order == 'desc':
+            query = query.order_by(Invoice.total.desc(), Invoice.date.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(Invoice.total.asc(), Invoice.date.desc(), Invoice.id.desc())
+        order = None
     else:
-        order = Invoice.date.desc() # Default sort
-    
-    query = query.order_by(order)
+        query = query.order_by(Invoice.date.desc(), Invoice.id.desc())
+        order = None
+
+    if order is not None:
+        query = query.order_by(order)
+
+    # Silent audit counters (kept in response meta; no server logs)
+    audit = {
+        'enabled': True,
+        'filters': {
+            'search': bool(search),
+            'status': status if status else None,
+            'invoice_type': invoice_type if invoice_type else None,
+            'date_from': date_from_str if date_from_str else None,
+            'date_to': date_to_str if date_to_str else None,
+        },
+        'sort': {
+            'sort_by': sort_by,
+            'sort_order': sort_order,
+        },
+        'counts': {
+            'filtered_total': None,
+            'filtered_customer_invoices': None,
+            'filtered_supplier_invoices': None,
+            'filtered_unlinked_invoices': None,
+            'page_customer_invoices': None,
+            'page_supplier_invoices': None,
+            'page_unlinked_invoices': None,
+        }
+    }
+
+    try:
+        audit_query = query.order_by(None)
+        audit_row = audit_query.with_entities(
+            func.count(Invoice.id),
+            func.coalesce(func.sum(case((Invoice.customer_id.isnot(None), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Invoice.supplier_id.isnot(None), 1), else_=0)), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (and_(Invoice.customer_id.is_(None), Invoice.supplier_id.is_(None)), 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        ).first()
+
+        if audit_row:
+            audit['counts']['filtered_total'] = int(audit_row[0] or 0)
+            audit['counts']['filtered_customer_invoices'] = int(audit_row[1] or 0)
+            audit['counts']['filtered_supplier_invoices'] = int(audit_row[2] or 0)
+            audit['counts']['filtered_unlinked_invoices'] = int(audit_row[3] or 0)
+    except Exception:
+        # Keep audit best-effort and non-fatal
+        pass
 
     # Pagination
     paginated_invoices = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -6278,12 +6385,33 @@ def get_invoices():
         
         result.append(invoice_dict)
 
+    try:
+        page_customer = 0
+        page_supplier = 0
+        page_unlinked = 0
+        for inv in invoices:
+            if getattr(inv, 'customer_id', None) is not None:
+                page_customer += 1
+            elif getattr(inv, 'supplier_id', None) is not None:
+                page_supplier += 1
+            else:
+                page_unlinked += 1
+
+        audit['counts']['page_customer_invoices'] = page_customer
+        audit['counts']['page_supplier_invoices'] = page_supplier
+        audit['counts']['page_unlinked_invoices'] = page_unlinked
+    except Exception:
+        pass
+
     return jsonify({
         'invoices': result,
         'total': paginated_invoices.total,
         'pages': paginated_invoices.pages,
         'current_page': paginated_invoices.page,
-        'per_page': paginated_invoices.per_page
+        'per_page': paginated_invoices.per_page,
+        'meta': {
+            'audit': audit,
+        },
     })
 
 
@@ -12800,7 +12928,12 @@ def delete_account(id):
 @require_permission('journal.view')
 def get_journal_entries():
     # إخفاء القيود المحذوفة افتراضياً
-    entries = JournalEntry.query.filter_by(is_deleted=False).order_by(JournalEntry.date.desc()).all()
+    entries = (
+        JournalEntry.query
+        .filter_by(is_deleted=False)
+        .order_by(JournalEntry.date.desc(), JournalEntry.id.desc())
+        .all()
+    )
     result = []
     for entry in entries:
         lines = []
@@ -18951,7 +19084,6 @@ def _append_safe_reversal_transactions_for_voucher(voucher: Voucher, created_by=
 
 @api.route('/vouchers', methods=['GET'])
 def get_vouchers():
-    print("DEBUG: get_vouchers called")
     """
     Get list of vouchers with optional filtering and pagination
     Query parameters:
@@ -19030,8 +19162,8 @@ def get_vouchers():
             (Voucher.description.ilike(search_term))
         )
 
-    # Order by date descending
-    query = query.order_by(Voucher.date.desc(), Voucher.id.desc())
+    # Default order: newest created first (better UX for approvals)
+    query = query.order_by(Voucher.created_at.desc(), Voucher.id.desc())
 
     # Pagination
     paginated_vouchers = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -19045,9 +19177,6 @@ def get_vouchers():
         'per_page': paginated_vouchers.per_page
     }
     
-    print(f"DEBUG: result type = {type(result)}")
-    print(f"DEBUG: result keys = {list(result.keys())}")
-    print(f"DEBUG: Returning {len(result['vouchers'])} vouchers")
     return jsonify(result)
 
 

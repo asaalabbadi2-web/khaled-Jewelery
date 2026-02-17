@@ -258,8 +258,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
           final customerName = (invoice['customer_name'] ?? '')
               .toString()
               .toLowerCase();
+          final supplierName = (invoice['supplier_name'] ?? '')
+              .toString()
+              .toLowerCase();
           final invoiceNumber = _getInvoiceDisplayNumber(invoice).toLowerCase();
           if (!customerName.contains(searchLower) &&
+              !supplierName.contains(searchLower) &&
               !invoiceNumber.contains(searchLower)) {
             return false;
           }
@@ -314,6 +318,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
           int comparison = 0;
           try {
             switch (_sortBy) {
+              case 'recent':
+                final idA = _tryParseInt(a['id']) ?? 0;
+                final idB = _tryParseInt(b['id']) ?? 0;
+                comparison = idA.compareTo(idB);
+                break;
               case 'date':
                 final dateA = a['date'] != null
                     ? DateTime.parse(a['date'].toString())
@@ -322,6 +331,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     ? DateTime.parse(b['date'].toString())
                     : DateTime.now();
                 comparison = dateA.compareTo(dateB);
+                if (comparison == 0) {
+                  final idA = _tryParseInt(a['id']) ?? 0;
+                  final idB = _tryParseInt(b['id']) ?? 0;
+                  comparison = idA.compareTo(idB);
+                }
                 break;
               case 'customer':
                 comparison = (a['customer_name'] ?? '').toString().compareTo(
@@ -1292,6 +1306,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                   value: _sortBy,
                   hint: isAr ? 'ترتيب حسب' : 'Sort By',
                   items: [
+                    {
+                      'value': 'recent',
+                      'label': isAr ? 'الأحدث' : 'Most Recent',
+                    },
                     {'value': 'date', 'label': isAr ? 'التاريخ' : 'Date'},
                     {
                       'value': 'customer',

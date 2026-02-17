@@ -192,14 +192,24 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     switch (_sortBy) {
       case 'date_desc':
         entries.sort(
-          (a, b) =>
-              DateTime.parse(b['date']).compareTo(DateTime.parse(a['date'])),
+          (a, b) {
+            final byDate = DateTime.parse(b['date']).compareTo(
+              DateTime.parse(a['date']),
+            );
+            if (byDate != 0) return byDate;
+            return (b['id'] as int).compareTo(a['id'] as int);
+          },
         );
         break;
       case 'date_asc':
         entries.sort(
-          (a, b) =>
-              DateTime.parse(a['date']).compareTo(DateTime.parse(b['date'])),
+          (a, b) {
+            final byDate = DateTime.parse(a['date']).compareTo(
+              DateTime.parse(b['date']),
+            );
+            if (byDate != 0) return byDate;
+            return (a['id'] as int).compareTo(b['id'] as int);
+          },
         );
         break;
       case 'amount_desc':
