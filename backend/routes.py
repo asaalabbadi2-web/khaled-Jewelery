@@ -4953,15 +4953,59 @@ def get_supplier_ledger(supplier_id):
             ),
         )
 
-    base_query = (
+    base_query_relaxed = (
         JournalEntryLine.query
         .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
         .join(Account, JournalEntryLine.account_id == Account.id)
         .filter(supplier_line_filter)
         .filter(JournalEntryLine.is_deleted.is_(False))
         .filter(JournalEntry.is_deleted.is_(False))
-        .filter(account_filter)
     )
+
+    base_query = base_query_relaxed.filter(account_filter)
+
+    # If strict account filtering drops supplier-tagged lines *and* that changes net totals,
+    # fall back to the relaxed query. This helps recover missing supplier invoices when
+    # payable account numbering/type assumptions don't match historical data.
+    try:
+        relaxed_count = base_query_relaxed.count()
+        strict_count = base_query.count()
+        if relaxed_count > strict_count:
+            def _nets(q):
+                row = (
+                    q.with_entities(
+                        func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0),
+                    ).first()
+                )
+                cd, cc, d18, c18, d21, c21, d22, c22, d24, c24 = row or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                return (
+                    float(cd or 0.0) - float(cc or 0.0),
+                    float(d18 or 0.0) - float(c18 or 0.0),
+                    float(d21 or 0.0) - float(c21 or 0.0),
+                    float(d22 or 0.0) - float(c22 or 0.0),
+                    float(d24 or 0.0) - float(c24 or 0.0),
+                )
+
+            strict_nets = _nets(base_query)
+            relaxed_nets = _nets(base_query_relaxed)
+            eps_cash = 0.01
+            eps_gold = 0.0005
+            if (
+                abs(strict_nets[0] - relaxed_nets[0]) > eps_cash
+                or any(abs(a - b) > eps_gold for a, b in zip(strict_nets[1:], relaxed_nets[1:]))
+            ):
+                base_query = base_query_relaxed
+    except Exception:
+        pass
 
     if date_from_dt:
         base_query = base_query.filter(JournalEntry.date >= date_from_dt)
@@ -5140,13 +5184,61 @@ def get_supplier_weight_statement(supplier_id):
             ),
         )
 
-    journal_lines = (
+    base_query_relaxed = (
         JournalEntryLine.query
         .join(JournalEntry)
         .join(Account, JournalEntryLine.account_id == Account.id)
         .filter(supplier_line_filter)
-        .filter(JournalEntryLine.is_deleted == False)  # noqa: E712
-        .filter(account_filter)
+        .filter(JournalEntryLine.is_deleted.is_(False))
+        .filter(JournalEntry.is_deleted.is_(False))
+    )
+
+    base_query = base_query_relaxed.filter(account_filter)
+
+    # If strict account filtering drops supplier-tagged lines *and* that changes net totals,
+    # fall back to the relaxed query.
+    try:
+        relaxed_count = base_query_relaxed.count()
+        strict_count = base_query.count()
+        if relaxed_count > strict_count:
+            def _nets(q):
+                row = (
+                    q.with_entities(
+                        func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0),
+                        func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0),
+                    ).first()
+                )
+                cd, cc, d18, c18, d21, c21, d22, c22, d24, c24 = row or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                return (
+                    float(cd or 0.0) - float(cc or 0.0),
+                    float(d18 or 0.0) - float(c18 or 0.0),
+                    float(d21 or 0.0) - float(c21 or 0.0),
+                    float(d22 or 0.0) - float(c22 or 0.0),
+                    float(d24 or 0.0) - float(c24 or 0.0),
+                )
+
+            strict_nets = _nets(base_query)
+            relaxed_nets = _nets(base_query_relaxed)
+            eps_cash = 0.01
+            eps_gold = 0.0005
+            if (
+                abs(strict_nets[0] - relaxed_nets[0]) > eps_cash
+                or any(abs(a - b) > eps_gold for a, b in zip(strict_nets[1:], relaxed_nets[1:]))
+            ):
+                base_query = base_query_relaxed
+    except Exception:
+        pass
+
+    journal_lines = (
+        base_query
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
