@@ -22,6 +22,31 @@ class _OfficesScreenState extends State<OfficesScreen> {
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
 
+  double _asDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is double) return v;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
+
+  String _formatSigned(
+    double amount, {
+    required bool isArabic,
+    required String unitAr,
+    required String unitEn,
+    int decimals = 2,
+  }) {
+    final absValue = amount.abs().toStringAsFixed(decimals);
+    final unit = isArabic ? unitAr : unitEn;
+
+    // Convention: positive = "عليه" (debit / receivable), negative = "له" (credit / payable)
+    final direction = isArabic
+        ? (amount < 0 ? 'له' : 'عليه')
+        : (amount < 0 ? 'Payable' : 'Receivable');
+
+    return '$direction $absValue $unit';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -140,12 +165,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
   void _showBalanceDialog(Map<String, dynamic> balance) {
     final isAr = widget.isArabic;
 
-    double asDouble(dynamic v) {
-      if (v == null) return 0.0;
-      if (v is double) return v;
-      if (v is num) return v.toDouble();
-      return double.tryParse(v.toString()) ?? 0.0;
-    }
+    final cashBalance = _asDouble(balance['balance_cash']);
+    final goldTotal = _asDouble(balance['balance_gold']?['total']);
 
     showDialog(
       context: context,
@@ -172,10 +193,10 @@ class _OfficesScreenState extends State<OfficesScreen> {
                       ? Map<String, dynamic>.from(balance['kpis'])
                       : <String, dynamic>{};
 
-                  final outstanding = asDouble(
+                  final outstanding = _asDouble(
                     kpis['outstanding_weight_main_karat'],
                   );
-                  final avgPrice = asDouble(kpis['avg_closing_price_per_gram']);
+                  final avgPrice = _asDouble(kpis['avg_closing_price_per_gram']);
 
                   Widget kpiCard({
                     required String title,
@@ -247,7 +268,15 @@ class _OfficesScreenState extends State<OfficesScreen> {
                 isAr ? 'الرصيد النقدي' : 'Cash Balance',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
-              Text('${balance['balance_cash']} ${isAr ? "ر.س" : "SAR"}'),
+              Text(
+                _formatSigned(
+                  cashBalance,
+                  isArabic: isAr,
+                  unitAr: 'ر.س',
+                  unitEn: 'SAR',
+                  decimals: 2,
+                ),
+              ),
               const SizedBox(height: 12),
 
               // الذهب
@@ -259,11 +288,23 @@ class _OfficesScreenState extends State<OfficesScreen> {
                   .where((e) => e.key != 'total')
                   .map(
                     (e) => Text(
-                      '${isAr ? "عيار" : "Karat"} ${e.key}: ${e.value} ${isAr ? "جم" : "g"}',
+                      '${isAr ? "عيار" : "Karat"} ${e.key}: ${_formatSigned(
+                        _asDouble(e.value),
+                        isArabic: isAr,
+                        unitAr: 'جم',
+                        unitEn: 'g',
+                        decimals: 3,
+                      )}',
                     ),
                   )),
               Text(
-                '${isAr ? "الإجمالي" : "Total"}: ${balance['balance_gold']['total']} ${isAr ? "جم" : "g"}',
+                '${isAr ? "الإجمالي" : "Total"}: ${_formatSigned(
+                  goldTotal,
+                  isArabic: isAr,
+                  unitAr: 'جم',
+                  unitEn: 'g',
+                  decimals: 3,
+                )}',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const Divider(height: 24),
@@ -431,6 +472,9 @@ class _OfficesScreenState extends State<OfficesScreen> {
     final theme = Theme.of(context);
     final isActive = office['active'] ?? true;
 
+    final cashBalance = _asDouble(office['balance_cash']);
+    final goldTotal = _asDouble(office['balance_gold']?['total']);
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 2,
@@ -539,15 +583,27 @@ class _OfficesScreenState extends State<OfficesScreen> {
                   Expanded(
                     child: _buildBalanceTile(
                       isAr ? 'النقدي' : 'Cash',
-                      '${office['balance_cash']} ${isAr ? "ر.س" : "SAR"}',
-                      AppColors.success,
+                      _formatSigned(
+                        cashBalance,
+                        isArabic: isAr,
+                        unitAr: 'ر.س',
+                        unitEn: 'SAR',
+                        decimals: 2,
+                      ),
+                      cashBalance < 0 ? AppColors.error : AppColors.success,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: _buildBalanceTile(
                       isAr ? 'الوزن' : 'Weight',
-                      '${office['balance_gold']?['total'] ?? 0} ${isAr ? "جم" : "g"}',
+                      _formatSigned(
+                        goldTotal,
+                        isArabic: isAr,
+                        unitAr: 'جم',
+                        unitEn: 'g',
+                        decimals: 3,
+                      ),
                       AppColors.primaryGold,
                     ),
                   ),

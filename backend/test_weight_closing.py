@@ -26,6 +26,7 @@ from models import (
     InvoiceItem,
     InvoiceKaratLine,
     Office,
+    Voucher,
     WeightClosingOrder,
     WeightClosingExecution,
 )
@@ -386,9 +387,30 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201, msg=response.data)
         data = json.loads(response.data)
         self.assertEqual(data['payment_status'], 'paid')
-        self.assertIn('weight_consumption', data)
-        self.assertAlmostEqual(data['weight_consumption']['weight_consumed'], 2.5)
+        self.assertIn('purchase_invoice_id', data)
+        self.assertIsNone(data['purchase_invoice_id'])
+        self.assertNotIn('weight_consumption', data)
         self.assertAlmostEqual(data['weight_main_karat'], 2.5)
+
+        refreshed_order = WeightClosingOrder.query.get(order.id)
+        self.assertEqual(refreshed_order.status, 'open')
+        self.assertAlmostEqual(refreshed_order.executed_weight_main_karat or 0.0, 0.0)
+
+        reservation_id = data['id']
+        settle_payload = {
+            'settlement_date': datetime.utcnow().isoformat(),
+            'execution_price_per_gram': 230.0,
+        }
+        settle_resp = self.client.post(
+            f'/api/office-reservations/{reservation_id}/settle',
+            data=json.dumps(settle_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(settle_resp.status_code, 200, msg=settle_resp.data)
+        settled = json.loads(settle_resp.data)
+        self.assertIsNotNone(settled.get('purchase_invoice_id'))
+        self.assertIn('weight_consumption', settled)
+        self.assertAlmostEqual(settled['weight_consumption']['weight_consumed'], 2.5)
 
         refreshed_order = WeightClosingOrder.query.get(order.id)
         self.assertEqual(refreshed_order.status, 'closed')
@@ -438,7 +460,7 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         self.assertEqual(data_page_2['pagination']['page'], 2)
 
     def test_reservation_creates_purchase_invoice_and_journal(self):
-        """Ensure creating an office reservation generates a purchase invoice and journal entry when paid."""
+        """Booking creates no invoice/gold journal; settlement creates them."""
         sale_invoice = self._create_sale_invoice(weight_grams=1.5, close_price=240.0)
         order = _upsert_weight_closing_order(
             sale_invoice,
@@ -467,53 +489,66 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201, msg=response.data)
         data = json.loads(response.data)
 
-        # reservation should include linked invoice id
+        # booking should not create invoice
         self.assertIn('purchase_invoice_id', data)
-        self.assertIsNotNone(data['purchase_invoice_id'])
+        self.assertIsNone(data['purchase_invoice_id'])
         reservation_id = data['id']
+
+        # payment voucher should exist (since paid_amount > 0)
+        self.assertIn('payment_voucher_id', data)
+        voucher = Voucher.query.get(data['payment_voucher_id'])
+        self.assertIsNotNone(voucher)
+        self.assertEqual(voucher.reference_type, 'office_reservation')
+        self.assertEqual(voucher.reference_id, reservation_id)
+
+        # no gold journal should exist at booking time
+        gold_entry = JournalEntry.query.filter_by(reference_type='office_reservation', reference_id=reservation_id).first()
+        self.assertIsNone(gold_entry)
 
         expected_total = round(payload['weight'] * payload['price_per_gram'], 2)
 
-        inv = Invoice.query.get(data['purchase_invoice_id'])
+        settle_payload = {
+            'settlement_date': datetime.utcnow().isoformat(),
+            'execution_price_per_gram': 240.0,
+        }
+        settle_resp = self.client.post(
+            f'/api/office-reservations/{reservation_id}/settle',
+            data=json.dumps(settle_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(settle_resp.status_code, 200, msg=settle_resp.data)
+        settled = json.loads(settle_resp.data)
+
+        inv = Invoice.query.get(settled['purchase_invoice_id'])
         self.assertIsNotNone(inv)
         self.assertEqual(inv.total, expected_total)
-
-        # A journal entry referencing the invoice should exist (payment recorded)
-        je = JournalEntry.query.filter_by(reference_type='invoice', reference_id=inv.id).first()
-        self.assertIsNotNone(je)
-        self.assertTrue(je.is_posted or je.entry_number is not None)
 
         gold_entry = JournalEntry.query.filter_by(reference_type='office_reservation', reference_id=reservation_id).first()
         self.assertIsNotNone(gold_entry)
         self.assertTrue(gold_entry.is_posted)
 
         lines = JournalEntryLine.query.filter_by(journal_entry_id=gold_entry.id).all()
-        self.assertEqual(len(lines), 4)
+        self.assertGreaterEqual(len(lines), 2)
 
-        bridge_account = Account.query.filter_by(account_number='1290').first()
         inventory_account = Account.query.filter_by(account_number='1310').first()
-        self.assertIsNotNone(bridge_account)
         self.assertIsNotNone(inventory_account)
 
-        bridge_lines = [line for line in lines if line.account_id == bridge_account.id]
-        self.assertEqual(len(bridge_lines), 2)
+        inventory_line = next(
+            line for line in lines
+            if line.account_id == inventory_account.id and (line.cash_debit or 0.0) > 0
+        )
+        self.assertAlmostEqual(inventory_line.cash_debit or 0.0, expected_total)
+        self.assertAlmostEqual(inventory_line.credit_21k or 0.0, payload['weight'])
 
-        office_line = next(line for line in lines if line.account_id == office.account_category_id)
-        inventory_line = next(line for line in lines if line.account_id == inventory_account.id)
-
-        bridge_cash_line = next(line for line in bridge_lines if (line.cash_debit or 0.0) > 0)
-        bridge_release_line = next(line for line in bridge_lines if (line.credit_21k or 0.0) > 0)
-
-        self.assertAlmostEqual(bridge_cash_line.cash_debit or 0.0, expected_total)
-        self.assertAlmostEqual(bridge_cash_line.debit_21k or 0.0, payload['weight'])
-        self.assertAlmostEqual(bridge_release_line.credit_21k or 0.0, payload['weight'])
-
+        office_line = next(
+            line for line in lines
+            if line.account_id == office.account_category_id and (line.cash_credit or 0.0) > 0
+        )
         self.assertAlmostEqual(office_line.cash_credit or 0.0, expected_total)
-        self.assertAlmostEqual(office_line.credit_21k or 0.0, payload['weight'])
-        self.assertAlmostEqual(inventory_line.debit_21k or 0.0, payload['weight'])
+        self.assertAlmostEqual(office_line.debit_21k or 0.0, payload['weight'])
 
     def test_reservation_partial_payment_creates_partial_invoice(self):
-        """Partial payment should create a partially_paid invoice and journal for the paid amount."""
+        """Partial payment creates a payment voucher at booking, and a partially_paid invoice on settlement."""
         sale_invoice = self._create_sale_invoice(weight_grams=2.0, close_price=210.0)
         order = _upsert_weight_closing_order(
             sale_invoice,
@@ -546,13 +581,26 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         data = json.loads(response.data)
 
         self.assertIn('purchase_invoice_id', data)
-        inv = Invoice.query.get(data['purchase_invoice_id'])
+        self.assertIsNone(data['purchase_invoice_id'])
+        self.assertIn('payment_voucher_id', data)
+
+        reservation_id = data['id']
+        settle_payload = {
+            'settlement_date': datetime.utcnow().isoformat(),
+            'execution_price_per_gram': 210.0,
+        }
+        settle_resp = self.client.post(
+            f'/api/office-reservations/{reservation_id}/settle',
+            data=json.dumps(settle_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(settle_resp.status_code, 200, msg=settle_resp.data)
+        settled = json.loads(settle_resp.data)
+
+        inv = Invoice.query.get(settled['purchase_invoice_id'])
         self.assertIsNotNone(inv)
         self.assertEqual(inv.status, 'partially_paid')
         self.assertAlmostEqual(inv.amount_paid, paid)
-
-        je = JournalEntry.query.filter_by(reference_type='invoice', reference_id=inv.id).first()
-        self.assertIsNotNone(je)
 
     def test_reservation_enforces_office_supplier(self):
         """Reservation must reject mismatched supplier_id and use the office supplier automatically."""
@@ -602,8 +650,22 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201, msg=response.data)
         data = json.loads(response.data)
 
+        self.assertIsNone(data.get('purchase_invoice_id'))
+        reservation_id = data['id']
+        settle_payload = {
+            'settlement_date': datetime.utcnow().isoformat(),
+            'execution_price_per_gram': payload['execution_price_per_gram'],
+        }
+        settle_resp = self.client.post(
+            f'/api/office-reservations/{reservation_id}/settle',
+            data=json.dumps(settle_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(settle_resp.status_code, 200, msg=settle_resp.data)
+        settled = json.loads(settle_resp.data)
+
         office_supplier = ensure_office_supplier(office)
-        inv = Invoice.query.get(data['purchase_invoice_id'])
+        inv = Invoice.query.get(settled['purchase_invoice_id'])
         self.assertIsNotNone(inv)
         self.assertEqual(inv.supplier_id, office_supplier.id)
 

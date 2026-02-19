@@ -22705,7 +22705,8 @@ def _auto_consume_weight_closing(
         exec_price = _coerce_float(exec_price, 0.0)
 
         # إنشاء قيد محاسبي للتنفيذ إذا كان هناك journal_entry_id
-        if journal_entry_id and invoice:
+        # ملاحظة: تنفيذ مكاتب التسكير (office_reservation) يجب ألا يمر على حساب الجسر.
+        if journal_entry_id and invoice and execution_type != 'office_reservation':
             karat_line = InvoiceKaratLine.query.filter_by(invoice_id=invoice.id).first()
             execution_karat = karat_line.karat if karat_line else get_main_karat()
 
@@ -23145,41 +23146,6 @@ def create_office_reservation():
         supplier_override = data.get('supplier_id')
         if supplier_override and supplier_override != supplier.id:
             return jsonify({'error': 'لا يمكن تحديد مورد مختلف عن مورد المكتب'}), 400
-
-        legacy_supplier_purchase = 'شراء' + ' من ' + 'مورد'
-
-        next_invoice_type_id = _next_invoice_type_id(['شراء', legacy_supplier_purchase])
-
-        purchase_invoice = Invoice(
-            invoice_type_id=next_invoice_type_id,
-            supplier_id=supplier.id,
-            office_id=office.id,
-            date=reservation_date,
-            total=total_amount,
-            invoice_type='شراء',
-            status='paid' if payment_status == 'paid' else ('partially_paid' if payment_status == 'partial' else 'unpaid'),
-            total_weight=weight_main_karat,
-            gold_subtotal=total_amount,
-            wage_subtotal=0.0,
-            gold_tax_total=0.0,
-            wage_tax_total=0.0,
-            amount_paid=paid_amount,
-            gold_type='scrap',
-        )
-        db.session.add(purchase_invoice)
-        db.session.flush()
-
-        karat_line = InvoiceKaratLine(
-            invoice_id=purchase_invoice.id,
-            karat=karat,
-            weight_grams=weight_grams,
-            gold_value_cash=total_amount,
-            manufacturing_wage_cash=0.0,
-        )
-        db.session.add(karat_line)
-
-        _upsert_weight_closing_order(purchase_invoice, execution_price, settings=settings)
-
         reservation = OfficeReservation(
             office_id=office.id,
             reservation_code=_generate_reservation_code(settings.get('reservation_code_prefix', 'RES')),
@@ -23198,146 +23164,89 @@ def create_office_reservation():
             notes=data.get('notes'),
             weight_consumed_main_karat=0.0,
             weight_remaining_main_karat=weight_main_karat,
-            purchase_invoice_id=purchase_invoice.id,
+            purchase_invoice_id=None,
         )
         db.session.add(reservation)
         db.session.flush()
-
-        invoice_entry = JournalEntry(
-            entry_number=_generate_journal_entry_number('INV'),
-            date=reservation_date,
-            description=f'سداد حجز مكتب {office.name}',
-            reference_type='invoice',
-            reference_id=purchase_invoice.id,
-        )
-        db.session.add(invoice_entry)
-        db.session.flush()
-
+        voucher = None
         if paid_amount > 0:
-            # Prefer explicit SafeBox selection (cash/bank) when provided, else fallback to settings.
+            # Create a real Payment Voucher (سند صرف) for the paid amount.
+            # This reflects money leaving the safe immediately, even if the gold is not received yet.
             resolved_payment_safe_box_id = (
                 _normalize_fk_ref(data.get('safe_box_id'))
                 or _normalize_fk_ref(data.get('cash_safe_box_id'))
                 or _normalize_fk_ref(settings.get('cash_safe_box_id'))
             )
 
+            safe_box = None
             cash_account = None
             if resolved_payment_safe_box_id is not None:
                 safe_box = SafeBox.query.get(int(resolved_payment_safe_box_id))
                 if not safe_box or not getattr(safe_box, 'is_active', True):
                     db.session.rollback()
-                    return jsonify({
-                        'error': 'الخزينة المحددة غير موجودة/غير فعالة',
-                        'details': f"safe_box_id={resolved_payment_safe_box_id}",
-                    }), 400
-
+                    return jsonify({'error': 'الخزينة المحددة غير موجودة/غير فعالة'}), 400
                 if safe_box.safe_type not in ('cash', 'bank'):
                     db.session.rollback()
-                    return jsonify({
-                        'error': 'الخزينة المحددة ليست خزينة نقد/بنك',
-                        'details': f"safe_box_id={resolved_payment_safe_box_id}, safe_type={safe_box.safe_type}",
-                    }), 400
-
+                    return jsonify({'error': 'الخزينة المحددة ليست خزينة نقد/بنك'}), 400
                 cash_account = Account.query.get(safe_box.account_id)
                 if not cash_account:
                     db.session.rollback()
-                    return jsonify({
-                        'error': 'لا يمكن تسجيل الدفعة لأن حساب الخزينة غير موجود',
-                        'details': f"safe_box_id={resolved_payment_safe_box_id}, account_id={safe_box.account_id}",
-                    }), 400
-
-                # Store on the created purchase invoice for traceability.
-                purchase_invoice.safe_box_id = safe_box.id
+                    return jsonify({'error': 'لا يمكن تسجيل الدفعة لأن حساب الخزينة غير موجود'}), 400
             else:
+                # Backward-compatible fallback: allow posting against the configured cash account number/id.
                 cash_account_setting = settings.get('cash_account_id', 1100)
                 cash_account = _resolve_account_from_id_or_number(cash_account_setting)
                 if not cash_account:
                     db.session.rollback()
-                    return jsonify({
-                        'error': 'لا يمكن تسجيل الدفعة لأن حساب الصندوق غير موجود/غير مضبوط',
-                        'details': f"cash_account_id={cash_account_setting}",
-                    }), 400
+                    return jsonify({'error': 'لا يمكن تسجيل الدفعة لأن حساب الصندوق غير موجود/غير مضبوط'}), 400
 
-            # قيد الدفع: المكتب مدين (ندفع له = نقلل الدين) والصندوق دائن (يخرج المال)
-            create_dual_journal_entry(
-                journal_entry_id=invoice_entry.id,
-                account_id=office.account_category_id,
-                cash_debit=paid_amount,
+            voucher_number = generate_voucher_number('payment', voucher_date=reservation_date)
+            voucher = Voucher(
+                voucher_number=voucher_number,
+                voucher_type='payment',
+                date=reservation_date,
+                party_type='supplier',
                 supplier_id=supplier.id,
-                description='دفع نقدية للمكتب (مدين)'
+                description=f'عربون/دفعة حجز مكتب {office.name} ({reservation.reservation_code})',
+                reference_type='office_reservation',
+                reference_id=reservation.id,
+                reference_number=str(reservation.reservation_code),
+                created_by=str(data.get('created_by') or 'system'),
+                status='approved',
+                approved_by=str(data.get('created_by') or 'system'),
+                approved_at=datetime.utcnow(),
+                amount_cash=round(float(paid_amount), 2),
+                amount_gold=0.0,
             )
-            create_dual_journal_entry(
-                journal_entry_id=invoice_entry.id,
-                account_id=cash_account.id,
-                cash_credit=paid_amount,
-                description='خروج نقدية من الصندوق (دائن)'
+            db.session.add(voucher)
+            db.session.flush()
+
+            db.session.add(
+                VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=office.account_category_id,
+                    line_type='debit',
+                    amount_type='cash',
+                    amount=round(float(paid_amount), 2),
+                    description='دفعة حجز مكتب (مدين)',
+                )
             )
-            verify_dual_balance(invoice_entry.id)
+            db.session.add(
+                VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=cash_account.id,
+                    line_type='credit',
+                    amount_type='cash',
+                    amount=round(float(paid_amount), 2),
+                    description='خروج نقدية من الصندوق (دائن)',
+                )
+            )
+            db.session.flush()
 
-        gold_entry = JournalEntry(
-            entry_number=_generate_journal_entry_number('WGT'),
-            date=reservation_date,
-            description=f'حجز ذهب عيار {karat} من مكتب {office.name}',
-            reference_type='office_reservation',
-            reference_id=reservation.id,
-            is_posted=True,
-            posted_at=reservation_date,
-            posted_by='system',
-        )
-        db.session.add(gold_entry)
-        db.session.flush()
-
-        # حساب الجسر (1710 preferred, 1290 fallback)
-        bridge_account = (
-            Account.query.filter_by(account_number='1710').first()
-            or Account.query.filter_by(account_number='1290').first()
-        )
-        if not bridge_account:
-            bridge_account = Account.query.filter_by(name='جسر مشتريات الكسر والتسكير').first()
-        
-        if not bridge_account:
-            db.session.rollback()
-            return jsonify({'error': 'حساب الجسر (1290) غير موجود في شجرة الحسابات'}), 500
-        
-        # قيد الحجز: الجسر مدين (نقداً + ذهباً) والمكتب دائن (نقداً + ذهباً)
-        # استخدام المعاملات الديناميكية مباشرة
-        karat_debit = f'debit_{karat}k'
-        karat_credit = f'credit_{karat}k'
-        
-        # حساب الجسر: مدين نقداً ومدين ذهباً
-        create_dual_journal_entry(
-            journal_entry_id=gold_entry.id,
-            account_id=bridge_account.id,
-            cash_debit=total_amount,
-            description=f'حجز ذهب عيار {karat} في الجسر',
-            **{karat_debit: weight_grams}  # معامل ديناميكي ✅
-        )
-        
-        # المكتب: دائن نقداً ودائن ذهباً
-        create_dual_journal_entry(
-            journal_entry_id=gold_entry.id,
-            account_id=office.account_category_id,
-            cash_credit=total_amount,
-            supplier_id=supplier.id,
-            description=f'بيع ذهب عيار {karat} للمحل (مكتب)',
-            **{karat_credit: weight_grams}  # معامل ديناميكي ✅
-        )
-        verify_dual_balance(gold_entry.id)
-
-        consumption = _auto_consume_weight_closing(
-            purchase_invoice.id,
-            weight_override=weight_main_karat,
-            price_per_gram=execution_price,
-            execution_type='office_reservation',
-            journal_entry_id=gold_entry.id,
-            notes=f'Office reservation #{reservation.reservation_code}',
-        )
-
-        reservation.weight_consumed_main_karat = consumption['weight_consumed']
-        reservation.weight_remaining_main_karat = max(weight_main_karat - consumption['weight_consumed'], 0.0)
-        reservation.executions_created = consumption['executions_created']
-        if reservation.weight_remaining_main_karat <= 0.0001:
-            reservation.status = 'executed'
+            voucher_entry = create_journal_entry_from_voucher(voucher)
+            if voucher_entry:
+                voucher.journal_entry_id = voucher_entry.id
+            _append_safe_transactions_for_voucher(voucher, created_by=voucher.created_by)
 
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
@@ -23347,17 +23256,212 @@ def create_office_reservation():
         db.session.commit()
 
         response = _serialize_office_reservation(reservation)
-        response['weight_consumption'] = consumption
+        response['purchase_invoice_id'] = reservation.purchase_invoice_id
         # Echo payment safe box (if provided via request or settings) for UI/debugging.
         payment_sb = _normalize_fk_ref(data.get('safe_box_id')) or _normalize_fk_ref(data.get('cash_safe_box_id'))
         if payment_sb is not None:
             response['payment_safe_box_id'] = int(payment_sb)
+
+        # Include voucher info (if any) so UI/support can trace the payment.
+        try:
+            if voucher is not None:
+                response['payment_voucher_id'] = int(voucher.id)
+                response['payment_voucher_number'] = str(voucher.voucher_number)
+        except Exception:
+            pass
         return jsonify(response), 201
 
     except Exception as exc:
         db.session.rollback()
         print(f"❌ Failed to create office reservation: {exc}")
         return jsonify({'error': f'فشل إنشاء الحجز: {exc}'}), 500
+
+
+@api.route('/office-reservations/<int:reservation_id>/settle', methods=['POST'])
+@require_permission('journal.post')
+def settle_office_reservation(reservation_id: int):
+    """Convert an office reservation (fixing/booking) into a purchase invoice at execution time.
+
+    Behavior:
+    - Creates the purchase invoice + karat line.
+    - Creates the gold journal entry (bridge vs office) and consumes weight closing orders.
+    - Links any prior payment vouchers that referenced the reservation to the created invoice.
+    """
+    reservation = OfficeReservation.query.get(reservation_id)
+    if not reservation:
+        return jsonify({'error': 'الحجز غير موجود'}), 404
+
+    if reservation.purchase_invoice_id:
+        # Already settled.
+        return jsonify(_serialize_office_reservation(reservation)), 200
+
+    data = request.get_json(silent=True) or {}
+
+    office = Office.query.get(reservation.office_id)
+    if not office:
+        return jsonify({'error': 'المكتب غير موجود'}), 404
+    ensure_office_account(office)
+    if not office.account_category_id:
+        return jsonify({'error': 'المكتب لا يملك حساباً محاسبياً مرتبطاً'}), 400
+
+    supplier = ensure_office_supplier(office)
+
+    try:
+        settlement_date = (
+            datetime.fromisoformat(data.get('settlement_date'))
+            if data.get('settlement_date')
+            else datetime.utcnow()
+        )
+    except ValueError:
+        return jsonify({'error': 'settlement_date يجب أن يكون بصيغة ISO'}), 400
+
+    execution_price = _coerce_float(
+        data.get('execution_price_per_gram'),
+        _coerce_float(getattr(reservation, 'execution_price_per_gram', None), _coerce_float(reservation.price_per_gram, 0.0)),
+    )
+    if execution_price <= 0:
+        return jsonify({'error': 'execution_price_per_gram غير صالح'}), 400
+
+    settings = _load_weight_closing_settings()
+
+    try:
+        legacy_supplier_purchase = 'شراء' + ' من ' + 'مورد'
+        next_invoice_type_id = _next_invoice_type_id(['شراء', legacy_supplier_purchase])
+
+        total_amount = float(getattr(reservation, 'total_amount', 0.0) or 0.0)
+        paid_amount = float(getattr(reservation, 'paid_amount', 0.0) or 0.0)
+        if total_amount <= 0:
+            total_amount = round(float(reservation.weight_grams or 0.0) * float(reservation.price_per_gram or 0.0), 2)
+
+        invoice_status = 'unpaid'
+        if paid_amount >= total_amount and total_amount > 0:
+            invoice_status = 'paid'
+        elif paid_amount > 0:
+            invoice_status = 'partially_paid'
+
+        purchase_invoice = Invoice(
+            invoice_type_id=next_invoice_type_id,
+            supplier_id=supplier.id,
+            office_id=office.id,
+            date=settlement_date,
+            total=total_amount,
+            invoice_type='شراء',
+            status=invoice_status,
+            total_weight=float(reservation.weight_main_karat or 0.0),
+            gold_subtotal=total_amount,
+            wage_subtotal=0.0,
+            gold_tax_total=0.0,
+            wage_tax_total=0.0,
+            amount_paid=paid_amount,
+            gold_type='scrap',
+        )
+        db.session.add(purchase_invoice)
+        db.session.flush()
+
+        db.session.add(
+            InvoiceKaratLine(
+                invoice_id=purchase_invoice.id,
+                karat=int(reservation.karat or get_main_karat()),
+                weight_grams=float(reservation.weight_grams or 0.0),
+                gold_value_cash=total_amount,
+                manufacturing_wage_cash=0.0,
+            )
+        )
+
+        _upsert_weight_closing_order(purchase_invoice, execution_price, settings=settings)
+
+        reservation.purchase_invoice_id = purchase_invoice.id
+        db.session.add(reservation)
+
+        # Relink prior payment vouchers from reservation -> invoice for better traceability.
+        try:
+            linked = Voucher.query.filter_by(reference_type='office_reservation', reference_id=reservation.id).all()
+            for v in linked:
+                v.reference_type = 'invoice'
+                v.reference_id = purchase_invoice.id
+                v.reference_number = str(purchase_invoice.id)
+                db.session.add(v)
+        except Exception:
+            pass
+
+        gold_entry = JournalEntry(
+            entry_number=_generate_journal_entry_number('WGT'),
+            date=settlement_date,
+            description=f'تنفيذ حجز ذهب ({reservation.reservation_code}) - مكتب {office.name}',
+            reference_type='office_reservation',
+            reference_id=reservation.id,
+            is_posted=True,
+            posted_at=settlement_date,
+            posted_by=str(data.get('created_by') or 'system'),
+        )
+        db.session.add(gold_entry)
+        db.session.flush()
+
+        # ✅ مكاتب التسكير: شراء نقدي/ذمم مباشرة على المخزون، بدون المرور على حساب الجسر.
+        inventory_account_id = _resolve_inventory_account_id_for_invoice('شراء', 'scrap')
+        if not inventory_account_id:
+            db.session.rollback()
+            return jsonify({'error': 'تعذر تحديد حساب مخزون الذهب (scrap)'}), 500
+
+        karat = int(reservation.karat or get_main_karat())
+        if karat not in (18, 21, 22, 24):
+            karat = int(get_main_karat() or 21)
+        if karat not in (18, 21, 22, 24):
+            karat = 21
+
+        weight_grams = float(reservation.weight_grams or 0.0)
+        if weight_grams <= 0:
+            db.session.rollback()
+            return jsonify({'error': 'وزن الحجز غير صالح'}), 400
+
+        karat_debit = f'debit_{karat}k'
+        karat_credit = f'credit_{karat}k'
+
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=inventory_account_id,
+            cash_debit=total_amount,
+            description=f'تسليم ذهب للتسكير عيار {karat} - إخراج وزن من المخزون',
+            **{karat_credit: weight_grams},
+        )
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=office.account_category_id,
+            cash_credit=total_amount,
+            supplier_id=supplier.id,
+            description=f'ذهب لدى مكتب التسكير (أمانة/ذمة على المكتب) - عيار {karat}',
+            **{karat_debit: weight_grams},
+        )
+        verify_dual_balance(gold_entry.id)
+
+        consumption = _auto_consume_weight_closing(
+            purchase_invoice.id,
+            weight_override=float(reservation.weight_main_karat or 0.0),
+            price_per_gram=execution_price,
+            execution_type='office_reservation',
+            journal_entry_id=gold_entry.id,
+            notes=f'Office reservation #{reservation.reservation_code}',
+        )
+
+        weight_main_karat = float(reservation.weight_main_karat or 0.0)
+        reservation.weight_consumed_main_karat = consumption['weight_consumed']
+        reservation.weight_remaining_main_karat = max(weight_main_karat - consumption['weight_consumed'], 0.0)
+        reservation.executions_created = consumption['executions_created']
+        if reservation.weight_remaining_main_karat <= 0.0001:
+            reservation.status = 'executed'
+        db.session.add(reservation)
+
+        db.session.commit()
+
+        response = _serialize_office_reservation(reservation)
+        response['weight_consumption'] = consumption
+        response['purchase_invoice_id'] = reservation.purchase_invoice_id
+        return jsonify(response), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        print(f"❌ Failed to settle office reservation: {exc}")
+        return jsonify({'error': f'فشل تنفيذ الحجز: {exc}'}), 500
 
 
 # ═══════════════════════════════════════════════════════════════
