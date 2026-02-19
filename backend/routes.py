@@ -113,6 +113,26 @@ def _wrap_api_exceptions(error_code: str, message: str):
 _DB_COLUMN_CACHE: dict[tuple[str, str], bool] = {}
 
 
+def _normalize_account_ref(value):
+    """Accept either an account id or account_number-like integer."""
+    if value in (None, '', False, 0, '0'):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def _normalize_fk_ref(value):
+    """Accept nullable integer FK values (treat 0 as null)."""
+    if value in (None, '', False, 0, '0'):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
 def _db_has_column(table_name: str, column_name: str) -> bool:
     key = (table_name, column_name)
     cached = _DB_COLUMN_CACHE.get(key)
@@ -796,24 +816,6 @@ def update_weight_closing_settings():
             0.0,
             float(_coerce_float(payload.get('shift_close_gold_pure_deficit_threshold_grams'), 0.10)),
         )
-
-    def _normalize_account_ref(value):
-        """Accept either account id or account_number-like integer."""
-        if value in (None, '', False):
-            return None
-        try:
-            return int(str(value).strip())
-        except Exception:
-            return None
-
-    def _normalize_fk_ref(value):
-        """Accept nullable integer FK values."""
-        if value in (None, '', False):
-            return None
-        try:
-            return int(str(value).strip())
-        except Exception:
-            return None
 
     # Inventory + cash account IDs
     for key in (
@@ -23115,7 +23117,12 @@ def create_office_reservation():
         return jsonify({'error': 'karat غير مدعوم. القيم المسموحة: 18, 21, 22, 24'}), 400
     weight_main_karat = round(convert_to_main_karat(weight_grams, karat), 6)
     total_amount = _coerce_float(data.get('total_amount'), round(weight_grams * price_per_gram, 2))
-    paid_amount = _coerce_float(data.get('paid_amount'), total_amount)
+
+    # Important: treat explicit 0 as 0 (do NOT fall back to total_amount).
+    if 'paid_amount' in data:
+        paid_amount = _coerce_float(data.get('paid_amount'), 0.0)
+    else:
+        paid_amount = float(total_amount)
 
     payment_status = data.get('payment_status')
     if not payment_status:
