@@ -348,7 +348,7 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
     final gold24 = _toDouble(values['gold_24k']);
 
     return gold18 * (18 / _mainKarat) +
-        gold21 +
+        gold21 * (21 / _mainKarat) +
         gold22 * (22 / _mainKarat) +
         gold24 * (24 / _mainKarat);
   }

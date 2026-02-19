@@ -82,6 +82,24 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     return false;
   }
 
+  ({DateTime startInclusive, DateTime endExclusive}) _rangeBounds(
+    DateTimeRange range,
+  ) {
+    // Normalize to full-day bounds so statements with timestamps behave
+    // consistently across summary cards and table filtering.
+    final start = DateTime(
+      range.start.year,
+      range.start.month,
+      range.start.day,
+    );
+    final endExclusive = DateTime(
+      range.end.year,
+      range.end.month,
+      range.end.day,
+    ).add(const Duration(days: 1));
+    return (startInclusive: start, endExclusive: endExclusive);
+  }
+
   ({double gold, double cash}) _openingBalanceAt(DateTime? start) {
     final statement = _statement;
     if (statement == null || start == null) {
@@ -132,14 +150,17 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     }
 
     final range = _dateRange!;
-    final opening = _openingBalanceAt(range.start);
+    final bounds = _rangeBounds(range);
+    final opening = _openingBalanceAt(bounds.startInclusive);
 
     double movementGold = 0.0;
     double movementCash = 0.0;
 
     for (final line in statement.lines) {
       final dt = line.date;
-      final inRange = !dt.isBefore(range.start) && !dt.isAfter(range.end);
+      final inRange =
+          !dt.isBefore(bounds.startInclusive) &&
+          dt.isBefore(bounds.endExclusive);
       if (!inRange) continue;
       movementGold += line.goldDebit - line.goldCredit;
       movementCash += line.cashDebit - line.cashCredit;
@@ -168,6 +189,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     }
 
     final range = _dateRange!;
+    final bounds = _rangeBounds(range);
     double goldDebit = 0.0;
     double goldCredit = 0.0;
     double cashDebit = 0.0;
@@ -175,7 +197,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     for (final line in statement.lines) {
       final dt = line.date;
-      final inRange = !dt.isBefore(range.start) && !dt.isAfter(range.end);
+      final inRange =
+          !dt.isBefore(bounds.startInclusive) &&
+          dt.isBefore(bounds.endExclusive);
       if (!inRange) continue;
       goldDebit += line.goldDebit;
       goldCredit += line.goldCredit;
@@ -408,17 +432,16 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     setState(() {
       final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
       final query = _searchController.text.trim().toLowerCase();
+      final bounds = _dateRange == null ? null : _rangeBounds(_dateRange!);
 
       var filtered = _statement!.lines.where((line) {
         final date = line.date;
         final description = line.description.toLowerCase();
 
-        final isAfterStartDate =
-            _dateRange?.start == null ||
-            date.isAfter(_dateRange!.start.subtract(const Duration(days: 1)));
-        final isBeforeEndDate =
-            _dateRange?.end == null ||
-            date.isBefore(_dateRange!.end.add(const Duration(days: 1)));
+        final matchesDateRange = bounds == null
+            ? true
+            : (!date.isBefore(bounds.startInclusive) &&
+                  date.isBefore(bounds.endExclusive));
         final matchesSearch = query.isEmpty
             ? true
             : description.contains(query) ||
@@ -444,15 +467,14 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
             0.0001;
         final matchesMovement = !_showOnlyMovement || hasMovement;
 
-        return isAfterStartDate &&
-            isBeforeEndDate &&
+        return matchesDateRange &&
             matchesSearch &&
             matchesFilterType &&
             matchesMovement;
       }).toList();
 
       // Recalculate running balances for the filtered list
-      final openingAtStart = _openingBalanceAt(_dateRange?.start);
+      final openingAtStart = _openingBalanceAt(bounds?.startInclusive);
       double runningGold = openingAtStart.gold;
       double runningCash = openingAtStart.cash;
       _filteredLines = [];
@@ -1749,18 +1771,13 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   int? _tryExtractInvoiceId(StatementLine line) {
-    if ((line.referenceType ?? '').toLowerCase().trim() == 'invoice') {
-      return line.referenceId;
+    // Only treat it as an invoice when the backend explicitly marks it so.
+    // Parsing invoice numbers from description is ambiguous (often not the DB ID)
+    // and causes 404s when calling /api/invoices/<id>.
+    if ((line.referenceType ?? '').toLowerCase().trim() != 'invoice') {
+      return null;
     }
-
-    final match = RegExp(
-      r'(?:فاتورة|invoice)\s*#?\s*(\d+)',
-      caseSensitive: false,
-    ).firstMatch(line.description);
-    if (match != null) {
-      return int.tryParse(match.group(1) ?? '');
-    }
-    return null;
+    return line.referenceId;
   }
 
   Future<void> _handleRowTap(StatementLine line, double mainKarat) async {
