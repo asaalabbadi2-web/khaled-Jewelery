@@ -4998,14 +4998,36 @@ def get_supplier_ledger(supplier_id):
     payable_filter = and_(Account.type == 'Liability', Account.account_number.like('21%'))
 
     allowed_ids = []
+    fallback_ids = []
     try:
         if supplier_fin_account_id not in (None, '', 0, '0', False):
             allowed_ids.append(int(supplier_fin_account_id))
+            fallback_ids.append(int(supplier_fin_account_id))
     except Exception:
         pass
     try:
         if supplier_memo_account_id not in (None, '', 0, '0', False):
             allowed_ids.append(int(supplier_memo_account_id))
+            fallback_ids.append(int(supplier_memo_account_id))
+    except Exception:
+        pass
+
+    # Office-linked suppliers may post directly to a dedicated office account
+    # (transaction_type='both', tracks_weight=True) which is stored in
+    # supplier.account_category_id. Include it for strict filtering, but do NOT
+    # include it in the fallback_ids used to pull untagged lines.
+    try:
+        office_posting_acc = None
+        raw_office_acc_id = getattr(supplier, 'account_category_id', None)
+        if raw_office_acc_id not in (None, '', 0, '0', False):
+            office_posting_acc = Account.query.get(int(raw_office_acc_id))
+        if (
+            office_posting_acc
+            and bool(getattr(office_posting_acc, 'tracks_weight', False))
+            and str(getattr(office_posting_acc, 'transaction_type', '') or '').lower() == 'both'
+        ):
+            allowed_ids.append(int(office_posting_acc.id))
+            fallback_ids.append(int(office_posting_acc.id))
     except Exception:
         pass
 
@@ -5014,11 +5036,11 @@ def get_supplier_ledger(supplier_id):
         account_filter = or_(Account.id.in_(allowed_ids), payable_filter)
 
     supplier_line_filter = (JournalEntryLine.supplier_id == supplier_id)
-    if allowed_ids:
+    if fallback_ids:
         supplier_line_filter = or_(
             supplier_line_filter,
             and_(
-                JournalEntryLine.account_id.in_(allowed_ids),
+                JournalEntryLine.account_id.in_(fallback_ids),
                 JournalEntryLine.customer_id.is_(None),
             ),
         )
@@ -5253,14 +5275,35 @@ def get_supplier_weight_statement(supplier_id):
 
     payable_filter = and_(Account.type == 'Liability', Account.account_number.like('21%'))
     allowed_ids = []
+    fallback_ids = []
     try:
         if supplier_fin_account_id not in (None, '', 0, '0', False):
             allowed_ids.append(int(supplier_fin_account_id))
+            fallback_ids.append(int(supplier_fin_account_id))
     except Exception:
         pass
     try:
         if supplier_memo_account_id not in (None, '', 0, '0', False):
             allowed_ids.append(int(supplier_memo_account_id))
+            fallback_ids.append(int(supplier_memo_account_id))
+    except Exception:
+        pass
+
+    # Office-linked suppliers can post to a dedicated office account stored in
+    # supplier.account_category_id (tracks_weight=True, transaction_type='both').
+    # Include it in strict allowed_ids, but not in fallback_ids.
+    try:
+        office_posting_acc = None
+        raw_office_acc_id = getattr(supplier, 'account_category_id', None)
+        if raw_office_acc_id not in (None, '', 0, '0', False):
+            office_posting_acc = Account.query.get(int(raw_office_acc_id))
+        if (
+            office_posting_acc
+            and bool(getattr(office_posting_acc, 'tracks_weight', False))
+            and str(getattr(office_posting_acc, 'transaction_type', '') or '').lower() == 'both'
+        ):
+            allowed_ids.append(int(office_posting_acc.id))
+            fallback_ids.append(int(office_posting_acc.id))
     except Exception:
         pass
 
@@ -5271,11 +5314,11 @@ def get_supplier_weight_statement(supplier_id):
     # Prefer explicit supplier tagging. As a robustness fallback (older data or mis-tagged imports),
     # also include lines posted directly to the supplier's own payable accounts.
     supplier_line_filter = (JournalEntryLine.supplier_id == supplier_id)
-    if allowed_ids:
+    if fallback_ids:
         supplier_line_filter = or_(
             supplier_line_filter,
             and_(
-                JournalEntryLine.account_id.in_(allowed_ids),
+                JournalEntryLine.account_id.in_(fallback_ids),
                 JournalEntryLine.customer_id == None,  # noqa: E711
             ),
         )
