@@ -139,6 +139,14 @@ class _OfficesScreenState extends State<OfficesScreen> {
 
   void _showBalanceDialog(Map<String, dynamic> balance) {
     final isAr = widget.isArabic;
+
+    double asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is double) return v;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0.0;
+    }
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -156,6 +164,82 @@ class _OfficesScreenState extends State<OfficesScreen> {
                 ),
               ),
               Text('${isAr ? "الكود" : "Code"}: ${balance['office_code']}'),
+
+              const SizedBox(height: 12),
+              Builder(
+                builder: (context) {
+                  final kpis = (balance['kpis'] is Map)
+                      ? Map<String, dynamic>.from(balance['kpis'])
+                      : <String, dynamic>{};
+
+                  final outstanding = asDouble(
+                    kpis['outstanding_weight_main_karat'],
+                  );
+                  final avgPrice = asDouble(kpis['avg_closing_price_per_gram']);
+
+                  Widget kpiCard({
+                    required String title,
+                    required String value,
+                    required IconData icon,
+                  }) {
+                    final theme = Theme.of(context);
+                    return Card(
+                      elevation: 0,
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            Icon(icon, color: AppColors.darkGold),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(value),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: kpiCard(
+                          title: isAr
+                              ? 'الوزن المعلق (مكافئ 21)'
+                              : 'Outstanding (21k eq)',
+                          value:
+                              '${outstanding.toStringAsFixed(3)} ${isAr ? "جم" : "g"}',
+                          icon: Icons.pending_actions,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: kpiCard(
+                          title: isAr
+                              ? 'متوسط تكلفة التسكير'
+                              : 'Avg Closing Cost',
+                          value:
+                              '${avgPrice.toStringAsFixed(2)} ${isAr ? "ر.س/جم" : "SAR/g"}',
+                          icon: Icons.price_change,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
               const Divider(height: 24),
 
               // النقدي

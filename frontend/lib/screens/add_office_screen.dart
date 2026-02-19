@@ -4,6 +4,10 @@ import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
 import '../utils.dart';
 
+import '../widgets/party_picker_dialog.dart';
+import '../widgets/safe_box_picker_dialog.dart';
+import '../widgets/searchable_picker_field.dart';
+
 /// شاشة إضافة أو تعديل مكتب
 class AddOfficeScreen extends StatefulWidget {
   final ApiService api;
@@ -25,11 +29,23 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
 
-  bool _isLoadingSafeBoxes = false;
-  List<SafeBoxModel> _safeBoxes = const [];
-  int? _selectedSafeBoxId;
+  // Supplier linking
+  String _supplierLinkMode = 'new'; // new | existing
+  bool _isLoadingSuppliers = false;
+  List<Map<String, dynamic>> _suppliers = const [];
+  Map<String, dynamic>? _selectedSupplier;
+
+  // Gold safe linking for existing supplier
+  String _goldSafeLinkMode = 'new'; // new | existing
+  bool _isLoadingGoldSafeBoxes = false;
+  List<SafeBoxModel> _goldSafeBoxes = const [];
+  SafeBoxModel? _selectedGoldSafe;
 
   bool _ensureSupplierAccounts = true;
+
+  // Opening balances (used mainly when creating a new supplier)
+  final _openingCashController = TextEditingController();
+  final _openingGoldMainController = TextEditingController();
 
   // Controllers
   final _nameController = TextEditingController();
@@ -55,26 +71,63 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
       _loadOfficeData();
     }
 
-    _loadSafeBoxes();
+    _loadSuppliers();
+    _loadGoldSafeBoxes();
   }
 
-  Future<void> _loadSafeBoxes() async {
-    setState(() => _isLoadingSafeBoxes = true);
+  Future<void> _loadSuppliers() async {
+    setState(() => _isLoadingSuppliers = true);
+    try {
+      final rows = await widget.api.getSuppliers();
+      if (!mounted) return;
+      setState(() {
+        _suppliers = rows.whereType<Map<String, dynamic>>().toList();
+
+        final currentId = _parseId(_selectedSupplier?['id']);
+        if (currentId != null) {
+          final match = _suppliers
+              .where((m) => _parseId(m['id']) == currentId)
+              .cast<Map<String, dynamic>>()
+              .toList();
+          if (match.isNotEmpty) {
+            _selectedSupplier = match.first;
+          }
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('خطأ في تحميل الموردين: $e', isError: true);
+    } finally {
+      if (!mounted) return;
+      setState(() => _isLoadingSuppliers = false);
+    }
+  }
+
+  Future<void> _loadGoldSafeBoxes() async {
+    setState(() => _isLoadingGoldSafeBoxes = true);
     try {
       final boxes = await widget.api.getSafeBoxes(
-        safeType: 'cash',
+        safeType: 'gold',
         isActive: true,
       );
       if (!mounted) return;
       setState(() {
-        _safeBoxes = boxes;
+        _goldSafeBoxes = boxes;
+
+        final currentId = _selectedGoldSafe?.id;
+        if (currentId != null) {
+          final match = _goldSafeBoxes.where((sb) => sb.id == currentId).toList();
+          if (match.isNotEmpty) {
+            _selectedGoldSafe = match.first;
+          }
+        }
       });
     } catch (e) {
       if (!mounted) return;
-      _showMessage('خطأ في تحميل الخزائن: $e', isError: true);
+      _showMessage('خطأ في تحميل خزائن الذهب: $e', isError: true);
     } finally {
       if (!mounted) return;
-      setState(() => _isLoadingSafeBoxes = false);
+      setState(() => _isLoadingGoldSafeBoxes = false);
     }
   }
 
@@ -95,11 +148,35 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
     _notesController.text = office['notes'] ?? '';
     _active = office['active'] ?? true;
 
+    // Default: existing supplier when editing
+    final supplierIdRaw = office['supplier_id'];
+    final supplierId = supplierIdRaw is int
+        ? supplierIdRaw
+        : int.tryParse((supplierIdRaw ?? '').toString());
+    if (supplierId != null) {
+      _supplierLinkMode = 'existing';
+      _selectedSupplier = {
+        'id': supplierId,
+        'name': office['supplier_name'] ?? '',
+        'phone': office['phone'] ?? '',
+      };
+    }
+
+    // Try to preload current gold safe choice (might be set on supplier default)
     final rawSafeBoxId = office['supplier_default_safe_box_id'];
-    if (rawSafeBoxId is int) {
-      _selectedSafeBoxId = rawSafeBoxId;
-    } else {
-      _selectedSafeBoxId = int.tryParse((rawSafeBoxId ?? '').toString());
+    final safeId = rawSafeBoxId is int
+        ? rawSafeBoxId
+        : int.tryParse((rawSafeBoxId ?? '').toString());
+    if (safeId != null) {
+      _goldSafeLinkMode = 'existing';
+      _selectedGoldSafe = SafeBoxModel(
+        id: safeId,
+        name: (office['supplier_default_safe_box_name'] ?? '').toString(),
+        safeType: 'gold',
+        accountId: 0,
+        isDefault: false,
+        isActive: true,
+      );
     }
   }
 
@@ -117,7 +194,68 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
     _licenseNumberController.dispose();
     _taxNumberController.dispose();
     _notesController.dispose();
+    _openingCashController.dispose();
+    _openingGoldMainController.dispose();
     super.dispose();
+  }
+
+  int? _parseId(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString());
+  }
+
+  double _parseDoubleOrZero(String s) {
+    final v = s.trim();
+    if (v.isEmpty) return 0.0;
+    return double.tryParse(v) ?? 0.0;
+  }
+
+  Future<void> _pickSupplier({required bool isAr}) async {
+    if (_isLoadingSuppliers) return;
+    if (_suppliers.isEmpty) {
+      await _loadSuppliers();
+      if (!mounted) return;
+    }
+    final picked = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => PartyPickerDialog(
+        title: isAr ? 'اختيار مورد' : 'Pick Supplier',
+        items: _suppliers,
+        selectedId: _parseId(_selectedSupplier?['id']),
+        emptyText: isAr ? 'لا يوجد موردون' : 'No suppliers',
+      ),
+    );
+    if (!mounted) return;
+    if (picked != null) {
+      setState(() {
+        _selectedSupplier = picked;
+      });
+    }
+  }
+
+  Future<void> _pickGoldSafeBox({required bool isAr}) async {
+    if (_isLoadingGoldSafeBoxes) return;
+    if (_goldSafeBoxes.isEmpty) {
+      await _loadGoldSafeBoxes();
+      if (!mounted) return;
+    }
+    final picked = await showDialog<SafeBoxModel>(
+      context: context,
+      builder: (context) => SafeBoxPickerDialog(
+        safeBoxes: _goldSafeBoxes,
+        selectedSafeBoxId: _selectedGoldSafe?.id,
+        filterSafeType: 'gold',
+        excludeGold: false,
+      ),
+    );
+    if (!mounted) return;
+    if (picked != null) {
+      setState(() {
+        _selectedGoldSafe = picked;
+      });
+    }
   }
 
   Future<void> _saveOffice() async {
@@ -125,9 +263,23 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
       return;
     }
 
+    if (_supplierLinkMode == 'existing' && _selectedSupplier == null) {
+      _showMessage('الرجاء اختيار مورد', isError: true);
+      return;
+    }
+    if (_supplierLinkMode == 'existing' && _goldSafeLinkMode == 'existing') {
+      if (_selectedGoldSafe == null || _selectedGoldSafe!.id == null) {
+        _showMessage('الرجاء اختيار خزنة ذهب', isError: true);
+        return;
+      }
+    }
+
     setState(() => _isLoading = true);
 
     try {
+      final openingCash = _parseDoubleOrZero(_openingCashController.text);
+      final openingGoldMain = _parseDoubleOrZero(_openingGoldMainController.text);
+
       final officeData = {
         'name': _nameController.text.trim(),
         'phone': _phoneController.text.trim(),
@@ -144,8 +296,24 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
         'notes': _notesController.text.trim(),
         'active': _active,
 
-        // Applies to the linked supplier (closing office supplier)
-        'supplier_default_safe_box_id': _selectedSafeBoxId,
+        // Supplier linkage
+        'supplier_link_mode': _supplierLinkMode,
+        if (_supplierLinkMode == 'existing')
+          'supplier_id': _parseId(_selectedSupplier?['id']),
+
+        // Gold SafeBox linkage
+        'gold_safe_link_mode': _supplierLinkMode == 'existing'
+            ? _goldSafeLinkMode
+            : 'new',
+        if (_supplierLinkMode == 'existing' && _goldSafeLinkMode == 'existing')
+          'gold_safe_box_id': _selectedGoldSafe?.id,
+
+        // Opening balances (cash + gold main-karat equiv)
+        if (_supplierLinkMode == 'new') ...{
+          'opening_balance_cash': openingCash,
+          'opening_balance_gold_main_karat': openingGoldMain,
+        },
+
         'ensure_supplier_accounts': _ensureSupplierAccounts,
       };
 
@@ -224,39 +392,151 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                     ),
                     const SizedBox(height: 16),
 
-                    DropdownButtonFormField<int?>(
-                      value: _selectedSafeBoxId,
-                      decoration: InputDecoration(
-                        labelText: isAr
-                            ? 'الخزنة الافتراضية (تسويات)'
-                            : 'Default SafeBox (settlements)',
-                        prefixIcon: const Icon(Icons.account_balance_wallet),
-                        border: const OutlineInputBorder(),
-                        helperText: _isLoadingSafeBoxes
-                            ? (isAr
-                                  ? 'جارٍ تحميل الخزائن...'
-                                  : 'Loading safeboxes...')
-                            : null,
-                      ),
-                      items: [
-                        DropdownMenuItem<int?>(
-                          value: null,
-                          child: Text(isAr ? 'بدون خزنة' : 'No SafeBox'),
-                        ),
-                        ..._safeBoxes.map((sb) {
-                          return DropdownMenuItem<int?>(
-                            value: sb.id,
-                            child: Text(sb.name),
-                          );
-                        }),
-                      ],
-                      onChanged: _isLoadingSafeBoxes
-                          ? null
-                          : (value) {
-                              setState(() => _selectedSafeBoxId = value);
-                            },
+                    _buildSectionTitle(
+                      isAr ? 'ربط المورد وخزنة الذهب' : 'Supplier & Gold Safe',
                     ),
                     const SizedBox(height: 12),
+
+                    RadioListTile<String>(
+                      value: 'new',
+                      groupValue: _supplierLinkMode,
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() {
+                          _supplierLinkMode = v;
+                          _selectedSupplier = null;
+                          _goldSafeLinkMode = 'new';
+                          _selectedGoldSafe = null;
+                        });
+                      },
+                      title: Text(isAr ? 'إنشاء مورد جديد' : 'Create new supplier'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    RadioListTile<String>(
+                      value: 'existing',
+                      groupValue: _supplierLinkMode,
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() {
+                          _supplierLinkMode = v;
+                          _goldSafeLinkMode = 'new';
+                          _selectedGoldSafe = null;
+                        });
+                      },
+                      title: Text(isAr ? 'ربط بمورد موجود' : 'Link existing supplier'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    const SizedBox(height: 10),
+
+                    if (_supplierLinkMode == 'existing') ...[
+                      SearchablePickerField(
+                        labelText: isAr ? 'المورد' : 'Supplier',
+                        valueText: (_selectedSupplier?['name'] ?? '').toString(),
+                        hintText: isAr ? 'اضغط لاختيار مورد' : 'Tap to pick supplier',
+                        helperText: _isLoadingSuppliers
+                            ? (isAr ? 'جارٍ تحميل الموردين...' : 'Loading suppliers...')
+                            : null,
+                        prefixIcon: Icons.person_search,
+                        onTap: () => _pickSupplier(isAr: isAr),
+                        enabled: !_isLoadingSuppliers,
+                      ),
+                      const SizedBox(height: 12),
+
+                      RadioListTile<String>(
+                        value: 'existing',
+                        groupValue: _goldSafeLinkMode,
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() {
+                            _goldSafeLinkMode = v;
+                          });
+                        },
+                        title: Text(
+                          isAr
+                              ? 'ربط بخزنة ذهب موجودة'
+                              : 'Link existing gold safe',
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      RadioListTile<String>(
+                        value: 'new',
+                        groupValue: _goldSafeLinkMode,
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() {
+                            _goldSafeLinkMode = v;
+                            _selectedGoldSafe = null;
+                          });
+                        },
+                        title: Text(
+                          isAr
+                              ? 'إنشاء خزنة ذهب جديدة لهذا المكتب'
+                              : 'Create a new gold safe for this office',
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      const SizedBox(height: 8),
+
+                      if (_goldSafeLinkMode == 'existing') ...[
+                        SearchablePickerField(
+                          labelText: isAr ? 'خزنة الذهب' : 'Gold SafeBox',
+                          valueText: _selectedGoldSafe?.name,
+                          hintText: isAr
+                              ? 'اضغط لاختيار خزنة ذهب'
+                              : 'Tap to pick gold safe',
+                          helperText: _isLoadingGoldSafeBoxes
+                              ? (isAr
+                                    ? 'جارٍ تحميل خزائن الذهب...'
+                                    : 'Loading gold safes...')
+                              : null,
+                          prefixIcon: Icons.currency_exchange,
+                          onTap: () => _pickGoldSafeBox(isAr: isAr),
+                          enabled: !_isLoadingGoldSafeBoxes,
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ] else ...[
+                      TextFormField(
+                        controller: _openingCashController,
+                        decoration: InputDecoration(
+                          labelText: isAr
+                              ? 'رصيد افتتاحي نقدي (ر.س)'
+                              : 'Opening cash balance (SAR)',
+                          prefixIcon: const Icon(Icons.payments_outlined),
+                          border: const OutlineInputBorder(),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                          signed: false,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _openingGoldMainController,
+                        decoration: InputDecoration(
+                          labelText: isAr
+                              ? 'رصيد افتتاحي ذهب (جرام مكافئ العيار الرئيسي)'
+                              : 'Opening gold (g, main-karat equiv)',
+                          prefixIcon: const Icon(Icons.scale_outlined),
+                          border: const OutlineInputBorder(),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                          signed: false,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        isAr
+                            ? 'سيتم إنشاء خزنة ذهب تلقائياً وربطها بالمورد.'
+                            : 'A gold safe will be auto-created and linked.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                        textAlign: isAr ? TextAlign.right : TextAlign.left,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
 
                     SwitchListTile.adaptive(
                       value: _ensureSupplierAccounts,

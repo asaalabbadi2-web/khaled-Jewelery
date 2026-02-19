@@ -157,6 +157,97 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     }
   }
 
+  SafeBoxModel? _findCashSafeBoxById(int? safeBoxId) {
+    if (safeBoxId == null) return null;
+    try {
+      return _safeBoxes.firstWhere((b) => b.id == safeBoxId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic>? _selectedSupplierMap() {
+    final selectedId = _selectedSupplierId;
+    if (selectedId == null) return null;
+    try {
+      return _suppliers.firstWhere((s) => _parseId(s['id']) == selectedId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int? _selectedSupplierDefaultSafeBoxId() {
+    final supplier = _selectedSupplierMap();
+    if (supplier == null) return null;
+    return _parseId(supplier['default_safe_box_id']);
+  }
+
+  bool _goldSafeIdExists(int? safeBoxId) {
+    if (safeBoxId == null) return false;
+    return _goldSafeBoxes.any((b) => b.id == safeBoxId);
+  }
+
+  int? _preferredGoldSafeIdForNewLine(int defaultKarat) {
+    final supplierDefaultId = _selectedSupplierDefaultSafeBoxId();
+    if (supplierDefaultId == null) return null;
+
+    final goldSafe = _findGoldSafeBoxById(supplierDefaultId);
+    if (goldSafe == null) return null;
+
+    final fixed = goldSafe.karat;
+    if (fixed != null && fixed != 0) {
+      return supplierDefaultId;
+    }
+
+    return _goldSafeAcceptsKarat(goldSafe, defaultKarat)
+        ? supplierDefaultId
+        : null;
+  }
+
+  void _applySupplierDefaultSafeBoxSelections({bool onlyWhenEmpty = true}) {
+    if (!mounted) return;
+    final supplierDefaultId = _selectedSupplierDefaultSafeBoxId();
+    if (supplierDefaultId == null) return;
+
+    bool changed = false;
+
+    // Cash SafeBox preference (for partial cash payments).
+    final cashBox = _findCashSafeBoxById(supplierDefaultId);
+    final cashType = cashBox?.safeType;
+    if (cashBox != null && (cashType == 'cash' || cashType == 'bank')) {
+      if (!onlyWhenEmpty || _selectedSafeBoxId == null) {
+        _selectedSafeBoxId = cashBox.id;
+        changed = true;
+      }
+    }
+
+    // Gold SafeBox preference (for gold settlements).
+    if (_isGoldSettlementContext && _goldSafeIdExists(supplierDefaultId)) {
+      if (_goldSettlementLines.isNotEmpty) {
+        final first = _goldSettlementLines.first;
+        final canOverride =
+            !onlyWhenEmpty || _goldSettlementLineWeight(first) <= 0;
+        if (canOverride) {
+          first.safeBoxId = supplierDefaultId;
+          final picked = _findGoldSafeBoxById(supplierDefaultId);
+          final fixed = picked?.karat;
+          if (fixed != null && {18, 21, 22, 24}.contains(fixed)) {
+            first.karat = fixed;
+          } else {
+            first.karat ??= _selectedGoldPaidKarat;
+          }
+          _selectedGoldSafeBoxId = supplierDefaultId;
+          changed = true;
+        }
+      }
+    }
+
+    if (!changed) return;
+    _clearIncompatibleGoldSettlementSafes();
+    _refreshGoldPaidTotalFromLines();
+    setState(() {});
+  }
+
   bool _goldSafeAcceptsKarat(SafeBoxModel box, int karat) {
     final fixed = box.karat;
     if (fixed == null || fixed == 0) return true;
@@ -387,13 +478,23 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               onPressed: () {
                 setState(() {
                   final defaultKarat = _selectedGoldPaidKarat;
-                  final defaultSafeId = _defaultGoldSafeIdForKarat(
+                  final supplierPreferred = _preferredGoldSafeIdForNewLine(
                     defaultKarat,
                   );
+                  final defaultSafeId =
+                      supplierPreferred ??
+                      _defaultGoldSafeIdForKarat(defaultKarat);
+
+                  final picked = _findGoldSafeBoxById(defaultSafeId);
+                  final fixed = picked?.karat;
+                  final lineKarat =
+                      (fixed != null && {18, 21, 22, 24}.contains(fixed))
+                      ? fixed
+                      : defaultKarat;
                   _goldSettlementLines.add(
                     _GoldSettlementLine(
                       safeBoxId: defaultSafeId,
-                      karat: defaultKarat,
+                      karat: lineKarat,
                       initialWeight: '',
                     ),
                   );
@@ -993,11 +1094,19 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         _cashPaidController.text = '0.00';
         _clearGoldSettlementLines();
         final defaultKarat = _selectedGoldPaidKarat;
-        final defaultSafeId = _defaultGoldSafeIdForKarat(defaultKarat);
+        final supplierPreferred = _preferredGoldSafeIdForNewLine(defaultKarat);
+        final defaultSafeId =
+            supplierPreferred ?? _defaultGoldSafeIdForKarat(defaultKarat);
+
+        final picked = _findGoldSafeBoxById(defaultSafeId);
+        final fixed = picked?.karat;
+        final lineKarat = (fixed != null && {18, 21, 22, 24}.contains(fixed))
+            ? fixed
+            : defaultKarat;
         _goldSettlementLines.add(
           _GoldSettlementLine(
             safeBoxId: defaultSafeId,
-            karat: defaultKarat,
+            karat: lineKarat,
             initialWeight: '0.000',
           ),
         );
@@ -1243,6 +1352,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         _suppliers = suppliers;
         _selectedSupplierId = resolvedId;
       });
+
+      _applySupplierDefaultSafeBoxSelections();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1498,6 +1609,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               _selectedSupplierId = supplierId;
               _supplierError = null;
             });
+
+            _applySupplierDefaultSafeBoxSelections();
           },
         ),
       ),
@@ -1549,6 +1662,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedSupplierId = id;
       _supplierError = null;
     });
+
+    _applySupplierDefaultSafeBoxSelections();
   }
 
   int? _parseInt(dynamic value) {

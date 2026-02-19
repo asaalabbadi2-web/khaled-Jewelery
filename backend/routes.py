@@ -3416,6 +3416,31 @@ def get_account_statement(account_id):
     account = Account.query.get_or_404(account_id)
     main_karat = get_main_karat()
 
+    # Dual Statement: if the account has a linked memo/financial pair, return a
+    # unified timeline (cash + gold) using the existing merged statement logic.
+    #
+    # Escape hatch (for debugging / special UX):
+    # - Pass `separate=1` OR `merged=0` to force the classic single-account statement.
+    try:
+        separate_flag = (str(request.args.get('separate', '')).strip().lower() in ('1', 'true', 'yes', 'y', 'on'))
+        merged_flag = str(request.args.get('merged', '')).strip().lower()
+        force_separate = separate_flag or (merged_flag in ('0', 'false', 'no', 'n', 'off'))
+    except Exception:
+        force_separate = False
+
+    try:
+        if force_separate:
+            raise RuntimeError('force_separate_statement')
+        has_memo_pair = bool(getattr(account, 'memo_account_id', None))
+        if not has_memo_pair and getattr(account, 'tracks_weight', False):
+            has_memo_pair = Account.query.filter_by(memo_account_id=account.id).first() is not None
+        if has_memo_pair:
+            return get_account_statement_merged(account_id)
+    except Exception:
+        # If anything goes wrong detecting memo linkage, fall back to the
+        # single-account statement behavior.
+        pass
+
     def _safe_dt(value, fallback=None):
         if value is None:
             return fallback
@@ -3431,6 +3456,17 @@ def get_account_statement(account_id):
     def _iso_or_none(value):
         dt = _safe_dt(value)
         return dt.isoformat() if dt else None
+
+    def _effective_entry_dt(je: 'JournalEntry'):
+        if not je:
+            return datetime.min
+        primary = _safe_dt(getattr(je, 'date', None))
+        posted = _safe_dt(getattr(je, 'posted_at', None))
+        created = _safe_dt(getattr(je, 'created_at', None))
+        # If primary date has no time component, prefer posted/created timestamps.
+        if primary and getattr(primary, 'time', None) and primary.time() != time.min:
+            return primary
+        return posted or created or primary or datetime.min
 
     # Calculate opening balance from افتتاحي entries
     opening_balance_cash = 0
@@ -3498,7 +3534,7 @@ def get_account_statement(account_id):
     merged = []
     for line in journal_lines:
         je = getattr(line, 'journal_entry', None)
-        dt = _safe_dt(getattr(je, 'date', None), _safe_dt(getattr(je, 'created_at', None), datetime.min))
+        dt = _effective_entry_dt(je)
         merged.append(('journal', dt, getattr(je, 'id', 0) or 0, line.id, line))
     merged.sort(key=lambda x: (x[1], x[2], x[3]))
 
@@ -3530,7 +3566,7 @@ def get_account_statement(account_id):
 
         statement_lines.append({
             'id': line.id,
-            'date': _iso_or_none(getattr(je, 'date', None) or getattr(je, 'created_at', None)),
+            'date': _iso_or_none(_effective_entry_dt(je)),
             'description': je.description,
             'journal_entry_id': line.journal_entry_id,
             'entry_number': je.entry_number,
@@ -3619,6 +3655,16 @@ def get_account_statement_merged(account_id):
     def _iso_or_none(value):
         dt = _safe_dt(value)
         return dt.isoformat() if dt else None
+
+    def _effective_entry_dt(je: 'JournalEntry'):
+        if not je:
+            return datetime.min
+        primary = _safe_dt(getattr(je, 'date', None))
+        posted = _safe_dt(getattr(je, 'posted_at', None))
+        created = _safe_dt(getattr(je, 'created_at', None))
+        if primary and getattr(primary, 'time', None) and primary.time() != time.min:
+            return primary
+        return posted or created or primary or datetime.min
 
     # Find linked memo account
     memo_account = None
@@ -3724,7 +3770,7 @@ def get_account_statement_merged(account_id):
         entry_id = line.journal_entry_id
         if entry_id not in lines_by_entry:
             je = getattr(line, 'journal_entry', None)
-            dt = _safe_dt(getattr(je, 'date', None), _safe_dt(getattr(je, 'created_at', None), datetime.min))
+            dt = _effective_entry_dt(je)
             lines_by_entry[entry_id] = {
                 'date': dt,
                 'entry_id': entry_id,
@@ -3915,6 +3961,16 @@ def get_customer_statement(id):
         dt = _safe_dt(value)
         return dt.isoformat() if dt else None
 
+    def _effective_entry_dt(je: 'JournalEntry'):
+        if not je:
+            return datetime.min
+        primary = _safe_dt(getattr(je, 'date', None))
+        posted = _safe_dt(getattr(je, 'posted_at', None))
+        created = _safe_dt(getattr(je, 'created_at', None))
+        if primary and getattr(primary, 'time', None) and primary.time() != time.min:
+            return primary
+        return posted or created or primary or datetime.min
+
     running_balance_cash = 0.0
     running_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
 
@@ -3987,6 +4043,18 @@ def get_customer_statement(id):
         .all()
     )
 
+    # Re-sort using effective datetime to get stable chronological ordering.
+    try:
+        journal_lines.sort(
+            key=lambda l: (
+                _effective_entry_dt(getattr(l, 'journal_entry', None)),
+                int(getattr(getattr(l, 'journal_entry', None), 'id', 0) or 0),
+                int(getattr(l, 'id', 0) or 0),
+            )
+        )
+    except Exception:
+        pass
+
     statement_lines = []
     total_cash_debit = 0.0
     total_cash_credit = 0.0
@@ -4022,7 +4090,7 @@ def get_customer_statement(id):
 
         statement_lines.append({
             'id': line.id,
-            'date': _iso_or_none(getattr(je, 'date', None) or getattr(je, 'created_at', None)),
+            'date': _iso_or_none(_effective_entry_dt(je)),
             'description': (line.description or je.description or ''),
             'journal_entry_id': line.journal_entry_id,
             'entry_number': je.entry_number,
@@ -4051,7 +4119,7 @@ def get_customer_statement(id):
         # Legacy output (older mobile clients / tools).
         legacy_lines.append({
             'id': line.id,
-            'date': _iso_or_none(getattr(je, 'date', None) or getattr(je, 'created_at', None)),
+            'date': _iso_or_none(_effective_entry_dt(je)),
             'entry_number': je.entry_number,
             'description': je.description,
             'account_number': line.account.account_number if line.account else None,
@@ -4698,7 +4766,7 @@ def add_supplier():
                     safe_box_id = None
                 safe_box = SafeBox.query.get(safe_box_id) if safe_box_id else None
                 safe_type = (safe_box.safe_type or '').strip().lower() if safe_box else ''
-                if not safe_box or not safe_box.is_active or safe_type not in ('cash', 'bank'):
+                if not safe_box or not safe_box.is_active or safe_type not in ('cash', 'bank', 'gold'):
                     db.session.rollback()
                     return jsonify({'error': 'default_safe_box_id غير صالح'}), 400
                 new_supplier.default_safe_box_id = safe_box.id
@@ -4768,7 +4836,7 @@ def update_supplier(id):
                 safe_box_id = None
             safe_box = SafeBox.query.get(safe_box_id) if safe_box_id else None
             safe_type = (safe_box.safe_type or '').strip().lower() if safe_box else ''
-            if not safe_box or not safe_box.is_active or safe_type not in ('cash', 'bank'):
+            if not safe_box or not safe_box.is_active or safe_type not in ('cash', 'bank', 'gold'):
                 return jsonify({'error': 'default_safe_box_id غير صالح'}), 400
             supplier.default_safe_box_id = safe_box.id
 
@@ -5135,6 +5203,32 @@ def get_supplier_weight_statement(supplier_id):
     supplier = Supplier.query.get_or_404(supplier_id)
     main_karat = get_main_karat()
 
+    def _safe_dt(value, fallback=None):
+        if value is None:
+            return fallback
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, time.min)
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return fallback
+
+    def _iso_or_none(value):
+        dt = _safe_dt(value)
+        return dt.isoformat() if dt else None
+
+    def _effective_entry_dt(je: 'JournalEntry'):
+        if not je:
+            return datetime.min
+        primary = _safe_dt(getattr(je, 'date', None))
+        posted = _safe_dt(getattr(je, 'posted_at', None))
+        created = _safe_dt(getattr(je, 'created_at', None))
+        if primary and getattr(primary, 'time', None) and primary.time() != time.min:
+            return primary
+        return posted or created or primary or datetime.min
+
     running_balance_cash = 0.0
     running_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
 
@@ -5243,6 +5337,18 @@ def get_supplier_weight_statement(supplier_id):
         .all()
     )
 
+    # Re-sort using effective datetime to get stable chronological ordering.
+    try:
+        journal_lines.sort(
+            key=lambda l: (
+                _effective_entry_dt(getattr(l, 'journal_entry', None)),
+                int(getattr(getattr(l, 'journal_entry', None), 'id', 0) or 0),
+                int(getattr(l, 'id', 0) or 0),
+            )
+        )
+    except Exception:
+        pass
+
     statement_lines = []
     total_cash_debit = 0.0
     total_cash_credit = 0.0
@@ -5272,7 +5378,7 @@ def get_supplier_weight_statement(supplier_id):
 
         statement_lines.append({
             'id': line.id,
-            'date': line.journal_entry.date.isoformat(),
+            'date': _iso_or_none(_effective_entry_dt(getattr(line, 'journal_entry', None))),
             'description': (line.description or line.journal_entry.description or ''),
             'journal_entry_id': line.journal_entry_id,
             'entry_number': line.journal_entry.entry_number if line.journal_entry else None,

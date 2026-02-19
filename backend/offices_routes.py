@@ -6,16 +6,217 @@ from flask import Blueprint, request, jsonify
 from models import (
     db,
     Office,
+    OfficeReservation,
     Account,
     SafeBox,
+    Supplier,
+    JournalEntry,
+    JournalEntryLine,
+    _configured_main_karat_f,
 )
 from office_supplier_service import ensure_office_supplier
 from office_account_service import ensure_office_account
 from party_account_service import ensure_supplier_accounts
 from services.live_balances import live_balances_by_account_ids
 
+from datetime import datetime
+
 # إنشاء Blueprint
 offices_bp = Blueprint('offices', __name__, url_prefix='/api/offices')
+
+
+def _boolish(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    return bool(value)
+
+
+def _to_int_or_none(value):
+    if value in (None, '', False):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def _to_float_or_zero(value) -> float:
+    if value in (None, '', False):
+        return 0.0
+    try:
+        return float(value)
+    except Exception:
+        try:
+            return float(str(value).strip())
+        except Exception:
+            return 0.0
+
+
+def _weight_kwargs_for_main_karat(amount: float, side: str) -> dict:
+    """Build {debit_XXk|credit_XXk: amount} based on configured main karat."""
+    try:
+        main = int(round(float(_configured_main_karat_f() or 21)))
+    except Exception:
+        main = 21
+    if main not in (18, 21, 22, 24):
+        main = 21
+
+    side_key = (side or '').strip().lower()
+    if side_key not in ('debit', 'credit'):
+        side_key = 'debit'
+
+    suffix = f'{main}k'
+    return {f'{side_key}_{suffix}': round(float(amount), 3)}
+
+
+def _ensure_office_gold_safe(office: Office, *, created_by: str = 'system') -> SafeBox:
+    """Ensure the office has a dedicated gold SafeBox (multi-karat) linked to its office account."""
+    if not office:
+        raise ValueError('office is required')
+
+    if not office.account_category_id:
+        ensure_office_account(office)
+        db.session.flush()
+
+    office_account_id = int(office.account_category_id)
+    existing = SafeBox.query.filter_by(
+        safe_type='gold',
+        karat=None,
+        account_id=office_account_id,
+    ).first()
+    if existing:
+        return existing
+
+    name = f'خزنة مكتب {office.name} - ذهب'
+    safe = SafeBox(
+        name=name,
+        name_en=None,
+        safe_type='gold',
+        account_id=office_account_id,
+        karat=None,
+        is_active=True,
+        is_default=False,
+        notes='خزنة ذهب خاصة بمكتب التسكير (متعددة العيارات)',
+        created_by=created_by,
+    )
+    db.session.add(safe)
+    db.session.flush()
+    return safe
+
+
+def _create_opening_entry_for_supplier(
+    supplier: Supplier,
+    opening_cash: float,
+    opening_gold_main: float,
+    *,
+    created_by: str = 'system',
+) -> None:
+    """Create an افتتاحي JournalEntry for supplier opening balances (cash + main-karat weight)."""
+
+    opening_cash = float(opening_cash or 0.0)
+    opening_gold_main = float(opening_gold_main or 0.0)
+
+    if abs(opening_cash) <= 0.0001 and abs(opening_gold_main) <= 0.0001:
+        return
+
+    accounts = ensure_supplier_accounts(supplier)
+    supplier_fin_id = int(accounts.financial.id)
+    supplier_memo_id = int(accounts.memo.id)
+
+    # Equity offset account (varies by COA version).
+    # Legacy used 31/32. Current system may use 3600 (with memo 7600).
+    equity_fin = (
+        Account.query.filter_by(account_number='32').first()
+        or Account.query.filter_by(account_number='31').first()
+        or Account.query.filter_by(account_number='3600').first()
+        or Account.query.filter_by(type='Equity', tracks_weight=False).first()
+        or Account.query.filter_by(type='Equity').first()
+    )
+    if not equity_fin:
+        raise ValueError('تعذر العثور على حساب حقوق الملكية لتسجيل الرصيد الافتتاحي')
+
+    equity_memo_id = getattr(equity_fin, 'memo_account_id', None)
+    if not equity_memo_id:
+        try:
+            equity_fin.create_parallel_account()
+            db.session.flush()
+        except Exception:
+            pass
+        equity_memo_id = getattr(equity_fin, 'memo_account_id', None)
+
+    now = datetime.utcnow()
+    entry = JournalEntry(
+        date=now,
+        description=f'رصيد افتتاحي للمورد: {supplier.name}',
+        entry_type='افتتاحي',
+        reference_type='supplier',
+        reference_id=int(supplier.id),
+        created_by=created_by,
+        is_draft=False,
+        is_posted=True,
+        posted_at=now,
+        posted_by=created_by,
+    )
+    db.session.add(entry)
+    db.session.flush()
+
+    if abs(opening_cash) > 0.0001:
+        cash_amt = round(abs(opening_cash), 2)
+        supplier_side = 'debit' if opening_cash >= 0 else 'credit'
+        equity_side = 'credit' if supplier_side == 'debit' else 'debit'
+        supplier_cash_kwargs = {'cash_debit': cash_amt} if supplier_side == 'debit' else {'cash_credit': cash_amt}
+        equity_cash_kwargs = {'cash_credit': cash_amt} if equity_side == 'credit' else {'cash_debit': cash_amt}
+
+        db.session.add(
+            JournalEntryLine(
+                journal_entry_id=entry.id,
+                account_id=supplier_fin_id,
+                supplier_id=int(supplier.id),
+                description='رصيد افتتاحي نقدي للمورد',
+                **supplier_cash_kwargs,
+            )
+        )
+        db.session.add(
+            JournalEntryLine(
+                journal_entry_id=entry.id,
+                account_id=int(equity_fin.id),
+                description='رصيد افتتاحي (مقابل) - حقوق الملكية',
+                **equity_cash_kwargs,
+            )
+        )
+
+    if abs(opening_gold_main) > 0.0001:
+        gold_amt = round(abs(opening_gold_main), 3)
+        supplier_side = 'debit' if opening_gold_main >= 0 else 'credit'
+        equity_side = 'credit' if supplier_side == 'debit' else 'debit'
+        supplier_weight_kwargs = _weight_kwargs_for_main_karat(gold_amt, supplier_side)
+
+        db.session.add(
+            JournalEntryLine(
+                journal_entry_id=entry.id,
+                account_id=supplier_memo_id,
+                supplier_id=int(supplier.id),
+                description='رصيد افتتاحي ذهب للمورد (مكافئ العيار الرئيسي)',
+                **supplier_weight_kwargs,
+            )
+        )
+
+        if equity_memo_id:
+            equity_weight_kwargs = _weight_kwargs_for_main_karat(gold_amt, equity_side)
+            db.session.add(
+                JournalEntryLine(
+                    journal_entry_id=entry.id,
+                    account_id=int(equity_memo_id),
+                    description='رصيد افتتاحي ذهب (مقابل) - حقوق الملكية',
+                    **equity_weight_kwargs,
+                )
+            )
 
 
 @offices_bp.route('', methods=['GET'])
@@ -112,38 +313,69 @@ def create_office():
         if data.get('create_account', True) and not explicit_account_set:
             ensure_office_account(office)
 
-        # Ensure a supplier exists for this office to keep reservations consistent
-        supplier = ensure_office_supplier(office)
+        supplier_link_mode = str(data.get('supplier_link_mode') or data.get('supplier_mode') or 'new').strip().lower()
+        supplier = None
 
-        # Optional: set default settlement SafeBox for the linked supplier
-        proposed_sb = data.get('supplier_default_safe_box_id', data.get('default_safe_box_id'))
-        if proposed_sb in (None, '', 0, '0', False):
-            proposed_sb = None
-        if proposed_sb is not None:
+        if supplier_link_mode in ('existing', 'link', 'existing_supplier'):
+            supplier_id = _to_int_or_none(data.get('supplier_id') or data.get('existing_supplier_id'))
+            if not supplier_id:
+                return jsonify({'error': 'يجب اختيار مورد موجود'}), 400
+            supplier = Supplier.query.get(int(supplier_id))
+            if not supplier:
+                return jsonify({'error': 'المورد غير موجود'}), 404
+
+            # Block re-link if supplier already belongs to another office
             try:
-                proposed_sb = int(proposed_sb)
+                existing_office = getattr(supplier, 'office', None)
+                if existing_office and int(getattr(existing_office, 'id', 0) or 0) != int(office.id):
+                    return jsonify({'error': 'هذا المورد مرتبط بمكتب آخر بالفعل'}), 400
             except Exception:
-                return jsonify({'error': 'معرف الخزنة غير صالح'}), 400
-            sb = SafeBox.query.get(proposed_sb)
-            if not sb:
-                return jsonify({'error': 'الخزنة غير موجودة'}), 400
-            supplier.default_safe_box_id = sb.id
-            db.session.add(supplier)
+                pass
 
-        # Optional: ensure supplier has financial + memo accounts (dual chart)
-        def _boolish(value, default: bool = False) -> bool:
-            if value is None:
-                return default
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, (int, float)):
-                return bool(value)
-            if isinstance(value, str):
-                return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
-            return bool(value)
+            office.supplier_id = supplier.id
+            db.session.add(office)
+        else:
+            # Validation: prevent accidental duplicate supplier creation.
+            # In "new supplier" mode the supplier name is derived from office.name.
+            existing_same_name = Supplier.query.filter(Supplier.name == office.name).first()
+            if existing_same_name is not None:
+                return jsonify({'error': 'يوجد مورد بنفس اسم المكتب بالفعل. استخدم خيار (ربط بمورد موجود) بدلاً من إنشاء جديد.'}), 400
+            supplier = ensure_office_supplier(office)
 
         if _boolish(data.get('ensure_supplier_accounts'), default=False):
             ensure_supplier_accounts(supplier)
+
+        gold_safe_link_mode = str(data.get('gold_safe_link_mode') or data.get('office_gold_safe_mode') or 'new').strip().lower()
+        if gold_safe_link_mode in ('existing', 'link', 'existing_safe'):
+            gold_safe_box_id = _to_int_or_none(
+                data.get('gold_safe_box_id')
+                or data.get('office_gold_safe_box_id')
+                or data.get('supplier_default_safe_box_id')
+            )
+            if not gold_safe_box_id:
+                return jsonify({'error': 'يجب اختيار خزنة ذهب موجودة'}), 400
+            sb = SafeBox.query.get(int(gold_safe_box_id))
+            if not sb or not sb.is_active or str(getattr(sb, 'safe_type', '') or '').strip().lower() != 'gold':
+                return jsonify({'error': 'خزنة الذهب غير صالحة'}), 400
+            supplier.default_safe_box_id = sb.id
+            db.session.add(supplier)
+        else:
+            gold_safe = _ensure_office_gold_safe(office)
+            supplier.default_safe_box_id = gold_safe.id
+            db.session.add(supplier)
+
+        opening_cash = _to_float_or_zero(data.get('opening_balance_cash'))
+        opening_gold_main = _to_float_or_zero(data.get('opening_balance_gold_main_karat'))
+        try:
+            _create_opening_entry_for_supplier(
+                supplier,
+                opening_cash=opening_cash,
+                opening_gold_main=opening_gold_main,
+                created_by='system',
+            )
+        except Exception as exc:
+            db.session.rollback()
+            return jsonify({'error': f'فشل تسجيل الرصيد الافتتاحي: {str(exc)}'}), 400
 
         db.session.commit()
         
@@ -209,38 +441,43 @@ def update_office(office_id):
         if 'active' in data:
             office.active = data['active']
         
-        # Optional: update linked supplier default SafeBox
+        # Optional: link to an existing supplier (block if supplier already linked elsewhere)
+        if data.get('supplier_link_mode') in ('existing', 'link', 'existing_supplier') or data.get('supplier_id'):
+            supplier_id = _to_int_or_none(data.get('supplier_id') or data.get('existing_supplier_id'))
+            if not supplier_id:
+                return jsonify({'error': 'يجب اختيار مورد موجود'}), 400
+            supplier = Supplier.query.get(int(supplier_id))
+            if not supplier:
+                return jsonify({'error': 'المورد غير موجود'}), 404
+            try:
+                existing_office = getattr(supplier, 'office', None)
+                if existing_office and int(getattr(existing_office, 'id', 0) or 0) != int(office.id):
+                    return jsonify({'error': 'هذا المورد مرتبط بمكتب آخر بالفعل'}), 400
+            except Exception:
+                pass
+            office.supplier_id = supplier.id
+            db.session.add(office)
+
+        # Optional: gold safe strategy for supplier default safe
         if office.supplier:
-            proposed_sb = data.get('supplier_default_safe_box_id', data.get('default_safe_box_id'))
-            if 'supplier_default_safe_box_id' in data or 'default_safe_box_id' in data:
-                if proposed_sb in (None, '', 0, '0', False):
-                    office.supplier.default_safe_box_id = None
-                else:
-                    try:
-                        proposed_sb = int(proposed_sb)
-                    except Exception:
-                        return jsonify({'error': 'معرف الخزنة غير صالح'}), 400
-                    sb = SafeBox.query.get(proposed_sb)
-                    if not sb:
-                        return jsonify({'error': 'الخزنة غير موجودة'}), 400
-                    office.supplier.default_safe_box_id = sb.id
+            gold_safe_link_mode = str(data.get('gold_safe_link_mode') or '').strip().lower()
+            if gold_safe_link_mode in ('existing', 'link', 'existing_safe') or 'gold_safe_box_id' in data:
+                gold_safe_box_id = _to_int_or_none(data.get('gold_safe_box_id') or data.get('office_gold_safe_box_id'))
+                if not gold_safe_box_id:
+                    return jsonify({'error': 'يجب اختيار خزنة ذهب موجودة'}), 400
+                sb = SafeBox.query.get(int(gold_safe_box_id))
+                if not sb or not sb.is_active or str(getattr(sb, 'safe_type', '') or '').strip().lower() != 'gold':
+                    return jsonify({'error': 'خزنة الذهب غير صالحة'}), 400
+                office.supplier.default_safe_box_id = sb.id
+                db.session.add(office.supplier)
+            elif gold_safe_link_mode in ('new', 'create', 'create_new'):
+                gold_safe = _ensure_office_gold_safe(office)
+                office.supplier.default_safe_box_id = gold_safe.id
                 db.session.add(office.supplier)
 
         # Optional: ensure supplier accounts
-        if office.supplier and data.get('ensure_supplier_accounts'):
-            def _boolish(value, default: bool = False) -> bool:
-                if value is None:
-                    return default
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, (int, float)):
-                    return bool(value)
-                if isinstance(value, str):
-                    return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
-                return bool(value)
-
-            if _boolish(data.get('ensure_supplier_accounts'), default=False):
-                ensure_supplier_accounts(office.supplier)
+        if office.supplier and _boolish(data.get('ensure_supplier_accounts'), default=False):
+            ensure_supplier_accounts(office.supplier)
 
         db.session.commit()
         
@@ -321,6 +558,32 @@ def get_office_balance(office_id):
             bal_21k = float(office.balance_gold_21k or 0.0)
             bal_22k = float(office.balance_gold_22k or 0.0)
             bal_24k = float(office.balance_gold_24k or 0.0)
+
+        # KPIs
+        outstanding_weight = (
+            db.session.query(db.func.sum(OfficeReservation.weight_remaining_main_karat))
+            .filter(OfficeReservation.office_id == office.id)
+            .filter(OfficeReservation.weight_remaining_main_karat > 0)
+            .scalar()
+            or 0.0
+        )
+
+        avg_weight = (
+            db.session.query(
+                db.func.sum(OfficeReservation.weight_main_karat),
+                db.func.sum(
+                    OfficeReservation.weight_main_karat
+                    * OfficeReservation.execution_price_per_gram
+                ),
+            )
+            .filter(OfficeReservation.office_id == office.id)
+            .filter(OfficeReservation.weight_main_karat > 0)
+            .filter(OfficeReservation.execution_price_per_gram > 0)
+            .first()
+        )
+        total_w = float((avg_weight[0] or 0.0) if avg_weight else 0.0)
+        total_w_cost = float((avg_weight[1] or 0.0) if avg_weight else 0.0)
+        avg_closing_price = (total_w_cost / total_w) if total_w > 0 else 0.0
         
         balance_data = {
             'office_id': office.id,
@@ -328,6 +591,10 @@ def get_office_balance(office_id):
             'office_name': office.name,
             'balance_cash': round(float(balance_cash), 2),
             'balance_source': 'account' if linked_account is not None else 'office',
+            'kpis': {
+                'outstanding_weight_main_karat': round(float(outstanding_weight), 3),
+                'avg_closing_price_per_gram': round(float(avg_closing_price), 2),
+            },
             'balance_gold': {
                 '18k': round(float(bal_18k), 3),
                 '21k': round(float(bal_21k), 3),
