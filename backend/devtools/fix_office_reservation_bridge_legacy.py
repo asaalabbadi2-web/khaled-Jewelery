@@ -55,6 +55,7 @@ from models import Account, JournalEntry, JournalEntryLine, OfficeReservation, d
 
 _MARK_CASH = "تصحيح جسر المشتريات (نقد)"
 _MARK_WEIGHT = "تصحيح جسر المشتريات (وزن)"
+_MARK_RESIDUAL = "إقفال رصيد الجسر (وزن)"
 
 
 def _as_float(v) -> float:
@@ -120,6 +121,20 @@ def _karat_amounts(line: JournalEntryLine) -> list[tuple[int, float, float]]:
     return out
 
 
+def _sum_karat_amounts(lines: list[JournalEntryLine], *, field_prefix: str) -> dict[int, float]:
+    """Sum karat amounts for lines.
+
+    field_prefix: 'debit' or 'credit'
+    """
+    totals: dict[int, float] = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
+    for ln in lines:
+        for k in (18, 21, 22, 24):
+            v = _as_float(getattr(ln, f"{field_prefix}_{k}k", 0.0))
+            totals[k] += float(v)
+    # Drop zeros
+    return {k: v for k, v in totals.items() if abs(v) > 1e-9}
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="Fix legacy office_reservation postings that went through purchase bridge")
     p.add_argument("--reservation-id", type=int, required=True)
@@ -154,6 +169,11 @@ def main(argv: list[str]) -> int:
         bridge_line_cash: tuple[int, float] | None = None  # (bridge_account_id, cash_debit)
         inventory_account_id: int | None = None
 
+        bridge_account_id_weight: int | None = None
+        bridge_weight_debit_lines: list[JournalEntryLine] = []
+        bridge_weight_credit_lines: list[JournalEntryLine] = []
+        inventory_weight_debit_lines: list[JournalEntryLine] = []
+
         # Also locate a "weight fix" entry that incorrectly posted "inventory" to bridge.
         wrong_weight_fix: tuple[JournalEntry, JournalEntryLine] | None = None
 
@@ -170,6 +190,18 @@ def main(argv: list[str]) -> int:
                 acc = _find_account_by_id(int(ln.account_id)) if ln.account_id else None
                 if inventory_account_id is None and _is_inventory_account(acc):
                     inventory_account_id = int(ln.account_id)
+
+                # Collect weight movements for residual bridge weight closure.
+                if acc and _is_bridge_account(acc):
+                    bridge_account_id_weight = int(ln.account_id)
+                    if any(d > 0 for _, d, _ in _karat_amounts(ln)):
+                        bridge_weight_debit_lines.append(ln)
+                    if any(c > 0 for _, _, c in _karat_amounts(ln)):
+                        bridge_weight_credit_lines.append(ln)
+
+                if acc and _is_inventory_account(acc):
+                    if any(d > 0 for _, d, _ in _karat_amounts(ln)):
+                        inventory_weight_debit_lines.append(ln)
 
                 if bridge_line_cash is None and _is_bridge_account(acc):
                     cd = _as_float(getattr(ln, "cash_debit", 0.0))
@@ -288,6 +320,74 @@ def main(argv: list[str]) -> int:
                                 journal_entry_id=adj.id,
                                 account_id=int(inventory_account_id),
                                 description=f"تطبيق تصحيح الوزن على المخزون ({k}k)",
+                                exclude_from_ledger=True,
+                                apply_golden_rule=False,
+                                **{karat_credit: float(w)},
+                            )
+
+                        verify_dual_balance(adj.id)
+
+        # Close residual bridge weight (e.g., 12.5g) to inventory when the reservation left a weight debit on bridge.
+        if bridge_account_id_weight is None:
+            print("NOTE: no bridge account detected for residual weight closure")
+        else:
+            if _has_marker(int(reservation.id), _MARK_RESIDUAL):
+                print("SKIP: residual weight marker already applied")
+            else:
+                bridge_debits = _sum_karat_amounts(bridge_weight_debit_lines, field_prefix="debit")
+                bridge_credits = _sum_karat_amounts(bridge_weight_credit_lines, field_prefix="credit")
+                inv_debits = _sum_karat_amounts(inventory_weight_debit_lines, field_prefix="debit")
+
+                residuals: list[tuple[int, float]] = []
+                for k in sorted(set(list(bridge_debits.keys()) + list(bridge_credits.keys()))):
+                    d = float(bridge_debits.get(k, 0.0))
+                    c = float(bridge_credits.get(k, 0.0))
+                    if d > 0 and c >= 0:
+                        r = d - c
+                        if r > 0.001:
+                            # Heuristic safety: only auto-close if inventory debit equals bridge credit (the executed amount)
+                            # which indicates the remaining balance is just a leftover on bridge.
+                            inv_d = float(inv_debits.get(k, 0.0))
+                            if c > 0 and abs(inv_d - c) <= 0.001:
+                                residuals.append((k, r))
+
+                if not residuals:
+                    print("NOTE: no residual bridge weight detected")
+                else:
+                    summary = ", ".join([f"{k}k:{w:.3f}g" for k, w in residuals])
+                    print(
+                        f"{'APPLY' if apply else 'PLAN'} RESIDUAL: move leftover weight [{summary}] from bridge({bridge_account_id_weight}) -> inventory({inventory_account_id})"
+                    )
+                    if apply:
+                        adj = JournalEntry(
+                            date=entries[-1].date,
+                            description=f"{_MARK_RESIDUAL} - RES#{reservation.id}",
+                            entry_type="تصحيح",
+                            reference_type="office_reservation",
+                            reference_id=int(reservation.id),
+                            is_posted=True,
+                            posted_at=entries[-1].date,
+                            posted_by=str(args.posted_by or "system"),
+                            created_by=str(args.posted_by or "system"),
+                        )
+                        db.session.add(adj)
+                        db.session.flush()
+
+                        for k, w in residuals:
+                            karat_debit = f"debit_{k}k"
+                            karat_credit = f"credit_{k}k"
+                            create_dual_journal_entry(
+                                journal_entry_id=adj.id,
+                                account_id=int(inventory_account_id),
+                                description=f"إضافة وزن متبقي من الجسر للمخزون ({k}k)",
+                                exclude_from_ledger=True,
+                                apply_golden_rule=False,
+                                **{karat_debit: float(w)},
+                            )
+                            create_dual_journal_entry(
+                                journal_entry_id=adj.id,
+                                account_id=int(bridge_account_id_weight),
+                                description=f"إقفال وزن متبقي على الجسر ({k}k)",
                                 exclude_from_ledger=True,
                                 apply_golden_rule=False,
                                 **{karat_credit: float(w)},
