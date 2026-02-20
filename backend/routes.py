@@ -18632,6 +18632,7 @@ def mark_payroll_paid(payroll_id):
     Body Parameters:
         - paid_date: تاريخ الدفع (اختياري)
         - payment_account_id: معرف حساب الدفع (نقدية/بنك/شيك) (اختياري - افتراضي: حساب النقدية)
+        - advance_deduction_amount: مبلغ خصم من سلفة الموظف داخل نفس سند الصرف (اختياري)
         - created_by: اسم المستخدم (اختياري)
     """
     payroll_entry = Payroll.query.get_or_404(payroll_id)
@@ -18642,7 +18643,20 @@ def mark_payroll_paid(payroll_id):
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    # ✅ إنشاء سند صرف تلقائي إذا لم يكن موجوداً
+    # Optional: deduct an advance from the salary payment voucher.
+    try:
+        advance_deduction_amount = float(data.get('advance_deduction_amount') or 0.0)
+    except Exception:
+        return jsonify({'error': 'advance_deduction_amount_invalid'}), 400
+
+    if advance_deduction_amount < 0:
+        return jsonify({'error': 'advance_deduction_amount_negative'}), 400
+
+    net_salary = float(payroll_entry.net_salary or 0.0)
+    if advance_deduction_amount > net_salary + 1e-9:
+        return jsonify({'error': 'advance_deduction_exceeds_net_salary'}), 400
+
+    # ✅ إنشاء سند صرف تلقائي + ترحيله (سند + قيد يومية) إذا لم يكن موجوداً
     if not payroll_entry.voucher_id:
         try:
             # البحث عن حساب الموظف
@@ -18667,35 +18681,42 @@ def mark_payroll_paid(payroll_id):
             else:
                 voucher_number = f"{voucher_prefix}-0001"
 
-            # إنشاء السند
+            # إنشاء السند (pending ثم يتم ترحيله مباشرة مثل سندات الدفعات)
             voucher = Voucher(
                 voucher_number=voucher_number,
-                voucher_type='صرف',
+                voucher_type='payment',
                 date=paid_date,
                 description=f"صرف راتب {employee.name} - {payroll_entry.month}/{payroll_entry.year}",
-                status='approved',
+                status='pending',
                 created_by=data.get('created_by', 'system'),
+                party_type='other',
+                party_name=employee.name,
+                reference_type='payroll',
+                reference_id=int(payroll_entry.id),
+                reference_number=f"{payroll_entry.year}-{payroll_entry.month:02d}",
             )
             db.session.add(voucher)
             db.session.flush()  # للحصول على voucher.id
 
-            # إضافة سطر الحساب (من حساب الموظف أو حساب الرواتب)
-            if employee.account_id:
-                salary_account_id = employee.account_id
-            else:
-                # البحث عن حساب "مستحقات رواتب" (222)
-                salaries_payable_account = Account.query.filter(
-                    or_(
-                        Account.account_number == '222',
-                        Account.name.like('%مستحقات رواتب%'),
-                        Account.name.like('%رواتب مستحقة%')
-                    )
-                ).first()
-                salary_account_id = salaries_payable_account.id if salaries_payable_account else None
+            # ✅ تحديد حساب طرف الرواتب: ذمم الموظف - رواتب (2400xxxx)
+            salary_account_id = None
+            try:
+                from employee_account_helpers import get_or_create_employee_payables_accounts
+                from employee_account_naming import employee_payable_account_name
+
+                expected_name = employee_payable_account_name(employee.name, category_ar='رواتب')
+                payables = get_or_create_employee_payables_accounts(
+                    employee.name,
+                    created_by=data.get('created_by', 'system'),
+                )
+                salary_acc = next((a for a in payables if (a.name or '').strip() == expected_name), None)
+                salary_account_id = int(salary_acc.id) if salary_acc else None
+            except Exception:
+                salary_account_id = None
 
             if not salary_account_id:
                 db.session.rollback()
-                return jsonify({'error': 'لا يوجد حساب مرتبط بالموظف أو حساب مستحقات رواتب'}), 400
+                return jsonify({'error': 'لا يوجد حساب ذمم رواتب (2400xxxx) لهذا الموظف. يرجى تشغيل Ensure setup للموظف.'}), 400
 
             # ✅ تحديد حساب الدفع (نقدية/بنك/شيك)
             payment_account_id = data.get('payment_account_id')
@@ -18721,27 +18742,58 @@ def mark_payroll_paid(payroll_id):
                     db.session.rollback()
                     return jsonify({'error': 'لا يوجد حساب دفع (نقدية/بنك) في النظام'}), 400
 
-            # إضافة السطر المدين (من حساب الدفع - خروج أموال)
-            debit_line = VoucherAccountLine(
-                voucher_id=voucher.id,
-                account_id=payment_account.id,
-                line_type='debit',  # ✅ مدين - خروج أموال من الحساب
-                amount_type='cash',
-                description=f"صرف راتب {employee.name} - {payment_account.name}",
-                amount=payroll_entry.net_salary,
-            )
-            db.session.add(debit_line)
+            cash_paid = max(0.0, net_salary - advance_deduction_amount)
 
-            # إضافة السطر الدائن (لحساب مستحقات الرواتب)
-            credit_line = VoucherAccountLine(
+            # اتجاه الصرف:
+            # - debit: ذمم الرواتب (2400xxxx) بقيمة صافي الراتب
+            # - credits: الخزنة (نقد/بنك/شيك) بمبلغ المدفوع فعليًا + سلفة الموظف (170/171) بمبلغ الخصم
+            if cash_paid > 1e-9:
+                safe_line = VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=payment_account.id,
+                    line_type='credit',
+                    amount_type='cash',
+                    description=f"صرف راتب {employee.name} - {payment_account.name}",
+                    amount=cash_paid,
+                )
+                db.session.add(safe_line)
+
+            party_line = VoucherAccountLine(
                 voucher_id=voucher.id,
                 account_id=salary_account_id,
-                line_type='credit',  # ✅ دائن - تسديد الالتزام
+                line_type='debit',
                 amount_type='cash',
                 description=f"راتب {payroll_entry.month}/{payroll_entry.year}",
-                amount=payroll_entry.net_salary,
+                amount=net_salary,
             )
-            db.session.add(credit_line)
+            db.session.add(party_line)
+
+            if advance_deduction_amount > 1e-9:
+                if not employee.account_id:
+                    db.session.rollback()
+                    return jsonify({'error': 'employee_missing_account_for_advance_deduction'}), 400
+
+                advance_line = VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=int(employee.account_id),
+                    line_type='credit',
+                    amount_type='cash',
+                    description=f"خصم سلفة من راتب {employee.name}",
+                    amount=float(advance_deduction_amount),
+                )
+                db.session.add(advance_line)
+
+            # ترحيل السند تلقائياً (إنشاء قيد + ربط + SafeBoxTransaction)
+            journal_entry = create_journal_entry_from_voucher(voucher)
+            if not journal_entry:
+                raise Exception('Failed to create journal entry from payroll voucher')
+
+            voucher.status = 'approved'
+            voucher.approved_at = datetime.now()
+            voucher.approved_by = data.get('created_by', 'system')
+            voucher.journal_entry_id = journal_entry.id
+
+            _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
 
             payroll_entry.voucher_id = voucher.id
 
@@ -23487,11 +23539,14 @@ def settle_office_reservation(reservation_id: int):
         )
 
         weight_main_karat = float(reservation.weight_main_karat or 0.0)
-        reservation.weight_consumed_main_karat = consumption['weight_consumed']
-        reservation.weight_remaining_main_karat = max(weight_main_karat - consumption['weight_consumed'], 0.0)
-        reservation.executions_created = consumption['executions_created']
-        if reservation.weight_remaining_main_karat <= 0.0001:
-            reservation.status = 'executed'
+        weight_consumed = float(consumption.get('weight_consumed') or 0.0)
+
+        # In this workflow, settlement represents a real purchase/receipt of gold.
+        # Weight-closing consumption is an internal matching mechanism and should not block execution.
+        reservation.weight_consumed_main_karat = weight_main_karat
+        reservation.weight_remaining_main_karat = 0.0
+        reservation.executions_created = int(consumption.get('executions_created') or 0)
+        reservation.status = 'completed'
         db.session.add(reservation)
 
         db.session.commit()
@@ -23499,12 +23554,69 @@ def settle_office_reservation(reservation_id: int):
         response = _serialize_office_reservation(reservation)
         response['weight_consumption'] = consumption
         response['purchase_invoice_id'] = reservation.purchase_invoice_id
+        response['journal_entry'] = {
+            'id': gold_entry.id,
+            'entry_number': gold_entry.entry_number,
+            'date': gold_entry.date.isoformat() if gold_entry.date else settlement_date.isoformat(),
+        }
+        try:
+            eps = 0.0001
+            if weight_consumed + eps < weight_main_karat:
+                response['weight_closing_warning'] = {
+                    'message': 'تم تنفيذ الحجز، لكن لم يتم ربط/استهلاك وزن تسكير كافي (لا توجد أوامر تسكير مفتوحة كفاية).',
+                    'weight_requested': round(weight_main_karat, 6),
+                    'weight_consumed': round(weight_consumed, 6),
+                }
+        except Exception:
+            pass
         return jsonify(response), 200
 
     except Exception as exc:
         db.session.rollback()
         print(f"❌ Failed to settle office reservation: {exc}")
         return jsonify({'error': f'فشل تنفيذ الحجز: {exc}'}), 500
+
+
+@api.route('/office-reservations/<int:reservation_id>/cancel', methods=['POST'])
+@require_permission('journal.post')
+def cancel_office_reservation(reservation_id: int):
+    """Cancel an office reservation.
+
+    This is intentionally conservative:
+    - You cannot cancel a reservation after settlement (purchase_invoice_id exists).
+    - You cannot cancel if any payment was recorded (paid_amount > 0 or payment voucher exists),
+      because that would require a financial reversal workflow.
+    """
+    reservation = OfficeReservation.query.options(joinedload(OfficeReservation.office)).get(reservation_id)
+    if not reservation:
+        return jsonify({'error': 'الحجز غير موجود'}), 404
+
+    if reservation.purchase_invoice_id:
+        return jsonify({'error': 'لا يمكن إلغاء حجز تم تنفيذه'}), 400
+
+    if (reservation.status or '').lower() == 'cancelled':
+        return jsonify(_serialize_office_reservation(reservation)), 200
+
+    paid_amount = float(getattr(reservation, 'paid_amount', 0.0) or 0.0)
+    if paid_amount > 0:
+        return jsonify({'error': 'لا يمكن إلغاء حجز عليه دفعات. قم بعمل سند عكس/استرجاع أولاً'}), 400
+
+    try:
+        linked_voucher = Voucher.query.filter_by(
+            reference_type='office_reservation',
+            reference_id=reservation.id,
+        ).first()
+    except Exception:
+        linked_voucher = None
+
+    if linked_voucher is not None:
+        return jsonify({'error': 'لا يمكن إلغاء حجز مرتبط بسند دفع. قم بإلغاء السند أولاً'}), 400
+
+    reservation.status = 'cancelled'
+    db.session.add(reservation)
+    db.session.commit()
+
+    return jsonify(_serialize_office_reservation(reservation)), 200
 
 
 # ═══════════════════════════════════════════════════════════════

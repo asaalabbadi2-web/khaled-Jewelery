@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api_service.dart';
+import '../models/employee_model.dart';
 import '../models/payroll_model.dart';
 import 'payroll_report_screen.dart';
 
@@ -60,7 +61,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
     final result = await showDialog<Map<String, dynamic>?>(
       context: context,
       builder: (context) =>
-          PayrollFormDialog(isArabic: widget.isArabic, entry: entry),
+          PayrollFormDialog(api: widget.api, isArabic: widget.isArabic, entry: entry),
     );
 
     if (result == null) return;
@@ -152,16 +153,20 @@ class _PayrollScreenState extends State<PayrollScreen> {
 
     int? selectedAccountId = defaultAccount['id'];
 
+    double advanceDeductionAmount = 0.0;
+    final advanceDeductionController = TextEditingController(text: '0.00');
+
     // إظهار dialog لاختيار طريقة الدفع
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           title: Text(isAr ? 'تأكيد دفع الراتب' : 'Confirm Payment'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               Text(
                 isAr
                     ? 'الموظف: ${entry.employee?.name ?? ""}'
@@ -173,6 +178,13 @@ class _PayrollScreenState extends State<PayrollScreen> {
                 isAr
                     ? 'الراتب الصافي: ${entry.netSalary.toStringAsFixed(2)} ريال'
                     : 'Net Salary: ${entry.netSalary.toStringAsFixed(2)} SAR',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isAr
+                    ? 'المدفوع فعلياً: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} ريال'
+                    : 'Cash Paid: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} SAR',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 16),
               Text(
@@ -193,23 +205,26 @@ class _PayrollScreenState extends State<PayrollScreen> {
                 items: paymentAccounts.map((acc) {
                   return DropdownMenuItem<int>(
                     value: acc['id'],
-                    child: Row(
-                      children: [
-                        Icon(
-                          _getAccountIcon(acc['name']),
-                          size: 18,
-                          color: acc['is_default'] == true
-                              ? Colors.green
-                              : Colors.grey,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '${acc['name']} (${acc['account_number']})',
-                            overflow: TextOverflow.ellipsis,
+                    child: SizedBox(
+                      width: 420,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _getAccountIcon(acc['name']),
+                            size: 18,
+                            color: acc['is_default'] == true
+                                ? Colors.green
+                                : Colors.grey,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${acc['name']} (${acc['account_number']})',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 }).toList(),
@@ -219,7 +234,49 @@ class _PayrollScreenState extends State<PayrollScreen> {
                   });
                 },
               ),
-            ],
+              const SizedBox(height: 16),
+              Text(
+                isAr ? 'خصم من سلفة (اختياري):' : 'Advance Deduction (optional):',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: advanceDeductionController,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  hintText: isAr ? '0.00' : '0.00',
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  signed: false,
+                  decimal: true,
+                ),
+                onChanged: (value) {
+                  final parsed =
+                      double.tryParse(value.trim().replaceAll(',', '.')) ?? 0.0;
+                  setDialogState(() {
+                    advanceDeductionAmount = parsed < 0 ? 0.0 : parsed;
+                    if (advanceDeductionAmount > entry.netSalary) {
+                      advanceDeductionAmount = entry.netSalary;
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isAr
+                    ? 'سيتم خصم هذا المبلغ من حساب سلفة الموظف ضمن نفس سند الصرف.'
+                    : 'This amount will be credited to the employee advance account in the same voucher.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).hintColor,
+                ),
+              ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -242,6 +299,8 @@ class _PayrollScreenState extends State<PayrollScreen> {
       final updated = await widget.api.markPayrollPaid(
         entry.id ?? 0,
         paymentAccountId: selectedAccountId,
+        advanceDeductionAmount:
+            advanceDeductionAmount > 0 ? advanceDeductionAmount : null,
       );
       setState(() {
         final index = _entries.indexWhere((p) => p.id == entry.id);
@@ -465,9 +524,15 @@ class _PayrollScreenState extends State<PayrollScreen> {
 }
 
 class PayrollFormDialog extends StatefulWidget {
+  final ApiService api;
   final bool isArabic;
   final PayrollModel? entry;
-  const PayrollFormDialog({super.key, required this.isArabic, this.entry});
+  const PayrollFormDialog({
+    super.key,
+    required this.api,
+    required this.isArabic,
+    this.entry,
+  });
 
   @override
   State<PayrollFormDialog> createState() => _PayrollFormDialogState();
@@ -485,6 +550,11 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
   late final TextEditingController _notesController;
   String _status = 'pending';
 
+  bool _loadingEmployees = false;
+  String? _employeesLoadError;
+  List<EmployeeModel> _employees = [];
+  int? _selectedEmployeeId;
+
   @override
   void initState() {
     super.initState();
@@ -493,6 +563,7 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
     _employeeIdController = TextEditingController(
       text: entry?.employeeId.toString() ?? '',
     );
+    _selectedEmployeeId = entry?.employeeId;
     _monthController = TextEditingController(
       text: (entry?.month ?? now.month).toString(),
     );
@@ -518,6 +589,58 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
     _basicController.addListener(_calculateNet);
     _allowancesController.addListener(_calculateNet);
     _deductionsController.addListener(_calculateNet);
+
+    _loadEmployees();
+  }
+
+  Future<void> _loadEmployees() async {
+    setState(() {
+      _loadingEmployees = true;
+      _employeesLoadError = null;
+    });
+
+    try {
+      // Fetch all pages of active employees (best-effort).
+      final all = <EmployeeModel>[];
+      int page = 1;
+      int pages = 1;
+      do {
+        final res = await widget.api.getEmployees(
+          page: page,
+          perPage: 200,
+          isActive: true,
+        );
+        final chunk = (res['employees'] as List<EmployeeModel>? ?? []);
+        all.addAll(chunk);
+        pages = (res['pages'] as int?) ?? 1;
+        page++;
+      } while (page <= pages);
+
+      all.sort((a, b) => a.name.compareTo(b.name));
+
+      if (!mounted) return;
+      setState(() {
+        _employees = all;
+      });
+
+      // If editing and employee is inactive/missing from list, keep selected id.
+      if (_selectedEmployeeId != null && _employees.isNotEmpty) {
+        final exists = _employees.any((e) => e.id == _selectedEmployeeId);
+        if (!exists) {
+          // Keep it as-is; dropdown will show hint only.
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _employeesLoadError = e.toString();
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _loadingEmployees = false;
+      });
+    }
   }
 
   void _calculateNet() {
@@ -557,8 +680,12 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
 
+    final employeeId = _employeesLoadError == null
+        ? _selectedEmployeeId
+        : int.tryParse(_employeeIdController.text.trim());
+
     final payload = <String, dynamic>{
-      'employee_id': int.tryParse(_employeeIdController.text.trim()),
+      'employee_id': employeeId,
       'month': int.tryParse(_monthController.text.trim()),
       'year': int.tryParse(_yearController.text.trim()),
       'basic_salary':
@@ -603,19 +730,62 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextFormField(
-                  controller: _employeeIdController,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'معرّف الموظف' : 'Employee ID',
+                if (_employeesLoadError == null) ...[
+                  DropdownButtonFormField<int>(
+                    value: _selectedEmployeeId,
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'الموظف' : 'Employee',
+                      suffixIcon: _loadingEmployees
+                          ? Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : null,
+                    ),
+                    items: _employees
+                        .where((e) => e.id != null)
+                        .map(
+                          (e) => DropdownMenuItem<int>(
+                            value: e.id,
+                            child: Text(
+                              '${e.name} (${e.employeeCode})',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _loadingEmployees
+                        ? null
+                        : (value) => setState(() => _selectedEmployeeId = value),
+                    validator: (value) {
+                      if (value == null) {
+                        return isAr ? 'يرجى اختيار الموظف' : 'Select an employee';
+                      }
+                      return null;
+                    },
                   ),
-                  keyboardType: TextInputType.number,
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return isAr ? 'المعرف مطلوب' : 'Employee ID required';
-                    }
-                    return null;
-                  },
-                ),
+                ] else ...[
+                  TextFormField(
+                    controller: _employeeIdController,
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'معرّف الموظف' : 'Employee ID',
+                      helperText: isAr
+                          ? 'تعذر تحميل قائمة الموظفين، أدخل المعرّف يدوياً.'
+                          : 'Could not load employees list, enter ID manually.',
+                    ),
+                    keyboardType: TextInputType.number,
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return isAr ? 'المعرف مطلوب' : 'Employee ID required';
+                      }
+                      return null;
+                    },
+                  ),
+                ],
                 TextFormField(
                   controller: _monthController,
                   decoration: InputDecoration(

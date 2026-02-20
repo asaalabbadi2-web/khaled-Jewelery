@@ -783,6 +783,49 @@ class ApiService {
     throw Exception(_errorMessageFromResponse(response));
   }
 
+  Future<Map<String, dynamic>> settleOfficeReservation(
+    int reservationId, {
+    double? executionPricePerGram,
+    DateTime? settlementDate,
+    String? createdBy,
+  }) async {
+    final payload = <String, dynamic>{
+      if (executionPricePerGram != null)
+        'execution_price_per_gram': executionPricePerGram,
+      if (settlementDate != null) 'settlement_date': settlementDate.toIso8601String(),
+      if (createdBy != null) 'created_by': createdBy,
+    };
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/office-reservations/$reservationId/settle'),
+      body: json.encode(payload),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> cancelOfficeReservation(
+    int reservationId, {
+    String? cancelledBy,
+    String? reason,
+  }) async {
+    final payload = <String, dynamic>{
+      if (cancelledBy != null) 'cancelled_by': cancelledBy,
+      if (reason != null) 'reason': reason,
+    };
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/office-reservations/$reservationId/cancel'),
+      body: json.encode(payload),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
   // Item Methods
   Future<List<dynamic>> getItems({
     bool? inStockOnly,
@@ -4013,6 +4056,7 @@ class ApiService {
     DateTime? paidDate,
     int? voucherId,
     int? paymentAccountId, // ✅ حساب الدفع (نقدية/بنك/شيك)
+    double? advanceDeductionAmount, // ✅ خصم من سلفة الموظف ضمن نفس السند
   }) async {
     final response = await _authedPost(
       Uri.parse('$_baseUrl/payroll/$payrollId/mark-paid'),
@@ -4022,6 +4066,7 @@ class ApiService {
           'paid_date': paidDate?.toIso8601String().split('T').first,
           'voucher_id': voucherId,
           'payment_account_id': paymentAccountId, // ✅ إرسال حساب الدفع
+          'advance_deduction_amount': advanceDeductionAmount,
         }..removeWhere((key, value) => value == null),
       ),
     );

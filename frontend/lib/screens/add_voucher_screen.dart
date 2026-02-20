@@ -274,10 +274,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         _selectedEmployeeId = toInt(decoded?['employee_id']);
         _selectedOtherAccountId = toInt(decoded?['other_account_id']);
 
-        _descriptionController.text = (decoded?['description'] ?? '').toString();
+        _descriptionController.text = (decoded?['description'] ?? '')
+            .toString();
         _notesController.text = (decoded?['notes'] ?? '').toString();
-        _receiverNameController.text =
-            (decoded?['receiver_name'] ?? '').toString();
+        _receiverNameController.text = (decoded?['receiver_name'] ?? '')
+            .toString();
 
         _accountLines.clear();
         final rawLines = (decoded?['account_lines'] as List<dynamic>? ?? [])
@@ -694,7 +695,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             sb.safeType == 'check';
       }).toList();
 
-      return filteredSafes
+      final safeOptions = filteredSafes
           .map(
             (sb) => {
               'id': sb.accountId,
@@ -710,6 +711,29 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             },
           )
           .toList();
+
+      // Special case: Salary payment with advance deduction.
+      // In the salary template, allow adding a second CREDIT cash line that targets
+      // the employee's personal account under 1700 (170xxxx) to reduce the advance
+      // balance as part of the same voucher.
+      final bool allowEmployeeAdvanceOffset =
+          widget.voucherType != 'receipt' &&
+          (lineType ?? '') == 'credit' &&
+          (amountType ?? '') == 'cash' &&
+          _selectedTemplateId == 'payment_salary';
+
+      if (!allowEmployeeAdvanceOffset) {
+        return safeOptions;
+      }
+
+      final employeeAccounts = _accounts.where((acc) {
+        final accNum = (acc['account_number'] ?? '').toString();
+        return (accNum.startsWith('170') || accNum.startsWith('171')) &&
+            accNum.length >= 5;
+      }).toList();
+
+      // Combine: safes first (common UX), then employee accounts.
+      return [...safeOptions, ...employeeAccounts];
     }
 
     // للحالات الأخرى: نعرض الحسابات العادية
@@ -837,6 +861,56 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     }
   }
 
+  String _normalizeSearchText(String value) {
+    // Best-effort normalization for matching Arabic names in account labels.
+    return (value)
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '');
+  }
+
+  int? _findEmployeeSalaryPayableAccountId(EmployeeModel employee) {
+    // Expected: per-employee salary payable account under 2400xxxx
+    // Account name pattern (from backend helpers): "ح/ذمم الموظف <name> - رواتب"
+    final empKey = _normalizeSearchText(employee.name);
+
+    final candidates = _accounts.where((acc) {
+      final numStr = (acc['account_number'] ?? '').toString().trim();
+      if (!numStr.startsWith('2400') || numStr.length < 5) return false;
+
+      final nameStr = (acc['name'] ?? '').toString();
+      final key = _normalizeSearchText(nameStr);
+      return key.contains(empKey) && key.contains(_normalizeSearchText('رواتب'));
+    }).toList();
+
+    if (candidates.isEmpty) {
+      // Fallback: match employee name under 2400 even if "رواتب" missing.
+      final fallback = _accounts.where((acc) {
+        final numStr = (acc['account_number'] ?? '').toString().trim();
+        if (!numStr.startsWith('2400') || numStr.length < 5) return false;
+        final nameStr = (acc['name'] ?? '').toString();
+        return _normalizeSearchText(nameStr).contains(empKey);
+      }).toList();
+      if (fallback.isEmpty) return null;
+      // Prefer the most specific/longest account number.
+      fallback.sort((a, b) {
+        final an = (a['account_number'] ?? '').toString().length;
+        final bn = (b['account_number'] ?? '').toString().length;
+        return bn.compareTo(an);
+      });
+      return _coerceAccountId(fallback.first['id']);
+    }
+
+    // Prefer the most specific/longest account number.
+    candidates.sort((a, b) {
+      final an = (a['account_number'] ?? '').toString().length;
+      final bn = (b['account_number'] ?? '').toString().length;
+      return bn.compareTo(an);
+    });
+    return _coerceAccountId(candidates.first['id']);
+  }
+
   int? _coerceAccountId(dynamic value) {
     if (value == null) {
       return null;
@@ -873,7 +947,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   bool _shouldShowSafeBoxesForLineType(String? lineType) {
     if (lineType == null) return false;
     final bool isReceipt = widget.voucherType == 'receipt';
-    return (isReceipt && lineType == 'debit') || (!isReceipt && lineType == 'credit');
+    return (isReceipt && lineType == 'debit') ||
+        (!isReceipt && lineType == 'credit');
   }
 
   bool _safeMatchesAmountType(SafeBoxModel safe, String amountType) {
@@ -1070,7 +1145,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
               ? 'صرف راتب موظف'
               : _descriptionController.text;
           _notesController.text = _notesController.text.isEmpty
-              ? 'يرجى اختيار الموظف وتحديد الفترة.'
+              ? 'اختر الموظف وسيتم الربط تلقائياً بحساب ذمم الرواتب (2400xxxx).'
               : _notesController.text;
           _ensureFirstLineConfiguration(
             amountType: 'cash',
@@ -1078,20 +1153,18 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           );
           break;
         case 'payment_advance':
-          _partyType = 'other';
+          _partyType = 'employee';
           clearPartySelections();
           _descriptionController.text = _descriptionController.text.isEmpty
               ? 'صرف سلفة لموظف'
               : _descriptionController.text;
           _notesController.text = _notesController.text.isEmpty
-              ? 'اختر حساب السلفة التفصيلي للموظف (مثل: 140000 - سلفة أحمد)'
+              ? 'اختر الموظف وسيتم الربط تلقائياً بحسابه ضمن الأصول (170xxxx).'
               : _notesController.text;
           _ensureFirstLineConfiguration(
             amountType: 'cash',
             description: 'سلفة موظف',
           );
-          // لا نحدد حساب مسبقاً - المستخدم يختار الحساب التفصيلي للموظف
-          _selectedOtherAccountId = null;
           break;
         case 'payment_expense':
           _partyType = 'other';
@@ -1592,7 +1665,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
               SearchablePickerField(
                 labelText: 'العميل *',
                 valueText: _selectedPartyName('customer'),
-                hintText: _customers.isEmpty ? 'لا يوجد عملاء' : 'اضغط للبحث والاختيار',
+                hintText: _customers.isEmpty
+                    ? 'لا يوجد عملاء'
+                    : 'اضغط للبحث والاختيار',
                 helperText: _customersAggregateAccountNumber != null
                     ? 'سيتم القيد على الحساب التجميعي للعملاء ($_customersAggregateAccountNumber)'
                     : 'سيتم القيد على الحساب التجميعي للعملاء',
@@ -1604,7 +1679,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
               SearchablePickerField(
                 labelText: 'المورد *',
                 valueText: _selectedPartyName('supplier'),
-                hintText: _suppliers.isEmpty ? 'لا يوجد موردين' : 'اضغط للبحث والاختيار',
+                hintText: _suppliers.isEmpty
+                    ? 'لا يوجد موردين'
+                    : 'اضغط للبحث والاختيار',
                 helperText: _suppliersAggregateAccountNumber != null
                     ? 'سيتم القيد على الحساب التجميعي للموردين ($_suppliersAggregateAccountNumber)'
                     : 'سيتم القيد على الحساب التجميعي للموردين',
@@ -1644,12 +1721,34 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 accounts: _accounts,
                 value: _selectedOtherAccountId,
                 labelText: 'الحساب *',
-                hintText: 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
+                hintText: _selectedTemplateId == 'payment_salary'
+                    ? 'اختر حساب ذمم الموظفين - رواتب (2400xxxx)'
+                    : _selectedTemplateId == 'payment_advance'
+                    ? 'اختر حساب الموظف (170xxxx)'
+                    : 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
                 title: 'اختيار حساب',
                 isArabic: true,
-                helperText: 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
+                helperText: _selectedTemplateId == 'payment_salary'
+                    ? 'سيتم تسجيل الراتب على ذمم الموظفين (رواتب)'
+                    : _selectedTemplateId == 'payment_advance'
+                    ? 'سيتم تسجيل السلفة على حساب الموظف ضمن الأصول'
+                    : 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
                 predicate: (a) {
                   final accNum = accountNumberOf(a);
+
+                  // Template-driven filters:
+                  // - Salary: employee salary payables accounts under 2400xxxx
+                  // - Advances: employee personal/receivable accounts under 170xxxx
+                  if (_selectedTemplateId == 'payment_salary') {
+                    return accNum.startsWith('2400') && accNum.length >= 5;
+                  }
+                  if (_selectedTemplateId == 'payment_advance') {
+                    return (accNum.startsWith('170') ||
+                            accNum.startsWith('171')) &&
+                        accNum.length >= 5;
+                  }
+
+                  // Default (expenses / misc / legacy advances)
                   return accNum.startsWith('5') ||
                       accNum.startsWith('4') ||
                       accNum.startsWith('140');
@@ -2318,7 +2417,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
     // For cash/bank/clearing safes, prefer ledger balance (loaded on-demand).
     final safeType = safe.safeType;
-    final isCashLikeSafe = safeType == 'cash' || safeType == 'bank' || safeType == 'clearing';
+    final isCashLikeSafe =
+        safeType == 'cash' || safeType == 'bank' || safeType == 'clearing';
     if (line.amountType == 'cash' && isCashLikeSafe) {
       final safeId = safe.id;
       if (safeId != null &&
@@ -2388,7 +2488,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     } else {
       final available = _getAvailableSafeCash(safe);
       final bool isOutflow = _isCashOutflowFromSafe(line);
-      exceedsBalance = isOutflow && available != null && line.amount > available + 0.01;
+      exceedsBalance =
+          isOutflow && available != null && line.amount > available + 0.01;
       bgColor = exceedsBalance ? Colors.red.shade50 : Colors.green.shade50;
       borderColor = exceedsBalance
           ? Colors.red.shade200
@@ -2570,12 +2671,29 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           );
         }
       } else if (_partyType == 'employee') {
-        // استخدام حساب الموظف الشخصي
+        // اختيار الموظف بالاسم، ثم الربط بالخلفية حسب القالب:
+        // - راتب: ذمم الموظفين-رواتب (2400xxxx)
+        // - سلفة: حساب الموظف ضمن الأصول (170xxxx)
         selectedEmployee = _findEmployeeById(_selectedEmployeeId);
-        if (selectedEmployee != null && selectedEmployee.accountId != null) {
-          partyAccountId = selectedEmployee.accountId;
+        if (selectedEmployee == null) {
+          throw Exception('تعذر العثور على بيانات الموظف المحدد');
+        }
+
+        if (_selectedTemplateId == 'payment_salary') {
+          partyAccountId = _findEmployeeSalaryPayableAccountId(selectedEmployee);
+          if (partyAccountId == null) {
+            throw Exception(
+              'لا يوجد حساب ذمم رواتب (2400xxxx) مرتبط بهذا الموظف.\n'
+              'يرجى إنشاء/تأكيد حسابات الذمم للموظف من شاشة الموظفين (Ensure setup).',
+            );
+          }
         } else {
-          throw Exception('الموظف المختار ليس لديه حساب مرتبط');
+          // Default: employee personal account (170xxxx)
+          if (selectedEmployee.accountId != null) {
+            partyAccountId = selectedEmployee.accountId;
+          } else {
+            throw Exception('الموظف المختار ليس لديه حساب مرتبط');
+          }
         }
       } else if (_partyType == 'other') {
         // استخدام الحساب المحدد يدوياً
@@ -3068,7 +3186,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   if (value == 'gold') {
                     final safe = _findSafeByAccountId(line.accountId);
                     final fixed = safe?.karat;
-                    if (safe != null && safe.safeType == 'gold' && fixed != null && fixed > 0) {
+                    if (safe != null &&
+                        safe.safeType == 'gold' &&
+                        fixed != null &&
+                        fixed > 0) {
                       line.karat = fixed.toDouble();
                     }
                   }

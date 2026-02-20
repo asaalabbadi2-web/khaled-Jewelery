@@ -459,6 +459,47 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         self.assertEqual(len(data_page_2['data']), 1)
         self.assertEqual(data_page_2['pagination']['page'], 2)
 
+    def test_office_reservation_can_be_cancelled_when_unpaid(self):
+        office = self._create_office(code='OFF-CANCEL', name='Cancel Office')
+
+        payload = {
+            'office_id': office.id,
+            'reservation_date': datetime.utcnow().isoformat(),
+            'karat': 21,
+            'weight': 1.25,
+            'price_per_gram': 250.0,
+            'execution_price_per_gram': 250.0,
+            'paid_amount': 0.0,
+        }
+
+        response = self.client.post(
+            '/api/office-reservations',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 201, msg=response.data)
+        data = json.loads(response.data)
+        self.assertEqual(data['payment_status'], 'pending')
+        self.assertIsNone(data.get('purchase_invoice_id'))
+
+        reservation_id = data['id']
+        cancel_resp = self.client.post(
+            f'/api/office-reservations/{reservation_id}/cancel',
+            data=json.dumps({'cancelled_by': 'test'}),
+            content_type='application/json',
+        )
+        self.assertEqual(cancel_resp.status_code, 200, msg=cancel_resp.data)
+        cancelled = json.loads(cancel_resp.data)
+        self.assertEqual(cancelled.get('status'), 'cancelled')
+        self.assertIsNone(cancelled.get('purchase_invoice_id'))
+
+        # Should not create a gold journal entry on cancellation.
+        gold_entry = JournalEntry.query.filter_by(
+            reference_type='office_reservation',
+            reference_id=reservation_id,
+        ).first()
+        self.assertIsNone(gold_entry)
+
     def test_reservation_creates_purchase_invoice_and_journal(self):
         """Booking creates no invoice/gold journal; settlement creates them."""
         sale_invoice = self._create_sale_invoice(weight_grams=1.5, close_price=240.0)
