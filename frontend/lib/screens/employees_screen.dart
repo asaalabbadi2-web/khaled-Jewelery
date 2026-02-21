@@ -7,6 +7,7 @@ import '../models/employee_model.dart';
 import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../utils.dart';
+import 'account_statement_screen.dart';
 
 class EmployeesScreen extends StatefulWidget {
   final ApiService api;
@@ -90,6 +91,84 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 
   Future<void> _refresh() async {
     await _loadEmployees();
+  }
+
+  Map<String, dynamic>? _pickEmployeeSalaryAccount(
+    List<dynamic> accounts,
+    EmployeeModel employee,
+  ) {
+    final empName = employee.name.trim().toLowerCase();
+    if (empName.isEmpty) return null;
+
+    final nameTokens = empName
+        .split(RegExp(r'\s+'))
+        .map((t) => t.trim())
+        .where((t) => t.length >= 2)
+        .toList(growable: false);
+
+    final flat = <Map<String, dynamic>>[];
+
+    void visit(dynamic node) {
+      if (node is! Map) return;
+      final map = node.cast<String, dynamic>();
+      flat.add(map);
+      final children = map['sub_accounts'];
+      if (children is List) {
+        for (final ch in children) {
+          visit(ch);
+        }
+      }
+    }
+
+    for (final root in accounts) {
+      visit(root);
+    }
+
+    bool looksLikeSalaryName(String name) {
+      final n = name.toLowerCase();
+      return n.contains('رواتب') ||
+          n.contains('راتب') ||
+          n.contains('salary') ||
+          n.contains('payroll');
+    }
+
+    int scoreAccount(Map<String, dynamic> acc) {
+      final name = (acc['name'] ?? '').toString().toLowerCase();
+      final number = (acc['account_number'] ?? '').toString().toLowerCase();
+
+      var score = 0;
+      if (number.startsWith('2400')) score += 50;
+      if (looksLikeSalaryName(name)) score += 30;
+
+      if (name.contains(empName)) {
+        score += 20;
+      } else if (nameTokens.isNotEmpty && nameTokens.any(name.contains)) {
+        score += 10;
+      }
+
+      // Prefer detail accounts (usually no children)
+      final children = acc['sub_accounts'];
+      final hasChildren = children is List && children.isNotEmpty;
+      if (!hasChildren) score += 5;
+
+      return score;
+    }
+
+    Map<String, dynamic>? best;
+    var bestScore = 0;
+    for (final acc in flat) {
+      final name = (acc['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      final sc = scoreAccount(acc);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = acc;
+      }
+    }
+
+    // Require a minimum confidence.
+    if (bestScore < 50) return null;
+    return best;
   }
 
   Future<void> _toggleEmployee(EmployeeModel employee) async {
@@ -412,6 +491,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
   void _showEmployeeDetails(EmployeeModel employee) {
     final isAr = widget.isArabic;
     var currentEmployee = employee;
+    var openingSalaryStatement = false;
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -478,18 +558,20 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                       FilledButton.icon(
                         onPressed: () async {
                           try {
-                            final updated = await widget.api.ensureEmployeeSetup(
-                              employee.id ?? 0,
-                              ensurePersonalAccount: true,
-                              ensurePayablesAccounts: true,
-                              ensureCashSafe: true,
-                              ensureGoldSafe: true,
-                            );
+                            final updated = await widget.api
+                                .ensureEmployeeSetup(
+                                  employee.id ?? 0,
+                                  ensurePersonalAccount: true,
+                                  ensurePayablesAccounts: true,
+                                  ensureCashSafe: true,
+                                  ensureGoldSafe: true,
+                                );
 
                             // Update list + modal copy
                             setState(() {
-                              final index = _employees
-                                  .indexWhere((e) => e.id == updated.id);
+                              final index = _employees.indexWhere(
+                                (e) => e.id == updated.id,
+                              );
                               if (index != -1) {
                                 _employees[index] = updated;
                               }
@@ -551,6 +633,107 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                         value:
                             '${employee.account!.accountNumber} - ${employee.account!.name}',
                       ),
+                    if (employee.account != null)
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton.icon(
+                          onPressed: () {
+                            final acc = employee.account!;
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => AccountStatementScreen(
+                                  accountId: acc.id,
+                                  accountName: acc.name,
+                                ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.receipt_long, size: 18),
+                          label: Text(isAr ? 'كشف حساب' : 'Account Statement'),
+                        ),
+                      ),
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: TextButton.icon(
+                        onPressed: openingSalaryStatement
+                            ? null
+                            : () async {
+                                setModalState(() {
+                                  openingSalaryStatement = true;
+                                });
+
+                                try {
+                                  final accounts = await widget.api
+                                      .getAccounts();
+                                  final salaryAccount =
+                                      _pickEmployeeSalaryAccount(
+                                        accounts,
+                                        employee,
+                                      );
+
+                                  if (salaryAccount == null) {
+                                    _showSnack(
+                                      isAr
+                                          ? 'تعذر العثور على حساب رواتب الموظف. ابحث في كشف الحساب عن: رواتب ${employee.name}'
+                                          : 'Could not find salary account. Search statements for: Salary ${employee.name}',
+                                      isError: true,
+                                    );
+                                    return;
+                                  }
+
+                                  final id = salaryAccount['id'];
+                                  final accountId = id is int
+                                      ? id
+                                      : int.tryParse('$id');
+                                  if (accountId == null) {
+                                    _showSnack(
+                                      isAr
+                                          ? 'تعذر فتح كشف الرواتب (معرّف الحساب غير صالح)'
+                                          : 'Failed to open salary statement (invalid account id)',
+                                      isError: true,
+                                    );
+                                    return;
+                                  }
+
+                                  final accountName =
+                                      (salaryAccount['name'] ?? '').toString();
+                                  if (!mounted) return;
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => AccountStatementScreen(
+                                        accountId: accountId,
+                                        accountName: accountName.isEmpty
+                                            ? (isAr
+                                                  ? 'رواتب الموظف'
+                                                  : 'Employee Salary')
+                                            : accountName,
+                                      ),
+                                    ),
+                                  );
+                                } catch (e) {
+                                  _showSnack(e.toString(), isError: true);
+                                } finally {
+                                  setModalState(() {
+                                    openingSalaryStatement = false;
+                                  });
+                                }
+                              },
+                        icon: openingSalaryStatement
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.payments_outlined, size: 18),
+                        label: Text(
+                          isAr
+                              ? 'كشف حساب الرواتب (2400)'
+                              : 'Salary Statement (2400)',
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     Wrap(
                       spacing: 12,
@@ -1201,7 +1384,8 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                       setState(() {
                         _autoCreateCashSafe = value;
                         if (value) {
-                          _selectedCashSafeBoxId = 0; // main (treated as NULL server-side)
+                          _selectedCashSafeBoxId =
+                              0; // main (treated as NULL server-side)
                         }
                       });
                     },
@@ -1234,7 +1418,9 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                           ),
                         ),
                   ],
-                  onChanged: (_loadingCashSafes || (widget.employee == null && _autoCreateCashSafe))
+                  onChanged:
+                      (_loadingCashSafes ||
+                          (widget.employee == null && _autoCreateCashSafe))
                       ? null
                       : (value) {
                           setState(() {
@@ -1255,7 +1441,8 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                       setState(() {
                         _autoCreateGoldSafe = value;
                         if (value) {
-                          _selectedGoldSafeBoxId = 0; // main (treated as NULL server-side)
+                          _selectedGoldSafeBoxId =
+                              0; // main (treated as NULL server-side)
                         }
                       });
                     },
@@ -1288,7 +1475,9 @@ class _EmployeeFormDialogState extends State<EmployeeFormDialog> {
                           ),
                         ),
                   ],
-                  onChanged: (_loadingGoldSafes || (widget.employee == null && _autoCreateGoldSafe))
+                  onChanged:
+                      (_loadingGoldSafes ||
+                          (widget.employee == null && _autoCreateGoldSafe))
                       ? null
                       : (value) {
                           setState(() {
