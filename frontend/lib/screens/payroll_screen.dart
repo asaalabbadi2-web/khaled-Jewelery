@@ -60,11 +60,19 @@ class _PayrollScreenState extends State<PayrollScreen> {
   Future<void> _openForm({PayrollModel? entry}) async {
     final result = await showDialog<Map<String, dynamic>?>(
       context: context,
-      builder: (context) =>
-          PayrollFormDialog(api: widget.api, isArabic: widget.isArabic, entry: entry),
+      builder: (context) => PayrollFormDialog(
+        api: widget.api,
+        isArabic: widget.isArabic,
+        entry: entry,
+      ),
     );
 
     if (result == null) return;
+
+    final desiredStatus = (result['status'] ?? '').toString();
+    final wasApproved = (entry?.status ?? '').toLowerCase() == 'approved';
+    final justApproved =
+        desiredStatus.toLowerCase() == 'approved' && !wasApproved;
 
     try {
       if (entry == null) {
@@ -73,6 +81,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
         _showSnack(
           widget.isArabic ? 'تم إنشاء سجل الرواتب' : 'Payroll entry created',
         );
+
+        if (desiredStatus.toLowerCase() == 'approved') {
+          await _promptPostAccrual(created);
+        }
       } else {
         final updated = await widget.api.updatePayroll(entry.id ?? 0, result);
         setState(() {
@@ -84,7 +96,55 @@ class _PayrollScreenState extends State<PayrollScreen> {
         _showSnack(
           widget.isArabic ? 'تم تحديث سجل الرواتب' : 'Payroll entry updated',
         );
+
+        if (justApproved) {
+          await _promptPostAccrual(updated);
+        }
       }
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    }
+  }
+
+  Future<void> _promptPostAccrual(PayrollModel entry) async {
+    final isAr = widget.isArabic;
+    final payrollId = entry.id;
+    if (payrollId == null || payrollId <= 0) return;
+
+    final employeeName = entry.employee?.name ?? '';
+    final month = entry.month;
+    final year = entry.year;
+    final net = entry.netSalary;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(isAr ? 'ترحيل استحقاق الرواتب' : 'Post Payroll Accrual'),
+        content: Text(
+          isAr
+              ? 'تم اعتماد سجل الراتب${employeeName.isNotEmpty ? " للموظف: $employeeName" : ""} (${month}/${year}).\nهل تريد ترحيل الاستحقاق الآن؟\n\nسيتم إنشاء قيد: \nمدين 5410 (مصروف الرواتب) = ${net.toStringAsFixed(2)}\nدائن 2400xxxx (رواتب مستحقة) = ${net.toStringAsFixed(2)}'
+              : 'This payroll entry has been approved${employeeName.isNotEmpty ? " for $employeeName" : ""} (${month}/${year}).\nPost the accrual now?\n\nJournal: \nDr 5410 (Salary Expense) = ${net.toStringAsFixed(2)}\nCr 2400xxxx (Salaries Payable) = ${net.toStringAsFixed(2)}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(isAr ? 'لاحقاً' : 'Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(isAr ? 'ترحيل الآن' : 'Post now'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await widget.api.postPayrollAccrual(payrollId);
+      _showSnack(
+        isAr ? 'تم ترحيل الاستحقاق بنجاح' : 'Accrual posted successfully',
+      );
     } catch (e) {
       _showSnack(e.toString(), isError: true);
     }
@@ -167,114 +227,119 @@ class _PayrollScreenState extends State<PayrollScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-              Text(
-                isAr
-                    ? 'الموظف: ${entry.employee?.name ?? ""}'
-                    : 'Employee: ${entry.employee?.name ?? ""}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                isAr
-                    ? 'الراتب الصافي: ${entry.netSalary.toStringAsFixed(2)} ريال'
-                    : 'Net Salary: ${entry.netSalary.toStringAsFixed(2)} SAR',
-              ),
-              const SizedBox(height: 8),
-              Text(
-                isAr
-                    ? 'المدفوع فعلياً: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} ريال'
-                    : 'Cash Paid: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} SAR',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                isAr ? 'طريقة الدفع:' : 'Payment Method:',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<int>(
-                initialValue: selectedAccountId,
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  hintText: isAr ? 'اختر حساب الدفع' : 'Select payment account',
+                Text(
+                  isAr
+                      ? 'الموظف: ${entry.employee?.name ?? ""}'
+                      : 'Employee: ${entry.employee?.name ?? ""}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                items: paymentAccounts.map((acc) {
-                  return DropdownMenuItem<int>(
-                    value: acc['id'],
-                    child: SizedBox(
-                      width: 420,
-                      child: Row(
-                        children: [
-                          Icon(
-                            _getAccountIcon(acc['name']),
-                            size: 18,
-                            color: acc['is_default'] == true
-                                ? Colors.green
-                                : Colors.grey,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '${acc['name']} (${acc['account_number']})',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
+                const SizedBox(height: 8),
+                Text(
+                  isAr
+                      ? 'الراتب الصافي: ${entry.netSalary.toStringAsFixed(2)} ريال'
+                      : 'Net Salary: ${entry.netSalary.toStringAsFixed(2)} SAR',
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  isAr
+                      ? 'المدفوع فعلياً: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} ريال'
+                      : 'Cash Paid: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} SAR',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  isAr ? 'طريقة الدفع:' : 'Payment Method:',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<int>(
+                  initialValue: selectedAccountId,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
                     ),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setDialogState(() {
-                    selectedAccountId = value;
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-              Text(
-                isAr ? 'خصم من سلفة (اختياري):' : 'Advance Deduction (optional):',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: advanceDeductionController,
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+                    hintText: isAr
+                        ? 'اختر حساب الدفع'
+                        : 'Select payment account',
                   ),
-                  hintText: isAr ? '0.00' : '0.00',
+                  items: paymentAccounts.map((acc) {
+                    return DropdownMenuItem<int>(
+                      value: acc['id'],
+                      child: SizedBox(
+                        width: 420,
+                        child: Row(
+                          children: [
+                            Icon(
+                              _getAccountIcon(acc['name']),
+                              size: 18,
+                              color: acc['is_default'] == true
+                                  ? Colors.green
+                                  : Colors.grey,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${acc['name']} (${acc['account_number']})',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedAccountId = value;
+                    });
+                  },
                 ),
-                keyboardType: const TextInputType.numberWithOptions(
-                  signed: false,
-                  decimal: true,
+                const SizedBox(height: 16),
+                Text(
+                  isAr
+                      ? 'خصم من سلفة (اختياري):'
+                      : 'Advance Deduction (optional):',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                onChanged: (value) {
-                  final parsed =
-                      double.tryParse(value.trim().replaceAll(',', '.')) ?? 0.0;
-                  setDialogState(() {
-                    advanceDeductionAmount = parsed < 0 ? 0.0 : parsed;
-                    if (advanceDeductionAmount > entry.netSalary) {
-                      advanceDeductionAmount = entry.netSalary;
-                    }
-                  });
-                },
-              ),
-              const SizedBox(height: 8),
-              Text(
-                isAr
-                    ? 'سيتم خصم هذا المبلغ من حساب سلفة الموظف ضمن نفس سند الصرف.'
-                    : 'This amount will be credited to the employee advance account in the same voucher.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).hintColor,
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: advanceDeductionController,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    hintText: isAr ? '0.00' : '0.00',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    signed: false,
+                    decimal: true,
+                  ),
+                  onChanged: (value) {
+                    final parsed =
+                        double.tryParse(value.trim().replaceAll(',', '.')) ??
+                        0.0;
+                    setDialogState(() {
+                      advanceDeductionAmount = parsed < 0 ? 0.0 : parsed;
+                      if (advanceDeductionAmount > entry.netSalary) {
+                        advanceDeductionAmount = entry.netSalary;
+                      }
+                    });
+                  },
                 ),
-              ),
+                const SizedBox(height: 8),
+                Text(
+                  isAr
+                      ? 'سيتم خصم هذا المبلغ من حساب سلفة الموظف ضمن نفس سند الصرف.'
+                      : 'This amount will be credited to the employee advance account in the same voucher.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).hintColor,
+                  ),
+                ),
               ],
             ),
           ),
@@ -299,8 +364,9 @@ class _PayrollScreenState extends State<PayrollScreen> {
       final updated = await widget.api.markPayrollPaid(
         entry.id ?? 0,
         paymentAccountId: selectedAccountId,
-        advanceDeductionAmount:
-            advanceDeductionAmount > 0 ? advanceDeductionAmount : null,
+        advanceDeductionAmount: advanceDeductionAmount > 0
+            ? advanceDeductionAmount
+            : null,
       );
       setState(() {
         final index = _entries.indexWhere((p) => p.id == entry.id);
@@ -741,7 +807,9 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
                               child: SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             )
                           : null,
@@ -760,10 +828,13 @@ class _PayrollFormDialogState extends State<PayrollFormDialog> {
                         .toList(),
                     onChanged: _loadingEmployees
                         ? null
-                        : (value) => setState(() => _selectedEmployeeId = value),
+                        : (value) =>
+                              setState(() => _selectedEmployeeId = value),
                     validator: (value) {
                       if (value == null) {
-                        return isAr ? 'يرجى اختيار الموظف' : 'Select an employee';
+                        return isAr
+                            ? 'يرجى اختيار الموظف'
+                            : 'Select an employee';
                       }
                       return null;
                     },

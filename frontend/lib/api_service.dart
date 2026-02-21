@@ -36,8 +36,8 @@ String _resolveApiBaseUrl() {
     if (kIsWeb) {
       // Support relative base URLs for web deployments (e.g. /api behind nginx).
       // Docker builds often pass API_BASE_URL=/api.
-      final isAbsolute = configured.startsWith('http://') ||
-          configured.startsWith('https://');
+      final isAbsolute =
+          configured.startsWith('http://') || configured.startsWith('https://');
       if (isAbsolute) return configured;
 
       final origin = Uri.base.origin;
@@ -383,11 +383,7 @@ class ApiService {
       request.headers['Authorization'] = 'Bearer $token';
       request.fields.addAll(fields);
       request.files.add(
-        http.MultipartFile.fromBytes(
-          fileField,
-          fileBytes,
-          filename: filename,
-        ),
+        http.MultipartFile.fromBytes(fileField, fileBytes, filename: filename),
       );
       final streamed = await request.send();
       return http.Response.fromStream(streamed);
@@ -792,7 +788,8 @@ class ApiService {
     final payload = <String, dynamic>{
       if (executionPricePerGram != null)
         'execution_price_per_gram': executionPricePerGram,
-      if (settlementDate != null) 'settlement_date': settlementDate.toIso8601String(),
+      if (settlementDate != null)
+        'settlement_date': settlementDate.toIso8601String(),
       if (createdBy != null) 'created_by': createdBy,
     };
 
@@ -1181,7 +1178,8 @@ class ApiService {
       );
     }
 
-    if (errorCode == 'supplier_account_missing' || errorCode == 'customer_account_missing') {
+    if (errorCode == 'supplier_account_missing' ||
+        errorCode == 'customer_account_missing') {
       final msg = (parsed?['message']?.toString().trim().isNotEmpty == true)
           ? parsed!['message'].toString().trim()
           : _errorMessageFromResponse(response);
@@ -1190,7 +1188,9 @@ class ApiService {
       throw ApiException(
         statusCode: response.statusCode,
         code: errorCode!,
-        message: (details == null || details.isEmpty) ? msg : '$msg\n\nتفاصيل: $details',
+        message: (details == null || details.isEmpty)
+            ? msg
+            : '$msg\n\nتفاصيل: $details',
         details: parsed ?? const {},
       );
     }
@@ -1308,9 +1308,7 @@ class ApiService {
   Future<List<int>> downloadSystemBackupZip() async {
     final response = await _authedGet(
       Uri.parse('$_baseUrl/system/backup/download'),
-      headers: const {
-        'Accept': 'application/zip',
-      },
+      headers: const {'Accept': 'application/zip'},
     );
 
     if (response.statusCode == 200) {
@@ -1368,7 +1366,9 @@ class ApiService {
     throw Exception(_errorMessageFromResponse(response));
   }
 
-  Future<List<Map<String, dynamic>>> listDriveBackupsServerSide({int pageSize = 20}) async {
+  Future<List<Map<String, dynamic>>> listDriveBackupsServerSide({
+    int pageSize = 20,
+  }) async {
     final response = await _authedGet(
       Uri.parse('$_baseUrl/system/backup/drive/list?page_size=$pageSize'),
     );
@@ -1483,11 +1483,12 @@ class ApiService {
     int supplierId, {
     bool ensureAccounts = true,
   }) async {
-    final uri = Uri.parse(
-      '$_baseUrl/suppliers/$supplierId/repair-historical-balances',
-    ).replace(
-      queryParameters: ensureAccounts ? {'ensure_accounts': '1'} : null,
-    );
+    final uri =
+        Uri.parse(
+          '$_baseUrl/suppliers/$supplierId/repair-historical-balances',
+        ).replace(
+          queryParameters: ensureAccounts ? {'ensure_accounts': '1'} : null,
+        );
 
     final response = await _authedPost(
       uri,
@@ -1566,14 +1567,13 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getAccountById(int accountId) async {
-    final response = await _authedGet(
-      Uri.parse('$_baseUrl/accounts/$accountId'),
-    ).timeout(
-      const Duration(seconds: 10),
-      onTimeout: () {
-        throw Exception('Connection timeout - تأكد من تشغيل Backend');
-      },
-    );
+    final response =
+        await _authedGet(Uri.parse('$_baseUrl/accounts/$accountId')).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw Exception('Connection timeout - تأكد من تشغيل Backend');
+          },
+        );
 
     if (response.statusCode == 200) {
       final decoded = json.decode(utf8.decode(response.bodyBytes));
@@ -2320,9 +2320,7 @@ class ApiService {
 
     final decoded = json.decode(utf8.decode(response.bodyBytes));
     if (decoded is List) {
-      return decoded
-          .whereType<Map<String, dynamic>>()
-          .toList(growable: false);
+      return decoded.whereType<Map<String, dynamic>>().toList(growable: false);
     }
 
     return const [];
@@ -2339,9 +2337,7 @@ class ApiService {
     DateTime? endDate,
     int limit = 200,
   }) async {
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-    };
+    final queryParams = <String, String>{'limit': limit.toString()};
     if (safeBoxId != null) queryParams['safe_box_id'] = safeBoxId.toString();
     if (categoryId != null) queryParams['category_id'] = categoryId.toString();
     if (invoiceId != null) queryParams['invoice_id'] = invoiceId.toString();
@@ -2367,9 +2363,7 @@ class ApiService {
 
     final decoded = json.decode(utf8.decode(response.bodyBytes));
     if (decoded is List) {
-      return decoded
-          .whereType<Map<String, dynamic>>()
-          .toList(growable: false);
+      return decoded.whereType<Map<String, dynamic>>().toList(growable: false);
     }
 
     return const [];
@@ -2384,10 +2378,7 @@ class ApiService {
     String? note,
     DateTime? date,
   }) async {
-    final payload = <String, dynamic>{
-      'gold_type': goldType,
-      'lines': lines,
-    };
+    final payload = <String, dynamic>{'gold_type': goldType, 'lines': lines};
 
     if (createdBy != null && createdBy.trim().isNotEmpty) {
       payload['created_by'] = createdBy.trim();
@@ -4052,7 +4043,9 @@ class ApiService {
         if (decoded is Map<String, dynamic>) {
           final msg = decoded['message']?.toString();
           final err = decoded['error']?.toString();
-          throw Exception(msg?.isNotEmpty == true ? msg : (err ?? 'فشل تحميل حسابات الدفع'));
+          throw Exception(
+            msg?.isNotEmpty == true ? msg : (err ?? 'فشل تحميل حسابات الدفع'),
+          );
         }
       } catch (_) {
         // fallthrough
@@ -4088,6 +4081,38 @@ class ApiService {
     } else {
       throw Exception('Failed to mark payroll as paid: ${response.body}');
     }
+  }
+
+  Future<Map<String, dynamic>> postPayrollAccrual(
+    int payrollId, {
+    String? createdBy,
+  }) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/payroll/$payrollId/post-accrual'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(
+        {'created_by': createdBy}..removeWhere((key, value) => value == null),
+      ),
+    );
+
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200) {
+      if (decoded is Map<String, dynamic>) return decoded;
+      throw Exception('Unexpected response from post-accrual');
+    }
+
+    try {
+      if (decoded is Map<String, dynamic>) {
+        final msg = decoded['message']?.toString();
+        final err = decoded['error']?.toString();
+        throw Exception(
+          msg?.isNotEmpty == true ? msg : (err ?? 'فشل ترحيل الاستحقاق'),
+        );
+      }
+    } catch (_) {
+      // fallthrough
+    }
+    throw Exception('Failed to post payroll accrual: ${response.body}');
   }
 
   // ---------------------------------------------------------------------------
@@ -4323,7 +4348,8 @@ class ApiService {
       'gross_amount': grossAmount,
       'fee_amount': feeAmount,
       if (feeAccountId != null) 'fee_account_id': feeAccountId,
-      if (settlementDate != null) 'settlement_date': settlementDate.toIso8601String(),
+      if (settlementDate != null)
+        'settlement_date': settlementDate.toIso8601String(),
       if (referenceNumber != null) 'reference_number': referenceNumber,
       if (notes != null) 'notes': notes,
       if (description != null) 'description': description,
@@ -4515,12 +4541,12 @@ class ApiService {
 
     // فلترة خزائن الدفع فقط (لا تشمل الذهب)
     return safeBoxes
-      .where(
-        (sb) =>
-          sb.safeType == 'cash' ||
-          sb.safeType == 'bank' ||
-          sb.safeType == 'clearing',
-      )
+        .where(
+          (sb) =>
+              sb.safeType == 'cash' ||
+              sb.safeType == 'bank' ||
+              sb.safeType == 'clearing',
+        )
         .toList();
   }
 

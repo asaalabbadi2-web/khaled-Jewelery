@@ -100,6 +100,31 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     final empName = employee.name.trim().toLowerCase();
     if (empName.isEmpty) return null;
 
+    String normalizeName(String input) {
+      final s = input.toLowerCase().trim();
+      // Collapse all whitespace + remove common separators to be resilient
+      // to formatting differences (e.g. spaces around '-')
+      return s
+          .replaceAll(RegExp(r'\s+'), '')
+          .replaceAll('-', '')
+          .replaceAll('–', '')
+          .replaceAll('—', '')
+          .replaceAll('/', '')
+          .replaceAll('\\', '')
+          .replaceAll('_', '')
+          .replaceAll('|', '')
+          .replaceAll(':', '')
+          .replaceAll('،', '')
+          .replaceAll(',', '')
+          .replaceAll('.', '')
+          .replaceAll('(', '')
+          .replaceAll(')', '');
+    }
+
+    final expectedSalaryAccountName =
+        'ح/ذمم الموظف ${employee.name.trim()} - رواتب';
+    final expectedNormalized = normalizeName(expectedSalaryAccountName);
+
     final nameTokens = empName
         .split(RegExp(r'\s+'))
         .map((t) => t.trim())
@@ -124,6 +149,18 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
       visit(root);
     }
 
+    // 1) Prefer an exact match by name + 2400 prefix to avoid collisions
+    // when employee names overlap (e.g. "محمد" vs "محمد علي").
+    for (final acc in flat) {
+      final number = (acc['account_number'] ?? '').toString().toLowerCase();
+      if (!number.startsWith('2400')) continue;
+      final name = (acc['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      if (normalizeName(name) == expectedNormalized) {
+        return acc;
+      }
+    }
+
     bool looksLikeSalaryName(String name) {
       final n = name.toLowerCase();
       return n.contains('رواتب') ||
@@ -136,9 +173,16 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
       final name = (acc['name'] ?? '').toString().toLowerCase();
       final number = (acc['account_number'] ?? '').toString().toLowerCase();
 
+      final normalizedName = normalizeName(name);
+
       var score = 0;
       if (number.startsWith('2400')) score += 50;
       if (looksLikeSalaryName(name)) score += 30;
+
+      // Strong signal: close to the canonical naming.
+      if (normalizedName == expectedNormalized) {
+        score += 80;
+      }
 
       if (name.contains(empName)) {
         score += 20;

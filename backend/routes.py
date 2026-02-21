@@ -18623,6 +18623,133 @@ def get_payment_accounts():
     } for sb in safe_boxes])
 
 
+@api.route('/payroll/<int:payroll_id>/post-accrual', methods=['POST'])
+@require_permission('employees.payroll')
+def post_payroll_accrual(payroll_id):
+    """Post payroll accrual journal entry.
+
+    Debit: Salary expense (production: 5410)
+    Credit: Employee salary payable (2400xxxx)
+
+    Idempotent via JournalEntry(reference_type='payroll_accrual', reference_id=payroll_id)
+    """
+    payroll_entry = Payroll.query.get_or_404(payroll_id)
+    data = request.get_json() or {}
+
+    if (payroll_entry.status or '').strip().lower() == 'cancelled':
+        return jsonify({'error': 'لا يمكن ترحيل استحقاق سجل راتب ملغي'}), 400
+
+    existing = (
+        JournalEntry.query
+        .filter_by(reference_type='payroll_accrual', reference_id=int(payroll_entry.id), is_deleted=False)
+        .order_by(JournalEntry.id.desc())
+        .first()
+    )
+    if existing:
+        return jsonify({
+            'message': 'تم ترحيل الاستحقاق مسبقاً',
+            'already_posted': True,
+            'journal_entry': existing.to_dict(),
+        }), 200
+
+    if (payroll_entry.status or '').strip().lower() not in ('approved', 'paid'):
+        return jsonify({'error': 'يجب اعتماد سجل الراتب قبل ترحيل الاستحقاق'}), 400
+
+    try:
+        net_salary = float(payroll_entry.net_salary or 0.0)
+    except Exception:
+        net_salary = 0.0
+    if net_salary <= 0:
+        return jsonify({'error': 'صافي الراتب غير صالح للترحيل'}), 400
+
+    employee = Employee.query.get(payroll_entry.employee_id)
+    if not employee:
+        return jsonify({'error': 'الموظف غير موجود'}), 404
+
+    salary_expense_account = Account.query.filter_by(account_number='5410').first()
+    if not salary_expense_account:
+        return jsonify({
+            'error': 'حساب مصروف الرواتب (5410) غير موجود في شجرة الحسابات',
+            'details': {'expected_account_number': '5410'},
+        }), 400
+
+    salary_payable_account_id = None
+    try:
+        from employee_account_helpers import get_or_create_employee_payables_accounts
+        from employee_account_naming import employee_payable_account_name
+
+        expected_name = employee_payable_account_name(employee.name, category_ar='رواتب')
+        payables = get_or_create_employee_payables_accounts(
+            employee.name,
+            created_by=data.get('created_by', 'system'),
+        )
+        salary_acc = next((a for a in payables if (a.name or '').strip() == expected_name), None)
+        salary_payable_account_id = int(salary_acc.id) if salary_acc else None
+    except Exception:
+        salary_payable_account_id = None
+
+    if not salary_payable_account_id:
+        return jsonify({
+            'error': 'لا يوجد حساب ذمم رواتب (2400xxxx) لهذا الموظف. يرجى تشغيل Ensure setup للموظف.',
+        }), 400
+
+    now = datetime.utcnow()
+    created_by = data.get('created_by', 'system')
+    description = f"إثبات استحقاق راتب {employee.name} - {payroll_entry.month}/{payroll_entry.year}"
+
+    try:
+        journal_entry = JournalEntry(
+            date=now,
+            description=description,
+            entry_type='استحقاق رواتب',
+            reference_type='payroll_accrual',
+            reference_id=int(payroll_entry.id),
+            reference_number=f"{payroll_entry.year}-{int(payroll_entry.month):02d}",
+            created_by=created_by,
+            is_posted=True,
+            posted_at=now,
+            posted_by=created_by,
+        )
+        db.session.add(journal_entry)
+        db.session.flush()
+
+        create_dual_journal_entry(
+            journal_entry_id=journal_entry.id,
+            account_id=salary_expense_account.id,
+            cash_debit=net_salary,
+            description=description,
+        )
+
+        create_dual_journal_entry(
+            journal_entry_id=journal_entry.id,
+            account_id=salary_payable_account_id,
+            cash_credit=net_salary,
+            description=description,
+        )
+
+        balance_state = verify_dual_balance(journal_entry.id)
+        if not balance_state.get('balanced', True):
+            db.session.rollback()
+            return jsonify({
+                'error': 'فشل ترحيل قيد الاستحقاق بسبب عدم توازن القيد',
+                'details': balance_state,
+            }), 500
+
+        db.session.commit()
+        return jsonify({
+            'message': 'تم ترحيل استحقاق الرواتب بنجاح',
+            'already_posted': False,
+            'journal_entry': journal_entry.to_dict(),
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        expose = (os.getenv('EXPOSE_API_ERRORS') or '').strip() == '1'
+        payload = {'error': 'فشل ترحيل استحقاق الرواتب'}
+        if expose:
+            payload['details'] = str(exc)
+        return jsonify(payload), 500
+
+
 @api.route('/payroll/<int:payroll_id>/mark-paid', methods=['POST'])
 @require_permission('employees.payroll')
 def mark_payroll_paid(payroll_id):
