@@ -4040,13 +4040,23 @@ class ApiService {
 
   /// الحصول على حسابات الدفع المتاحة (نقدية، بنك، شيك)
   Future<List<Map<String, dynamic>>> getPaymentAccounts() async {
-    final response = await http.get(
+    final response = await _authedGet(
       Uri.parse('$_baseUrl/payroll/payment-accounts'),
     );
     if (response.statusCode == 200) {
       final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
       return data.cast<Map<String, dynamic>>();
     } else {
+      try {
+        final decoded = json.decode(utf8.decode(response.bodyBytes));
+        if (decoded is Map<String, dynamic>) {
+          final msg = decoded['message']?.toString();
+          final err = decoded['error']?.toString();
+          throw Exception(msg?.isNotEmpty == true ? msg : (err ?? 'فشل تحميل حسابات الدفع'));
+        }
+      } catch (_) {
+        // fallthrough
+      }
       throw Exception('Failed to fetch payment accounts: ${response.body}');
     }
   }
