@@ -16186,6 +16186,193 @@ def get_inventory_movement_report():
     })
 
 
+@api.route('/home/leaderboard', methods=['GET'])
+def get_home_leaderboard():
+    """Gamification leaderboard (safe for employees).
+
+    Contract:
+    - Query Params: period=today|week, metric=weight|count
+    - Uses posted sales invoices only (invoice_type == 'بيع', is_posted == True)
+    - Excludes returns in phase 1
+    - Admin summary is included only for admins/financial report viewers
+    """
+    from sqlalchemy import func
+
+    period = (request.args.get('period') or 'today').strip().lower()
+    metric = (request.args.get('metric') or 'weight').strip().lower()
+
+    now = datetime.now()
+    if period == 'week':
+        start_date = now.date() - timedelta(days=now.date().weekday())
+        start_dt = datetime.combine(start_date, datetime.min.time())
+        end_dt = start_dt + timedelta(days=7)
+    else:
+        start_dt = datetime.combine(now.date(), datetime.min.time())
+        end_dt = start_dt + timedelta(days=1)
+        period = 'today'
+
+    # Sales only, posted only, attributed to an employee.
+    base_filters = [
+        Invoice.is_posted.is_(True),
+        Invoice.invoice_type == 'بيع',
+        Invoice.date >= start_dt,
+        Invoice.date < end_dt,
+        Invoice.employee_id.isnot(None),
+    ]
+
+    rows = (
+        db.session.query(
+            Invoice.employee_id.label('employee_id'),
+            func.count(Invoice.id).label('count'),
+            func.coalesce(func.sum(Invoice.total_weight), 0.0).label('weight_sum'),
+            func.coalesce(func.sum(Invoice.total), 0.0).label('cash_sum'),
+            func.coalesce(func.sum(Invoice.profit_cash), 0.0).label('profit_sum'),
+        )
+        .filter(*base_filters)
+        .group_by(Invoice.employee_id)
+        .all()
+    )
+
+    employee_ids = [int(r.employee_id) for r in rows if getattr(r, 'employee_id', None) is not None]
+    name_map = {}
+    if employee_ids:
+        try:
+            emps = Employee.query.filter(Employee.id.in_(employee_ids)).all()
+            name_map = {int(e.id): (e.name or '').strip() for e in emps}
+        except Exception:
+            name_map = {}
+
+    def _to_float(value, default=0.0):
+        try:
+            return float(value or 0.0)
+        except Exception:
+            return default
+
+    ranking_raw = []
+    for r in rows:
+        emp_id = int(r.employee_id)
+        count_value = int(getattr(r, 'count', 0) or 0)
+        weight_value = _to_float(getattr(r, 'weight_sum', 0.0), 0.0)
+        ranking_raw.append({
+            'id': emp_id,
+            'name': name_map.get(emp_id) or f'Employee {emp_id}',
+            'count': count_value,
+            'weight': round(weight_value, 3),
+        })
+
+    metric_key = 'weight_g'
+    if metric == 'count':
+        metric_key = 'count'
+
+    # Compute score + sort
+    for it in ranking_raw:
+        if metric_key == 'count':
+            it['score'] = float(it['count'])
+        else:
+            it['score'] = float(it['weight'])
+
+    ranking_raw.sort(key=lambda x: (x.get('score', 0.0), x.get('count', 0)), reverse=True)
+
+    total_score = sum(float(it.get('score') or 0.0) for it in ranking_raw) or 0.0
+    ranking = []
+    for it in ranking_raw:
+        score_value = float(it.get('score') or 0.0)
+        share = (score_value / total_score) if total_score > 0 else 0.0
+        ranking.append({
+            'id': it['id'],
+            'name': it['name'],
+            'count': int(it.get('count') or 0),
+            'score': round(score_value, 3 if metric_key == 'weight_g' else 0),
+            'share': round(float(share), 4),
+        })
+
+    champion = None
+    if ranking:
+        champion = {
+            'id': ranking[0]['id'],
+            'name': ranking[0]['name'],
+            'badge': '🥇',
+        }
+
+    # Phase 2: weekly team goal
+    target_progress = 0.0
+    team_weight_g = None
+    weekly_target_weight_g = None
+    remaining_weight_g = None
+
+    if period == 'week':
+        team_weight_value = (
+            db.session.query(func.coalesce(func.sum(Invoice.total_weight), 0.0))
+            .filter(*base_filters)
+            .scalar()
+        )
+        team_weight_g = round(_to_float(team_weight_value, 0.0), 3)
+
+        settings_row = Settings.query.first()
+        if not settings_row:
+            settings_row = Settings(main_karat=get_main_karat() or 21)
+            db.session.add(settings_row)
+            db.session.commit()
+
+        weekly_target_weight_g = _to_float(
+            getattr(settings_row, 'weekly_sales_target_weight', None),
+            2000.0,
+        )
+        if weekly_target_weight_g < 0:
+            weekly_target_weight_g = 0.0
+
+        if weekly_target_weight_g > 0:
+            target_progress = float(team_weight_g / weekly_target_weight_g)
+            target_progress = max(0.0, min(1.0, target_progress))
+            remaining_weight_g = round(max(0.0, weekly_target_weight_g - team_weight_g), 3)
+        else:
+            target_progress = 0.0
+            remaining_weight_g = 0.0
+
+    payload = {
+        'period': period,
+        'metric': metric_key,
+        'champion': champion,
+        'ranking': ranking,
+        'target_progress': target_progress,
+        'team_weight_g': team_weight_g,
+        'weekly_target_weight_g': weekly_target_weight_g,
+        'remaining_weight_g': remaining_weight_g,
+    }
+
+    # Admin summary (only for admins / financial report viewers)
+    user = getattr(g, 'current_user', None)
+    can_view_admin = bool(getattr(user, 'is_admin', False))
+    if not can_view_admin and user is not None:
+        try:
+            can_view_admin = bool(user.has_permission('reports.financial'))
+        except Exception:
+            can_view_admin = False
+
+    if can_view_admin:
+        # Aggregate across all sales (not per employee) for the same period.
+        totals = (
+            db.session.query(
+                func.coalesce(func.sum(Invoice.total), 0.0).label('cash_total'),
+                func.coalesce(func.sum(Invoice.profit_cash), 0.0).label('profit_total'),
+            )
+            .filter(
+                Invoice.is_posted.is_(True),
+                Invoice.invoice_type == 'بيع',
+                Invoice.date >= start_dt,
+                Invoice.date < end_dt,
+            )
+            .first()
+        )
+        payload['admin_summary'] = {
+            'total_cash': round(_to_float(getattr(totals, 'cash_total', 0.0), 0.0), 2),
+            'total_profit': round(_to_float(getattr(totals, 'profit_total', 0.0), 0.0), 2),
+            'currency': 'SAR',
+        }
+
+    return jsonify(payload)
+
+
 @api.route('/general_ledger_all', methods=['GET'])
 @require_permission('reports.financial')
 def get_general_ledger_all():

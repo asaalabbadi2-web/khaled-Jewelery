@@ -105,6 +105,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   int _pendingApprovalsCount = 0;
   Timer? _approvalsAutoRefreshTimer;
 
+  // Gamification: leaderboard (today/week)
+  Map<String, dynamic>? _leaderboardData;
+  bool _leaderboardLoading = false;
+  String? _leaderboardError;
+  String _leaderboardPeriod = 'today';
+
   // Bottom Navigation
   int _selectedNavIndex = 0;
   final List<String> _bottomNavItems = [
@@ -193,6 +199,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final futures = <Future<void>>[];
       if (auth.isAuthenticated) futures.add(_loadGoldPrice());
       if (auth.isAuthenticated) futures.add(_loadPendingApprovalsCount());
+      final quickActions = context.read<QuickActionsProvider>();
+      if (auth.isAuthenticated && quickActions.showSalesRaceCard) {
+        futures.add(_loadLeaderboard());
+      }
       if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
       if (auth.hasPermission('items.view')) futures.add(_loadItems());
       if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
@@ -208,6 +218,43 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       debugPrint('❌ خطأ في تحميل البيانات: $e');
     } finally {
       setState(() => isLoading = false);
+    }
+  }
+
+  Future<void> _loadLeaderboard({String? period}) async {
+    try {
+      final auth = context.read<AuthProvider>();
+      if (!auth.isAuthenticated) return;
+
+      final selectedPeriod = (period ?? _leaderboardPeriod).trim().toLowerCase();
+
+      if (mounted) {
+        setState(() {
+          _leaderboardLoading = true;
+          _leaderboardError = null;
+          _leaderboardPeriod = selectedPeriod;
+        });
+      }
+
+      final data = await api.getHomeLeaderboard(
+        period: selectedPeriod,
+        metric: 'weight',
+      );
+      if (!mounted) return;
+      setState(() {
+        _leaderboardData = data;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _leaderboardError = e.toString();
+        _leaderboardData = null;
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _leaderboardLoading = false;
+      });
     }
   }
 
@@ -1641,6 +1688,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Original home screen content
   Widget _buildHomeTabContent(bool isAr) {
+    final showSalesRaceCard = context.watch<QuickActionsProvider>().showSalesRaceCard;
     return Column(
       children: [
         Expanded(
@@ -1666,8 +1714,36 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
                     const SizedBox(height: 24),
 
-                    // Quick Actions
-                    _buildQuickActions(),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isWide = constraints.maxWidth >= 1100;
+
+                        if (isWide && showSalesRaceCard) {
+                          // Large screens: show Sales Race beside invoice buttons.
+                          // RTL: first child appears on the right, so put Quick Actions first.
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: _buildQuickActions()),
+                              const SizedBox(width: 16),
+                              Expanded(child: _buildLeaderboardCard(isAr)),
+                            ],
+                          );
+                        }
+
+                        // Small/medium screens: stacked layout.
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (showSalesRaceCard) ...[
+                              _buildLeaderboardCard(isAr),
+                              const SizedBox(height: 24),
+                            ],
+                            _buildQuickActions(),
+                          ],
+                        );
+                      },
+                    ),
 
                     const SizedBox(height: 24),
                   ],
@@ -1678,6 +1754,466 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         ),
         _buildMarketTickerBar(),
       ],
+    );
+  }
+
+  Widget _buildLeaderboardCard(bool isAr) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final data = _leaderboardData;
+    final period = (data?['period'] ?? _leaderboardPeriod).toString();
+    final isWeek = period == 'week';
+    final ranking = (data?['ranking'] as List?) ?? const [];
+    final champion = data?['champion'] as Map?;
+    final adminSummary = data?['admin_summary'] as Map?;
+
+    final weeklyTarget = (data?['weekly_target_weight_g'] as num?)?.toDouble();
+    final teamWeight = (data?['team_weight_g'] as num?)?.toDouble();
+    final remainingWeight =
+        (data?['remaining_weight_g'] as num?)?.toDouble();
+    final targetProgress =
+        (data?['target_progress'] as num?)?.toDouble() ?? 0.0;
+
+    final isGoalAchieved = targetProgress >= 0.9999;
+    final Color goalColor = isGoalAchieved
+        ? AppColors.success
+        : (targetProgress < 0.5 ? AppColors.warning : AppColors.info);
+
+    final metric = (data?['metric'] ?? 'weight_g').toString();
+
+    final microcopy = isWeek
+        ? (isGoalAchieved
+            ? (isAr ? 'إنجاز جماعي رائع 👏' : 'Amazing team achievement 👏')
+            : (isAr
+                ? 'معًا نحو تحقيق هدف الأسبوع 💪'
+                : 'Together towards the weekly goal 💪'))
+        : (isAr ? 'هدف اليوم: سرعة + دقة' : 'Today\'s goal: speed + accuracy');
+
+    String rankLabel(int index) {
+      if (index == 0) return '🥇';
+      if (index == 1) return '🥈';
+      if (index == 2) return '🥉';
+      return '${index + 1}';
+    }
+
+    Widget buildRow(Map row, int index) {
+      final name = (row['name'] ?? '').toString();
+      final score = (row['score'] as num?)?.toDouble() ?? 0.0;
+      final share = (row['share'] as num?)?.toDouble() ?? 0.0;
+      final count = (row['count'] as num?)?.toInt() ?? 0;
+
+      final isLeader = index == 0;
+      final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
+
+          final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
+          final metricText = (metric == 'count')
+            ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
+            : (isAr
+              ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
+              : '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn');
+
+      return Padding(
+        padding: const EdgeInsetsDirectional.only(bottom: 12),
+        child: Container(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: colorScheme.onSurface.withValues(alpha: 0.035),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: colorScheme.onSurface.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 28,
+                child: Text(
+                  rankLabel(index),
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: valueColor.withValues(alpha: 0.12),
+                child: Text(
+                  name.isNotEmpty ? name.characters.first : '?',
+                  style: TextStyle(
+                    color: valueColor,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          metricText,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurface.withValues(
+                              alpha: 0.65,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: share.clamp(0.0, 1.0),
+                        minHeight: 8,
+                        backgroundColor: colorScheme.onSurface.withValues(
+                          alpha: 0.08,
+                        ),
+                        valueColor: AlwaysStoppedAnimation<Color>(valueColor),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return _buildGlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    isAr
+                        ? (isWeek ? 'تحدي الأسبوع' : 'سباق المبيعات — اليوم')
+                        : (isWeek
+                            ? 'Weekly Challenge'
+                            : 'Sales Race — Today'),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Icon(
+                  Icons.emoji_events_rounded,
+                  color: AppColors.primaryGold,
+                  size: 28,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: SegmentedButton<String>(
+                segments: <ButtonSegment<String>>[
+                  ButtonSegment<String>(
+                    value: 'today',
+                    label: Text(isAr ? 'اليوم' : 'Today'),
+                  ),
+                  ButtonSegment<String>(
+                    value: 'week',
+                    label: Text(isAr ? 'الأسبوع' : 'Week'),
+                  ),
+                ],
+                selected: <String>{_leaderboardPeriod},
+                onSelectionChanged: _leaderboardLoading
+                    ? null
+                    : (selection) {
+                        final next = selection.isNotEmpty
+                            ? selection.first
+                            : _leaderboardPeriod;
+                        if (next == _leaderboardPeriod) return;
+                        setState(() {
+                          _leaderboardPeriod = next;
+                        });
+                        _loadLeaderboard(period: next);
+                      },
+                showSelectedIcon: false,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              microcopy,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurface.withValues(alpha: 0.65),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_leaderboardLoading)
+              LinearProgressIndicator(
+                minHeight: 6,
+                backgroundColor: colorScheme.onSurface.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  colorScheme.primary,
+                ),
+              )
+            else if (_leaderboardError != null)
+              Text(
+                isAr ? 'تعذر تحميل لوحة الصدارة' : 'Could not load leaderboard',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.error,
+                ),
+              )
+            else ...[
+              if (isWeek && weeklyTarget != null && teamWeight != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colorScheme.onSurface.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: colorScheme.onSurface.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                isAr ? 'هدف الفريق' : 'Team Goal',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (isGoalAchieved) ...[
+                                const SizedBox(width: 8),
+                                const Text(
+                                  '🎉',
+                                  style: TextStyle(fontSize: 16),
+                                ),
+                              ],
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Text(
+                                isAr
+                                    ? '${teamWeight.toStringAsFixed(1)} / ${weeklyTarget.toStringAsFixed(0)} جم'
+                                    : '${teamWeight.toStringAsFixed(1)} / ${weeklyTarget.toStringAsFixed(0)} g',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurface.withValues(
+                                    alpha: 0.65,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                '${(targetProgress.clamp(0.0, 1.0) * 100).round()}%',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: goalColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: TweenAnimationBuilder<double>(
+                          tween: Tween<double>(
+                            begin: 0,
+                            end: targetProgress.clamp(0.0, 1.0),
+                          ),
+                          duration: const Duration(milliseconds: 700),
+                          builder: (context, value, child) =>
+                              LinearProgressIndicator(
+                            value: value,
+                            minHeight: 10,
+                            backgroundColor: colorScheme.onSurface.withValues(
+                              alpha: 0.08,
+                            ),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              goalColor,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        (remainingWeight != null && remainingWeight > 0)
+                            ? (isAr
+                                ? 'بقيت ${remainingWeight.toStringAsFixed(0)} جم لتحقيق هدف الأسبوع'
+                                : '${remainingWeight.toStringAsFixed(0)} g remaining to hit the weekly goal')
+                            : (isAr
+                                ? 'تم تحقيق هدف الأسبوع! 🎉'
+                                : 'Weekly goal achieved! 🎉'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isGoalAchieved)
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(top: 10),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.success.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: AppColors.success.withValues(alpha: 0.28),
+                          ),
+                        ),
+                        child: Text(
+                          isAr ? '🎉 اكتمل الأسبوع' : '🎉 Week Completed',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppColors.success,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+              ],
+              if (ranking.isEmpty)
+                Text(
+                  isAr
+                      ? (isWeek
+                          ? 'لم يبدأ التحدي هذا الأسبوع بعد.'
+                          : 'لا توجد مبيعات مسجلة اليوم بعد.')
+                      : (isWeek
+                          ? 'The weekly challenge hasn\'t started yet.'
+                          : 'No sales recorded today yet.'),
+                  style: theme.textTheme.bodySmall,
+                )
+              else ...[
+                if (champion != null)
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(bottom: 12),
+                    child: Row(
+                      children: [
+                        Text(
+                          (champion['badge'] ?? '🥇').toString(),
+                          style: const TextStyle(fontSize: 18),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            isAr
+                                ? 'المتصدّر: ${champion['name'] ?? ''}'
+                                : 'Champion: ${champion['name'] ?? ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                for (int i = 0; i < ranking.length; i++)
+                  if (ranking[i] is Map) buildRow(ranking[i] as Map, i),
+              ],
+            ],
+            if (adminSummary != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.primary.withValues(alpha: 0.18),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isAr ? 'إجمالي النقد' : 'Total Cash',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${(adminSummary['total_cash'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: colorScheme.secondary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.secondary.withValues(alpha: 0.18),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isAr ? 'إجمالي الربح' : 'Total Profit',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${(adminSummary['total_profit'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

@@ -11,9 +11,11 @@ enum QuickActionAddStatus { added, reactivated, alreadyExists, failed }
 /// Provider لإدارة أزرار الوصول السريع في الشاشة الرئيسية
 class QuickActionsProvider extends ChangeNotifier {
   static const String _storageKey = 'quick_actions';
+  static const String _showSalesRaceCardKey = 'home_show_sales_race_card';
 
   List<QuickActionItem> _actions = [];
   bool _isLoading = true;
+  bool _showSalesRaceCard = true;
 
   List<QuickActionItem> get actions => _actions;
   List<QuickActionItem> get activeActions =>
@@ -21,6 +23,8 @@ class QuickActionsProvider extends ChangeNotifier {
         ..sort((a, b) => a.order.compareTo(b.order));
 
   bool get isLoading => _isLoading;
+
+  bool get showSalesRaceCard => _showSalesRaceCard;
 
   QuickActionsProvider() {
     _loadActions();
@@ -49,6 +53,10 @@ class QuickActionsProvider extends ChangeNotifier {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+
+      _showSalesRaceCard =
+          prefs.getBool(_showSalesRaceCardKey) ?? _showSalesRaceCard;
+
       final String? actionsJson = prefs.getString(_storageKey);
 
       if (actionsJson != null && actionsJson.isNotEmpty) {
@@ -71,6 +79,20 @@ class QuickActionsProvider extends ChangeNotifier {
     _sortActionsByOrder();
     _isLoading = false;
     notifyListeners();
+  }
+
+  Future<bool> setShowSalesRaceCard(bool value) async {
+    _showSalesRaceCard = value;
+    notifyListeners();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_showSalesRaceCardKey, value);
+      return true;
+    } catch (e) {
+      debugPrint('❌ خطأ في حفظ خيار سباق المبيعات: $e');
+      return false;
+    }
   }
 
   /// حفظ الأزرار في SharedPreferences

@@ -3947,6 +3947,40 @@ class ApiService {
   }
 
   // ---------------------------------------------------------------------------
+  // Home Leaderboard (Gamification)
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> getHomeLeaderboard({
+    String period = 'today',
+    String metric = 'weight',
+  }) async {
+    final uri = Uri.parse(
+      '$_baseUrl/home/leaderboard',
+    ).replace(queryParameters: {'period': period, 'metric': metric});
+
+    final response = await _authedGet(uri);
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+
+    if (response.statusCode == 200) {
+      if (decoded is Map<String, dynamic>) return decoded;
+      throw Exception('Unexpected leaderboard response');
+    }
+
+    try {
+      if (decoded is Map<String, dynamic>) {
+        final msg = decoded['message']?.toString();
+        final err = decoded['error']?.toString();
+        throw Exception(
+          msg?.isNotEmpty == true ? msg : (err ?? 'فشل تحميل لوحة الصدارة'),
+        );
+      }
+    } catch (_) {
+      // fallthrough
+    }
+    throw Exception('Failed to load leaderboard: ${response.body}');
+  }
+
+  // ---------------------------------------------------------------------------
   // Payroll API
   // ---------------------------------------------------------------------------
 

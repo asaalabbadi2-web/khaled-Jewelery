@@ -119,6 +119,35 @@ class _CustomizeQuickActionsScreenState
                   ),
                 ),
 
+                // خيارات العرض في الشاشة الرئيسية
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: theme.cardColor,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: theme.dividerColor, width: 1),
+                  ),
+                  child: SwitchListTile(
+                    value: provider.showSalesRaceCard,
+                    activeColor: AppColors.success,
+                    title: const Text('عرض كرت سباق المبيعات'),
+                    subtitle: const Text('إظهار/إخفاء كرت التحدي في الرئيسية'),
+                    onChanged: (value) async {
+                      final ok = await provider.setShowSalesRaceCard(value);
+                      if (!mounted) return;
+                      if (!ok) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text('تعذر حفظ الإعداد، حاول مرة أخرى'),
+                            backgroundColor: AppColors.error,
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                ),
+
                 // الإحصائيات
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),

@@ -2020,6 +2020,12 @@ class Settings(db.Model):
     # 🆕 تعطيل bootstraps عند بدء التشغيل (مفيد بعد Full System Wipe)
     # عندما True: لا يتم seed لشجرة الحسابات أو حسابات الدعم تلقائياً عند تشغيل السيرفر.
     disable_startup_bootstrap = db.Column(db.Boolean, default=False)
+
+    # ==========================================
+    # 🆕 Gamification Targets
+    # ==========================================
+    # هدف وزن مبيعات الأسبوع (بالجرام) لاستخدامه في تحدي الفريق.
+    weekly_sales_target_weight = db.Column(db.Float, default=2000.0)
     
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
@@ -2059,10 +2065,20 @@ class Settings(db.Model):
             except Exception:
                 exempt_karats = ['24']
 
+        # Existing to_dict continues below...
+
+        # Gamification targets
+        weekly_target = None
+        try:
+            weekly_target = float(getattr(self, 'weekly_sales_target_weight', None) or 0.0)
+        except Exception:
+            weekly_target = 0.0
+
         return {
             'id': self.id,
             'main_karat': self.main_karat,
             'currency_symbol': self.currency_symbol,
+            'weekly_sales_target_weight': weekly_target,
             'tax_rate': self.tax_rate,
             'tax_enabled': self.tax_enabled,
             'vat_exempt_karats': exempt_karats,
