@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../api_service.dart';
+import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 import 'add_office_screen.dart';
 
@@ -21,6 +23,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
   bool _showActiveOnly = true;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+
+  int _mainKarat = 21;
 
   double _asDouble(dynamic v) {
     if (v == null) return 0.0;
@@ -47,10 +51,49 @@ class _OfficesScreenState extends State<OfficesScreen> {
     return '$direction $absValue $unit';
   }
 
+  double _convertToMainKarat(double grams, int karat) {
+    if (grams == 0.0) return 0.0;
+    final mk = _mainKarat > 0 ? _mainKarat : 21;
+    return grams * (karat / mk);
+  }
+
+  double _goldMainEquivalentFromOffice(Map<String, dynamic> office) {
+    final b18 = _asDouble(office['balance_gold_18k']);
+    final b21 = _asDouble(office['balance_gold_21k']);
+    final b22 = _asDouble(office['balance_gold_22k']);
+    final b24 = _asDouble(office['balance_gold_24k']);
+
+    return _convertToMainKarat(b18, 18) +
+        _convertToMainKarat(b21, 21) +
+        _convertToMainKarat(b22, 22) +
+        _convertToMainKarat(b24, 24);
+  }
+
+  double _goldMainEquivalentFromGoldMap(Map<String, dynamic> gold) {
+    final b18 = _asDouble(gold['18k']);
+    final b21 = _asDouble(gold['21k']);
+    final b22 = _asDouble(gold['22k']);
+    final b24 = _asDouble(gold['24k']);
+
+    return _convertToMainKarat(b18, 18) +
+        _convertToMainKarat(b21, 21) +
+        _convertToMainKarat(b22, 22) +
+        _convertToMainKarat(b24, 24);
+  }
+
   @override
   void initState() {
     super.initState();
     _loadOffices();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final mk = context.watch<SettingsProvider>().mainKarat;
+    if (mk > 0 && mk != _mainKarat) {
+      setState(() => _mainKarat = mk);
+    }
   }
 
   @override
@@ -187,7 +230,9 @@ class _OfficesScreenState extends State<OfficesScreen> {
     return result ?? false;
   }
 
-  Future<void> _showOfficeReservationsDialog(Map<String, dynamic> office) async {
+  Future<void> _showOfficeReservationsDialog(
+    Map<String, dynamic> office,
+  ) async {
     final isAr = widget.isArabic;
     final officeId = (office['id'] is num)
         ? (office['id'] as num).toInt()
@@ -297,11 +342,9 @@ class _OfficesScreenState extends State<OfficesScreen> {
                     String fmt(dynamic iso) {
                       if (iso == null) return '--';
                       try {
-                        return DateTime.parse(iso.toString())
-                            .toLocal()
-                            .toString()
-                            .split('.')
-                            .first;
+                        return DateTime.parse(
+                          iso.toString(),
+                        ).toLocal().toString().split('.').first;
                       } catch (_) {
                         return iso.toString();
                       }
@@ -312,7 +355,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
                       child: ListView.separated(
                         shrinkWrap: true,
                         itemCount: ordered.length,
-                        separatorBuilder: (_, __) => const Divider(height: 16),
+                        separatorBuilder: (_, _) => const Divider(height: 16),
                         itemBuilder: (context, index) {
                           final r = ordered[index];
                           final rid = (r['id'] is num)
@@ -329,7 +372,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
                           final paid = _asDouble(r['paid_amount']);
                           final total = _asDouble(r['total_amount']);
                           final execPrice = _asDouble(
-                            r['execution_price_per_gram'] ?? r['price_per_gram'],
+                            r['execution_price_per_gram'] ??
+                                r['price_per_gram'],
                           );
 
                           return Column(
@@ -337,7 +381,9 @@ class _OfficesScreenState extends State<OfficesScreen> {
                             children: [
                               Text(
                                 code.isNotEmpty
-                                    ? (isAr ? 'حجز: $code' : 'Reservation: $code')
+                                    ? (isAr
+                                          ? 'حجز: $code'
+                                          : 'Reservation: $code')
                                     : (isAr ? 'حجز #' : 'Reservation #'),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
@@ -369,8 +415,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
                               ),
                               Text(
                                 isAr
-                                    ? 'الوزن (مكافئ 21): ${weightMain.toStringAsFixed(3)} جم | العيار: $karat'
-                                    : 'Weight (21k eq): ${weightMain.toStringAsFixed(3)} g | Karat: $karat',
+                                    ? 'الوزن (مكافئ العيار الرئيسي $_mainKarat): ${weightMain.toStringAsFixed(3)} جم | العيار: $karat'
+                                    : 'Weight (${_mainKarat}k eq): ${weightMain.toStringAsFixed(3)} g | Karat: $karat',
                                 style: TextStyle(
                                   color: isDone ? Colors.grey.shade700 : null,
                                   decoration: isDone
@@ -408,12 +454,16 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                               );
                                               if (!ok) return;
 
-                                              setLocalState(() => busyIds.add(rid));
+                                              setLocalState(
+                                                () => busyIds.add(rid),
+                                              );
                                               try {
-                                                await widget.api.cancelOfficeReservation(
-                                                  rid,
-                                                  cancelledBy: 'flutter_app',
-                                                );
+                                                await widget.api
+                                                    .cancelOfficeReservation(
+                                                      rid,
+                                                      cancelledBy:
+                                                          'flutter_app',
+                                                    );
                                                 _showMessage(
                                                   isAr
                                                       ? 'تم إلغاء الحجز'
@@ -429,14 +479,18 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                                   isError: true,
                                                 );
                                               } finally {
-                                                setLocalState(() => busyIds.remove(rid));
+                                                setLocalState(
+                                                  () => busyIds.remove(rid),
+                                                );
                                               }
                                             },
                                       child: isBusy
                                           ? const SizedBox(
                                               height: 18,
                                               width: 18,
-                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
                                             )
                                           : Text(isAr ? 'إلغاء' : 'Cancel'),
                                     ),
@@ -458,30 +512,45 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                               );
                                               if (!ok) return;
 
-                                              setLocalState(() => busyIds.add(rid));
+                                              setLocalState(
+                                                () => busyIds.add(rid),
+                                              );
                                               try {
-                                                final resp = await widget.api.settleOfficeReservation(
-                                                  rid,
-                                                  executionPricePerGram: execPrice > 0 ? execPrice : null,
-                                                  settlementDate: DateTime.now(),
-                                                  createdBy: 'flutter_app',
-                                                );
+                                                final resp = await widget.api
+                                                    .settleOfficeReservation(
+                                                      rid,
+                                                      executionPricePerGram:
+                                                          execPrice > 0
+                                                          ? execPrice
+                                                          : null,
+                                                      settlementDate:
+                                                          DateTime.now(),
+                                                      createdBy: 'flutter_app',
+                                                    );
 
                                                 String? entryNumber;
-                                                if (resp['journal_entry'] is Map) {
-                                                  final je = Map<String, dynamic>.from(
-                                                    resp['journal_entry'] as Map,
-                                                  );
-                                                  entryNumber = je['entry_number']?.toString();
+                                                if (resp['journal_entry']
+                                                    is Map) {
+                                                  final je =
+                                                      Map<String, dynamic>.from(
+                                                        resp['journal_entry']
+                                                            as Map,
+                                                      );
+                                                  entryNumber =
+                                                      je['entry_number']
+                                                          ?.toString();
                                                 }
                                                 _showMessage(
-                                                  entryNumber != null && entryNumber.trim().isNotEmpty
+                                                  entryNumber != null &&
+                                                          entryNumber
+                                                              .trim()
+                                                              .isNotEmpty
                                                       ? (isAr
-                                                          ? 'تم تنفيذ الحجز - قيد: $entryNumber'
-                                                          : 'Executed - JE: $entryNumber')
+                                                            ? 'تم تنفيذ الحجز - قيد: $entryNumber'
+                                                            : 'Executed - JE: $entryNumber')
                                                       : (isAr
-                                                          ? 'تم تنفيذ الحجز'
-                                                          : 'Reservation executed'),
+                                                            ? 'تم تنفيذ الحجز'
+                                                            : 'Reservation executed'),
                                                   isError: false,
                                                 );
                                                 await refresh();
@@ -493,7 +562,9 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                                   isError: true,
                                                 );
                                               } finally {
-                                                setLocalState(() => busyIds.remove(rid));
+                                                setLocalState(
+                                                  () => busyIds.remove(rid),
+                                                );
                                               }
                                             },
                                       style: ElevatedButton.styleFrom(
@@ -506,7 +577,10 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                               width: 18,
                                               child: CircularProgressIndicator(
                                                 strokeWidth: 2,
-                                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Colors.white),
                                               ),
                                             )
                                           : Text(isAr ? 'تنفيذ' : 'Execute'),
@@ -539,7 +613,10 @@ class _OfficesScreenState extends State<OfficesScreen> {
     final isAr = widget.isArabic;
 
     final cashBalance = _asDouble(balance['balance_cash']);
-    final goldTotal = _asDouble(balance['balance_gold']?['total']);
+    final goldMap = (balance['balance_gold'] is Map)
+        ? Map<String, dynamic>.from(balance['balance_gold'])
+        : <String, dynamic>{};
+    final goldTotalMain = _goldMainEquivalentFromGoldMap(goldMap);
 
     showDialog(
       context: context,
@@ -569,7 +646,9 @@ class _OfficesScreenState extends State<OfficesScreen> {
                   final outstanding = _asDouble(
                     kpis['outstanding_weight_main_karat'],
                   );
-                  final avgPrice = _asDouble(kpis['avg_closing_price_per_gram']);
+                  final avgPrice = _asDouble(
+                    kpis['avg_closing_price_per_gram'],
+                  );
 
                   Widget kpiCard({
                     required String title,
@@ -612,8 +691,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
                       Expanded(
                         child: kpiCard(
                           title: isAr
-                              ? 'الوزن المعلق (مكافئ 21)'
-                              : 'Outstanding (21k eq)',
+                              ? 'الوزن المعلق (مكافئ العيار الرئيسي $_mainKarat)'
+                              : 'Outstanding (${_mainKarat}k eq)',
                           value:
                               '${outstanding.toStringAsFixed(3)} ${isAr ? "جم" : "g"}',
                           icon: Icons.pending_actions,
@@ -661,23 +740,11 @@ class _OfficesScreenState extends State<OfficesScreen> {
                   .where((e) => e.key != 'total')
                   .map(
                     (e) => Text(
-                      '${isAr ? "عيار" : "Karat"} ${e.key}: ${_formatSigned(
-                        _asDouble(e.value),
-                        isArabic: isAr,
-                        unitAr: 'جم',
-                        unitEn: 'g',
-                        decimals: 3,
-                      )}',
+                      '${isAr ? "عيار" : "Karat"} ${e.key}: ${_formatSigned(_asDouble(e.value), isArabic: isAr, unitAr: 'جم', unitEn: 'g', decimals: 3)}',
                     ),
                   )),
               Text(
-                '${isAr ? "الإجمالي" : "Total"}: ${_formatSigned(
-                  goldTotal,
-                  isArabic: isAr,
-                  unitAr: 'جم',
-                  unitEn: 'g',
-                  decimals: 3,
-                )}',
+                '${isAr ? "الإجمالي (مكافئ العيار الرئيسي $_mainKarat)" : "Total (${_mainKarat}k eq)"}: ${_formatSigned(goldTotalMain, isArabic: isAr, unitAr: 'جم', unitEn: 'g', decimals: 3)}',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const Divider(height: 24),
@@ -846,7 +913,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
     final isActive = office['active'] ?? true;
 
     final cashBalance = _asDouble(office['balance_cash']);
-    final goldTotal = _asDouble(office['balance_gold']?['total']);
+    final goldTotal = _goldMainEquivalentFromOffice(office);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),

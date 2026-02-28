@@ -122,8 +122,8 @@ class _PayrollScreenState extends State<PayrollScreen> {
         title: Text(isAr ? 'ترحيل استحقاق الرواتب' : 'Post Payroll Accrual'),
         content: Text(
           isAr
-              ? 'تم اعتماد سجل الراتب${employeeName.isNotEmpty ? " للموظف: $employeeName" : ""} (${month}/${year}).\nهل تريد ترحيل الاستحقاق الآن؟\n\nسيتم إنشاء قيد: \nمدين 5410 (مصروف الرواتب) = ${net.toStringAsFixed(2)}\nدائن 2400xxxx (رواتب مستحقة) = ${net.toStringAsFixed(2)}'
-              : 'This payroll entry has been approved${employeeName.isNotEmpty ? " for $employeeName" : ""} (${month}/${year}).\nPost the accrual now?\n\nJournal: \nDr 5410 (Salary Expense) = ${net.toStringAsFixed(2)}\nCr 2400xxxx (Salaries Payable) = ${net.toStringAsFixed(2)}',
+            ? 'تم اعتماد سجل الراتب${employeeName.isNotEmpty ? " للموظف: $employeeName" : ""} ($month/$year).\nهل تريد ترحيل الاستحقاق الآن؟\n\nسيتم إنشاء قيد: \nمدين 5410 (مصروف الرواتب) = ${net.toStringAsFixed(2)}\nدائن 2400xxxx (رواتب مستحقة) = ${net.toStringAsFixed(2)}'
+            : 'This payroll entry has been approved${employeeName.isNotEmpty ? " for $employeeName" : ""} ($month/$year).\nPost the accrual now?\n\nJournal: \nDr 5410 (Salary Expense) = ${net.toStringAsFixed(2)}\nCr 2400xxxx (Salaries Payable) = ${net.toStringAsFixed(2)}',
         ),
         actions: [
           TextButton(

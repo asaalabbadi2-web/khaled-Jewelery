@@ -2969,6 +2969,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           MaterialPageRoute(builder: (_) => AddEditJournalEntryScreen()),
         );
         break;
+      case 'journal_entries_list':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => JournalEntriesListScreen(isArabic: widget.isArabic),
+          ),
+        );
+        break;
       case 'accounts':
         result = await Navigator.push(
           context,

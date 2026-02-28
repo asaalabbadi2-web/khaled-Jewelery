@@ -1552,7 +1552,7 @@ def post_invoices_batch():
                     action='post',
                     entity_type='invoice',
                     entity_id=invoice.id,
-                    entity_number=invoice.invoice_number,
+                    entity_number=(getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', '') or '')),
                     details=json.dumps({'batch_operation': True}, ensure_ascii=False),
                     ip_address=request.remote_addr,
                     user_agent=request.headers.get('User-Agent')
@@ -1632,7 +1632,7 @@ def unpost_invoice(invoice_id):
                 action='unpost',
                 entity_type='invoice',
                 entity_id=invoice_id,
-                entity_number=invoice.invoice_number,
+                entity_number=(getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', '') or '')),
                 success=False,
                 error_message='الفاتورة غير مرحلة أصلاً',
                 ip_address=request.remote_addr,
@@ -1662,7 +1662,7 @@ def unpost_invoice(invoice_id):
             action='unpost',
             entity_type='invoice',
             entity_id=invoice_id,
-            entity_number=invoice.invoice_number,
+            entity_number=(getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', '') or '')),
             details=json.dumps({
                 'invoice_type': invoice.invoice_type,
                 'total': float(invoice.total or 0)

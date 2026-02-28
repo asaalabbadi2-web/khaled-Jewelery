@@ -50,11 +50,13 @@ class AccountLineModel {
 class AddVoucherScreen extends StatefulWidget {
   final String voucherType; // 'receipt' or 'payment'
   final Map<String, dynamic>? existingVoucher; // optional: edit mode
+  final int? initialSupplierId; // optional: quick-create for a supplier
 
   const AddVoucherScreen({
     super.key,
     required this.voucherType,
     this.existingVoucher,
+    this.initialSupplierId,
   });
 
   @override
@@ -128,6 +130,18 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
     if (widget.existingVoucher != null) {
       _populateFromExisting(widget.existingVoucher!);
+    }
+
+    // Quick-create: preselect supplier when opening a payment voucher
+    // from the suppliers list.
+    if (widget.existingVoucher == null &&
+        widget.voucherType == 'payment' &&
+        widget.initialSupplierId != null) {
+      _partyType = 'supplier';
+      _selectedSupplierId = widget.initialSupplierId;
+      _selectedCustomerId = null;
+      _selectedEmployeeId = null;
+      _selectedOtherAccountId = null;
     }
 
     if (widget.existingVoucher == null) {
@@ -863,11 +877,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   String _normalizeSearchText(String value) {
     // Best-effort normalization for matching Arabic names in account labels.
-    return (value)
-        .toString()
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'\s+'), '');
+    return (value).toString().trim().toLowerCase().replaceAll(
+      RegExp(r'\s+'),
+      '',
+    );
   }
 
   int? _findEmployeeSalaryPayableAccountId(EmployeeModel employee) {
@@ -881,7 +894,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
       final nameStr = (acc['name'] ?? '').toString();
       final key = _normalizeSearchText(nameStr);
-      return key.contains(empKey) && key.contains(_normalizeSearchText('رواتب'));
+      return key.contains(empKey) &&
+          key.contains(_normalizeSearchText('رواتب'));
     }).toList();
 
     if (candidates.isEmpty) {
@@ -2680,7 +2694,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         }
 
         if (_selectedTemplateId == 'payment_salary') {
-          partyAccountId = _findEmployeeSalaryPayableAccountId(selectedEmployee);
+          partyAccountId = _findEmployeeSalaryPayableAccountId(
+            selectedEmployee,
+          );
           if (partyAccountId == null) {
             throw Exception(
               'لا يوجد حساب ذمم رواتب (2400xxxx) مرتبط بهذا الموظف.\n'

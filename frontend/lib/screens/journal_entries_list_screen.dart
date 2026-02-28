@@ -675,13 +675,19 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     final colorScheme = theme.colorScheme;
     final gold = colorScheme.primary;
     final background = theme.scaffoldBackgroundColor;
+    final appBarBackground = theme.appBarTheme.backgroundColor;
+    final fallbackAppBarForeground = () {
+      final bg = appBarBackground ?? colorScheme.surface;
+      final b = ThemeData.estimateBrightnessForColor(bg);
+      return b == Brightness.dark ? Colors.white : Colors.black;
+    }();
     final appBarForeground =
-        theme.appBarTheme.foregroundColor ?? colorScheme.onPrimary;
+        theme.appBarTheme.foregroundColor ?? fallbackAppBarForeground;
 
     return Scaffold(
       backgroundColor: background,
       appBar: AppBar(
-        backgroundColor: theme.appBarTheme.backgroundColor,
+        backgroundColor: appBarBackground,
         foregroundColor: appBarForeground,
         title: _isSearching
             ? TextField(
@@ -690,6 +696,12 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
                 decoration: InputDecoration(
                   hintText: 'بحث بالوصف، التاريخ، أو الرقم...',
                   border: InputBorder.none,
+                  filled: true,
+                  fillColor: appBarForeground.withValues(alpha: 0.10),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   hintStyle: TextStyle(
                     color: appBarForeground.withValues(alpha: 0.6),
                   ),

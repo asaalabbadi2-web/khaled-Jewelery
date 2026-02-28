@@ -235,7 +235,64 @@ def get_offices():
                 query = query.filter(Office.active.is_(False))
 
         offices = query.all()
-        return jsonify([office.to_dict() for office in offices]), 200
+
+        from services.party_live_balances import compute_live_supplier_balances
+
+        supplier_ids = []
+        account_ids = []
+        for office in offices:
+            if getattr(office, 'supplier_id', None):
+                try:
+                    supplier_ids.append(int(office.supplier_id))
+                except Exception:
+                    pass
+            if getattr(office, 'account_category_id', None):
+                try:
+                    account_ids.append(int(office.account_category_id))
+                except Exception:
+                    pass
+
+        supplier_rows = Supplier.query.filter(Supplier.id.in_(list({int(x) for x in supplier_ids if x}))).all() if supplier_ids else []
+        balances_by_supplier = compute_live_supplier_balances(supplier_rows) if supplier_rows else {}
+        live_map = live_balances_by_account_ids(account_ids) if account_ids else {}
+
+        results = []
+        for office in offices:
+            data = office.to_dict()
+
+            bal = None
+            try:
+                sid = data.get('supplier_id')
+                if sid not in (None, '', 0, '0', False):
+                    bal = balances_by_supplier.get(int(sid))
+            except Exception:
+                bal = None
+
+            if isinstance(bal, dict):
+                data['balance_cash'] = round(float(bal.get('cash', 0.0) or 0.0), 2)
+                data['balance_gold_18k'] = round(float(bal.get('18k', 0.0) or 0.0), 3)
+                data['balance_gold_21k'] = round(float(bal.get('21k', 0.0) or 0.0), 3)
+                data['balance_gold_22k'] = round(float(bal.get('22k', 0.0) or 0.0), 3)
+                data['balance_gold_24k'] = round(float(bal.get('24k', 0.0) or 0.0), 3)
+            else:
+                account_id = data.get('account_category_id')
+                live = None
+                try:
+                    if account_id not in (None, '', 0, '0', False):
+                        live = live_map.get(int(account_id))
+                except Exception:
+                    live = None
+
+                if isinstance(live, dict):
+                    data['balance_cash'] = float(live.get('cash') or 0.0)
+                    data['balance_gold_18k'] = float(live.get('18k') or 0.0)
+                    data['balance_gold_21k'] = float(live.get('21k') or 0.0)
+                    data['balance_gold_22k'] = float(live.get('22k') or 0.0)
+                    data['balance_gold_24k'] = float(live.get('24k') or 0.0)
+
+            results.append(data)
+
+        return jsonify(results), 200
     except Exception as e:
         print(f"❌ خطأ في جلب المكاتب: {e}")
         return jsonify({'error': str(e)}), 500
@@ -249,7 +306,43 @@ def get_office(office_id):
         if not office:
             return jsonify({'error': 'المكتب غير موجود'}), 404
         
-        return jsonify(office.to_dict()), 200
+        data = office.to_dict()
+
+        from services.party_live_balances import compute_live_supplier_balances
+
+        bal = None
+        try:
+            sid = data.get('supplier_id')
+            if sid not in (None, '', 0, '0', False):
+                supplier = Supplier.query.get(int(sid))
+                balances_by_supplier = compute_live_supplier_balances([supplier]) if supplier else {}
+                bal = balances_by_supplier.get(int(sid))
+        except Exception:
+            bal = None
+
+        if isinstance(bal, dict):
+            data['balance_cash'] = round(float(bal.get('cash', 0.0) or 0.0), 2)
+            data['balance_gold_18k'] = round(float(bal.get('18k', 0.0) or 0.0), 3)
+            data['balance_gold_21k'] = round(float(bal.get('21k', 0.0) or 0.0), 3)
+            data['balance_gold_22k'] = round(float(bal.get('22k', 0.0) or 0.0), 3)
+            data['balance_gold_24k'] = round(float(bal.get('24k', 0.0) or 0.0), 3)
+        else:
+            account_id = data.get('account_category_id')
+            live = None
+            try:
+                if account_id not in (None, '', 0, '0', False):
+                    live = live_balances_by_account_ids([int(account_id)]).get(int(account_id))
+            except Exception:
+                live = None
+
+            if isinstance(live, dict):
+                data['balance_cash'] = float(live.get('cash') or 0.0)
+                data['balance_gold_18k'] = float(live.get('18k') or 0.0)
+                data['balance_gold_21k'] = float(live.get('21k') or 0.0)
+                data['balance_gold_22k'] = float(live.get('22k') or 0.0)
+                data['balance_gold_24k'] = float(live.get('24k') or 0.0)
+
+        return jsonify(data), 200
     
     except Exception as e:
         print(f"❌ خطأ في جلب المكتب: {e}")
@@ -539,12 +632,31 @@ def get_office_balance(office_id):
         if not office:
             return jsonify({'error': 'المكتب غير موجود'}), 404
 
+        from services.party_live_balances import compute_live_supplier_balances
+
+        supplier_bal = None
+        try:
+            if getattr(office, 'supplier_id', None) not in (None, '', 0, '0', False):
+                supplier = Supplier.query.get(int(office.supplier_id))
+                if supplier is not None:
+                    supplier_bal = compute_live_supplier_balances([supplier]).get(int(supplier.id))
+        except Exception:
+            supplier_bal = None
+
         linked_account = None
         if office.account_category_id:
             linked_account = Account.query.get(office.account_category_id)
 
-        # Canonical source of truth: journal-derived aggregation for linked accounts.
-        if linked_account is not None:
+        # Canonical source of truth: supplier-ledger balance when the office is linked to a supplier.
+        if isinstance(supplier_bal, dict):
+            balance_cash = float(supplier_bal.get('cash') or 0.0)
+            bal_18k = float(supplier_bal.get('18k') or 0.0)
+            bal_21k = float(supplier_bal.get('21k') or 0.0)
+            bal_22k = float(supplier_bal.get('22k') or 0.0)
+            bal_24k = float(supplier_bal.get('24k') or 0.0)
+            balance_source = 'supplier'
+        # Fallback: journal-derived aggregation for linked accounts.
+        elif linked_account is not None:
             live = live_balances_by_account_ids([linked_account.id]).get(int(linked_account.id))
             live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
             balance_cash = float(live.get('cash') or 0.0)
@@ -552,12 +664,14 @@ def get_office_balance(office_id):
             bal_21k = float(live.get('21k') or 0.0)
             bal_22k = float(live.get('22k') or 0.0)
             bal_24k = float(live.get('24k') or 0.0)
+            balance_source = 'account'
         else:
             balance_cash = float(office.balance_cash or 0.0)
             bal_18k = float(office.balance_gold_18k or 0.0)
             bal_21k = float(office.balance_gold_21k or 0.0)
             bal_22k = float(office.balance_gold_22k or 0.0)
             bal_24k = float(office.balance_gold_24k or 0.0)
+            balance_source = 'office'
 
         # KPIs
         outstanding_weight = (
@@ -590,7 +704,7 @@ def get_office_balance(office_id):
             'office_code': office.office_code,
             'office_name': office.name,
             'balance_cash': round(float(balance_cash), 2),
-            'balance_source': 'account' if linked_account is not None else 'office',
+            'balance_source': balance_source,
             'kpis': {
                 'outstanding_weight_main_karat': round(float(outstanding_weight), 3),
                 'avg_closing_price_per_gram': round(float(avg_closing_price), 2),

@@ -988,6 +988,35 @@ class Invoice(db.Model):
 
     __table_args__ = (db.UniqueConstraint('invoice_type', 'invoice_type_id', name='_invoice_type_uc'),)
 
+    @property
+    def invoice_number(self) -> str:
+        """Computed invoice number.
+
+        NOTE: This intentionally does NOT depend on a DB column, so it works
+        in production databases that haven't had an `invoice_number` migration.
+        """
+        try:
+            from invoice_number_generator import generate_invoice_number
+
+            invoice_type_value = (getattr(self, 'invoice_type', None) or '').strip()
+            if 'مورد' in invoice_type_value and 'شراء' in invoice_type_value:
+                if 'مرتجع' in invoice_type_value:
+                    invoice_type_value = 'مرتجع شراء (مورد)'
+                else:
+                    invoice_type_value = 'شراء'
+
+            return generate_invoice_number(
+                invoice_type=invoice_type_value or 'INV',
+                invoice_type_id=int(getattr(self, 'invoice_type_id', 0) or 0),
+                invoice_date=getattr(self, 'date', None),
+                use_arabic=False,
+            )
+        except Exception:
+            try:
+                return f"INV-{int(getattr(self, 'id', 0) or 0)}"
+            except Exception:
+                return "INV"
+
     def to_dict(self):
         invoice_type_value = (self.invoice_type or '').strip()
         if 'مورد' in invoice_type_value and 'شراء' in invoice_type_value:
@@ -1010,6 +1039,7 @@ class Invoice(db.Model):
         result = {
             'id': self.id,
             'invoice_type_id': self.invoice_type_id,
+            'invoice_number': getattr(self, 'invoice_number', None),
             'customer_id': self.customer_id,
             'supplier_id': self.supplier_id,
             'employee_id': self.employee_id,

@@ -694,8 +694,27 @@ class DefaultQuickActions {
   }
 
   static List<QuickActionItem> getDefaultActive() {
-    return getAll().where((item) => item.isActive).toList()
-      ..sort((a, b) => a.order.compareTo(b.order));
+    // Default quick access buttons (used for first-run and reset-to-defaults).
+    // Keep this list minimal and in the exact intended order.
+    const defaultIds = <String>[
+      'sales_invoice',
+      'scrap_purchase_invoice',
+      'scrap_sales_invoice',
+      'purchase_invoice',
+      'vouchers_list',
+      'journal_entries_list',
+      'accounts',
+      'reports_center',
+      'posting_management',
+    ];
+
+    final List<QuickActionItem> defaults = [];
+    for (int i = 0; i < defaultIds.length; i++) {
+      final item = findById(defaultIds[i]);
+      if (item == null) continue;
+      defaults.add(item.copyWith(isActive: true, order: i));
+    }
+    return defaults;
   }
 
   static List<QuickActionItem> catalogExcluding(Set<String> ids) {

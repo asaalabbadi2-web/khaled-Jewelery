@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
- import 'package:intl/intl.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../api_service.dart';
@@ -7,7 +7,9 @@ import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as app_theme;
 
 import 'account_statement_screen.dart';
+import 'add_voucher_screen.dart';
 import 'add_supplier_screen.dart';
+import 'purchase_invoice_screen.dart';
 import 'supplier_ledger_screen.dart';
 
 class SuppliersScreen extends StatefulWidget {
@@ -433,12 +435,6 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                         itemBuilder: (context, index) {
                           final supplier = suppliers[index];
                           final supplierId = supplier['id'] as int?;
-                          final supplierAccountIdRaw = supplier['account_id'];
-                          final supplierAccountId = supplierAccountIdRaw is int
-                              ? supplierAccountIdRaw
-                              : int.tryParse(
-                                  (supplierAccountIdRaw ?? '').toString(),
-                                );
                           final supplierName = (supplier['name'] ?? '')
                               .toString();
                           final supplierCode = (supplier['supplier_code'] ?? '')
@@ -732,6 +728,53 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         IconButton(
+                                          icon: const Icon(
+                                            Icons.shopping_cart_outlined,
+                                          ),
+                                          tooltip: isAr
+                                              ? 'فاتورة شراء'
+                                              : 'Purchase invoice',
+                                          color:
+                                              app_theme.AppColors.primaryGold,
+                                          onPressed: actionsEnabled
+                                              ? () {
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) =>
+                                                          PurchaseInvoiceScreen(
+                                                            supplierId:
+                                                                supplierId,
+                                                          ),
+                                                    ),
+                                                  );
+                                                }
+                                              : null,
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.call_made),
+                                          tooltip: isAr
+                                              ? 'سند صرف'
+                                              : 'Payment voucher',
+                                          color: app_theme.AppColors.info,
+                                          onPressed: actionsEnabled
+                                              ? () {
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) =>
+                                                          AddVoucherScreen(
+                                                            voucherType:
+                                                                'payment',
+                                                            initialSupplierId:
+                                                                supplierId,
+                                                          ),
+                                                    ),
+                                                  );
+                                                }
+                                              : null,
+                                        ),
+                                        IconButton(
                                           icon: const Icon(Icons.receipt_long),
                                           tooltip: isAr
                                               ? 'حركات المورد'
@@ -761,11 +804,11 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                             Icons.layers_outlined,
                                           ),
                                           tooltip: isAr
-                                              ? 'كشف حساب مدمج (مالي + مذكرة)'
+                                              ? 'كشف حساب المورد'
                                               : 'Merged statement (financial + memo)',
                                           color:
                                               app_theme.AppColors.primaryGold,
-                                          onPressed: (supplierAccountId != null)
+                                          onPressed: actionsEnabled
                                               ? () {
                                                   Navigator.push(
                                                     context,
@@ -773,11 +816,11 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                                       builder: (context) =>
                                                           AccountStatementScreen(
                                                             accountId:
-                                                                supplierAccountId,
+                                                                supplierId,
                                                             accountName:
                                                                 supplierName,
                                                             entityType:
-                                                                'account',
+                                                                'supplier',
                                                           ),
                                                     ),
                                                   );
