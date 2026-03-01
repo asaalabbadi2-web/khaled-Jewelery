@@ -6488,98 +6488,6 @@ def get_invoices():
         # Keep audit best-effort and non-fatal
         pass
 
-    # Global tab summary (over FULL filtered result set, before pagination)
-    tab_summary = {
-        'sales': {
-            'total_invoices': 0,
-            'total_amount': 0.0,
-            'paid_amount': 0.0,
-            'unpaid_amount': 0.0,
-            'vat_total': 0.0,
-            'sold_weight_total': 0.0,
-        },
-        'purchase': {
-            'total_invoices': 0,
-            'total_amount': 0.0,
-            'paid_amount': 0.0,
-            'unpaid_amount': 0.0,
-            'vat_total': 0.0,
-            'sold_weight_total': 0.0,
-        },
-        'returns': {
-            'total_invoices': 0,
-            'total_amount': 0.0,
-            'paid_amount': 0.0,
-            'unpaid_amount': 0.0,
-            'vat_total': 0.0,
-            'sold_weight_total': 0.0,
-        },
-    }
-
-    def _classify_tab(invoice_type_value):
-        t = (invoice_type_value or '').strip()
-        if not t:
-            return None
-        lower = t.lower()
-        is_return = ('مرتجع' in t) or ('return' in lower)
-        if is_return:
-            return 'returns'
-        is_sale = ('بيع' in t) or (lower == 'sell') or ('sale' in lower)
-        if is_sale:
-            return 'sales'
-        is_purchase = ('شراء' in t) or (lower == 'buy') or ('purchase' in lower)
-        if is_purchase:
-            return 'purchase'
-        return None
-
-    try:
-        summary_rows = query.order_by(None).with_entities(
-            Invoice.invoice_type,
-            Invoice.status,
-            Invoice.total,
-            Invoice.total_tax,
-            Invoice.total_weight,
-            Invoice.amount_paid,
-            Invoice.barter_total,
-        ).all()
-
-        for row in summary_rows:
-            tab_key = _classify_tab(row[0])
-            if not tab_key:
-                continue
-
-            bucket = tab_summary[tab_key]
-            bucket['total_invoices'] += 1
-
-            status_value = (row[1] or '').strip().lower()
-            if status_value == 'cancelled' or status_value == 'ملغاة':
-                continue
-
-            total_value = float(row[2] or 0.0)
-            tax_value = float(row[3] or 0.0)
-            weight_value = float(row[4] or 0.0)
-            paid_cash_value = float(row[5] or 0.0)
-            barter_value = float(row[6] or 0.0)
-            settled_value = paid_cash_value + barter_value
-            paid_clamped = max(0.0, min(total_value, settled_value))
-            remaining_value = max(0.0, total_value - settled_value)
-
-            bucket['total_amount'] += total_value
-            bucket['paid_amount'] += paid_clamped
-            bucket['unpaid_amount'] += remaining_value
-            bucket['vat_total'] += tax_value
-            bucket['sold_weight_total'] += weight_value
-
-        for _, bucket in tab_summary.items():
-            bucket['total_amount'] = round(float(bucket['total_amount']), 2)
-            bucket['paid_amount'] = round(float(bucket['paid_amount']), 2)
-            bucket['unpaid_amount'] = round(float(bucket['unpaid_amount']), 2)
-            bucket['vat_total'] = round(float(bucket['vat_total']), 2)
-            bucket['sold_weight_total'] = round(float(bucket['sold_weight_total']), 4)
-    except Exception:
-        # Non-fatal; frontend falls back to current-page aggregation.
-        pass
-
     # Pagination
     paginated_invoices = query.paginate(page=page, per_page=per_page, error_out=False)
     invoices = paginated_invoices.items
@@ -6623,7 +6531,6 @@ def get_invoices():
         'per_page': paginated_invoices.per_page,
         'meta': {
             'audit': audit,
-            'tab_summary': tab_summary,
         },
     })
 
@@ -9791,6 +9698,237 @@ def add_invoice():
             karat_key = str(int(round(karat_float)))
             if karat_key not in gold_by_karat:
                 gold_by_karat[karat_key] = 0.0
+
+
+
+            @api.route('/devtools/import/sales-invoices', methods=['POST'])
+            @require_admin
+            def devtools_import_sales_invoices_from_excel():
+                """Import sales invoices from an uploaded Excel file.
+
+                Admin-only endpoint.
+
+                Request: multipart/form-data
+                  - file: .xlsx
+                  - apply: '0'|'1' (default: 0 dry-run)
+                  - sheet: optional sheet name
+
+                Notes:
+                  - Dedupe is always enabled.
+                  - Uses the same invoice creation route logic (`add_invoice`).
+                  - For imports only, an admin can override invoice employee_id/posted_by
+                    via a guarded flag injected server-side.
+                """
+
+                import os
+                import tempfile
+                from datetime import datetime
+
+                try:
+                    from auth_decorators import generate_token
+                except Exception:
+                    generate_token = None
+
+                # Local import to avoid heavy imports at module load time.
+                from devtools.import_sales_invoices import (
+                    _read_xlsx_rows,
+                    _normalize_header,
+                    _parse_row,
+                    _group_invoices,
+                    _load_employee_map,
+                    _infer_payment_method_ids,
+                    _build_invoice_payload,
+                    _ensure_default_customer,
+                    _find_existing_invoice_ids,
+                )
+
+                def _to_bool(raw, default: bool = False) -> bool:
+                    if raw in (None, ''):
+                        return default
+                    s = str(raw).strip().lower()
+                    return s in ('1', 'true', 'yes', 'y', 'on', 'apply')
+
+                uploaded = request.files.get('file')
+                if not uploaded:
+                    return jsonify({'success': False, 'error': 'missing_file', 'message': 'Missing uploaded file'}), 400
+
+                filename = (getattr(uploaded, 'filename', None) or 'sales.xlsx').strip() or 'sales.xlsx'
+                if not filename.lower().endswith('.xlsx'):
+                    return jsonify({'success': False, 'error': 'invalid_file', 'message': 'Only .xlsx files are supported'}), 400
+
+                apply_mode = _to_bool(request.form.get('apply'), default=False)
+                sheet_name = request.form.get('sheet') or None
+
+                # Persist to a temp file because the importer expects a path.
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                        tmp.write(uploaded.read())
+                        tmp_path = tmp.name
+
+                    # Resolve the actual sheet name that will be read.
+                    actual_sheet_name = sheet_name
+                    try:
+                        from openpyxl import load_workbook as _lw
+                        _wb = _lw(tmp_path, read_only=True, data_only=True)
+                        if sheet_name and sheet_name in _wb.sheetnames:
+                            actual_sheet_name = sheet_name
+                        else:
+                            actual_sheet_name = _wb.sheetnames[0] if _wb.sheetnames else sheet_name
+                        _wb.close()
+                    except Exception:
+                        pass
+
+                    raw_rows = _read_xlsx_rows(tmp_path, sheet_name=sheet_name)
+                    if not raw_rows:
+                        return jsonify({'success': False, 'error': 'empty_file', 'message': 'No rows found in Excel sheet'}), 400
+
+                    fieldnames = [_normalize_header(h) for h in (raw_rows[0].keys() if raw_rows else [])]
+
+                    parsed = []
+                    errors = []
+                    last_date = None
+                    for i, rr in enumerate(raw_rows, start=1):
+                        try:
+                            pr = _parse_row(rr, fieldnames)
+                            if pr:
+                                parsed.append(pr)
+                                last_date = pr.date
+                        except Exception as exc:
+                            # Carry-forward date from previous row when Excel export omits it.
+                            if 'Missing date' in str(exc) and last_date is not None:
+                                try:
+                                    rr2 = dict(rr)
+                                    rr2['التاريخ'] = last_date.strftime('%Y/%m/%d')
+                                    pr = _parse_row(rr2, fieldnames)
+                                    if pr:
+                                        parsed.append(pr)
+                                    continue
+                                except Exception as exc2:
+                                    errors.append(f'row {i}: {exc2}')
+                                    continue
+
+                            errors.append(f'row {i}: {exc}')
+
+                    grouped = _group_invoices(parsed)
+                    group_keys = sorted(grouped.keys(), key=lambda x: (str(x)))
+
+                    employee_map = _load_employee_map()
+                    pm_ids = _infer_payment_method_ids()
+                    default_customer_id = _ensure_default_customer(None, 'عميل نقدي')
+
+                    summary = {
+                        'success': True,
+                        'apply': bool(apply_mode),
+                        'filename': filename,
+                        'sheet_name': actual_sheet_name,
+                        'parsed_rows': len(parsed),
+                        'invoice_groups_total': len(group_keys),
+                        'row_parse_errors_count': len(errors),
+                        'row_parse_errors': errors[:50],
+                        'warnings_count': 0,
+                        'warnings': [],
+                        'groups_would_create': 0,
+                        'groups_skipped_existing': 0,
+                        'groups_skipped_missing_employee': 0,
+                        'created_invoices': 0,
+                        'created_invoice_ids': [],
+                    }
+
+                    # Create a short-lived token for internal calls.
+                    current_user = getattr(g, 'current_user', None)
+                    token = None
+                    if apply_mode:
+                        if generate_token and current_user is not None:
+                            try:
+                                token = generate_token(current_user, expires_in_minutes=5)
+                            except Exception:
+                                token = None
+
+                    for gk in group_keys:
+                        lines = grouped[gk]
+                        payload, warns = _build_invoice_payload(
+                            gk,
+                            lines,
+                            employee_map=employee_map,
+                            pm_ids=pm_ids,
+                            assume_cash_remainder=True,
+                        )
+
+                        if payload.get('invoice_type') == 'بيع' and default_customer_id:
+                            payload['customer_id'] = int(default_customer_id)
+
+                        if warns:
+                            summary['warnings_count'] += len(warns)
+                            if len(summary['warnings']) < 50:
+                                summary['warnings'].extend(warns[: max(0, 50 - len(summary['warnings']))])
+
+                        # Skip if employee_id missing (prevents mis-attribution)
+                        if not payload.get('employee_id'):
+                            summary['groups_skipped_missing_employee'] += 1
+                            continue
+
+                        # Dedupe is always on
+                        existing_ids = _find_existing_invoice_ids(payload)
+                        if existing_ids:
+                            summary['groups_skipped_existing'] += 1
+                            continue
+
+                        summary['groups_would_create'] += 1
+
+                        if not apply_mode:
+                            continue
+
+                        # Guarded override flag (admin only) to preserve employee attribution.
+                        payload['allow_employee_override'] = True
+
+                        headers = {}
+                        if token:
+                            headers['Authorization'] = f'Bearer {token}'
+
+                        from app import app as _app  # type: ignore
+                        with _app.test_request_context('/api/invoices', method='POST', json=payload, headers=headers):
+                            rv = add_invoice()
+
+                        status = None
+                        resp = None
+                        if isinstance(rv, tuple) and len(rv) >= 2:
+                            resp, status = rv[0], rv[1]
+                        else:
+                            resp, status = rv, 200
+
+                        try:
+                            data = resp.get_json(silent=True) if hasattr(resp, 'get_json') else None
+                        except Exception:
+                            data = None
+
+                        if int(status) >= 400:
+                            summary['success'] = False
+                            summary['error'] = 'invoice_create_failed'
+                            summary['message'] = f'Failed at group {gk} (status={status})'
+                            summary['failed_group_key'] = str(gk)
+                            summary['failed_response'] = data
+                            return jsonify(summary), 400
+
+                        summary['created_invoices'] += 1
+                        try:
+                            if isinstance(data, dict) and 'invoice_id' in data:
+                                if len(summary['created_invoice_ids']) < 200:
+                                    summary['created_invoice_ids'].append(int(data['invoice_id']))
+                        except Exception:
+                            pass
+
+                    summary['completed_at'] = datetime.utcnow().isoformat() + 'Z'
+                    return jsonify(summary), (200 if summary.get('success') else 400)
+
+                except Exception as exc:
+                    return jsonify({'success': False, 'error': 'import_failed', 'message': str(exc)}), 500
+                finally:
+                    if tmp_path:
+                        try:
+                            os.unlink(tmp_path)
+                        except Exception:
+                            pass
             gold_by_karat[karat_key] += weight_float
 
         if not has_valid_karat_lines:
@@ -12500,237 +12638,6 @@ def add_invoice():
         import traceback
         traceback.print_exc()
         return jsonify({'error': 'An unexpected server error occurred.'}), 500
-
-
-
-@api.route('/devtools/import/sales-invoices', methods=['POST'])
-@require_admin
-def devtools_import_sales_invoices_from_excel():
-    """Import sales invoices from an uploaded Excel file.
-
-    Admin-only endpoint.
-
-    Request: multipart/form-data
-      - file: .xlsx
-      - apply: '0'|'1' (default: 0 dry-run)
-      - sheet: optional sheet name
-
-    Notes:
-      - Dedupe is always enabled.
-      - Uses the same invoice creation route logic (`add_invoice`).
-      - For imports only, an admin can override invoice employee_id/posted_by
-        via a guarded flag injected server-side.
-    """
-
-    import os
-    import tempfile
-    from datetime import datetime
-
-    try:
-        from auth_decorators import generate_token
-    except Exception:
-        generate_token = None
-
-    # Local import to avoid heavy imports at module load time.
-    from devtools.import_sales_invoices import (
-        _read_xlsx_rows,
-        _normalize_header,
-        _parse_row,
-        _group_invoices,
-        _load_employee_map,
-        _infer_payment_method_ids,
-        _build_invoice_payload,
-        _ensure_default_customer,
-        _find_existing_invoice_ids,
-    )
-
-    def _to_bool(raw, default: bool = False) -> bool:
-        if raw in (None, ''):
-            return default
-        s = str(raw).strip().lower()
-        return s in ('1', 'true', 'yes', 'y', 'on', 'apply')
-
-    uploaded = request.files.get('file')
-    if not uploaded:
-        return jsonify({'success': False, 'error': 'missing_file', 'message': 'Missing uploaded file'}), 400
-
-    filename = (getattr(uploaded, 'filename', None) or 'sales.xlsx').strip() or 'sales.xlsx'
-    if not filename.lower().endswith('.xlsx'):
-        return jsonify({'success': False, 'error': 'invalid_file', 'message': 'Only .xlsx files are supported'}), 400
-
-    apply_mode = _to_bool(request.form.get('apply'), default=False)
-    sheet_name = request.form.get('sheet') or None
-
-    # Persist to a temp file because the importer expects a path.
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-            tmp.write(uploaded.read())
-            tmp_path = tmp.name
-
-        # Resolve the actual sheet name that will be read.
-        actual_sheet_name = sheet_name
-        try:
-            from openpyxl import load_workbook as _lw
-            _wb = _lw(tmp_path, read_only=True, data_only=True)
-            if sheet_name and sheet_name in _wb.sheetnames:
-                actual_sheet_name = sheet_name
-            else:
-                actual_sheet_name = _wb.sheetnames[0] if _wb.sheetnames else sheet_name
-            _wb.close()
-        except Exception:
-            pass
-
-        raw_rows = _read_xlsx_rows(tmp_path, sheet_name=sheet_name)
-        if not raw_rows:
-            return jsonify({'success': False, 'error': 'empty_file', 'message': 'No rows found in Excel sheet'}), 400
-
-        fieldnames = [_normalize_header(h) for h in (raw_rows[0].keys() if raw_rows else [])]
-
-        parsed = []
-        errors = []
-        last_date = None
-        for i, rr in enumerate(raw_rows, start=1):
-            try:
-                pr = _parse_row(rr, fieldnames)
-                if pr:
-                    parsed.append(pr)
-                    last_date = pr.date
-            except Exception as exc:
-                # Carry-forward date from previous row when Excel export omits it.
-                if 'Missing date' in str(exc) and last_date is not None:
-                    try:
-                        rr2 = dict(rr)
-                        rr2['التاريخ'] = last_date.strftime('%Y/%m/%d')
-                        pr = _parse_row(rr2, fieldnames)
-                        if pr:
-                            parsed.append(pr)
-                        continue
-                    except Exception as exc2:
-                        errors.append(f'row {i}: {exc2}')
-                        continue
-
-                errors.append(f'row {i}: {exc}')
-
-        grouped = _group_invoices(parsed)
-        group_keys = sorted(grouped.keys(), key=lambda x: (str(x)))
-
-        employee_map = _load_employee_map()
-        pm_ids = _infer_payment_method_ids()
-        default_customer_id = _ensure_default_customer(None, 'عميل نقدي')
-
-        summary = {
-            'success': True,
-            'apply': bool(apply_mode),
-            'filename': filename,
-            'sheet_name': actual_sheet_name,
-            'parsed_rows': len(parsed),
-            'invoice_groups_total': len(group_keys),
-            'row_parse_errors_count': len(errors),
-            'row_parse_errors': errors[:50],
-            'warnings_count': 0,
-            'warnings': [],
-            'groups_would_create': 0,
-            'groups_skipped_existing': 0,
-            'groups_skipped_missing_employee': 0,
-            'created_invoices': 0,
-            'created_invoice_ids': [],
-        }
-
-        # Create a short-lived token for internal calls.
-        current_user = getattr(g, 'current_user', None)
-        token = None
-        if apply_mode:
-            if generate_token and current_user is not None:
-                try:
-                    token = generate_token(current_user, expires_in_minutes=5)
-                except Exception:
-                    token = None
-
-        for gk in group_keys:
-            lines = grouped[gk]
-            payload, warns = _build_invoice_payload(
-                gk,
-                lines,
-                employee_map=employee_map,
-                pm_ids=pm_ids,
-                assume_cash_remainder=True,
-            )
-
-            if payload.get('invoice_type') == 'بيع' and default_customer_id:
-                payload['customer_id'] = int(default_customer_id)
-
-            if warns:
-                summary['warnings_count'] += len(warns)
-                if len(summary['warnings']) < 50:
-                    summary['warnings'].extend(warns[: max(0, 50 - len(summary['warnings']))])
-
-            # Skip if employee_id missing (prevents mis-attribution)
-            if not payload.get('employee_id'):
-                summary['groups_skipped_missing_employee'] += 1
-                continue
-
-            # Dedupe is always on
-            existing_ids = _find_existing_invoice_ids(payload)
-            if existing_ids:
-                summary['groups_skipped_existing'] += 1
-                continue
-
-            summary['groups_would_create'] += 1
-
-            if not apply_mode:
-                continue
-
-            # Guarded override flag (admin only) to preserve employee attribution.
-            payload['allow_employee_override'] = True
-
-            headers = {}
-            if token:
-                headers['Authorization'] = f'Bearer {token}'
-
-            from app import app as _app  # type: ignore
-            with _app.test_request_context('/api/invoices', method='POST', json=payload, headers=headers):
-                rv = add_invoice()
-
-            status = None
-            resp = None
-            if isinstance(rv, tuple) and len(rv) >= 2:
-                resp, status = rv[0], rv[1]
-            else:
-                resp, status = rv, 200
-
-            try:
-                data = resp.get_json(silent=True) if hasattr(resp, 'get_json') else None
-            except Exception:
-                data = None
-
-            if int(status) >= 400:
-                summary['success'] = False
-                summary['error'] = 'invoice_create_failed'
-                summary['message'] = f'Failed at group {gk} (status={status})'
-                summary['failed_group_key'] = str(gk)
-                summary['failed_response'] = data
-                return jsonify(summary), 400
-
-            summary['created_invoices'] += 1
-            try:
-                if isinstance(data, dict) and 'invoice_id' in data:
-                    if len(summary['created_invoice_ids']) < 200:
-                        summary['created_invoice_ids'].append(int(data['invoice_id']))
-            except Exception:
-                pass
-
-        summary['completed_at'] = datetime.utcnow().isoformat() + 'Z'
-        return jsonify(summary), (200 if summary.get('success') else 400)
-
-    except Exception as exc:
-        return jsonify({'success': False, 'error': 'import_failed', 'message': str(exc)}), 500
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
 
 @api.route('/accounts', methods=['GET'])
 def get_accounts():

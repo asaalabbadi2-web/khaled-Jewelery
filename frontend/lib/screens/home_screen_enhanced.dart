@@ -51,6 +51,7 @@ import 'posting_management_screen.dart';
 import 'audit_log_screen.dart';
 import 'shift_closing_screen.dart';
 import 'weight_closing_execute_screen.dart';
+import 'import_documents_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
 import 'reports/admin_dashboard_screen.dart';
@@ -1166,6 +1167,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         await _loadAllData();
       },
     );
+
+    if (auth.isSystemAdmin) {
+      addDestination(
+        icon: Icons.upload_file,
+        title: isAr ? 'استيراد المستندات (Excel)' : 'Import Documents (Excel)',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ImportDocumentsScreen(isArabic: isAr),
+            ),
+          );
+          await _loadAllData();
+        },
+      );
+    }
     addDestination(
       icon: Icons.account_tree,
       title: isAr ? 'إدارة المكاتب والفروع' : 'Branches Management',

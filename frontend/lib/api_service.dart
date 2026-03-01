@@ -1338,6 +1338,58 @@ class ApiService {
   }
 
   // ============================================
+  // 📥 Import: Sales Invoices (Excel)
+  // ============================================
+
+  Future<Map<String, dynamic>> importSalesInvoicesFromExcel({
+    required List<int> fileBytes,
+    required String filename,
+    required bool apply,
+    String? sheetName,
+  }) =>
+      importDocumentsFromExcel(
+        fileBytes: fileBytes,
+        filename: filename,
+        apply: apply,
+        endpointPath: '/devtools/import/sales-invoices',
+        sheetName: sheetName,
+      );
+
+  /// Generic Excel import for any document type.
+  /// [endpointPath] is the path relative to the API base, e.g.
+  /// `'/devtools/import/sales-invoices'`.
+  Future<Map<String, dynamic>> importDocumentsFromExcel({
+    required List<int> fileBytes,
+    required String filename,
+    required bool apply,
+    required String endpointPath,
+    String? sheetName,
+  }) async {
+    final fields = <String, String>{
+      'apply': apply ? '1' : '0',
+    };
+    if (sheetName != null && sheetName.trim().isNotEmpty) {
+      fields['sheet'] = sheetName.trim();
+    }
+
+    final response = await _authedMultipartPost(
+      Uri.parse('$_baseUrl$endpointPath'),
+      fields: fields,
+      fileBytes: fileBytes,
+      fileField: 'file',
+      filename: filename,
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'success': true};
+    }
+
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  // ============================================
   // ☁️ Server-side Google Drive (Service Account)
   // ============================================
 

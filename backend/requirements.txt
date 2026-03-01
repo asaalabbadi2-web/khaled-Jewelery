@@ -16,6 +16,7 @@ redis==5.0.8
 Werkzeug==3.0.3
 gunicorn==21.2.0
 pytest==8.4.2
+openpyxl==3.1.5
 
 # Google Drive (Service Account) for server-side cloud backups
 google-api-python-client==2.154.0
