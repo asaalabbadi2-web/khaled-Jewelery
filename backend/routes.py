@@ -12693,7 +12693,13 @@ def add_invoice():
         print(f"An unexpected error occurred: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': 'An unexpected server error occurred.'}), 500
+        # In local/dev this helps diagnose the root cause from the client UI.
+        # Keep the main error stable, but attach details for troubleshooting.
+        return jsonify({
+            'error': 'An unexpected server error occurred.',
+            'detail': str(e),
+            'error_type': type(e).__name__,
+        }), 500
 
 
 
