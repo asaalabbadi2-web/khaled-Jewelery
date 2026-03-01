@@ -10175,9 +10175,17 @@ def add_invoice():
 
             if missing:
                 db.session.rollback()
+                try:
+                    missing_keys = ', '.join(sorted({str(m.get('mapping')) for m in missing if isinstance(m, dict) and m.get('mapping')}))
+                except Exception:
+                    missing_keys = ''
                 return jsonify({
                     'error': 'account_mapping_missing',
-                    'message': 'نقص في ربط الحسابات المطلوبة لإنشاء قيد فاتورة البيع. الرجاء ضبط Accounting Mapping أو التأكد من وجود الحسابات الافتراضية.',
+                    'message': (
+                        'نقص في ربط الحسابات المطلوبة لإنشاء قيد فاتورة البيع. '
+                        'الرجاء ضبط Accounting Mapping أو التأكد من وجود الحسابات الافتراضية.'
+                        + (f' (المطلوب: {missing_keys})' if missing_keys else '')
+                    ),
                     'missing': missing,
                     'resolved': {
                         'cash_acc_id': cash_acc_id,
