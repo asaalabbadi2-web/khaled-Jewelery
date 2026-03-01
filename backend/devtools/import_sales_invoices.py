@@ -130,6 +130,18 @@ def _category_name_variants(name: str) -> List[str]:
     except Exception:
         pass
 
+    # Variant without explicit karat numbers (some categories omit karat suffix).
+    # Examples:
+    # - "بنجرة ذهب 21" -> "بنجرة ذهب"
+    # - "اساور ذهب 18" -> "اساور ذهب"
+    try:
+        s4 = re.sub(r"\b(18|21|22|24)\b", "", s)
+        s4 = re.sub(r"\s+", " ", s4).strip()
+        if s4 and s4 != s:
+            out.append(s4)
+    except Exception:
+        pass
+
     # Drop definite article.
     if s.startswith("ال") and len(s) > 2:
         out.append(s[2:])
@@ -167,6 +179,7 @@ _DEFAULT_CATEGORY_NAME_ALIASES: Dict[str, str] = {
     "بنجره": "بنجرة",
     "دبله": "دبلة",
     "اسوره": "سوار",
+    "اساور": "سوار",
 }
 
 
@@ -243,6 +256,20 @@ def _resolve_category(raw_name: Any) -> Tuple[Optional[int], Optional[str], Opti
                 target = aliases.get(nv)
                 if target:
                     alias_targets.append(target)
+
+            # If no full-phrase alias exists, try token-level substitution.
+            # Example: "بناجر ذهب عيار 21" -> replace "بناجر" with "بنجرة".
+            if not alias_targets:
+                parts = [p for p in re.split(r"\s+", raw_original) if p.strip()]
+                replaced_any = False
+                for i, p in enumerate(parts):
+                    tp = aliases.get(_normalize_arabic_text(p))
+                    if tp:
+                        parts[i] = tp
+                        replaced_any = True
+                if replaced_any:
+                    alias_targets.append(" ".join(parts).strip())
+
             if alias_targets:
                 # Prefer the first alias target for resolution; keep the rest as fallbacks.
                 raw = alias_targets[0]

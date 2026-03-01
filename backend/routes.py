@@ -12559,6 +12559,28 @@ def devtools_import_sales_invoices_from_excel():
         _cached_categories,
     )
 
+    def _extract_error_message(obj) -> str:
+        try:
+            if isinstance(obj, dict):
+                for k in ('message', 'detail', 'error'):
+                    v = obj.get(k)
+                    if v not in (None, '', False):
+                        return str(v)
+                # Common patterns: {'errors': [...]} or {'validation_errors': {...}}
+                for k in ('errors', 'validation_errors'):
+                    v = obj.get(k)
+                    if v not in (None, '', False):
+                        return str(v)
+        except Exception:
+            pass
+        return ''
+
+    def _safe_len(x) -> int:
+        try:
+            return len(x) if x is not None else 0
+        except Exception:
+            return 0
+
     def _to_bool(raw, default: bool = False) -> bool:
         if raw in (None, ''):
             return default
@@ -12730,11 +12752,51 @@ def devtools_import_sales_invoices_from_excel():
                 data = None
 
             if int(status) >= 400:
+                # Provide actionable context to the caller/UI.
+                reason = _extract_error_message(data) or 'unknown_error'
+                group_preview = []
+                try:
+                    for r in (lines or [])[:5]:
+                        group_preview.append({
+                            'date': getattr(r, 'date', None).isoformat() if getattr(r, 'date', None) else None,
+                            'employee_code': getattr(r, 'employee_code', None),
+                            'employee_name': getattr(r, 'employee_name', None),
+                            'branch_name': getattr(r, 'branch_name', None),
+                            'item_name': getattr(r, 'item_name', None),
+                            'karat': getattr(r, 'karat', None),
+                            'total_weight': getattr(r, 'total_weight', None),
+                            'line_net': getattr(r, 'line_net', None),
+                            'line_total': getattr(r, 'line_total', None),
+                            'cash_amount': getattr(r, 'cash_amount', None),
+                            'card_amount': getattr(r, 'card_amount', None),
+                            'card_type': getattr(r, 'card_type', None),
+                        })
+                except Exception:
+                    group_preview = []
+
                 summary['success'] = False
                 summary['error'] = 'invoice_create_failed'
-                summary['message'] = f'Failed at group {gk} (status={status})'
+                summary['message'] = f'Failed at group {gk} (status={status}): {reason}'
                 summary['failed_group_key'] = str(gk)
                 summary['failed_response'] = data
+                summary['failed_reason'] = reason
+                summary['failed_group_preview'] = group_preview
+                try:
+                    summary['failed_payload_preview'] = {
+                        'invoice_type': payload.get('invoice_type'),
+                        'date': payload.get('date'),
+                        'total': payload.get('total'),
+                        'total_tax': payload.get('total_tax'),
+                        'amount_paid': payload.get('amount_paid'),
+                        'employee_id': payload.get('employee_id'),
+                        'customer_id': payload.get('customer_id'),
+                        'items_count': _safe_len(payload.get('items') or []),
+                        'payments_count': _safe_len(payload.get('payments') or []),
+                        'is_posted': payload.get('is_posted'),
+                        'force_post': payload.get('force_post'),
+                    }
+                except Exception:
+                    pass
                 return jsonify(summary), 400
 
             summary['created_invoices'] += 1
