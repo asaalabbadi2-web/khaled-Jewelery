@@ -7341,26 +7341,44 @@ def get_account_id_for_mapping(operation_type, account_type):
     2. إذا لم تجد، تستخدم الحسابات الافتراضية
     """
     from models import AccountingMapping
-    
+
+    # Support legacy/UI alias keys.
+    # Example: Flutter uses 'cost' بينما بعض قيود الباكند تستخدم 'cost_of_sales'.
+    _alias_map = {
+        'cost_of_sales': ['cost'],
+        'cost': ['cost_of_sales'],
+        'sales_gold_new': ['revenue'],
+        'revenue': ['sales_gold_new'],
+    }
+
+    candidates = [account_type]
+    try:
+        for alt in (_alias_map.get(account_type) or []):
+            if alt and alt not in candidates:
+                candidates.append(alt)
+    except Exception:
+        candidates = [account_type]
+
     # 1. محاولة الحصول على الحساب من الإعدادات المخصصة (للعملية نفسها)
-    mapping = db.session.query(AccountingMapping).filter_by(
-        operation_type=operation_type,
-        account_type=account_type,
-        is_active=True
-    ).first()
-    
-    if mapping:
-        return mapping.account_id
+    for ct in candidates:
+        mapping = db.session.query(AccountingMapping).filter_by(
+            operation_type=operation_type,
+            account_type=ct,
+            is_active=True
+        ).first()
+        if mapping:
+            return mapping.account_id
 
     # 2. محاولة fallback للربط الافتراضي العام (قائمة واحدة لكل الأنواع)
     if operation_type != DEFAULT_MAPPING_OPERATION_TYPE:
-        default_mapping = db.session.query(AccountingMapping).filter_by(
-            operation_type=DEFAULT_MAPPING_OPERATION_TYPE,
-            account_type=account_type,
-            is_active=True
-        ).first()
-        if default_mapping:
-            return default_mapping.account_id
+        for ct in candidates:
+            default_mapping = db.session.query(AccountingMapping).filter_by(
+                operation_type=DEFAULT_MAPPING_OPERATION_TYPE,
+                account_type=ct,
+                is_active=True
+            ).first()
+            if default_mapping:
+                return default_mapping.account_id
     
     def _first_existing_account_id_by_numbers(numbers):
         for n in numbers:
@@ -7451,17 +7469,18 @@ def get_account_id_for_mapping(operation_type, account_type):
         'customers': ['أرصدة ذهب العملاء'],
     }
 
-    numbers = DEFAULT_ACCOUNT_NUMBER_CANDIDATES.get(account_type)
-    if numbers:
-        hit = _first_existing_account_id_by_numbers(numbers)
-        if hit:
-            return hit
+    for ct in candidates:
+        numbers = DEFAULT_ACCOUNT_NUMBER_CANDIDATES.get(ct)
+        if numbers:
+            hit = _first_existing_account_id_by_numbers(numbers)
+            if hit:
+                return hit
 
-    names = DEFAULT_ACCOUNT_NAME_CANDIDATES.get(account_type)
-    if names:
-        hit = _first_existing_account_id_by_names(names)
-        if hit:
-            return hit
+        names = DEFAULT_ACCOUNT_NAME_CANDIDATES.get(ct)
+        if names:
+            hit = _first_existing_account_id_by_names(names)
+            if hit:
+                return hit
 
     if account_type == 'manufacturing_wage':
         return _ensure_manufacturing_wage_expense_account()
