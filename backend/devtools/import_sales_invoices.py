@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import difflib
 import os
 import re
 import sys
@@ -45,6 +46,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import date as date_type
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
@@ -58,6 +60,152 @@ def _strip(s: Any) -> str:
     if s is None:
         return ""
     return str(s).strip()
+
+
+_ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]")
+
+
+def _normalize_arabic_text(raw: Any) -> str:
+    s = _strip(raw)
+    if not s:
+        return ""
+
+    s = s.replace("ـ", "")
+    s = _ARABIC_DIACRITICS_RE.sub("", s)
+
+    # Normalize common Arabic variants.
+    s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    s = s.replace("ى", "ي")
+    s = s.replace("ؤ", "و").replace("ئ", "ي")
+
+    # Keep ta-marbuta as-is for exact matching but remove whitespace/punct.
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[\-_/\\.,،؛:؛'\"()\[\]{}]+", "", s)
+    return s
+
+
+def _category_name_variants(name: str) -> List[str]:
+    s = _strip(name)
+    if not s:
+        return []
+
+    out = [s]
+
+    # Drop definite article.
+    if s.startswith("ال") and len(s) > 2:
+        out.append(s[2:])
+
+    # Try ta-marbuta variants.
+    if s.endswith("ة"):
+        out.append(s[:-1] + "ه")
+    if s.endswith("ه"):
+        out.append(s[:-1] + "ة")
+
+    # Common plural -> singular attempts.
+    if s.endswith("ات") and len(s) > 2:
+        base = s[:-2]
+        out.extend([base + "ة", base + "ه", base])
+
+    # De-dupe while preserving order.
+    seen = set()
+    uniq: List[str] = []
+    for v in out:
+        v = v.strip()
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        uniq.append(v)
+    return uniq
+
+
+@lru_cache(maxsize=1)
+def _cached_categories() -> List[Dict[str, Any]]:
+    from models import Category  # type: ignore
+
+    cats = Category.query.order_by(Category.name.asc()).all()
+    out: List[Dict[str, Any]] = []
+    for c in cats:
+        try:
+            cid = int(getattr(c, "id", 0) or 0)
+            name = str(getattr(c, "name", "") or "").strip()
+            if cid and name:
+                out.append(
+                    {
+                        "id": cid,
+                        "name": name,
+                        "norm": _normalize_arabic_text(name),
+                    }
+                )
+        except Exception:
+            continue
+    return out
+
+
+def _resolve_category(raw_name: Any) -> Tuple[Optional[int], Optional[str], Optional[str]]:
+    """Resolve a category by name.
+
+    Returns: (category_id, category_name, warning_message)
+    """
+
+    raw = _strip(raw_name)
+    if not raw:
+        return None, None, None
+
+    cats = _cached_categories()
+    if not cats:
+        return None, None, f"no categories exist in DB; cannot map '{raw}'"
+
+    # Exact name match first.
+    for v in _category_name_variants(raw):
+        for c in cats:
+            if c.get("name") == v:
+                return int(c["id"]), str(c["name"]), None
+
+    # Normalized exact match.
+    raw_norms = [_normalize_arabic_text(v) for v in _category_name_variants(raw)]
+    raw_norms = [n for n in raw_norms if n]
+    if raw_norms:
+        matches = [c for c in cats if c.get("norm") in set(raw_norms)]
+        if len(matches) == 1:
+            c = matches[0]
+            return int(c["id"]), str(c["name"]), None
+
+    # Fuzzy match (guarded).
+    best = None
+    second = None
+    best_ratio = 0.0
+    second_ratio = 0.0
+
+    target = raw_norms[0] if raw_norms else _normalize_arabic_text(raw)
+    if not target:
+        return None, None, None
+
+    # Prefer candidates with matching first 2 chars (when possible).
+    pool = cats
+    if len(target) >= 2:
+        prefix = target[:2]
+        pref = [c for c in cats if str(c.get("norm") or "").startswith(prefix)]
+        if pref:
+            pool = pref
+
+    for c in pool:
+        cand = str(c.get("norm") or "")
+        if not cand:
+            continue
+        ratio = difflib.SequenceMatcher(None, target, cand).ratio()
+        if ratio > best_ratio:
+            second, second_ratio = best, best_ratio
+            best, best_ratio = c, ratio
+        elif ratio > second_ratio:
+            second, second_ratio = c, ratio
+
+    if best is not None and best_ratio >= 0.80 and (best_ratio - second_ratio) >= 0.05:
+        return int(best["id"]), str(best["name"]), f"mapped '{raw}' -> '{best['name']}' (fuzzy {best_ratio:.2f})"
+
+    if best is not None and best_ratio >= 0.80:
+        return None, None, f"ambiguous category mapping for '{raw}' (closest '{best['name']}', score {best_ratio:.2f}); please fix Excel to match a system category name"
+
+    return None, None, f"unknown category '{raw}'; please create it in Categories or rename Excel value to match"
 
 
 def _normalize_header(h: str) -> str:
@@ -416,7 +564,14 @@ def _check_auth_required() -> bool:
     return auth_required
 
 
-def _build_invoice_payload(group_key: str, lines: List[ParsedRow], employee_map: Dict[str, int], pm_ids: Dict[str, int], assume_cash_remainder: bool) -> Tuple[Dict[str, Any], List[str]]:
+def _build_invoice_payload(
+    group_key: str,
+    lines: List[ParsedRow],
+    employee_map: Dict[str, int],
+    pm_ids: Dict[str, int],
+    assume_cash_remainder: bool,
+    as_categories: bool = False,
+) -> Tuple[Dict[str, Any], List[str]]:
     warnings: List[str] = []
 
     # Basic consistency checks
@@ -500,21 +655,33 @@ def _build_invoice_payload(group_key: str, lines: List[ParsedRow], employee_map:
         tax_per_item = round((line_tax / qty), 2) if (qty > 0 and line_tax > 0) else 0.0
         wage_per_item = round(float(ln.wage_per_gram or 0.0) * weight_per_item, 2) if weight_per_item > 0 else 0.0
 
-        items.append(
-            {
-                "name": ln.item_name,
-                "karat": ln.karat if ln.karat > 0 else 21,
-                "weight": weight_per_item,
-                "quantity": qty,
-                # Backend multiplies price*quantity, so this must be per-item.
-                "selling_price": price_per_item,
-                # Backend stores tax per item (and totals via *quantity).
-                "tax_amount": tax_per_item,
-                "discount_amount": 0.0,
-                "wage": wage_per_item,
-                "manufacturing_wage_per_gram": float(ln.wage_per_gram or 0.0),
-            }
-        )
+        item_payload: Dict[str, Any] = {
+            "karat": ln.karat if ln.karat > 0 else 21,
+            "weight": weight_per_item,
+            "quantity": qty,
+            # Backend multiplies price*quantity, so this must be per-item.
+            "selling_price": price_per_item,
+            # Backend stores tax per item (and totals via *quantity).
+            "tax_amount": tax_per_item,
+            "discount_amount": 0.0,
+            "wage": wage_per_item,
+            "manufacturing_wage_per_gram": float(ln.wage_per_gram or 0.0),
+        }
+
+        if as_categories:
+            cat_id, cat_name, cat_warn = _resolve_category(ln.item_name)
+            if cat_warn:
+                warnings.append(f"group {group_key}: {cat_warn}")
+
+            effective_cat_name = (cat_name or _strip(ln.item_name) or "").strip() or "تصنيف"
+            item_payload["name"] = effective_cat_name
+            item_payload["category"] = effective_cat_name
+            if cat_id:
+                item_payload["category_id"] = int(cat_id)
+        else:
+            item_payload["name"] = ln.item_name
+
+        items.append(item_payload)
 
     inv_total = round(inv_total, 2)
     inv_tax = round(inv_tax, 2)
@@ -627,6 +794,8 @@ def _build_invoice_payload(group_key: str, lines: List[ParsedRow], employee_map:
         "amount_paid": inv_total if (not payments or abs(inv_total - payments_sum) <= 0.01) else payments_sum,
         "employee_id": employee_id,
         "posted_by": emp_name or None,
+        "allow_employee_override": True,
+        "force_post": True,  # Historical imports bypass approval gates (below_cost etc.)
         "items": items,
     }
 
@@ -828,6 +997,12 @@ def main() -> int:
         help="Disable dedupe check (NOT recommended). By default the importer skips invoices that already exist (same date/total/employee/customer).",
     )
 
+    parser.add_argument(
+        "--as-categories",
+        action="store_true",
+        help="Import invoice lines as category-only lines (no item creation). Excel 'item' names are mapped to system Categories.",
+    )
+
     args = parser.parse_args()
 
     from app import app  # type: ignore
@@ -945,6 +1120,7 @@ def main() -> int:
                 employee_map=employee_map,
                 pm_ids=pm_ids,
                 assume_cash_remainder=not bool(args.no_assume_cash_remainder),
+                as_categories=bool(getattr(args, 'as_categories', False)),
             )
 
             if payload.get('invoice_type') == 'بيع' and default_customer_id:

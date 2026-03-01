@@ -3480,11 +3480,10 @@ def get_account_statement(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
     if _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
-    elif _db_has_column('journal_entry', 'is_posted'):
-        opening_filters.append(JournalEntry.is_posted == True)
 
     opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
 
@@ -3514,11 +3513,10 @@ def get_account_statement(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
     if _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
-    elif _db_has_column('journal_entry', 'is_posted'):
-        journal_filters.append(JournalEntry.is_posted == True)
 
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
@@ -3692,11 +3690,10 @@ def get_account_statement_merged(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_posted'):
+        opening_filters.append(JournalEntry.is_posted == True)
     if _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
-    elif _db_has_column('journal_entry', 'is_posted'):
-        opening_filters.append(JournalEntry.is_posted == True)
 
     opening_journal_lines = JournalEntryLine.query.join(JournalEntry).filter(*opening_filters).all()
 
@@ -3714,11 +3711,10 @@ def get_account_statement_merged(account_id):
             JournalEntry.is_deleted == False,
             JournalEntryLine.is_deleted == False,
         ]
-        # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+        if _db_has_column('journal_entry', 'is_posted'):
+            memo_opening_filters.append(JournalEntry.is_posted == True)
         if _db_has_column('journal_entry', 'is_draft'):
             memo_opening_filters.append(JournalEntry.is_draft == False)
-        elif _db_has_column('journal_entry', 'is_posted'):
-            memo_opening_filters.append(JournalEntry.is_posted == True)
 
         memo_opening_lines = (
             JournalEntryLine.query.join(JournalEntry)
@@ -3753,11 +3749,10 @@ def get_account_statement_merged(account_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
-    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    if _db_has_column('journal_entry', 'is_posted'):
+        journal_filters.append(JournalEntry.is_posted == True)
     if _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
-    elif _db_has_column('journal_entry', 'is_posted'):
-        journal_filters.append(JournalEntry.is_posted == True)
 
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
@@ -3988,7 +3983,7 @@ def get_customer_statement(id):
     ]
     if _db_has_column('journal_entry', 'is_posted'):
         opening_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_draft'):
         opening_filters.append(JournalEntry.is_draft == False)
 
     opening_journal_lines = (
@@ -4027,7 +4022,7 @@ def get_customer_statement(id):
     ]
     if _db_has_column('journal_entry', 'is_posted'):
         journal_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_draft'):
         journal_filters.append(JournalEntry.is_draft == False)
 
     # IMPORTANT:
@@ -4491,10 +4486,10 @@ def repair_supplier_historical_balances(supplier_id):
         JournalEntry.is_deleted == False,
         JournalEntryLine.is_deleted == False,
     ]
+    if _db_has_column('journal_entry', 'is_posted'):
+        jl_filters.append(JournalEntry.is_posted == True)
     if _db_has_column('journal_entry', 'is_draft'):
         jl_filters.append(JournalEntry.is_draft == False)
-    elif _db_has_column('journal_entry', 'is_posted'):
-        jl_filters.append(JournalEntry.is_posted == True)
 
     rows = (
         db.session.query(
@@ -8772,6 +8767,24 @@ def add_invoice():
             # Do not break invoice creation if costing gate fails unexpectedly.
             pass
 
+        # 🆕 force_post: allow admin/import callers to bypass approval gates
+        # (historical imports should not be held for approval).
+        force_post = False
+        try:
+            force_post = bool(data.get('force_post', False))
+        except Exception:
+            force_post = False
+
+        if force_post:
+            # Only honour force_post when auth is not required (CLI import)
+            # or when the caller is an admin.
+            is_admin_caller = bool(getattr(current_user, 'is_admin', False)) if current_user else False
+            if not (is_admin_caller or not auth_required):
+                force_post = False
+
+        if force_post:
+            approval_reasons = []
+
         approval_required = bool(approval_reasons)
         approval_reason = approval_reasons[0] if approval_reasons else None
 
@@ -12514,6 +12527,7 @@ def devtools_import_sales_invoices_from_excel():
       - file: .xlsx
       - apply: '0'|'1' (default: 0 dry-run)
       - sheet: optional sheet name
+    - as_categories: '0'|'1' (default: 0)
 
     Notes:
       - Dedupe is always enabled.
@@ -12542,6 +12556,7 @@ def devtools_import_sales_invoices_from_excel():
         _build_invoice_payload,
         _ensure_default_customer,
         _find_existing_invoice_ids,
+        _cached_categories,
     )
 
     def _to_bool(raw, default: bool = False) -> bool:
@@ -12560,6 +12575,13 @@ def devtools_import_sales_invoices_from_excel():
 
     apply_mode = _to_bool(request.form.get('apply'), default=False)
     sheet_name = request.form.get('sheet') or None
+    as_categories = _to_bool(request.form.get('as_categories'), default=False)
+
+    if as_categories:
+        try:
+            _cached_categories.cache_clear()
+        except Exception:
+            pass
 
     # Persist to a temp file because the importer expects a path.
     tmp_path = None
@@ -12622,6 +12644,7 @@ def devtools_import_sales_invoices_from_excel():
         summary = {
             'success': True,
             'apply': bool(apply_mode),
+            'as_categories': bool(as_categories),
             'filename': filename,
             'sheet_name': actual_sheet_name,
             'parsed_rows': len(parsed),
@@ -12655,6 +12678,7 @@ def devtools_import_sales_invoices_from_excel():
                 employee_map=employee_map,
                 pm_ids=pm_ids,
                 assume_cash_remainder=True,
+                as_categories=bool(as_categories),
             )
 
             if payload.get('invoice_type') == 'بيع' and default_customer_id:
@@ -12683,6 +12707,7 @@ def devtools_import_sales_invoices_from_excel():
 
             # Guarded override flag (admin only) to preserve employee attribution.
             payload['allow_employee_override'] = True
+            payload['force_post'] = True  # Historical imports bypass approval gates
 
             headers = {}
             if token:
@@ -13538,7 +13563,7 @@ def _recalculate_account_balances_for_accounts(account_ids):
         ]
         if _db_has_column('journal_entry', 'is_posted'):
             filters.append(JournalEntry.is_posted == True)
-        elif _db_has_column('journal_entry', 'is_draft'):
+        if _db_has_column('journal_entry', 'is_draft'):
             filters.append(JournalEntry.is_draft == False)
 
         # Posted + not deleted journal lines only (exclude drafts when available)
@@ -13596,7 +13621,7 @@ def _rebuild_all_account_balances() -> dict:
     ]
     if _db_has_column('journal_entry', 'is_posted'):
         jl_filters.append(JournalEntry.is_posted == True)
-    elif _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_draft'):
         jl_filters.append(JournalEntry.is_draft == False)
 
     journal_rows = (

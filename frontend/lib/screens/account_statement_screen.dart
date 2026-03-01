@@ -1311,34 +1311,60 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Widget _buildToolbar(double maxWidth) {
+    final isNarrow = maxWidth < 500;
+
+    // View-mode labels
+    const viewModeLabels = {0: 'مزدوج', 1: 'ذهب فقط', 2: 'نقدي فقط'};
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Wrap(
-          spacing: 12,
-          runSpacing: 12,
+          spacing: 8,
+          runSpacing: 8,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             ElevatedButton.icon(
               onPressed: _pickDateRange,
-              icon: const Icon(Icons.date_range),
+              icon: const Icon(Icons.date_range, size: 18),
               label: Text(
                 _dateRange == null
                     ? 'نطاق التاريخ'
                     : '${DateFormat('dd/MM/yyyy').format(_dateRange!.start)} - ${DateFormat('dd/MM/yyyy').format(_dateRange!.end)}',
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-            SegmentedButton<int>(
-              segments: const [
-                ButtonSegment(value: 0, label: Text('مزدوج')),
-                ButtonSegment(value: 1, label: Text('ذهب فقط')),
-                ButtonSegment(value: 2, label: Text('نقدي فقط')),
-              ],
-              selected: {_viewMode},
-              onSelectionChanged: (value) {
-                setState(() => _viewMode = value.first);
-              },
-            ),
+            // Use a compact dropdown on narrow screens instead of SegmentedButton
+            if (isNarrow)
+              DropdownButton<int>(
+                value: _viewMode,
+                isDense: true,
+                items: viewModeLabels.entries
+                    .map(
+                      (e) =>
+                          DropdownMenuItem(value: e.key, child: Text(e.value)),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _viewMode = value);
+                },
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(value: 0, label: Text('مزدوج')),
+                    ButtonSegment(value: 1, label: Text('ذهب فقط')),
+                    ButtonSegment(value: 2, label: Text('نقدي فقط')),
+                  ],
+                  selected: {_viewMode},
+                  onSelectionChanged: (value) {
+                    setState(() => _viewMode = value.first);
+                  },
+                ),
+              ),
             if (widget.entityType == 'account')
               FilterChip(
                 label: const Text('دمج الحسابين'),
@@ -1379,7 +1405,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                       _showOnlyMovement)
                   ? _clearFilters
                   : null,
-              icon: const Icon(Icons.filter_alt_off),
+              icon: const Icon(Icons.filter_alt_off, size: 18),
               label: const Text('مسح الفلاتر'),
             ),
             _buildExportMenu(),
@@ -1402,14 +1428,18 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                             _filterLines();
                           },
                         ),
-                  hintText: 'ابحث بالبيان / رقم المرجع / المبلغ',
+                  hintText: isNarrow
+                      ? 'بحث...'
+                      : 'ابحث بالبيان / رقم المرجع / المبلغ',
                   border: const OutlineInputBorder(),
+                  isDense: isNarrow,
                 ),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             DropdownButton<String>(
               value: _filterType,
+              isDense: true,
               items: const [
                 DropdownMenuItem(value: 'all', child: Text('الكل')),
                 DropdownMenuItem(value: 'debit', child: Text('مدين')),

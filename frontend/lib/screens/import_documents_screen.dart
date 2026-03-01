@@ -57,8 +57,10 @@ const _kDocTypes = <_DocTypeMeta>[
     labelAr: 'فواتير الشراء',
     labelEn: 'Purchase Invoices',
     endpointPath: '/devtools/import/purchase-invoices',
-    hintAr: 'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
-    hintEn: 'Not available yet — requires a backend endpoint and an Excel template.',
+    hintAr:
+        'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
+    hintEn:
+        'Not available yet — requires a backend endpoint and an Excel template.',
     icon: Icons.shopping_bag,
     enabled: false,
   ),
@@ -67,8 +69,10 @@ const _kDocTypes = <_DocTypeMeta>[
     labelAr: 'مرتجعات البيع',
     labelEn: 'Sales Returns',
     endpointPath: '/devtools/import/sales-returns',
-    hintAr: 'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
-    hintEn: 'Not available yet — requires a backend endpoint and an Excel template.',
+    hintAr:
+        'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
+    hintEn:
+        'Not available yet — requires a backend endpoint and an Excel template.',
     icon: Icons.assignment_return,
     enabled: false,
   ),
@@ -77,8 +81,10 @@ const _kDocTypes = <_DocTypeMeta>[
     labelAr: 'مرتجعات الشراء',
     labelEn: 'Purchase Returns',
     endpointPath: '/devtools/import/purchase-returns',
-    hintAr: 'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
-    hintEn: 'Not available yet — requires a backend endpoint and an Excel template.',
+    hintAr:
+        'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
+    hintEn:
+        'Not available yet — requires a backend endpoint and an Excel template.',
     icon: Icons.keyboard_return,
     enabled: false,
   ),
@@ -87,8 +93,10 @@ const _kDocTypes = <_DocTypeMeta>[
     labelAr: 'قيود اليومية',
     labelEn: 'Journal Entries',
     endpointPath: '/devtools/import/journal-entries',
-    hintAr: 'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
-    hintEn: 'Not available yet — requires a backend endpoint and an Excel template.',
+    hintAr:
+        'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
+    hintEn:
+        'Not available yet — requires a backend endpoint and an Excel template.',
     icon: Icons.article,
     enabled: false,
   ),
@@ -97,8 +105,10 @@ const _kDocTypes = <_DocTypeMeta>[
     labelAr: 'قيود افتتاحية',
     labelEn: 'Opening Entries',
     endpointPath: '/devtools/import/opening-entries',
-    hintAr: 'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
-    hintEn: 'Not available yet — requires a backend endpoint and an Excel template.',
+    hintAr:
+        'غير متوفر حالياً — يلزم إضافة endpoint في الباك-إند + تحديد قالب Excel.',
+    hintEn:
+        'Not available yet — requires a backend endpoint and an Excel template.',
     icon: Icons.flag,
     enabled: false,
   ),
@@ -109,10 +119,7 @@ const _kDocTypes = <_DocTypeMeta>[
 class ImportDocumentsScreen extends StatefulWidget {
   final bool isArabic;
 
-  const ImportDocumentsScreen({
-    super.key,
-    required this.isArabic,
-  });
+  const ImportDocumentsScreen({super.key, required this.isArabic});
 
   @override
   State<ImportDocumentsScreen> createState() => _ImportDocumentsScreenState();
@@ -134,6 +141,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
   bool _busy = false;
   Map<String, dynamic>? _lastResult;
   bool _lastWasApply = false;
+
+  // Sales invoices only
+  bool _salesAsCategories = false;
 
   bool get _hasFile => _picked != null && _fileBytes != null;
 
@@ -157,6 +167,7 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
       _fileBytes = null;
       _lastResult = null;
       _lastWasApply = false;
+      _salesAsCategories = false;
     });
   }
 
@@ -178,7 +189,10 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
       final bytes = file.bytes;
       if (bytes == null || bytes.isEmpty) {
         throw Exception(
-            widget.isArabic ? 'تعذر قراءة بيانات الملف' : 'Unable to read file bytes');
+          widget.isArabic
+              ? 'تعذر قراءة بيانات الملف'
+              : 'Unable to read file bytes',
+        );
       }
       setState(() {
         _picked = file;
@@ -211,12 +225,20 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
       _lastWasApply = apply;
     });
     try {
-      final res = await _api.importDocumentsFromExcel(
-        fileBytes: _fileBytes!,
-        filename: _picked?.name ?? 'import.xlsx',
-        apply: apply,
-        endpointPath: _meta.endpointPath,
-      );
+      final res = switch (_selectedType) {
+        _DocType.salesInvoices => await _api.importSalesInvoicesFromExcel(
+          fileBytes: _fileBytes!,
+          filename: _picked?.name ?? 'sales.xlsx',
+          apply: apply,
+          asCategories: _salesAsCategories,
+        ),
+        _ => await _api.importDocumentsFromExcel(
+          fileBytes: _fileBytes!,
+          filename: _picked?.name ?? 'import.xlsx',
+          apply: apply,
+          endpointPath: _meta.endpointPath,
+        ),
+      };
       setState(() => _lastResult = res);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -261,8 +283,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
               style: TextStyle(
                 color: m.enabled
                     ? null
-                    : theme.textTheme.bodyMedium?.color
-                        ?.withValues(alpha: 0.55),
+                    : theme.textTheme.bodyMedium?.color?.withValues(
+                        alpha: 0.55,
+                      ),
               ),
             ),
             selected: selected,
@@ -296,8 +319,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
           Expanded(
             child: Text(
               k,
-              style:
-                  theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -309,10 +333,19 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
 
   /// Type-specific rows for the result card.
   List<Widget> _buildTypeSpecificRows(
-      Map<String, dynamic> res, ThemeData theme) {
+    Map<String, dynamic> res,
+    ThemeData theme,
+  ) {
     switch (_selectedType) {
       case _DocType.salesInvoices:
         return [
+          _buildKeyValue(
+            widget.isArabic ? 'نمط الاستيراد' : 'Import mode',
+            (res['as_categories'] == true)
+                ? (widget.isArabic ? 'سطور تصنيف' : 'Category lines')
+                : (widget.isArabic ? 'أصناف' : 'Items'),
+            theme,
+          ),
           _buildKeyValue(
             widget.isArabic ? 'الصفوف المقروءة' : 'Parsed rows',
             res['parsed_rows'],
@@ -366,8 +399,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
     if (res == null) return const SizedBox.shrink();
 
     final sheetName = res['sheet_name'] as String?;
-    final warnings =
-        (res['warnings'] is List) ? (res['warnings'] as List) : const [];
+    final warnings = (res['warnings'] is List)
+        ? (res['warnings'] as List)
+        : const [];
     final errors = (res['row_parse_errors'] is List)
         ? (res['row_parse_errors'] as List)
         : const [];
@@ -431,15 +465,20 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                 widget.isArabic
                     ? 'تحذيرات (أول ${warnings.length > 10 ? 10 : warnings.length})'
                     : 'Warnings (first ${warnings.length > 10 ? 10 : warnings.length})',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(fontWeight: FontWeight.bold),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 4),
-              ...warnings.take(10).map(
+              ...warnings
+                  .take(10)
+                  .map(
                     (w) => Padding(
                       padding: const EdgeInsetsDirectional.only(bottom: 3),
-                      child: Text('- ${w.toString()}',
-                          style: theme.textTheme.bodySmall),
+                      child: Text(
+                        '- ${w.toString()}',
+                        style: theme.textTheme.bodySmall,
+                      ),
                     ),
                   ),
               if (warnings.length > 10)
@@ -462,7 +501,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                 ),
               ),
               const SizedBox(height: 4),
-              ...errors.take(10).map(
+              ...errors
+                  .take(10)
+                  .map(
                     (e) => Padding(
                       padding: const EdgeInsetsDirectional.only(bottom: 3),
                       child: Text(
@@ -487,10 +528,15 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
     final theme = Theme.of(context);
     final meta = _meta;
 
+    final showSalesOptions =
+        _selectedType == _DocType.salesInvoices && meta.enabled;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.isArabic ? 'استيراد المستندات (Excel)' : 'Import Documents (Excel)',
+          widget.isArabic
+              ? 'استيراد المستندات (Excel)'
+              : 'Import Documents (Excel)',
           style: const TextStyle(fontFamily: 'Cairo'),
         ),
       ),
@@ -508,20 +554,22 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
                 side: BorderSide(
-                    color: theme.dividerColor.withValues(alpha: 0.55)),
+                  color: theme.dividerColor.withValues(alpha: 0.55),
+                ),
               ),
               child: Padding(
-                padding:
-                    const EdgeInsetsDirectional.fromSTEB(16, 14, 16, 14),
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 16, 14),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Current type label
                     Row(
                       children: [
-                        Icon(meta.icon,
-                            size: 18,
-                            color: theme.colorScheme.primary),
+                        Icon(
+                          meta.icon,
+                          size: 18,
+                          color: theme.colorScheme.primary,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           widget.isArabic ? meta.labelAr : meta.labelEn,
@@ -534,7 +582,11 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                           const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsetsDirectional.fromSTEB(
-                                8, 3, 8, 3),
+                              8,
+                              3,
+                              8,
+                              3,
+                            ),
                             decoration: BoxDecoration(
                               color: theme.dividerColor.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(999),
@@ -554,8 +606,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                     Text(
                       widget.isArabic ? meta.hintAr : meta.hintEn,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.textTheme.bodySmall?.color
-                            ?.withValues(alpha: 0.75),
+                        color: theme.textTheme.bodySmall?.color?.withValues(
+                          alpha: 0.75,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -565,7 +618,9 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: (_busy || !meta.enabled) ? null : _pickFile,
+                            onPressed: (_busy || !meta.enabled)
+                                ? null
+                                : _pickFile,
                             icon: const Icon(Icons.upload_file),
                             label: Text(
                               widget.isArabic
@@ -589,8 +644,7 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                           const SizedBox(
                             width: 18,
                             height: 18,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         ],
                       ],
@@ -598,11 +652,35 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                     const SizedBox(height: 8),
 
                     // File info
-                    Text(
-                      _fileInfoText,
-                      style: theme.textTheme.bodySmall,
-                    ),
+                    Text(_fileInfoText, style: theme.textTheme.bodySmall),
                     const SizedBox(height: 12),
+
+                    if (showSalesOptions) ...[
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          widget.isArabic
+                              ? 'استيراد كسطور تصنيف (بدون إنشاء أصناف)'
+                              : 'Import as category lines (no item creation)',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        subtitle: Text(
+                          widget.isArabic
+                              ? 'يتم استخدام خانة "الصنف" كمسمّى تصنيف وربطه بتصنيفات النظام'
+                              : 'Uses the “Item” column as a Category name and links to system categories',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        value: _salesAsCategories,
+                        onChanged: _busy
+                            ? null
+                            : (v) {
+                                setState(() {
+                                  _salesAsCategories = v;
+                                });
+                              },
+                      ),
+                      const SizedBox(height: 8),
+                    ],
 
                     // Action buttons
                     Row(
@@ -613,9 +691,7 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
                                 ? null
                                 : () => _run(apply: false),
                             child: Text(
-                              widget.isArabic
-                                  ? 'تحليل (Dry-run)'
-                                  : 'Dry-run',
+                              widget.isArabic ? 'تحليل (Dry-run)' : 'Dry-run',
                             ),
                           ),
                         ),
@@ -644,11 +720,7 @@ class _ImportDocumentsScreenState extends State<ImportDocumentsScreen> {
             const SizedBox(height: 14),
 
             // ── Result card ───────────────────────────────────────────────
-            Expanded(
-              child: SingleChildScrollView(
-                child: _buildResult(theme),
-              ),
-            ),
+            Expanded(child: SingleChildScrollView(child: _buildResult(theme))),
           ],
         ),
       ),

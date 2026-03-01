@@ -1345,15 +1345,16 @@ class ApiService {
     required List<int> fileBytes,
     required String filename,
     required bool apply,
+    bool asCategories = false,
     String? sheetName,
-  }) =>
-      importDocumentsFromExcel(
-        fileBytes: fileBytes,
-        filename: filename,
-        apply: apply,
-        endpointPath: '/devtools/import/sales-invoices',
-        sheetName: sheetName,
-      );
+  }) => importDocumentsFromExcel(
+    fileBytes: fileBytes,
+    filename: filename,
+    apply: apply,
+    endpointPath: '/devtools/import/sales-invoices',
+    sheetName: sheetName,
+    extraFields: {'as_categories': asCategories ? '1' : '0'},
+  );
 
   /// Generic Excel import for any document type.
   /// [endpointPath] is the path relative to the API base, e.g.
@@ -1364,12 +1365,15 @@ class ApiService {
     required bool apply,
     required String endpointPath,
     String? sheetName,
+    Map<String, String>? extraFields,
   }) async {
-    final fields = <String, String>{
-      'apply': apply ? '1' : '0',
-    };
+    final fields = <String, String>{'apply': apply ? '1' : '0'};
     if (sheetName != null && sheetName.trim().isNotEmpty) {
       fields['sheet'] = sheetName.trim();
+    }
+
+    if (extraFields != null && extraFields.isNotEmpty) {
+      fields.addAll(extraFields);
     }
 
     final response = await _authedMultipartPost(

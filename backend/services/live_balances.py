@@ -47,11 +47,13 @@ def live_balances_by_account_ids(account_ids: Iterable[int]) -> Dict[int, dict]:
         JournalEntryLine.is_deleted == False,
     ]
 
-    # Prefer non-draft filtering. Many DBs do not maintain `is_posted` reliably.
+    # Always require posted entries for accurate balances.
+    if _db_has_column("journal_entry", "is_posted"):
+        jl_filters.append(JournalEntry.is_posted == True)
+
+    # Additionally exclude drafts when the column exists.
     if _db_has_column("journal_entry", "is_draft"):
         jl_filters.append(JournalEntry.is_draft == False)
-    elif _db_has_column("journal_entry", "is_posted"):
-        jl_filters.append(JournalEntry.is_posted == True)
 
     rows = (
         db.session.query(
