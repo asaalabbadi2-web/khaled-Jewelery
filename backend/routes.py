@@ -10382,6 +10382,22 @@ def add_invoice():
             
             # وسيلة دفع واحدة
             elif payment_method_id:
+                # Commission timing guard:
+                # If the payment method settles fees later, we must record the *gross* receipt now.
+                # Ignore any client-provided net/commission fields to avoid JE cash imbalance.
+                try:
+                    pm_commission_timing = str(getattr(payment_method_obj, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+                except Exception:
+                    pm_commission_timing = 'invoice'
+
+                if pm_commission_timing == 'settlement':
+                    try:
+                        net_amount = float(total_cash or 0.0)
+                    except Exception:
+                        net_amount = total_cash
+                    commission_amount = 0.0
+                    commission_vat_total = 0.0
+
                 actual_debit_amount = net_amount if commission_amount > 0 else total_cash
                 paid_amount_total = total_cash
                 
@@ -12340,8 +12356,101 @@ def add_invoice():
                     print(f"Balance check after auto-weight-balance: {balance_check}")
 
                 if not balance_check['balanced']:
+                    # Capture a small preview of journal lines before rollback to make debugging easier.
+                    try:
+                        from models import JournalEntryLine, Account
+
+                        je_lines = (
+                            db.session.query(JournalEntryLine)
+                            .filter_by(journal_entry_id=journal_entry.id)
+                            .order_by(JournalEntryLine.id.asc())
+                            .all()
+                        )
+                        preview = []
+                        for ln in je_lines[:30]:
+                            acc = ln.account or db.session.query(Account).get(ln.account_id)
+                            preview.append({
+                                'line_id': ln.id,
+                                'account_id': ln.account_id,
+                                'account_number': getattr(acc, 'account_number', None),
+                                'account_name': getattr(acc, 'name', None),
+                                'description': getattr(ln, 'description', None),
+                                'cash_debit': round(float(getattr(ln, 'cash_debit', 0.0) or 0.0), 2),
+                                'cash_credit': round(float(getattr(ln, 'cash_credit', 0.0) or 0.0), 2),
+                                'debit_18k': round(float(getattr(ln, 'debit_18k', 0.0) or 0.0), 3),
+                                'credit_18k': round(float(getattr(ln, 'credit_18k', 0.0) or 0.0), 3),
+                                'debit_21k': round(float(getattr(ln, 'debit_21k', 0.0) or 0.0), 3),
+                                'credit_21k': round(float(getattr(ln, 'credit_21k', 0.0) or 0.0), 3),
+                                'debit_22k': round(float(getattr(ln, 'debit_22k', 0.0) or 0.0), 3),
+                                'credit_22k': round(float(getattr(ln, 'credit_22k', 0.0) or 0.0), 3),
+                                'debit_24k': round(float(getattr(ln, 'debit_24k', 0.0) or 0.0), 3),
+                                'credit_24k': round(float(getattr(ln, 'credit_24k', 0.0) or 0.0), 3),
+                            })
+                        balance_check = dict(balance_check or {})
+                        balance_check['journal_lines_preview'] = preview
+                        balance_check['posting_context'] = {
+                            'invoice_type': str(data.get('type') or ''),
+                            'total_cash': round(float(total_cash or 0.0), 2) if 'total_cash' in locals() else None,
+                            'net_amount': round(float(net_amount or 0.0), 2) if 'net_amount' in locals() else None,
+                            'commission_amount': round(float(commission_amount or 0.0), 2) if 'commission_amount' in locals() else None,
+                            'commission_vat_total': round(float(commission_vat_total or 0.0), 2) if 'commission_vat_total' in locals() else None,
+                            'payment_method_id': payment_method_id,
+                            'payment_commission_timing': pm_commission_timing if 'pm_commission_timing' in locals() else None,
+                            'safe_box_id': safe_box_id,
+                            'payments_count': len(payments) if isinstance(payments, list) else None,
+                        }
+                    except Exception as preview_exc:
+                        try:
+                            balance_check = dict(balance_check or {})
+                            balance_check['journal_lines_preview_error'] = str(preview_exc)
+                        except Exception:
+                            pass
+
                     db.session.rollback()
-                    error_msg = f"Journal entry is not balanced: {', '.join(balance_check['errors'])}"
+                    extra_parts = []
+                    try:
+                        ctx = (balance_check or {}).get('posting_context') if isinstance(balance_check, dict) else None
+                        if isinstance(ctx, dict):
+                            ctx_bits = []
+                            for k in (
+                                'payment_commission_timing',
+                                'total_cash',
+                                'net_amount',
+                                'commission_amount',
+                                'commission_vat_total',
+                                'payment_method_id',
+                                'safe_box_id',
+                                'payments_count',
+                            ):
+                                if k in ctx and ctx.get(k) is not None:
+                                    ctx_bits.append(f"{k}={ctx.get(k)}")
+                            if ctx_bits:
+                                extra_parts.append('ctx: ' + ', '.join(ctx_bits))
+
+                        preview = (balance_check or {}).get('journal_lines_preview') if isinstance(balance_check, dict) else None
+                        if isinstance(preview, list) and preview:
+                            cash_lines = []
+                            for ln in preview:
+                                try:
+                                    d = float((ln or {}).get('cash_debit') or 0.0)
+                                    c = float((ln or {}).get('cash_credit') or 0.0)
+                                except Exception:
+                                    d, c = 0.0, 0.0
+                                if abs(d) < 0.005 and abs(c) < 0.005:
+                                    continue
+                                acc_no = (ln or {}).get('account_number')
+                                acc_nm = (ln or {}).get('account_name')
+                                label = f"{acc_no} {acc_nm}".strip()
+                                cash_lines.append(f"{label}: {d:.2f}/{c:.2f}")
+                                if len(cash_lines) >= 8:
+                                    break
+                            if cash_lines:
+                                extra_parts.append('lines: ' + ' | '.join(cash_lines))
+                    except Exception:
+                        pass
+
+                    extra = (' | ' + ' | '.join(extra_parts)) if extra_parts else ''
+                    error_msg = f"Journal entry is not balanced: {', '.join(balance_check['errors'])}{extra}"
                     print(f"❌ Balance Error: {error_msg}")
                     return jsonify({'error': error_msg, 'balance_details': balance_check}), 400
             except Exception as auto_exc:
