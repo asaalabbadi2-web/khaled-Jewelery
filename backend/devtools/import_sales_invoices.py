@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import csv
 import difflib
+import json
 import os
 import re
 import sys
@@ -70,6 +71,22 @@ def _normalize_arabic_text(raw: Any) -> str:
     if not s:
         return ""
 
+    # Normalize Arabic-Indic digits to Western digits.
+    arabic_digits = {
+        "٠": "0",
+        "١": "1",
+        "٢": "2",
+        "٣": "3",
+        "٤": "4",
+        "٥": "5",
+        "٦": "6",
+        "٧": "7",
+        "٨": "8",
+        "٩": "9",
+    }
+    for k, v in arabic_digits.items():
+        s = s.replace(k, v)
+
     s = s.replace("ـ", "")
     s = _ARABIC_DIACRITICS_RE.sub("", s)
 
@@ -90,6 +107,28 @@ def _category_name_variants(name: str) -> List[str]:
         return []
 
     out = [s]
+
+    # Normalize common Excel "karat" tokens into a plain number.
+    # Examples:
+    # - "خاتم ذهب ع 21" -> "خاتم ذهب 21"
+    # - "سوار ذهب عيار 18" -> "سوار ذهب 18"
+    try:
+        s2 = _strip(s)
+        s2 = re.sub(r"\b(?:عيار|ع)\s*([0-9٠-٩]{2})\b", r" \1", s2)
+        s2 = re.sub(r"\s+", " ", s2).strip()
+        if s2 and s2 != s:
+            out.append(s2)
+    except Exception:
+        pass
+
+    # Variant without the word "ذهب" (some categories omit it, e.g. "سلسال 21").
+    try:
+        s3 = re.sub(r"\bذهب\b", "", s)
+        s3 = re.sub(r"\s+", " ", s3).strip()
+        if s3 and s3 != s:
+            out.append(s3)
+    except Exception:
+        pass
 
     # Drop definite article.
     if s.startswith("ال") and len(s) > 2:
@@ -116,6 +155,48 @@ def _category_name_variants(name: str) -> List[str]:
         seen.add(v)
         uniq.append(v)
     return uniq
+
+
+# Excel-to-system Category name aliases (production support).
+# You can override/extend this via env var CATEGORY_NAME_ALIASES_JSON.
+# Format: {"excel_name": "system_category_name", ...}
+_DEFAULT_CATEGORY_NAME_ALIASES: Dict[str, str] = {
+    # Example requested: "بناجر" (Excel) -> "بنجرة" (system)
+    "بناجر": "بنجرة",
+    # Common Arabic typos from Excel exports
+    "بنجره": "بنجرة",
+    "دبله": "دبلة",
+    "اسوره": "سوار",
+}
+
+
+@lru_cache(maxsize=1)
+def _load_category_name_aliases_by_norm() -> Dict[str, str]:
+    merged: Dict[str, str] = {}
+
+    # Defaults first.
+    for k, v in (_DEFAULT_CATEGORY_NAME_ALIASES or {}).items():
+        nk = _normalize_arabic_text(k)
+        tv = _strip(v)
+        if nk and tv:
+            merged[nk] = tv
+
+    # Optional env override/extend.
+    raw = str(os.getenv('CATEGORY_NAME_ALIASES_JSON', '') or '').strip()
+    if raw:
+        try:
+            decoded = json.loads(raw)
+            if isinstance(decoded, dict):
+                for k, v in decoded.items():
+                    nk = _normalize_arabic_text(k)
+                    tv = _strip(v)
+                    if nk and tv:
+                        merged[nk] = tv
+        except Exception:
+            # Ignore env parsing errors to keep imports resilient.
+            pass
+
+    return merged
 
 
 @lru_cache(maxsize=1)
@@ -147,9 +228,26 @@ def _resolve_category(raw_name: Any) -> Tuple[Optional[int], Optional[str], Opti
     Returns: (category_id, category_name, warning_message)
     """
 
-    raw = _strip(raw_name)
+    raw_original = _strip(raw_name)
+    raw = raw_original
     if not raw:
         return None, None, None
+
+    # Apply alias mapping (e.g. Excel label -> system category name)
+    try:
+        aliases = _load_category_name_aliases_by_norm()
+        if aliases:
+            alias_targets: List[str] = []
+            for v in _category_name_variants(raw_original):
+                nv = _normalize_arabic_text(v)
+                target = aliases.get(nv)
+                if target:
+                    alias_targets.append(target)
+            if alias_targets:
+                # Prefer the first alias target for resolution; keep the rest as fallbacks.
+                raw = alias_targets[0]
+    except Exception:
+        raw = raw_original
 
     cats = _cached_categories()
     if not cats:
@@ -204,6 +302,13 @@ def _resolve_category(raw_name: Any) -> Tuple[Optional[int], Optional[str], Opti
 
     if best is not None and best_ratio >= 0.80:
         return None, None, f"ambiguous category mapping for '{raw}' (closest '{best['name']}', score {best_ratio:.2f}); please fix Excel to match a system category name"
+
+    # If alias was applied and still failed, mention the original label for clarity.
+    if raw_original and raw != raw_original:
+        return None, None, (
+            f"unknown category '{raw_original}' (alias -> '{raw}'); "
+            f"please create it in Categories or rename Excel value to match"
+        )
 
     return None, None, f"unknown category '{raw}'; please create it in Categories or rename Excel value to match"
 
