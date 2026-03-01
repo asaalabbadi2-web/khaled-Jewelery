@@ -12358,7 +12358,7 @@ def add_invoice():
                 if not balance_check['balanced']:
                     # Capture a small preview of journal lines before rollback to make debugging easier.
                     try:
-                        from models import JournalEntryLine, Account
+                        from models import JournalEntryLine
 
                         je_lines = (
                             db.session.query(JournalEntryLine)
