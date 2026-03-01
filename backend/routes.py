@@ -10257,9 +10257,23 @@ def add_invoice():
                 for payment in payments_data:
                     pm_obj = PaymentMethod.query.get(payment['payment_method_id'])
                     pm_amount = _to_float(payment.get('amount', 0.0))
-                    pm_commission = _to_float(payment.get('commission_amount', 0.0))
-                    pm_commission_vat = _to_float(payment.get('commission_vat', 0.0))
-                    pm_net = _to_float(payment.get('net_amount', pm_amount - pm_commission - pm_commission_vat))
+
+                    # Respect commission timing policy:
+                    # - settlement: do not record commission at invoice time and do not reduce the debit.
+                    # This prevents imbalanced JEs when the client still sends net/commission fields.
+                    try:
+                        pm_commission_timing = str(getattr(pm_obj, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+                    except Exception:
+                        pm_commission_timing = 'invoice'
+
+                    if pm_commission_timing == 'settlement':
+                        pm_commission = 0.0
+                        pm_commission_vat = 0.0
+                        pm_net = pm_amount
+                    else:
+                        pm_commission = _to_float(payment.get('commission_amount', 0.0))
+                        pm_commission_vat = _to_float(payment.get('commission_vat', 0.0))
+                        pm_net = _to_float(payment.get('net_amount', pm_amount - pm_commission - pm_commission_vat))
 
                     paid_amount_total += pm_amount
                     
