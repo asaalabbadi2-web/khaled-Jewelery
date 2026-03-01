@@ -10178,6 +10178,37 @@ def add_invoice():
             if not cost_of_sales_acc_id:
                 missing.append({'mapping': 'cost_of_sales', 'operation_type': 'بيع'})
 
+            # If VAT exists on items, VAT payable mapping is required to keep JE balanced.
+            try:
+                _tax_total_for_check = sum(
+                    _to_float(
+                        it.get('tax_amount', it.get('tax', 0.0)),
+                        0.0,
+                    )
+                    for it in (data.get('items') or [])
+                    if isinstance(it, dict)
+                )
+                if _tax_total_for_check < 0:
+                    _tax_total_for_check = abs(_tax_total_for_check)
+            except Exception:
+                _tax_total_for_check = 0.0
+
+            if _tax_total_for_check > 0.009 and not vat_payable_acc_id:
+                missing.append({'mapping': 'vat_payable', 'operation_type': 'بيع'})
+
+            # If commissions are being applied at invoice time, commission mappings are required.
+            try:
+                if float(commission_amount or 0.0) > 0.009 and not commission_acc_id:
+                    missing.append({'mapping': 'commission', 'operation_type': 'بيع'})
+            except Exception:
+                pass
+
+            try:
+                if float(commission_vat_total or 0.0) > 0.009 and not (commission_vat_acc_id or commission_acc_id):
+                    missing.append({'mapping': 'commission_vat', 'operation_type': 'بيع'})
+            except Exception:
+                pass
+
             # تحقق من حساب المخزون المطلوب فعلياً حسب عناصر الفاتورة
             try:
                 required_karats = {
