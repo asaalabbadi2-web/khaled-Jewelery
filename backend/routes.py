@@ -6764,6 +6764,45 @@ def add_invoice_payment(invoice_id: int):
 
         return None
 
+    def _fallback_non_cash_safe_box_id(pm: PaymentMethod | None) -> int | None:
+        """Fallback SafeBox for non-cash payment methods when none is supplied/configured.
+
+        Precedence:
+        - If auto settlement enabled: default clearing safe, then default bank safe
+        - Otherwise: default bank safe, then default clearing safe
+
+        This is intentionally conservative and only kicks in when the payment
+        method has no `default_safe_box_id` and the request didn't supply one.
+        """
+        try:
+            if pm is None:
+                return None
+            auto_settle = bool(getattr(pm, 'auto_settlement_enabled', False))
+        except Exception:
+            auto_settle = False
+
+        def pick_default(t: str) -> int | None:
+            try:
+                sb = SafeBox.get_default_by_type(t)
+                if sb and sb.id:
+                    return int(sb.id)
+            except Exception:
+                return None
+
+            # If no explicit default is configured, but there is exactly one
+            # active safe box of this type, use it as a conservative fallback.
+            try:
+                safes = SafeBox.query.filter_by(safe_type=t, is_active=True).all()
+                if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                    return int(safes[0].id)
+            except Exception:
+                return None
+            return None
+
+        if auto_settle:
+            return pick_default('clearing') or pick_default('bank')
+        return pick_default('bank') or pick_default('clearing')
+
     def _is_cash_payment_method(pm: PaymentMethod | None) -> bool:
         if pm is None:
             return False
@@ -6802,7 +6841,10 @@ def add_invoice_payment(invoice_id: int):
         resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
 
     if resolved_safe_box_id is None:
-        resolved_safe_box_id = _fallback_cash_safe_box_id()
+        if _is_cash_payment_method(pm_obj):
+            resolved_safe_box_id = _fallback_cash_safe_box_id()
+        else:
+            resolved_safe_box_id = _fallback_non_cash_safe_box_id(pm_obj)
 
     # Enforce employee cash safe toggle: if employee cash safes are disabled,
     # do not allow routing payments into the employee cash safe (fallback to main cash).
@@ -8886,6 +8928,42 @@ def add_invoice():
 
             return None
 
+        def _fallback_non_cash_safe_box_id(pm) -> int | None:
+            """Fallback SafeBox for non-cash payment methods when none is supplied/configured.
+
+            Precedence:
+            - If auto settlement enabled: default clearing safe, then default bank safe
+            - Otherwise: default bank safe, then default clearing safe
+            """
+            try:
+                if pm is None:
+                    return None
+                auto_settle = bool(getattr(pm, 'auto_settlement_enabled', False))
+            except Exception:
+                auto_settle = False
+
+            def pick_default(t: str) -> int | None:
+                try:
+                    sb = SafeBox.get_default_by_type(t)
+                    if sb and sb.id:
+                        return int(sb.id)
+                except Exception:
+                    return None
+
+                # If no explicit default is configured, but there is exactly one
+                # active safe box of this type, use it as a conservative fallback.
+                try:
+                    safes = SafeBox.query.filter_by(safe_type=t, is_active=True).all()
+                    if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                        return int(safes[0].id)
+                except Exception:
+                    return None
+                return None
+
+            if auto_settle:
+                return pick_default('clearing') or pick_default('bank')
+            return pick_default('bank') or pick_default('clearing')
+
         if payments_data and isinstance(payments_data, list) and len(payments_data) > 0:
             # إنشاء سجل لكل وسيلة دفع
             for payment in payments_data:
@@ -8920,7 +8998,10 @@ def add_invoice():
                         resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None)
 
                     if resolved_safe_box_id is None:
-                        resolved_safe_box_id = _fallback_cash_safe_box_id()
+                        if _is_cash_payment_method(pm_obj):
+                            resolved_safe_box_id = _fallback_cash_safe_box_id()
+                        else:
+                            resolved_safe_box_id = _fallback_non_cash_safe_box_id(pm_obj)
 
                     # Enforce employee cash safe toggle: when disabled, do not route
                     # payments into the employee cash safe (fallback to main cash safe).
@@ -9146,7 +9227,10 @@ def add_invoice():
             if not is_receivable:
                 resolved_safe_box_id = new_invoice.safe_box_id or (getattr(pm_obj, 'default_safe_box_id', None) if pm_obj else None)
                 if resolved_safe_box_id is None:
-                    resolved_safe_box_id = _fallback_cash_safe_box_id()
+                    if _is_cash_payment_method(pm_obj):
+                        resolved_safe_box_id = _fallback_cash_safe_box_id()
+                    else:
+                        resolved_safe_box_id = _fallback_non_cash_safe_box_id(pm_obj)
                 if resolved_safe_box_id is None:
                     db.session.rollback()
                     return jsonify({
@@ -12941,6 +13025,21 @@ def devtools_import_sales_invoices_from_excel():
             if int(status) >= 400:
                 # Provide actionable context to the caller/UI.
                 reason = _extract_error_message(data) or 'unknown_error'
+                try:
+                    if isinstance(data, dict) and str(data.get('error') or '') == 'missing_safe_box_for_payment_method':
+                        pm_id = data.get('payment_method_id')
+                        pm_name = data.get('payment_method_name')
+                        extra = None
+                        if pm_name not in (None, '', False):
+                            extra = str(pm_name)
+                            if pm_id not in (None, '', False):
+                                extra = f"{extra} (id={pm_id})"
+                        elif pm_id not in (None, '', False):
+                            extra = f"id={pm_id}"
+                        if extra:
+                            reason = f"{reason} - {extra}"
+                except Exception:
+                    pass
                 group_preview = []
                 try:
                     for r in (lines or [])[:5]:
