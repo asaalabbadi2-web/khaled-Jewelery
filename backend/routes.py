@@ -6846,6 +6846,10 @@ def add_invoice_payment(invoice_id: int):
         else:
             resolved_safe_box_id = _fallback_non_cash_safe_box_id(pm_obj)
 
+    # Ultimate fallback: use cash safe as last resort for any payment method.
+    if resolved_safe_box_id is None:
+        resolved_safe_box_id = _fallback_cash_safe_box_id()
+
     # Enforce employee cash safe toggle: if employee cash safes are disabled,
     # do not allow routing payments into the employee cash safe (fallback to main cash).
     try:
@@ -9009,6 +9013,11 @@ def add_invoice():
                         else:
                             resolved_safe_box_id = _fallback_non_cash_safe_box_id(pm_obj)
 
+                    # Ultimate fallback: use cash safe as last resort for any payment
+                    # method rather than failing the entire invoice.
+                    if resolved_safe_box_id is None:
+                        resolved_safe_box_id = _fallback_cash_safe_box_id()
+
                     # Enforce employee cash safe toggle: when disabled, do not route
                     # payments into the employee cash safe (fallback to main cash safe).
                     try:
@@ -9237,6 +9246,9 @@ def add_invoice():
                         resolved_safe_box_id = _fallback_cash_safe_box_id()
                     else:
                         resolved_safe_box_id = _fallback_non_cash_safe_box_id(pm_obj)
+                # Ultimate fallback: use cash safe as last resort.
+                if resolved_safe_box_id is None:
+                    resolved_safe_box_id = _fallback_cash_safe_box_id()
                 if resolved_safe_box_id is None:
                     db.session.rollback()
                     return jsonify({
@@ -12940,8 +12952,20 @@ def devtools_import_sales_invoices_from_excel():
         pm_ids = _infer_payment_method_ids()
         default_customer_id = _ensure_default_customer(None, 'عميل نقدي')
 
+        # Diagnostic: resolve safe_box_ids for each payment method so we can
+        # confirm what the importer will send to add_invoice.
+        from devtools.import_sales_invoices import _resolve_safe_box_id_for_payment_method
+        pm_safe_diag = {}
+        for _pm_key, _pm_id in pm_ids.items():
+            try:
+                _sb = _resolve_safe_box_id_for_payment_method(_pm_id)
+                pm_safe_diag[_pm_key] = {'pm_id': _pm_id, 'resolved_safe_box_id': _sb}
+            except Exception:
+                pm_safe_diag[_pm_key] = {'pm_id': _pm_id, 'resolved_safe_box_id': None}
+
         summary = {
             'success': True,
+            '_code_version': 'safebox_fix_v3',
             'apply': bool(apply_mode),
             'as_categories': bool(as_categories),
             'filename': filename,
@@ -12957,6 +12981,8 @@ def devtools_import_sales_invoices_from_excel():
             'groups_skipped_missing_employee': 0,
             'created_invoices': 0,
             'created_invoice_ids': [],
+            '_pm_ids': pm_ids,
+            '_pm_safe_diag': pm_safe_diag,
         }
 
         # Create a short-lived token for internal calls.
