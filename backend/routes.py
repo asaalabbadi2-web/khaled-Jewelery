@@ -9160,6 +9160,10 @@ def add_invoice():
                             'payment_method_name': getattr(pm_obj, 'name', None) if pm_obj else None,
                         }), 400
 
+                    # Persist resolved safe_box_id back into the payment dict so
+                    # the journal-entry section (Phase 2) can read it later.
+                    payment['safe_box_id'] = resolved_safe_box_id
+
                     # Validate safe box exists (avoid FK failures and keep atomicity explicit)
                     safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
                     if not safe_box_obj:
@@ -9361,6 +9365,9 @@ def add_invoice():
                         'payment_method_id': payment_method_id,
                         'payment_method_name': getattr(pm_obj, 'name', None) if pm_obj else None,
                     }), 400
+
+                # Persist resolved safe_box_id so the journal-entry section can read it.
+                safe_box_id = resolved_safe_box_id
 
                 safe_box_obj = SafeBox.query.get(resolved_safe_box_id)
                 if not safe_box_obj:
@@ -10491,9 +10498,19 @@ def add_invoice():
                     elif pm_obj and pm_obj.default_safe_box:
                         safe_box = pm_obj.default_safe_box
 
-                    # ✅ الأفضل والمعمول به غالباً: الحساب يُستمد فقط من الخزينة
-                    # - إما تحديد خزينة صراحةً لكل دفعة
-                    # - أو الاعتماد على default_safe_box في وسيلة الدفع
+                    # Fallback: use the same resolution chain as Phase 1 when
+                    # neither the payload nor the payment method carries a safe box.
+                    if not safe_box:
+                        _fb_id = None
+                        if _is_cash_payment_method(pm_obj):
+                            _fb_id = _fallback_cash_safe_box_id()
+                        else:
+                            _fb_id = _fallback_non_cash_safe_box_id(pm_obj)
+                        if _fb_id is None:
+                            _fb_id = _fallback_cash_safe_box_id()
+                        if _fb_id is not None:
+                            safe_box = SafeBox.query.get(_fb_id)
+
                     if not safe_box:
                         return jsonify({
                             'error': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
@@ -10614,7 +10631,18 @@ def add_invoice():
                 elif payment_method_obj and payment_method_obj.default_safe_box:
                     safe_box = payment_method_obj.default_safe_box
 
-                # ✅ الأفضل والمعمول به غالباً: الحساب يُستمد فقط من الخزينة
+                # Fallback: use the same resolution chain as Phase 1.
+                if not safe_box:
+                    _fb_id = None
+                    if _is_cash_payment_method(payment_method_obj):
+                        _fb_id = _fallback_cash_safe_box_id()
+                    else:
+                        _fb_id = _fallback_non_cash_safe_box_id(payment_method_obj)
+                    if _fb_id is None:
+                        _fb_id = _fallback_cash_safe_box_id()
+                    if _fb_id is not None:
+                        safe_box = SafeBox.query.get(_fb_id)
+
                 if not safe_box:
                     return jsonify({
                         'error': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
