@@ -1902,6 +1902,11 @@ def update_settings():
     if 'voucher_auto_post' in data:
         settings.voucher_auto_post = data['voucher_auto_post']
 
+    # 🆕 إعدادات الترحيل (Posting Preferences)
+    for _pk in ('auto_post_invoices', 'auto_post_entries', 'require_approval_before_post', 'allow_unposting'):
+        if _pk in data:
+            setattr(settings, _pk, bool(data[_pk]))
+
     # 🆕 إعدادات الأمان
     if 'require_auth_for_invoice_create' in data:
         settings.require_auth_for_invoice_create = data['require_auth_for_invoice_create']
@@ -9127,7 +9132,18 @@ def add_invoice():
         approval_required = bool(approval_reasons)
         approval_reason = approval_reasons[0] if approval_reasons else None
 
-        unposted_mode = bool(approval_required)
+        # 🆕 Check server-side posting settings
+        # If auto_post_invoices is False, ALL invoices go to unposted mode
+        # (unless force_post is set by admin/import).
+        _posting_auto_post = True
+        try:
+            _posting_settings = Settings.query.first()
+            if _posting_settings:
+                _posting_auto_post = bool(getattr(_posting_settings, 'auto_post_invoices', True))
+        except Exception:
+            _posting_auto_post = True
+
+        unposted_mode = bool(approval_required) or (not _posting_auto_post and not force_post)
 
         if unposted_mode:
             # Do not treat as settled/paid until approved/posting occurs.
@@ -12918,8 +12934,16 @@ def add_invoice():
         # --- 7. Mark as Posted and Commit ---
         now = datetime.now()
 
-        if approval_required:
-            print("✅ Balance verified! Approval required; skipping posting/safebox effects...")
+        # Determine if invoice should be unposted:
+        # 1) Approval required (below_cost / large_discount)
+        # 2) Auto-post disabled in server settings (and not force_post)
+        _auto_post_disabled = (not _posting_auto_post and not force_post)
+
+        if approval_required or _auto_post_disabled:
+            if approval_required:
+                print("✅ Balance verified! Approval required; skipping posting/safebox effects...")
+            else:
+                print("✅ Balance verified! Auto-post disabled; saving as unposted...")
 
             new_invoice.is_posted = False
             # Keep posted_by as creator name, but do not set posted_at.
@@ -12933,8 +12957,9 @@ def add_invoice():
             if hasattr(journal_entry, 'posted_by'):
                 journal_entry.posted_by = None
 
-            # Persistent manager alert.
-            try:
+            # Persistent manager alert (only for approval-gated invoices, not auto-post-disabled).
+            if approval_required:
+              try:
                 from models import SystemAlert
 
                 reason_labels = {
@@ -13003,11 +13028,12 @@ def add_invoice():
                     created_by=posted_by_username or 'system',
                 )
                 db.session.add(alert)
-            except Exception:
+              except Exception:
                 pass
 
             # Audit: approval required (per-reason)
-            try:
+            if approval_required:
+              try:
                 from models import AuditLog
 
                 audit_base = {
@@ -13051,12 +13077,13 @@ def add_invoice():
                         user_agent=request.headers.get('User-Agent'),
                         success=True,
                     )
-            except Exception:
+              except Exception:
                 pass
 
             db.session.commit()
             resp = new_invoice.to_dict()
-            resp['approval_required'] = True
+            resp['approval_required'] = bool(approval_required)
+            resp['auto_post_disabled'] = bool(_auto_post_disabled and not approval_required)
             resp['approval_reason'] = approval_reason
             resp['approval_reasons'] = approval_reasons or ([] if not approval_reason else [approval_reason])
             if 'below_cost' in (approval_reasons or []):
@@ -14706,6 +14733,21 @@ def add_journal_entry():
         # Update balances only for non-draft entries.
         if not requested_is_draft:
             _update_account_balances_from_journal_lines(created_lines)
+
+        # 🆕 Check auto_post_entries setting
+        if not requested_is_draft:
+            _auto_post_je = False
+            try:
+                _je_posting_settings = Settings.query.first()
+                if _je_posting_settings:
+                    _auto_post_je = bool(getattr(_je_posting_settings, 'auto_post_entries', False))
+            except Exception:
+                _auto_post_je = False
+
+            if _auto_post_je:
+                new_entry.is_posted = True
+                new_entry.posted_at = datetime.now()
+                new_entry.posted_by = getattr(g, 'current_user', None) and getattr(g.current_user, 'username', 'system') or 'system'
 
         db.session.commit()
         return jsonify(new_entry.to_dict()), 201

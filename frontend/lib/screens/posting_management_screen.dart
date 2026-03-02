@@ -220,11 +220,28 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
 
+      // 🆕 Load core posting settings from BACKEND (authoritative source)
+      try {
+        final serverSettings = await _apiService.getSettings();
+        setState(() {
+          _autoPostInvoices = serverSettings['auto_post_invoices'] == true;
+          _autoPostEntries = serverSettings['auto_post_entries'] == true;
+          _requireApproval = serverSettings['require_approval_before_post'] == true;
+          _allowUnposting = serverSettings['allow_unposting'] == true;
+        });
+      } catch (e) {
+        // Fallback to SharedPreferences if backend unreachable
+        debugPrint('⚠️ Failed to load posting settings from backend: $e');
+        setState(() {
+          _autoPostInvoices = prefs.getBool('posting_auto_invoices') ?? false;
+          _autoPostEntries = prefs.getBool('posting_auto_entries') ?? false;
+          _requireApproval = prefs.getBool('posting_require_approval') ?? true;
+          _allowUnposting = prefs.getBool('posting_allow_unpost') ?? true;
+        });
+      }
+
+      // Local-only preferences (permissions, schedule, etc.)
       setState(() {
-        _autoPostInvoices = prefs.getBool('posting_auto_invoices') ?? false;
-        _autoPostEntries = prefs.getBool('posting_auto_entries') ?? false;
-        _requireApproval = prefs.getBool('posting_require_approval') ?? true;
-        _allowUnposting = prefs.getBool('posting_allow_unpost') ?? true;
         _validateBalance = prefs.getBool('posting_validate_balance') ?? true;
         _canPostInvoices = prefs.getBool('posting_perm_post_invoices') ?? true;
         _canPostEntries = prefs.getBool('posting_perm_post_entries') ?? true;
@@ -262,8 +279,24 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
 
   Future<void> _saveSettings() async {
     try {
+      // 🆕 Save core posting settings to BACKEND
+      try {
+        await _apiService.updateSettings({
+          'auto_post_invoices': _autoPostInvoices,
+          'auto_post_entries': _autoPostEntries,
+          'require_approval_before_post': _requireApproval,
+          'allow_unposting': _allowUnposting,
+        });
+      } catch (e) {
+        debugPrint('⚠️ Failed to save posting settings to backend: $e');
+        _showError('فشل حفظ إعدادات الترحيل على السيرفر: ${e.toString()}');
+        return;
+      }
+
+      // Local-only preferences
       final prefs = await SharedPreferences.getInstance();
 
+      // Keep local copies as fallback cache
       await prefs.setBool('posting_auto_invoices', _autoPostInvoices);
       await prefs.setBool('posting_auto_entries', _autoPostEntries);
       await prefs.setBool('posting_require_approval', _requireApproval);
@@ -1693,6 +1726,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   value: _autoPostInvoices,
                   onChanged: (value) {
                     setState(() => _autoPostInvoices = value);
+                    _saveSettings();
                   },
                   activeThumbColor: theme.AppColors.primaryGold,
                   secondary: Icon(
@@ -1707,6 +1741,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   value: _autoPostEntries,
                   onChanged: (value) {
                     setState(() => _autoPostEntries = value);
+                    _saveSettings();
                   },
                   activeThumbColor: theme.AppColors.primaryGold,
                   secondary: Icon(Icons.book, color: theme.AppColors.darkGold),
@@ -1729,6 +1764,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   value: _requireApproval,
                   onChanged: (value) {
                     setState(() => _requireApproval = value);
+                    _saveSettings();
                   },
                   activeThumbColor: theme.AppColors.primaryGold,
                   secondary: Icon(
@@ -1745,6 +1781,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   value: _allowUnposting,
                   onChanged: (value) {
                     setState(() => _allowUnposting = value);
+                    _saveSettings();
                   },
                   activeThumbColor: theme.AppColors.primaryGold,
                   secondary: Icon(Icons.undo, color: theme.AppColors.darkGold),

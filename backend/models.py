@@ -2020,6 +2020,18 @@ class Settings(db.Model):
     # خزينة الذهب للكسر الرئيسية (صندوق الكسر الرئيسي)
     main_scrap_gold_safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=True)
     main_scrap_gold_safe_box = db.relationship('SafeBox', foreign_keys=[main_scrap_gold_safe_box_id])
+
+    # ==========================================
+    # 🆕 إعدادات الترحيل (Posting Preferences)
+    # ==========================================
+    # ترحيل الفواتير تلقائياً فور الحفظ
+    auto_post_invoices = db.Column(db.Boolean, default=True)
+    # ترحيل القيود تلقائياً فور الحفظ
+    auto_post_entries = db.Column(db.Boolean, default=True)
+    # طلب موافقة قبل الترحيل (يؤثر على بوابات الاعتماد - below_cost/large_discount)
+    require_approval_before_post = db.Column(db.Boolean, default=False)
+    # السماح بإلغاء ترحيل الفواتير والقيود المرحلة
+    allow_unposting = db.Column(db.Boolean, default=False)
     
     # 🆕 إعدادات السندات
     voucher_auto_post = db.Column(db.Boolean, default=False)  # False = يتطلب اعتماد قبل الترحيل، True = ترحيل تلقائي
@@ -2141,6 +2153,13 @@ class Settings(db.Model):
             'main_scrap_gold_safe_box_id': getattr(self, 'main_scrap_gold_safe_box_id', None),
             'manufacturing_wage_mode': (self.manufacturing_wage_mode or 'expense'),
             'voucher_auto_post': self.voucher_auto_post,
+
+            # 🆕 Posting Preferences
+            'auto_post_invoices': bool(getattr(self, 'auto_post_invoices', True)),
+            'auto_post_entries': bool(getattr(self, 'auto_post_entries', True)),
+            'require_approval_before_post': bool(getattr(self, 'require_approval_before_post', False)),
+            'allow_unposting': bool(getattr(self, 'allow_unposting', False)),
+
             'weight_closing_settings': json.loads(self.weight_closing_settings) if self.weight_closing_settings else None,
             'gold_price_auto_update_enabled': bool(self.gold_price_auto_update_enabled),
             'gold_price_auto_update_time': self.gold_price_auto_update_time or '09:00',

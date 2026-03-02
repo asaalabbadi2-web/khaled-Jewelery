@@ -1611,6 +1611,17 @@ def unpost_invoice(invoice_id):
     ⚠️ تحذير: هذا الإجراء حساس ويجب استخدامه بحذر
     """
     try:
+        # Check server-side allow_unposting setting
+        try:
+            _unpost_settings = Settings.query.first()
+            if _unpost_settings and not bool(getattr(_unpost_settings, 'allow_unposting', False)):
+                return jsonify({
+                    'success': False,
+                    'message': 'إلغاء الترحيل معطّل في إعدادات النظام'
+                }), 403
+        except Exception:
+            pass
+
         posted_by = g.current_user.username
         invoice = Invoice.query.get(invoice_id)
         if not invoice:
@@ -1909,6 +1920,17 @@ def unpost_journal_entry(entry_id):
     ⚠️ تحذير: هذا الإجراء حساس ويجب استخدامه بحذر
     """
     try:
+        # Check server-side allow_unposting setting
+        try:
+            _unpost_settings = Settings.query.first()
+            if _unpost_settings and not bool(getattr(_unpost_settings, 'allow_unposting', False)):
+                return jsonify({
+                    'success': False,
+                    'message': 'إلغاء الترحيل معطّل في إعدادات النظام'
+                }), 403
+        except Exception:
+            pass
+
         posted_by = g.current_user.username
         entry = JournalEntry.query.get(entry_id)
         
