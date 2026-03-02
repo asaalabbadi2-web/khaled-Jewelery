@@ -6771,12 +6771,33 @@ def add_invoice_payment(invoice_id: int):
         except Exception:
             pass
 
+        # If multiple active cash safes exist (common in production), pick a stable
+        # fallback instead of failing: prefer default then lowest id.
+        try:
+            sb = (
+                SafeBox.query.filter_by(safe_type='cash', is_active=True)
+                .order_by(SafeBox.is_default.desc(), SafeBox.id.asc())
+                .first()
+            )
+            if sb and getattr(sb, 'id', None):
+                return int(sb.id)
+        except Exception:
+            pass
+
         # Last resort: if there is exactly one active safe box in the system,
         # use it rather than failing (helps when safe_type is misconfigured).
         try:
             safes = SafeBox.query.filter_by(is_active=True).all()
             if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
                 return int(safes[0].id)
+        except Exception:
+            pass
+
+        # If multiple active safes exist, pick a stable fallback rather than failing.
+        try:
+            sb = SafeBox.query.filter_by(is_active=True).order_by(SafeBox.id.asc()).first()
+            if sb and getattr(sb, 'id', None):
+                return int(sb.id)
         except Exception:
             pass
 
@@ -6813,6 +6834,19 @@ def add_invoice_payment(invoice_id: int):
                 safes = SafeBox.query.filter_by(safe_type=t, is_active=True).all()
                 if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
                     return int(safes[0].id)
+            except Exception:
+                return None
+
+            # If multiple active safes exist and none is marked default, pick a
+            # stable fallback to avoid blocking invoice creation.
+            try:
+                sb = (
+                    SafeBox.query.filter_by(safe_type=t, is_active=True)
+                    .order_by(SafeBox.is_default.desc(), SafeBox.id.asc())
+                    .first()
+                )
+                if sb and getattr(sb, 'id', None):
+                    return int(sb.id)
             except Exception:
                 return None
             return None
@@ -8963,12 +8997,33 @@ def add_invoice():
             except Exception:
                 pass
 
+            # If multiple active cash safes exist (common in production), pick a stable
+            # fallback instead of failing: prefer default then lowest id.
+            try:
+                sb = (
+                    SafeBox.query.filter_by(safe_type='cash', is_active=True)
+                    .order_by(SafeBox.is_default.desc(), SafeBox.id.asc())
+                    .first()
+                )
+                if sb and getattr(sb, 'id', None):
+                    return int(sb.id)
+            except Exception:
+                pass
+
             # Last resort: if there is exactly one active safe box in the system,
             # use it rather than failing (helps when safe_type is misconfigured).
             try:
                 safes = SafeBox.query.filter_by(is_active=True).all()
                 if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
                     return int(safes[0].id)
+            except Exception:
+                pass
+
+            # If multiple active safes exist, pick a stable fallback rather than failing.
+            try:
+                sb = SafeBox.query.filter_by(is_active=True).order_by(SafeBox.id.asc()).first()
+                if sb and getattr(sb, 'id', None):
+                    return int(sb.id)
             except Exception:
                 pass
 
@@ -9002,6 +9057,19 @@ def add_invoice():
                     safes = SafeBox.query.filter_by(safe_type=t, is_active=True).all()
                     if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
                         return int(safes[0].id)
+                except Exception:
+                    return None
+
+                # If multiple active safes exist and none is marked default, pick a
+                # stable fallback to avoid blocking invoice creation.
+                try:
+                    sb = (
+                        SafeBox.query.filter_by(safe_type=t, is_active=True)
+                        .order_by(SafeBox.is_default.desc(), SafeBox.id.asc())
+                        .first()
+                    )
+                    if sb and getattr(sb, 'id', None):
+                        return int(sb.id)
                 except Exception:
                     return None
                 return None
