@@ -8884,7 +8884,13 @@ def add_invoice():
                 return False
             try:
                 pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
-                return pt == 'receivable'
+                if pt in {'receivable', 'credit', 'on_account', 'ar'}:
+                    return True
+                name = str(getattr(pm, 'name', '') or '').strip()
+                # Common Arabic labels for on-account/receivables.
+                if 'آجل' in name or 'اجل' in name:
+                    return True
+                return False
             except Exception:
                 return False
 

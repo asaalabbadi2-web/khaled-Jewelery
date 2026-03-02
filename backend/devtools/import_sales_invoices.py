@@ -666,6 +666,144 @@ def _infer_payment_method_ids() -> Dict[str, int]:
     return out
 
 
+def _resolve_safe_box_id_for_payment_method(pm_id: int) -> Optional[int]:
+    """Best-effort resolve SafeBox id for a payment method.
+
+    This importer may create payments for card/bank methods. The invoice route
+    requires a SafeBox (either explicitly via payment.safe_box_id, or implicitly
+    via PaymentMethod.default_safe_box_id / system defaults).
+
+    We try to resolve conservatively:
+    - PaymentMethod.default_safe_box_id
+    - Default SafeBox by type (bank/clearing)
+    - If no default but exactly one active safe of that type, use it
+    - Name/bank_name unique match as last resort
+    """
+
+    try:
+        pm_id_int = int(pm_id)
+    except Exception:
+        return None
+
+    try:
+        from models import PaymentMethod, SafeBox  # type: ignore
+    except Exception:
+        return None
+
+    pm = None
+    try:
+        pm = PaymentMethod.query.get(pm_id_int)
+    except Exception:
+        pm = None
+    if not pm:
+        return None
+
+    # Cash: let backend route to employee/main cash safes.
+    try:
+        pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
+        name = str(getattr(pm, 'name', '') or '')
+        if pt == 'cash' or ('نقد' in name):
+            return None
+        # Receivable/on-account methods should not move a SafeBox.
+        if pt in {'receivable', 'credit', 'on_account', 'ar'} or ('آجل' in name) or ('اجل' in name):
+            return None
+    except Exception:
+        pass
+
+    try:
+        raw_default = getattr(pm, 'default_safe_box_id', None)
+        if raw_default not in (None, '', 0, '0', False):
+            return int(raw_default)
+    except Exception:
+        pass
+
+    try:
+        auto_settle = bool(getattr(pm, 'auto_settlement_enabled', False))
+    except Exception:
+        auto_settle = False
+
+    def _pick_default_or_unique_active(t: str) -> Optional[int]:
+        try:
+            sb = SafeBox.get_default_by_type(t)
+            if sb and getattr(sb, 'id', None):
+                return int(sb.id)
+        except Exception:
+            pass
+
+        try:
+            safes = SafeBox.query.filter_by(safe_type=t, is_active=True).all()
+            if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                return int(safes[0].id)
+        except Exception:
+            pass
+        return None
+
+    # Prefer clearing for auto-settlement-enabled methods.
+    if auto_settle:
+        sb_id = _pick_default_or_unique_active('clearing') or _pick_default_or_unique_active('bank')
+        if sb_id:
+            return sb_id
+    else:
+        sb_id = _pick_default_or_unique_active('bank') or _pick_default_or_unique_active('clearing')
+        if sb_id:
+            return sb_id
+
+    # Last resort: unique name/bank_name match.
+    try:
+        pm_name = str(getattr(pm, 'name', '') or '').strip()
+    except Exception:
+        pm_name = ''
+    pm_norm = _normalize_arabic_text(pm_name)
+
+    try:
+        candidate_safes = (
+            SafeBox.query
+            .filter(SafeBox.is_active.is_(True))
+            .filter(SafeBox.safe_type.in_(['bank', 'clearing']))
+            .all()
+        )
+    except Exception:
+        candidate_safes = []
+
+    matches: List[int] = []
+    for sb in candidate_safes or []:
+        try:
+            sb_id = int(getattr(sb, 'id', 0) or 0)
+        except Exception:
+            continue
+        if not sb_id:
+            continue
+
+        try:
+            sb_name = str(getattr(sb, 'name', '') or '').strip()
+            sb_bank = str(getattr(sb, 'bank_name', '') or '').strip()
+        except Exception:
+            sb_name = ''
+            sb_bank = ''
+
+        sb_norm = _normalize_arabic_text(sb_name)
+        sb_bank_norm = _normalize_arabic_text(sb_bank)
+
+        ok = False
+        if pm_norm and sb_norm and (pm_norm in sb_norm or sb_norm in pm_norm):
+            ok = True
+        if (not ok) and sb_bank_norm:
+            try:
+                if sb_bank_norm in _normalize_arabic_text(pm_name):
+                    ok = True
+            except Exception:
+                pass
+
+        if ok:
+            matches.append(sb_id)
+
+    matches = sorted(set(matches))
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
 def _load_employee_map() -> Dict[str, int]:
     from models import Employee  # type: ignore
 
@@ -850,6 +988,8 @@ def _build_invoice_payload(
         if not cash_pm:
             warnings.append(f"group {group_key}: cash payment present but no cash payment method found")
         else:
+            # For cash, do not force a specific safe_box_id; let backend route
+            # based on employee cash safe / main cash safe settings.
             payments.append({"payment_method_id": cash_pm, "amount": cash_total})
 
     for card_type, amt in sorted(card_by_type.items(), key=lambda x: x[0]):
@@ -870,7 +1010,11 @@ def _build_invoice_payload(
             warnings.append(f"group {group_key}: card payment ({card_type}) but no card payment method found")
             continue
 
-        payments.append({"payment_method_id": pm_id, "amount": amt})
+        p: Dict[str, Any] = {"payment_method_id": pm_id, "amount": amt}
+        sb_id = _resolve_safe_box_id_for_payment_method(pm_id)
+        if sb_id:
+            p["safe_box_id"] = int(sb_id)
+        payments.append(p)
 
     # If there are payments but rounding differences exist, adjust cash (or add cash remainder).
     payments_sum = round(sum(float(p.get("amount") or 0.0) for p in payments), 2)
