@@ -6762,6 +6762,24 @@ def add_invoice_payment(invoice_id: int):
         except Exception:
             pass
 
+        # If no explicit default is configured, but there is exactly one active
+        # cash safe box, use it as a conservative fallback.
+        try:
+            safes = SafeBox.query.filter_by(safe_type='cash', is_active=True).all()
+            if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                return int(safes[0].id)
+        except Exception:
+            pass
+
+        # Last resort: if there is exactly one active safe box in the system,
+        # use it rather than failing (helps when safe_type is misconfigured).
+        try:
+            safes = SafeBox.query.filter_by(is_active=True).all()
+            if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                return int(safes[0].id)
+        except Exception:
+            pass
+
         return None
 
     def _fallback_non_cash_safe_box_id(pm: PaymentMethod | None) -> int | None:
@@ -8933,6 +8951,24 @@ def add_invoice():
                 sb = SafeBox.get_default_by_type('cash')
                 if sb and sb.id:
                     return int(sb.id)
+            except Exception:
+                pass
+
+            # If no explicit default is configured, but there is exactly one active
+            # cash safe box, use it as a conservative fallback.
+            try:
+                safes = SafeBox.query.filter_by(safe_type='cash', is_active=True).all()
+                if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                    return int(safes[0].id)
+            except Exception:
+                pass
+
+            # Last resort: if there is exactly one active safe box in the system,
+            # use it rather than failing (helps when safe_type is misconfigured).
+            try:
+                safes = SafeBox.query.filter_by(is_active=True).all()
+                if isinstance(safes, list) and len(safes) == 1 and getattr(safes[0], 'id', None):
+                    return int(safes[0].id)
             except Exception:
                 pass
 
