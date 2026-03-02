@@ -1949,6 +1949,21 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                       ),
                     ),
                     const SizedBox(width: 8),
+                    // Edit content button — only for unposted invoices
+                    if (invoice['is_posted'] != true && !isCancelled)
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _editInvoiceContent(invoice),
+                          icon: const Icon(Icons.edit, size: 18),
+                          label: Text(isAr ? 'تعديل' : 'Edit'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.orange.shade700,
+                            side: BorderSide(color: Colors.orange.shade700),
+                          ),
+                        ),
+                      ),
+                    if (invoice['is_posted'] != true && !isCancelled)
+                      const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: isCancelled
@@ -3181,6 +3196,70 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         );
       },
     );
+  }
+
+  /// Open the sales invoice screen in **edit mode** for an unposted invoice.
+  Future<void> _editInvoiceContent(Map<String, dynamic> invoice) async {
+    final isAr = widget.isArabic;
+    final invoiceIdValue = invoice['id'];
+    final invoiceId = invoiceIdValue is int
+        ? invoiceIdValue
+        : int.tryParse(invoiceIdValue?.toString() ?? '');
+
+    if (invoiceId == null) {
+      _showSnackBar(
+        isAr ? 'معرف الفاتورة غير صالح' : 'Invalid invoice id',
+        isError: true,
+      );
+      return;
+    }
+
+    if (invoice['is_posted'] == true) {
+      _showSnackBar(
+        isAr
+            ? 'لا يمكن تعديل فاتورة مرحّلة'
+            : 'Cannot edit a posted invoice',
+        isError: true,
+      );
+      return;
+    }
+
+    // Fetch full invoice data from backend
+    try {
+      final fullInvoice = await _apiService.getInvoiceById(invoiceId);
+
+      if (!mounted) return;
+
+      // Navigate to SalesInvoiceScreenV2 in edit mode
+      final items = _cloneDataList(await _getCachedItems());
+      final saleItems = _filterSaleReadyItems(items);
+      final customers = _cloneDataList(await _getCachedCustomers());
+
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SalesInvoiceScreenV2(
+            items: saleItems,
+            customers: customers,
+            editInvoiceId: invoiceId,
+            editInvoiceData: fullInvoice,
+          ),
+        ),
+      );
+
+      if (result == true && mounted) {
+        await _loadInvoices();
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar(
+          isAr
+              ? 'فشل تحميل بيانات الفاتورة: $e'
+              : 'Failed to load invoice data: $e',
+          isError: true,
+        );
+      }
+    }
   }
 
   Future<void> _editInvoice(Map<String, dynamic> invoice) async {

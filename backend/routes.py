@@ -79,7 +79,7 @@ from category_weight_tracking import (
 from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import pstdev
-from auth_decorators import get_current_user, require_permission, require_any_permission, require_admin
+from auth_decorators import get_current_user, require_auth, require_permission, require_any_permission, require_admin
 
 
 def _wrap_api_exceptions(error_code: str, message: str):
@@ -6645,6 +6645,228 @@ def get_invoice_by_id(invoice_id: int):
     invoice_dict['supplier_name'] = supplier_name
 
     return jsonify(invoice_dict)
+
+
+@api.route('/invoices/<int:invoice_id>', methods=['PUT'])
+@require_permission('invoice.edit')
+def update_unposted_invoice(invoice_id: int):
+    """Edit an unposted (draft / pending-approval) invoice.
+
+    Only invoices with is_posted=False can be edited.
+    Replaces items, payments, and header fields, then
+    **deletes + recreates** the draft via the standard add_invoice
+    flow (which handles JE creation, approval checks, etc.).
+
+    The strategy is delete-and-recreate rather than update-in-place,
+    because add_invoice has complex side-effects (journal entries,
+    category weight movements, approval alerts) that must be consistent.
+    The new invoice keeps the same invoice_type_id to preserve the
+    display number.
+    """
+
+    from models import (
+        CategoryWeightMovement, SystemAlert, InvoiceWeightSettlement,
+    )
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid or missing JSON body'}), 400
+
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
+
+    if invoice.is_posted:
+        return jsonify({
+            'error': 'invoice_already_posted',
+            'message': 'لا يمكن تعديل فاتورة مرحّلة. استخدم المرتجعات بدلاً من ذلك.',
+        }), 400
+
+    # Preserve the original invoice_type_id so the display number stays the same.
+    original_type_id = invoice.invoice_type_id
+    original_invoice_type = invoice.invoice_type
+    original_date = invoice.date
+
+    # --- 1. Delete all related entities ---
+    try:
+        # Journal entries linked to this invoice
+        linked_jes = JournalEntry.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        for je in linked_jes:
+            JournalEntryLine.query.filter_by(journal_entry_id=je.id).delete()
+            db.session.delete(je)
+
+        # Vouchers linked to this invoice
+        linked_vouchers = Voucher.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        for v in linked_vouchers:
+            VoucherAccountLine.query.filter_by(voucher_id=v.id).delete()
+            db.session.delete(v)
+
+        # SafeBox transactions
+        SafeBoxTransaction.query.filter_by(invoice_id=invoice_id).delete()
+
+        # Category weight movements
+        CategoryWeightMovement.query.filter_by(invoice_id=invoice_id).delete()
+
+        # System alerts
+        try:
+            SystemAlert.query.filter_by(
+                entity_type='Invoice', entity_id=invoice_id
+            ).delete()
+        except Exception:
+            pass
+
+        # Invoice weight settlements
+        try:
+            InvoiceWeightSettlement.query.filter_by(invoice_id=invoice_id).delete()
+        except Exception:
+            pass
+
+        # Child rows (cascade would handle these on delete, but be explicit)
+        InvoiceItem.query.filter_by(invoice_id=invoice_id).delete()
+        InvoicePayment.query.filter_by(invoice_id=invoice_id).delete()
+        InvoiceKaratLine.query.filter_by(invoice_id=invoice_id).delete()
+
+        # Delete the invoice itself
+        db.session.delete(invoice)
+        db.session.flush()
+
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({
+            'error': 'cleanup_failed',
+            'message': f'فشل حذف بيانات الفاتورة القديمة: {exc}',
+        }), 500
+
+    # --- 2. Re-create via the standard add_invoice flow ---
+    # Merge caller data with preserved original fields.
+    create_data = dict(data)
+    create_data['invoice_type_id'] = original_type_id
+    if 'invoice_type' not in create_data:
+        create_data['invoice_type'] = original_invoice_type
+    if 'date' not in create_data:
+        create_data['date'] = original_date.isoformat() if original_date else datetime.now().isoformat()
+
+    # Inject into Flask request context and call add_invoice.
+    from app import app as _app  # type: ignore
+
+    current_user = getattr(g, 'current_user', None)
+    headers = {}
+    if current_user:
+        try:
+            from auth_decorators import generate_token
+            token = generate_token(current_user, expires_in_minutes=2)
+            if token:
+                headers['Authorization'] = f'Bearer {token}'
+        except Exception:
+            pass
+
+    with _app.test_request_context(
+        '/api/invoices', method='POST',
+        json=create_data, headers=headers,
+    ):
+        rv = add_invoice()
+
+    status_code = 200
+    resp_obj = None
+    if isinstance(rv, tuple) and len(rv) >= 2:
+        resp_obj, status_code = rv[0], rv[1]
+    else:
+        resp_obj, status_code = rv, 201
+
+    try:
+        resp_data = resp_obj.get_json(silent=True) if hasattr(resp_obj, 'get_json') else None
+    except Exception:
+        resp_data = None
+
+    if int(status_code) >= 400:
+        # Re-creation failed — the old invoice is already deleted.
+        # Return the error so the user can fix and retry.
+        db.session.rollback()
+        return jsonify({
+            'error': 'recreate_failed',
+            'message': 'فشل إعادة إنشاء الفاتورة بعد الحذف. يرجى إنشاء فاتورة جديدة.',
+            'original_invoice_id': invoice_id,
+            'inner_error': resp_data,
+        }), int(status_code)
+
+    # Commit (add_invoice already committed internally).
+    try:
+        db.session.commit()
+    except Exception:
+        pass
+
+    # Attach old_invoice_id for the frontend.
+    result = resp_data or {}
+    result['old_invoice_id'] = invoice_id
+    result['edit_mode'] = True
+
+    return jsonify(result), 200
+
+
+@api.route('/invoices/<int:invoice_id>', methods=['DELETE'])
+@require_permission('invoice.edit')
+def delete_unposted_invoice(invoice_id: int):
+    """Delete an unposted invoice and all related records."""
+
+    from models import (
+        CategoryWeightMovement, SystemAlert, InvoiceWeightSettlement,
+    )
+
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
+
+    if invoice.is_posted:
+        return jsonify({
+            'error': 'invoice_already_posted',
+            'message': 'لا يمكن حذف فاتورة مرحّلة.',
+        }), 400
+
+    try:
+        # Journal entries
+        linked_jes = JournalEntry.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        for je in linked_jes:
+            JournalEntryLine.query.filter_by(journal_entry_id=je.id).delete()
+            db.session.delete(je)
+
+        # Vouchers
+        linked_vouchers = Voucher.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        for v in linked_vouchers:
+            VoucherAccountLine.query.filter_by(voucher_id=v.id).delete()
+            db.session.delete(v)
+
+        SafeBoxTransaction.query.filter_by(invoice_id=invoice_id).delete()
+        CategoryWeightMovement.query.filter_by(invoice_id=invoice_id).delete()
+
+        try:
+            SystemAlert.query.filter_by(entity_type='Invoice', entity_id=invoice_id).delete()
+        except Exception:
+            pass
+        try:
+            InvoiceWeightSettlement.query.filter_by(invoice_id=invoice_id).delete()
+        except Exception:
+            pass
+
+        InvoiceItem.query.filter_by(invoice_id=invoice_id).delete()
+        InvoicePayment.query.filter_by(invoice_id=invoice_id).delete()
+        InvoiceKaratLine.query.filter_by(invoice_id=invoice_id).delete()
+
+        db.session.delete(invoice)
+        db.session.commit()
+
+        return jsonify({'success': True, 'message': 'تم حذف الفاتورة بنجاح'}), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': 'delete_failed', 'message': str(exc)}), 500
 
 
 @api.route('/invoices/<int:invoice_id>/payments', methods=['POST'])

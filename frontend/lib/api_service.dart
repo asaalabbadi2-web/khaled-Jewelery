@@ -1213,6 +1213,40 @@ class ApiService {
     }
   }
 
+  /// Edit an unposted (draft / pending-approval) invoice.
+  /// The backend deletes the old invoice and re-creates it via add_invoice,
+  /// preserving the same invoice_type_id (display number).
+  Future<Map<String, dynamic>> updateUnpostedInvoice(
+    int invoiceId,
+    Map<String, dynamic> invoiceData,
+  ) async {
+    final response = await _authedPut(
+      Uri.parse('$_baseUrl/invoices/$invoiceId'),
+      body: json.encode(invoiceData),
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      throw Exception('Invalid server response');
+    }
+
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) parsed = decoded;
+    } catch (_) {}
+
+    final errorCode = parsed?['error']?.toString().trim();
+    throw ApiException(
+      statusCode: response.statusCode,
+      code: (errorCode == null || errorCode.isEmpty) ? 'http_error' : errorCode,
+      message: _errorMessageFromResponse(response),
+      details: parsed ?? const {},
+    );
+  }
+
   Future<Map<String, dynamic>> updateInvoiceStatus(
     int invoiceId,
     String status,

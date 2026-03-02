@@ -24,10 +24,16 @@ class SalesInvoiceScreenV2 extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   final List<Map<String, dynamic>> customers;
 
+  /// When non-null the screen is in **edit mode** for an existing unposted invoice.
+  final int? editInvoiceId;
+  final Map<String, dynamic>? editInvoiceData;
+
   const SalesInvoiceScreenV2({
     super.key,
     required this.items,
     required this.customers,
+    this.editInvoiceId,
+    this.editInvoiceData,
   });
 
   @override
@@ -35,6 +41,9 @@ class SalesInvoiceScreenV2 extends StatefulWidget {
 }
 
 class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
+  // ==================== Edit Mode ====================
+  bool get _isEditMode => widget.editInvoiceId != null;
+
   // ==================== State Variables ====================
   final _smartInputController = TextEditingController();
   final _smartInputFocus = FocusNode();
@@ -463,8 +472,85 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     _loadBranches();
     _loadPaymentMethods(); // 🆕 جلب وسائل الدفع
     _smartInputFocus.requestFocus();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _maybePromptRestoreLocalDraft();
+    if (_isEditMode) {
+      // In edit mode, prefill after data loads
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _prefillFromExistingInvoice();
+      });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _maybePromptRestoreLocalDraft();
+      });
+    }
+  }
+
+  // ==================== Edit Mode Prefill ====================
+  void _prefillFromExistingInvoice() {
+    final data = widget.editInvoiceData;
+    if (data == null) return;
+
+    setState(() {
+      // Customer & Branch
+      _selectedCustomerId = _parseInt(data['customer_id']);
+      _selectedBranchId = _parseInt(data['branch_id']);
+
+      // Items
+      final rawItems = data['items'];
+      if (rawItems is List) {
+        for (final rawItem in rawItems) {
+          if (rawItem is! Map) continue;
+          final m = Map<String, dynamic>.from(rawItem);
+          final karat = _parseDouble(m['karat']);
+          final weight = _parseDouble(m['weight']);
+          final wage = _parseDouble(m['wage']);
+          final net = _parseDouble(m['net']);
+          final tax = _parseDouble(m['tax']);
+          final taxRate = (net > 0) ? (tax / net) : _effectiveVatRate;
+          final count = _parseInt(m['quantity']) ?? 1;
+
+          final item = InvoiceItem(
+            id: _parseInt(m['item_id']),
+            name: (m['name'] ?? '').toString(),
+            barcode: '',
+            karat: karat,
+            weight: weight,
+            wage: wage,
+            categoryId: _parseInt(m['category_id']),
+            categoryName: (m['category_name'] ?? '').toString(),
+            count: count,
+            goldPrice24k: _goldPrice24k,
+            mainKarat: _settingsProvider.mainKarat,
+            taxRate: taxRate,
+            avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
+            avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
+          );
+          // Restore profit so the totals match the original invoice
+          final cost = item.cost;
+          item.profit = net - cost;
+          _items.add(item);
+        }
+      }
+
+      // Payments
+      final rawPayments = data['payments'];
+      if (rawPayments is List) {
+        for (final rawPay in rawPayments) {
+          if (rawPay is! Map) continue;
+          final m = Map<String, dynamic>.from(rawPay);
+          _payments.add(PaymentEntry(
+            paymentMethodId: _parseInt(m['payment_method_id']) ?? 0,
+            paymentMethodName: (m['payment_method_name'] ?? '').toString(),
+            amount: _parseDouble(m['amount']),
+            commissionRate: _parseDouble(m['commission_rate']),
+            commissionAmount: _parseDouble(m['commission_amount']),
+            commissionVat: _parseDouble(m['commission_vat']),
+            netAmount: _parseDouble(m['net_amount']),
+            settlementDays: _parseInt(m['settlement_days']) ?? 0,
+            notes: m['notes']?.toString(),
+            safeBoxId: _parseInt(m['safe_box_id']),
+          ));
+        }
+      }
     });
   }
 
@@ -2426,7 +2512,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         'items': _items.map((item) => item.toJson()).toList(),
       };
 
-      final response = await apiService.addInvoice(invoiceData);
+      final response = _isEditMode
+          ? await apiService.updateUnpostedInvoice(widget.editInvoiceId!, invoiceData)
+          : await apiService.addInvoice(invoiceData);
 
       final approvalRequired = response['approval_required'] == true;
       final approvalReasons = (response['approval_reasons'] is List)
@@ -2603,7 +2691,20 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       if (!mounted) return;
       await _clearLocalDraft();
-      _resetAfterSave();
+      if (_isEditMode) {
+        // In edit mode, navigate back with success result
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('تم تعديل الفاتورة بنجاح'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          Navigator.of(context).pop(true);
+        }
+      } else {
+        _resetAfterSave();
+      }
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }
@@ -3435,7 +3536,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             backgroundColor: AppColors.invoiceSaleNew,
             foregroundColor: Colors.white,
             iconTheme: const IconThemeData(color: Colors.white),
-            title: const Text('فاتورة البيع '),
+            title: Text(_isEditMode ? 'تعديل فاتورة البيع' : 'فاتورة البيع '),
             actions: [
               IconButton(
                 tooltip: 'إكمال لاحقاً',
