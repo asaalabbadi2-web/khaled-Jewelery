@@ -41,8 +41,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
   final Set<int> _selectedEntryIds = {};
   bool _userInfoInitialized = false;
 
-  // User name for posting
-  final TextEditingController _userNameController = TextEditingController();
+  // User name for posting — read from AuthProvider directly, no dialog needed
 
   // Search and Filter
   final TextEditingController _searchController = TextEditingController();
@@ -97,10 +96,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_userInfoInitialized) {
-      final auth = Provider.of<AuthProvider>(context, listen: false);
-      if (_userNameController.text.isEmpty && auth.username.isNotEmpty) {
-        _userNameController.text = auth.username;
-      }
       _userInfoInitialized = true;
     }
   }
@@ -108,7 +103,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
   @override
   void dispose() {
     _tabController.dispose();
-    _userNameController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -453,8 +447,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName = await _askForUserName();
-    if (userName == null || userName.isEmpty) return;
+    final userName =
+        Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final selected = _unpostedInvoices
@@ -487,8 +481,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName = await _askForUserName();
-    if (userName == null || userName.isEmpty) return;
+    final userName =
+        Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final result = await _apiService.postInvoice(invoiceId, userName);
@@ -544,8 +538,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName = await _askForUserName();
-    if (userName == null || userName.isEmpty) return;
+    final userName =
+        Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final result = await _apiService.postJournalEntriesBatch(
@@ -574,8 +568,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName = await _askForUserName();
-    if (userName == null || userName.isEmpty) return;
+    final userName =
+        Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final result = await _apiService.postJournalEntry(entryId, userName);
@@ -623,39 +617,6 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
   // =========================================
   // Helper Functions
   // =========================================
-
-  Future<String?> _askForUserName() async {
-    return showDialog<String>(
-      context: context,
-      builder: (context) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          title: const Text('اسم المستخدم'),
-          content: TextField(
-            controller: _userNameController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'أدخل اسمك',
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (value) => Navigator.pop(context, value),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إلغاء'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context, _userNameController.text);
-              },
-              child: const Text('تأكيد'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Future<bool> _confirmAction(String title, String message) async {
     final result = await showDialog<bool>(
@@ -1225,6 +1186,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   invStats['posted'] ?? 0,
                   invStats['unposted'] ?? 0,
                   Icons.receipt_long,
+                  pendingApproval: invStats['pending_approval'] ?? 0,
                 ),
               ),
               SizedBox(
@@ -1257,8 +1219,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     int total,
     int posted,
     int unposted,
-    IconData icon,
-  ) {
+    IconData icon, {
+    int pendingApproval = 0,
+  }) {
     final titleStyle = Theme.of(
       context,
     ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold);
@@ -1285,6 +1248,13 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               unposted,
               theme.AppColors.warning,
             ),
+            if (pendingApproval > 0)
+              _buildStatValue(
+                context,
+                'بانتظار موافقة',
+                pendingApproval,
+                Colors.orange,
+              ),
           ],
         ),
       ],
@@ -1464,11 +1434,19 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           ],
         ),
         trailing: isPosted
-            ? IconButton(
-                icon: const Icon(Icons.cancel, color: theme.AppColors.error),
-                onPressed: () => _unpostInvoice(id),
-                tooltip: 'إلغاء الترحيل',
-              )
+            ? (_allowUnposting
+                ? IconButton(
+                    icon: const Icon(
+                      Icons.cancel,
+                      color: theme.AppColors.error,
+                    ),
+                    onPressed: () => _unpostInvoice(id),
+                    tooltip: 'إلغاء الترحيل',
+                  )
+                : const Tooltip(
+                    message: 'إلغاء الترحيل معطّل في الإعدادات',
+                    child: Icon(Icons.lock_outline, color: Colors.grey),
+                  ))
             : IconButton(
                 icon: const Icon(
                   Icons.check_circle,
@@ -1632,11 +1610,19 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           ],
         ),
         trailing: isPosted
-            ? IconButton(
-                icon: const Icon(Icons.cancel, color: theme.AppColors.error),
-                onPressed: () => _unpostEntry(id),
-                tooltip: 'إلغاء الترحيل',
-              )
+            ? (_allowUnposting
+                ? IconButton(
+                    icon: const Icon(
+                      Icons.cancel,
+                      color: theme.AppColors.error,
+                    ),
+                    onPressed: () => _unpostEntry(id),
+                    tooltip: 'إلغاء الترحيل',
+                  )
+                : const Tooltip(
+                    message: 'إلغاء الترحيل معطّل في الإعدادات',
+                    child: Icon(Icons.lock_outline, color: Colors.grey),
+                  ))
             : IconButton(
                 icon: const Icon(
                   Icons.check_circle,

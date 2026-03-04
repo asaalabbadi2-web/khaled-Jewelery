@@ -1661,6 +1661,18 @@ def unpost_invoice(invoice_id):
             reason=f"Unpost invoice {getattr(invoice, 'invoice_number', None) or invoice.id}",
         )
 
+        # إلغاء ترحيل القيود المرتبطة بالفاتورة أيضاً
+        try:
+            linked_jes = JournalEntry.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id, is_posted=True
+            ).all()
+            for _je in linked_jes:
+                _je.is_posted = False
+                _je.posted_at = None
+                _je.posted_by = None
+        except Exception:
+            pass
+
         # إلغاء الترحيل
         invoice.is_posted = False
         invoice.posted_at = None
@@ -2023,7 +2035,112 @@ def unpost_journal_entry(entry_id):
 
 
 # ==========================================
-# 📊 إحصائيات الترحيل
+# � إلغاء الترحيل الجماعي
+# ==========================================
+
+@posting_bp.route('/invoices/unpost-batch', methods=['POST'])
+@require_permission('invoice.unpost')
+def unpost_invoices_batch():
+    """إلغاء ترحيل مجموعة فواتير — يتطلب allow_unposting=True في الإعدادات"""
+    try:
+        _us = Settings.query.first()
+        if _us and not bool(getattr(_us, 'allow_unposting', False)):
+            return jsonify({'success': False, 'message': 'إلغاء الترحيل معطّل في إعدادات النظام'}), 403
+
+        posted_by = g.current_user.username
+        data = request.get_json()
+        invoice_ids = data.get('invoice_ids', [])
+
+        if not invoice_ids:
+            return jsonify({'success': False, 'message': 'لم يتم تحديد أي فواتير'}), 400
+
+        invoices = Invoice.query.filter(Invoice.id.in_(invoice_ids), Invoice.is_posted == True).all()
+        unposted_count = 0
+
+        for invoice in invoices:
+            _append_safe_reversal_transactions_for_invoice_gold(
+                invoice, created_by=posted_by,
+                reason=f"Batch unpost {getattr(invoice, 'invoice_number', None) or invoice.id}",
+            )
+            # إلغاء القيود المرتبطة
+            try:
+                for _je in JournalEntry.query.filter_by(
+                    reference_type='invoice', reference_id=invoice.id, is_posted=True
+                ).all():
+                    _je.is_posted = False
+                    _je.posted_at = None
+                    _je.posted_by = None
+            except Exception:
+                pass
+
+            invoice.is_posted = False
+            invoice.posted_at = None
+            invoice.posted_by = None
+            unposted_count += 1
+
+            AuditLog.log_action(
+                user_name=posted_by, action='unpost', entity_type='invoice',
+                entity_id=invoice.id,
+                entity_number=getattr(invoice, 'invoice_number', None) or str(invoice.id),
+                details='{"batch_operation": true}',
+                ip_address=request.remote_addr, user_agent=request.headers.get('User-Agent'),
+            )
+
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'تم إلغاء ترحيل {unposted_count} فاتورة',
+                        'unposted_count': unposted_count}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/journal-entries/unpost-batch', methods=['POST'])
+@require_permission('journal.unpost')
+def unpost_journal_entries_batch():
+    """إلغاء ترحيل مجموعة قيود — يتطلب allow_unposting=True في الإعدادات"""
+    try:
+        _us = Settings.query.first()
+        if _us and not bool(getattr(_us, 'allow_unposting', False)):
+            return jsonify({'success': False, 'message': 'إلغاء الترحيل معطّل في إعدادات النظام'}), 403
+
+        posted_by = g.current_user.username
+        data = request.get_json()
+        entry_ids = data.get('entry_ids', [])
+
+        if not entry_ids:
+            return jsonify({'success': False, 'message': 'لم يتم تحديد أي قيود'}), 400
+
+        entries = JournalEntry.query.filter(
+            JournalEntry.id.in_(entry_ids),
+            JournalEntry.is_posted == True,
+            JournalEntry.is_deleted == False,
+        ).all()
+
+        unposted_count = 0
+        for entry in entries:
+            entry.is_posted = False
+            entry.posted_at = None
+            entry.posted_by = None
+            unposted_count += 1
+            AuditLog.log_action(
+                user_name=posted_by, action='unpost', entity_type='journal_entry',
+                entity_id=entry.id, entity_number=entry.entry_number,
+                details='{"batch_operation": true}',
+                ip_address=request.remote_addr, user_agent=request.headers.get('User-Agent'),
+            )
+
+        db.session.commit()
+        return jsonify({'success': True, 'message': f'تم إلغاء ترحيل {unposted_count} قيد',
+                        'unposted_count': unposted_count}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ==========================================
+# �📊 إحصائيات الترحيل
 # ==========================================
 
 @posting_bp.route('/posting/stats', methods=['GET'])
@@ -2031,24 +2148,33 @@ def unpost_journal_entry(entry_id):
 def get_posting_stats():
     """عرض إحصائيات الترحيل (لا يتطلب صلاحيات)"""
     try:
+        # فواتير معلّقة للموافقة: غير مرحّلة + يوجد تنبيه موافقة غير مراجَع لها
+        pending_approval_ids = set(
+            r[0] for r in db.session.query(SystemAlert.entity_id).filter(
+                SystemAlert.entity_type == 'Invoice',
+                SystemAlert.alert_type == 'invoice_approval',
+                SystemAlert.is_reviewed == False,
+            ).all()
+        )
         stats = {
             'invoices': {
                 'total': Invoice.query.count(),
                 'posted': Invoice.query.filter_by(is_posted=True).count(),
-                'unposted': Invoice.query.filter_by(is_posted=False).count()
+                'unposted': Invoice.query.filter_by(is_posted=False).count(),
+                'pending_approval': len(pending_approval_ids),
             },
             'journal_entries': {
                 'total': JournalEntry.query.filter_by(is_deleted=False).count(),
                 'posted': JournalEntry.query.filter_by(is_posted=True, is_deleted=False).count(),
-                'unposted': JournalEntry.query.filter_by(is_posted=False, is_deleted=False).count()
-            }
+                'unposted': JournalEntry.query.filter_by(is_posted=False, is_deleted=False).count(),
+            },
         }
-        
+
         return jsonify({
             'success': True,
             'stats': stats
         }), 200
-        
+
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

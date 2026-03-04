@@ -4906,6 +4906,19 @@ class ApiService {
     }
   }
 
+  /// Unpost multiple invoices (batch)
+  Future<Map<String, dynamic>> unpostInvoicesBatch(List<int> invoiceIds) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/invoices/unpost-batch'),
+      body: json.encode({'invoice_ids': invoiceIds}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to unpost invoices batch: ${response.body}');
+    }
+  }
+
   /// Approve and fully post a large-discount invoice (manager/admin)
   Future<Map<String, dynamic>> approveLargeDiscountInvoice(
     int invoiceId,
@@ -5012,6 +5025,20 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to unpost journal entry: ${response.body}');
+    }
+  }
+
+  /// Unpost multiple journal entries (batch)
+  Future<Map<String, dynamic>> unpostJournalEntriesBatch(
+      List<int> entryIds) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/journal-entries/unpost-batch'),
+      body: json.encode({'entry_ids': entryIds}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to unpost journal entries batch: ${response.body}');
     }
   }
 
