@@ -6730,6 +6730,17 @@ def update_unposted_invoice(invoice_id: int):
         except Exception:
             pass
 
+        # WeightClosingOrder has invoice_id NOT NULL — must delete before invoice
+        try:
+            from models import WeightClosingOrder, WeightClosingExecution
+            wco = WeightClosingOrder.query.filter_by(invoice_id=invoice_id).first()
+            if wco:
+                WeightClosingExecution.query.filter_by(order_id=wco.id).delete()
+                db.session.delete(wco)
+                db.session.flush()
+        except Exception:
+            pass
+
         # Child rows (cascade would handle these on delete, but be explicit)
         InvoiceItem.query.filter_by(invoice_id=invoice_id).delete()
         InvoicePayment.query.filter_by(invoice_id=invoice_id).delete()
@@ -6857,6 +6868,17 @@ def delete_unposted_invoice(invoice_id: int):
             pass
         try:
             InvoiceWeightSettlement.query.filter_by(invoice_id=invoice_id).delete()
+        except Exception:
+            pass
+
+        # WeightClosingOrder has invoice_id NOT NULL — must delete before invoice
+        try:
+            from models import WeightClosingOrder, WeightClosingExecution
+            wco = WeightClosingOrder.query.filter_by(invoice_id=invoice_id).first()
+            if wco:
+                WeightClosingExecution.query.filter_by(order_id=wco.id).delete()
+                db.session.delete(wco)
+                db.session.flush()
         except Exception:
             pass
 

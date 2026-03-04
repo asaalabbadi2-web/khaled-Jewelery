@@ -1456,7 +1456,7 @@ class WeightClosingOrder(db.Model):
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
-    invoice = db.relationship('Invoice', backref=db.backref('weight_closing_order', uselist=False))
+    invoice = db.relationship('Invoice', backref=db.backref('weight_closing_order', uselist=False, cascade='all, delete-orphan', single_parent=True))
     valuation_journal_entry = db.relationship('JournalEntry', backref='weight_closing_orders', lazy=True)
 
     executions = db.relationship(
