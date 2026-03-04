@@ -475,6 +475,41 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     }
   }
 
+  Future<void> _postAllInvoices() async {
+    if (!_canBatchPostInvoices) {
+      _showError('لا تملك صلاحية الترحيل الجماعي للفواتير');
+      return;
+    }
+
+    final allFiltered = _getFilteredInvoices();
+    if (allFiltered.isEmpty) return;
+
+    final confirm = await _confirmAction(
+      'ترحيل جميع الفواتير',
+      'سيتم ترحيل ${allFiltered.length} فاتورة غير مرحلة. هل أنت متأكد؟',
+    );
+    if (!confirm) return;
+
+    final userName =
+        Provider.of<AuthProvider>(context, listen: false).username;
+
+    try {
+      final ids = allFiltered.map((inv) => inv['id'] as int).toList();
+      final result = await _apiService.postInvoicesBatch(ids, userName);
+
+      if (result['success'] == true) {
+        _showSuccess('تم ترحيل ${result['posted_count']} فاتورة بنجاح');
+        _selectedInvoiceIds.clear();
+        _loadUnpostedInvoices();
+        _loadStatistics();
+      } else {
+        _showError(result['message'] ?? 'فشل الترحيل');
+      }
+    } catch (e) {
+      _showError('خطأ في الترحيل: ${e.toString()}');
+    }
+  }
+
   Future<void> _postInvoice(int invoiceId) async {
     if (!_canPostInvoices) {
       _showError('لا تملك صلاحية ترحيل الفواتير');
@@ -562,6 +597,44 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     }
   }
 
+  Future<void> _postAllEntries() async {
+    if (!_canBatchPostEntries) {
+      _showError('لا تملك صلاحية الترحيل الجماعي للقيود');
+      return;
+    }
+
+    final allFiltered = _getFilteredEntries();
+    if (allFiltered.isEmpty) return;
+
+    final confirm = await _confirmAction(
+      'ترحيل جميع القيود',
+      'سيتم ترحيل ${allFiltered.length} قيد غير مرحل. هل أنت متأكد؟',
+    );
+    if (!confirm) return;
+
+    final userName =
+        Provider.of<AuthProvider>(context, listen: false).username;
+
+    try {
+      final ids = allFiltered.map((e) => e['id'] as int).toList();
+      final result = await _apiService.postJournalEntriesBatch(ids, userName);
+
+      if (result['success'] == true) {
+        _showSuccess('تم ترحيل ${result['posted_count']} قيد بنجاح');
+        if (result['errors'] != null && result['errors'].isNotEmpty) {
+          _showError('تخطي بعض القيود: ${result['errors'].join(', ')}');
+        }
+        _selectedEntryIds.clear();
+        _loadUnpostedEntries();
+        _loadStatistics();
+      } else {
+        _showError(result['message'] ?? 'فشل الترحيل');
+      }
+    } catch (e) {
+      _showError('خطأ في الترحيل: ${e.toString()}');
+    }
+  }
+
   Future<void> _postEntry(int entryId) async {
     if (!_canPostEntries) {
       _showError('لا تملك صلاحية ترحيل القيود');
@@ -634,7 +707,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
             ElevatedButton(
               onPressed: () => Navigator.pop(context, true),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
+                backgroundColor: theme.AppColors.error,
                 foregroundColor: Colors.white,
               ),
               child: const Text('تأكيد'),
@@ -651,7 +724,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: Colors.green,
+        backgroundColor: theme.AppColors.success,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -669,7 +742,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(cleanMessage.isEmpty ? message : cleanMessage),
-        backgroundColor: Colors.red,
+        backgroundColor: theme.AppColors.error,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 5),
       ),
@@ -1012,7 +1085,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               const Text('إدارة الترحيل'),
               if (_enableScheduledPosting) ...[
                 const SizedBox(width: 8),
-                const Icon(Icons.schedule, size: 16, color: Colors.green),
+                const Icon(Icons.schedule, size: 16, color: theme.AppColors.success),
                 const SizedBox(width: 4),
                 Text(
                   _formatTimeOfDay(_scheduledTime),
@@ -1021,7 +1094,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               ],
             ],
           ),
-          backgroundColor: const Color(0xFFFFD700),
+          backgroundColor: theme.AppColors.darkGold,
+          foregroundColor: Colors.white,
           actions: [
             IconButton(
               icon: const Icon(Icons.history),
@@ -1062,6 +1136,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           bottom: TabBar(
             controller: _tabController,
             isScrollable: true,
+            indicatorColor: Colors.white,
+            indicatorWeight: 3,
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white70,
             tabs: [
               Tab(
                 child: Row(
@@ -1163,11 +1241,19 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       margin: const EdgeInsets.all(16),
       elevation: 4,
       clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: theme.AppColors.primaryGold.withValues(alpha: 0.35),
+          width: 1.5,
+        ),
+      ),
       child: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              theme.AppColors.primaryGold.withValues(alpha: 0.12),
+              theme.AppColors.primaryGold.withValues(alpha: 0.15),
+              theme.AppColors.lightGold.withValues(alpha: 0.08),
               surfaceColor,
             ],
             begin: AlignmentDirectional.topEnd,
@@ -1204,6 +1290,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   entryStats['posted'] ?? 0,
                   entryStats['unposted'] ?? 0,
                   Icons.auto_stories,
+                  pendingApproval: entryStats['pending_approval'] ?? 0,
                 ),
               ),
             ],
@@ -1309,6 +1396,58 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     return Column(
       children: [
         _buildSearchAndFilterBar(),
+        // Actions bar: Select All / Post All
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+          child: Row(
+            children: [
+              Text(
+                '${filteredInvoices.length} فاتورة',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey[600],
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    if (_selectedInvoiceIds.length == filteredInvoices.length) {
+                      _selectedInvoiceIds.clear();
+                    } else {
+                      _selectedInvoiceIds.addAll(
+                        filteredInvoices.map((inv) => inv['id'] as int),
+                      );
+                    }
+                  });
+                },
+                icon: Icon(
+                  _selectedInvoiceIds.length == filteredInvoices.length
+                      ? Icons.deselect
+                      : Icons.select_all,
+                  size: 18,
+                ),
+                label: Text(
+                  _selectedInvoiceIds.length == filteredInvoices.length
+                      ? 'إلغاء التحديد'
+                      : 'تحديد الكل',
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: _canBatchPostInvoices ? _postAllInvoices : null,
+                icon: const Icon(Icons.done_all, size: 18),
+                label: const Text('ترحيل الكل'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: theme.AppColors.primaryGold,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ),
         // Selection Header
         if (_selectedInvoiceIds.isNotEmpty)
           Container(
@@ -1388,73 +1527,119 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     final postedBy = invoice['posted_by'];
     final isSelected = _selectedInvoiceIds.contains(id);
 
+    final borderColor = isPosted ? theme.AppColors.success : theme.AppColors.warning;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       elevation: isSelected ? 6 : 2,
       color: isSelected
           ? theme.AppColors.lightGold.withValues(alpha: 0.25)
           : Theme.of(context).cardColor,
-      child: ListTile(
-        leading: isPosted
-            ? const CircleAvatar(
-                backgroundColor: theme.AppColors.success,
-                child: Icon(Icons.check, color: Colors.white),
-              )
-            : Checkbox(
-                value: isSelected,
-                activeColor: theme.AppColors.primaryGold,
-                onChanged: (value) {
-                  setState(() {
-                    if (value == true) {
-                      _selectedInvoiceIds.add(id);
-                    } else {
-                      _selectedInvoiceIds.remove(id);
-                    }
-                  });
-                },
-              ),
-        title: Text(
-          'فاتورة #$id - $invoiceType',
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('المبلغ: ${total.toStringAsFixed(2)} ر.س'),
-            Text('التاريخ: ${_formatDate(date)}'),
-            if (isPosted && postedBy != null)
-              Text(
-                'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-          ],
-        ),
-        trailing: isPosted
-            ? (_allowUnposting
-                ? IconButton(
-                    icon: const Icon(
-                      Icons.cancel,
-                      color: theme.AppColors.error,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: isSelected
+            ? BorderSide(color: theme.AppColors.primaryGold, width: 1.5)
+            : BorderSide.none,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(width: 5, color: borderColor),
+              Expanded(
+                child: ListTile(
+                  leading: isPosted
+                      ? CircleAvatar(
+                          backgroundColor: theme.AppColors.success,
+                          child: const Icon(Icons.check, color: Colors.white),
+                        )
+                      : Checkbox(
+                          value: isSelected,
+                          activeColor: theme.AppColors.primaryGold,
+                          onChanged: (value) {
+                            setState(() {
+                              if (value == true) {
+                                _selectedInvoiceIds.add(id);
+                              } else {
+                                _selectedInvoiceIds.remove(id);
+                              }
+                            });
+                          },
+                        ),
+                  title: Text(
+                    'فاتورة #$id - $invoiceType',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: isPosted
+                          ? Theme.of(context).textTheme.bodyLarge?.color
+                          : theme.AppColors.darkGold,
                     ),
-                    onPressed: () => _unpostInvoice(id),
-                    tooltip: 'إلغاء الترحيل',
-                  )
-                : const Tooltip(
-                    message: 'إلغاء الترحيل معطّل في الإعدادات',
-                    child: Icon(Icons.lock_outline, color: Colors.grey),
-                  ))
-            : IconButton(
-                icon: const Icon(
-                  Icons.check_circle,
-                  color: theme.AppColors.success,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.attach_money, size: 14, color: Colors.grey[600]),
+                          const SizedBox(width: 4),
+                          Text('المبلغ: ${total.toStringAsFixed(2)} ر.س',
+                              style: const TextStyle(fontSize: 12)),
+                          const SizedBox(width: 16),
+                          Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
+                          const SizedBox(width: 4),
+                          Text('التاريخ: ${_formatDate(date)}',
+                              style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                      if (isPosted && postedBy != null) ...[  
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(Icons.verified_user, size: 14,
+                                color: theme.AppColors.success),
+                            const SizedBox(width: 4),
+                            Text(
+                              'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[600],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                  trailing: isPosted
+                      ? (_allowUnposting
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.cancel,
+                                color: theme.AppColors.error,
+                              ),
+                              onPressed: () => _unpostInvoice(id),
+                              tooltip: 'إلغاء الترحيل',
+                            )
+                          : const Tooltip(
+                              message: 'إلغاء الترحيل معطّل في الإعدادات',
+                              child: Icon(Icons.lock_outline, color: Colors.grey),
+                            ))
+                      : IconButton(
+                              icon: const Icon(
+                                Icons.check_circle,
+                                color: theme.AppColors.success,
+                              ),
+                              onPressed: () => _postInvoice(id),
+                              tooltip: 'ترحيل',
+                            ),
                 ),
-                onPressed: () => _postInvoice(id),
-                tooltip: 'ترحيل',
               ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1487,6 +1672,58 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     return Column(
       children: [
         _buildSearchAndFilterBarForEntries(),
+        // Actions bar: Select All / Post All
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+          child: Row(
+            children: [
+              Text(
+                '${filteredEntries.length} قيد',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey[600],
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    if (_selectedEntryIds.length == filteredEntries.length) {
+                      _selectedEntryIds.clear();
+                    } else {
+                      _selectedEntryIds.addAll(
+                        filteredEntries.map((e) => e['id'] as int),
+                      );
+                    }
+                  });
+                },
+                icon: Icon(
+                  _selectedEntryIds.length == filteredEntries.length
+                      ? Icons.deselect
+                      : Icons.select_all,
+                  size: 18,
+                ),
+                label: Text(
+                  _selectedEntryIds.length == filteredEntries.length
+                      ? 'إلغاء التحديد'
+                      : 'تحديد الكل',
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: _canBatchPostEntries ? _postAllEntries : null,
+                icon: const Icon(Icons.done_all, size: 18),
+                label: const Text('ترحيل الكل'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: theme.AppColors.primaryGold,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ),
         // Selection Header
         if (_selectedEntryIds.isNotEmpty)
           Container(
@@ -1564,73 +1801,122 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     final postedBy = entry['posted_by'];
     final isSelected = _selectedEntryIds.contains(id);
 
+    final borderColor = isPosted ? theme.AppColors.success : theme.AppColors.info;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       elevation: isSelected ? 6 : 2,
       color: isSelected
           ? theme.AppColors.lightGold.withValues(alpha: 0.25)
           : Theme.of(context).cardColor,
-      child: ListTile(
-        leading: isPosted
-            ? const CircleAvatar(
-                backgroundColor: theme.AppColors.success,
-                child: Icon(Icons.check, color: Colors.white),
-              )
-            : Checkbox(
-                value: isSelected,
-                activeColor: theme.AppColors.primaryGold,
-                onChanged: (value) {
-                  setState(() {
-                    if (value == true) {
-                      _selectedEntryIds.add(id);
-                    } else {
-                      _selectedEntryIds.remove(id);
-                    }
-                  });
-                },
-              ),
-        title: Text(
-          '$entryNumber - $entryType',
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(description),
-            Text('التاريخ: ${_formatDate(date)}'),
-            if (isPosted && postedBy != null)
-              Text(
-                'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-          ],
-        ),
-        trailing: isPosted
-            ? (_allowUnposting
-                ? IconButton(
-                    icon: const Icon(
-                      Icons.cancel,
-                      color: theme.AppColors.error,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: isSelected
+            ? BorderSide(color: theme.AppColors.primaryGold, width: 1.5)
+            : BorderSide.none,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(width: 5, color: borderColor),
+              Expanded(
+                child: ListTile(
+                  leading: isPosted
+                      ? CircleAvatar(
+                          backgroundColor: theme.AppColors.success,
+                          child: const Icon(Icons.check, color: Colors.white),
+                        )
+                      : Checkbox(
+                          value: isSelected,
+                          activeColor: theme.AppColors.primaryGold,
+                          onChanged: (value) {
+                            setState(() {
+                              if (value == true) {
+                                _selectedEntryIds.add(id);
+                              } else {
+                                _selectedEntryIds.remove(id);
+                              }
+                            });
+                          },
+                        ),
+                  title: Text(
+                    '$entryNumber - $entryType',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: isPosted
+                          ? Theme.of(context).textTheme.bodyLarge?.color
+                          : theme.AppColors.info,
                     ),
-                    onPressed: () => _unpostEntry(id),
-                    tooltip: 'إلغاء الترحيل',
-                  )
-                : const Tooltip(
-                    message: 'إلغاء الترحيل معطّل في الإعدادات',
-                    child: Icon(Icons.lock_outline, color: Colors.grey),
-                  ))
-            : IconButton(
-                icon: const Icon(
-                  Icons.check_circle,
-                  color: theme.AppColors.success,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      if (description.isNotEmpty)
+                        Row(
+                          children: [
+                            Icon(Icons.notes, size: 14, color: Colors.grey[600]),
+                            const SizedBox(width: 4),
+                            Flexible(child: Text(description, style: const TextStyle(fontSize: 12))),
+                          ],
+                        ),
+                      Row(
+                        children: [
+                          Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
+                          const SizedBox(width: 4),
+                          Text('التاريخ: ${_formatDate(date)}',
+                              style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                      if (isPosted && postedBy != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(Icons.verified_user, size: 14,
+                                color: theme.AppColors.success),
+                            const SizedBox(width: 4),
+                            Text(
+                              'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[600],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                  trailing: isPosted
+                      ? (_allowUnposting
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.cancel,
+                                color: theme.AppColors.error,
+                              ),
+                              onPressed: () => _unpostEntry(id),
+                              tooltip: 'إلغاء الترحيل',
+                            )
+                          : const Tooltip(
+                              message: 'إلغاء الترحيل معطّل في الإعدادات',
+                              child: Icon(Icons.lock_outline, color: Colors.grey),
+                            ))
+                      : IconButton(
+                          icon: const Icon(
+                            Icons.check_circle,
+                            color: theme.AppColors.success,
+                          ),
+                          onPressed: () => _postEntry(id),
+                          tooltip: 'ترحيل',
+                        ),
                 ),
-                onPressed: () => _postEntry(id),
-                tooltip: 'ترحيل',
               ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2007,17 +2293,17 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                               children: [
                                 Row(
                                   children: [
-                                    const Icon(
+                                    Icon(
                                       Icons.access_time,
-                                      color: Color(0xFF2E7D32),
+                                      color: theme.AppColors.success,
                                     ),
                                     const SizedBox(width: 12),
                                     Text(
                                       _formatTimeOfDay(_scheduledTime),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.bold,
-                                        color: Color(0xFF2E7D32),
+                                        color: theme.AppColors.success,
                                       ),
                                     ),
                                   ],
@@ -2083,15 +2369,16 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: Colors.blue[50],
+                            color: theme.AppColors.info.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.blue[200]!),
+                            border: Border.all(
+                                color: theme.AppColors.info.withValues(alpha: 0.3)),
                           ),
                           child: Row(
                             children: [
                               Icon(
                                 Icons.info_outline,
-                                color: Colors.blue[700],
+                                color: theme.AppColors.info,
                                 size: 20,
                               ),
                               const SizedBox(width: 12),
@@ -2100,7 +2387,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                                   _getScheduleDescription(),
                                   style: TextStyle(
                                     fontSize: 13,
-                                    color: Colors.blue[900],
+                                    color: theme.AppColors.info,
                                   ),
                                 ),
                               ),
@@ -2182,8 +2469,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               icon: const Icon(Icons.save),
               label: const Text('حفظ الإعدادات'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFD700),
-                foregroundColor: Colors.black,
+                backgroundColor: theme.AppColors.darkGold,
+                foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 textStyle: const TextStyle(
                   fontSize: 18,
@@ -2270,7 +2557,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     if (_tabController.index == 0 && _selectedInvoiceIds.isNotEmpty) {
       return FloatingActionButton.extended(
         onPressed: _postSelectedInvoices,
-        backgroundColor: Colors.green,
+        backgroundColor: theme.AppColors.success,
+        foregroundColor: Colors.white,
         icon: const Icon(Icons.check_circle),
         label: Text('ترحيل ${_selectedInvoiceIds.length} فاتورة'),
       );
@@ -2279,7 +2567,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     if (_tabController.index == 2 && _selectedEntryIds.isNotEmpty) {
       return FloatingActionButton.extended(
         onPressed: _postSelectedEntries,
-        backgroundColor: Colors.green,
+        backgroundColor: theme.AppColors.success,
+        foregroundColor: Colors.white,
         icon: const Icon(Icons.check_circle),
         label: Text('ترحيل ${_selectedEntryIds.length} قيد'),
       );
