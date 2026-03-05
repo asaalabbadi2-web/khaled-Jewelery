@@ -10806,8 +10806,23 @@ def add_invoice():
                                 'safe_box_type': sb_type,
                             }), 400
                     
-                    # مدين حساب الخزينة
-                    if safe_box and safe_box.account:
+                    # ================================================================
+                    # قيد الفاتورة: مدين ذمم العميل (AR) وليس الخزينة مباشرةً.
+                    # السبب: سند القبض المُنشأ أعلاه (Phase 1) يُمدن الخزينة ويُدين
+                    # ذمم العميل ← الذمم تصفر والخزينة تُمدن مرة واحدة فقط.
+                    # إذا كانت الفاتورة غير مرحّلة (unposted_mode) لا يُنشأ سند،
+                    # فنستخدم الخزينة مباشرةً (المسار القديم).
+                    # ================================================================
+                    _ar_debit_id = party_account.id if (party_account and not unposted_mode) else None
+                    if _ar_debit_id:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=_ar_debit_id,
+                            cash_debit=pm_net,
+                            description=f"ذمم عميل - دفعة عبر {pm_obj.name if pm_obj else 'وسيلة دفع'}",
+                            apply_golden_rule=False
+                        )
+                    elif safe_box and safe_box.account:
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,
                             account_id=safe_box.account.id,
@@ -10938,7 +10953,23 @@ def add_invoice():
                             'safe_box_type': sb_type,
                         }), 400
                 
-                if safe_box and safe_box.account:
+                # ================================================================
+                # قيد الفاتورة: مدين ذمم العميل (AR) وليس الخزينة مباشرةً.
+                # السبب: سند القبض المُنشأ أعلاه (Phase 1) يُمدن الخزينة ويُدين
+                # ذمم العميل ← الذمم تصفر والخزينة تُمدن مرة واحدة فقط.
+                # إذا كانت الفاتورة غير مرحّلة (unposted_mode) لا يُنشأ سند،
+                # فنستخدم الخزينة مباشرةً (المسار القديم).
+                # ================================================================
+                _ar_debit_id_single = party_account.id if (party_account and not unposted_mode) else None
+                if _ar_debit_id_single:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=_ar_debit_id_single,
+                        cash_debit=actual_debit_amount,
+                        description=f"ذمم عميل - دفعة عبر {payment_method_obj.name if payment_method_obj else 'وسيلة دفع'}",
+                        apply_golden_rule=False
+                    )
+                elif safe_box and safe_box.account:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=safe_box.account.id,
