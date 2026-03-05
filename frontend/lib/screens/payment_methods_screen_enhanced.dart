@@ -22,6 +22,7 @@ class _PaymentMethodsScreenEnhancedState
   List<Map<String, dynamic>> _invoiceTypeOptions = [];
   List<String> _invoiceTypeDefaultSelection = [];
   List<SafeBoxModel> _availableSafeBoxes = [];
+  List<Map<String, dynamic>> _accounts = [];
   bool _isLoading = true;
 
   // ألوان النظام
@@ -229,12 +230,28 @@ class _PaymentMethodsScreenEnhancedState
           .map((method) => Map<String, dynamic>.from(method))
           .toList();
 
+      List<Map<String, dynamic>> accounts = [];
+      try {
+        final rawAccounts = await apiService.getAccounts();
+        accounts = rawAccounts
+            .whereType<Map<String, dynamic>>()
+            .where((a) {
+              final hasChildren = (a['sub_accounts'] as List?)?.isNotEmpty == true;
+              return !hasChildren; // detail accounts only
+            })
+            .map((a) => Map<String, dynamic>.from(a))
+            .toList();
+      } catch (_) {
+        accounts = [];
+      }
+
       setState(() {
         _paymentMethods = paymentMethods;
         _paymentTypes = dedupedTypesByCode.values.toList();
         _invoiceTypeOptions = invoiceOptions;
         _invoiceTypeDefaultSelection = defaultInvoiceSelection;
         _availableSafeBoxes = safeBoxes;
+        _accounts = accounts;
         _isLoading = false;
       });
     } catch (e) {
@@ -829,6 +846,14 @@ class _PaymentMethodsScreenEnhancedState
       settlementBankSafeBoxId = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
     } catch (_) {
       settlementBankSafeBoxId = null;
+    }
+
+    int? feeExpenseAccountId;
+    try {
+      final raw = editingMethod?['fee_expense_account_id'];
+      feeExpenseAccountId = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
+    } catch (_) {
+      feeExpenseAccountId = null;
     }
 
     String selectedCommissionTiming =
@@ -1567,6 +1592,119 @@ class _PaymentMethodsScreenEnhancedState
 
                   SizedBox(height: 16),
 
+                  SizedBox(height: 16),
+
+                  // حساب مصروف العمولة (للتسوية)
+                  Builder(
+                    builder: (context) {
+                      Map<String, dynamic>? selectedFeeAccount;
+                      if (feeExpenseAccountId != null) {
+                        try {
+                          selectedFeeAccount = _accounts.firstWhere(
+                            (a) => a['id'] == feeExpenseAccountId,
+                          );
+                        } catch (_) {
+                          selectedFeeAccount = null;
+                        }
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              'حساب مصروف العمولة (للتسوية)',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          InkWell(
+                            onTap: _accounts.isEmpty
+                                ? null
+                                : () async {
+                                    final picked = await showDialog<Map<String, dynamic>>(
+                                      context: context,
+                                      builder: (_) => _AccountPickerDialog(
+                                        accounts: _accounts,
+                                        selectedId: feeExpenseAccountId,
+                                      ),
+                                    );
+                                    if (picked != null) {
+                                      setDialogState(() {
+                                        feeExpenseAccountId = picked['id'] as int?;
+                                      });
+                                    }
+                                  },
+                            borderRadius: BorderRadius.circular(12),
+                            child: InputDecorator(
+                              decoration: InputDecoration(
+                                labelText: 'حساب المصروف',
+                                prefixIcon: Icon(
+                                  Icons.account_tree_outlined,
+                                  color: _warningColor,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                                fillColor: Colors.grey.shade50,
+                                suffixIcon: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (feeExpenseAccountId != null)
+                                      IconButton(
+                                        tooltip: 'مسح الربط',
+                                        onPressed: () => setDialogState(() {
+                                          feeExpenseAccountId = null;
+                                        }),
+                                        icon: Icon(
+                                          Icons.close,
+                                          color: Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    Icon(
+                                      Icons.arrow_drop_down,
+                                      color: _accounts.isEmpty
+                                          ? Colors.grey.shade400
+                                          : Colors.grey.shade700,
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                ),
+                              ),
+                              child: Text(
+                                selectedFeeAccount == null
+                                    ? (_accounts.isEmpty
+                                        ? 'لا توجد حسابات'
+                                        : 'اختر حساب مصروف العمولة (اختياري)')
+                                    : '${selectedFeeAccount['name']} (${selectedFeeAccount['account_number'] ?? ''})',
+                                style: TextStyle(
+                                  color: selectedFeeAccount == null
+                                      ? Colors.grey.shade600
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'يُستخدم عند إنشاء قيد تسوية المستحقات تلقائياً لتسجيل مصروف عمولة وسيلة الدفع.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                            textAlign: TextAlign.right,
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+
+                  SizedBox(height: 16),
+
                   // حالة التفعيل
                   Container(
                     decoration: BoxDecoration(
@@ -1657,6 +1795,7 @@ class _PaymentMethodsScreenEnhancedState
                         settlementScheduleType: settlementScheduleType,
                         settlementWeekday: settlementWeekday,
                         settlementBankSafeBoxId: settlementBankSafeBoxId,
+                        feeExpenseAccountId: feeExpenseAccountId,
                         isActive: isActive,
                         applicableInvoiceTypes: invoiceTypeList,
                       );
@@ -1674,6 +1813,7 @@ class _PaymentMethodsScreenEnhancedState
                         settlementScheduleType: settlementScheduleType,
                         settlementWeekday: settlementWeekday,
                         settlementBankSafeBoxId: settlementBankSafeBoxId,
+                        feeExpenseAccountId: feeExpenseAccountId,
                         isActive: isActive,
                         defaultSafeBoxId: selectedDefaultSafeBoxId,
                         applicableInvoiceTypes: invoiceTypeList,
@@ -1710,6 +1850,79 @@ class _PaymentMethodsScreenEnhancedState
           ],
         ),
       ),
+    );
+  }
+}
+
+/// حوار اختيار حساب من القائمة مع دعم البحث
+class _AccountPickerDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> accounts;
+  final int? selectedId;
+
+  const _AccountPickerDialog({required this.accounts, this.selectedId});
+
+  @override
+  State<_AccountPickerDialog> createState() => _AccountPickerDialogState();
+}
+
+class _AccountPickerDialogState extends State<_AccountPickerDialog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = widget.accounts.where((a) {
+      final name = (a['name'] ?? '').toString().toLowerCase();
+      final number = (a['account_number'] ?? '').toString();
+      final q = _query.trim().toLowerCase();
+      return q.isEmpty || name.contains(q) || number.contains(q);
+    }).toList();
+
+    return AlertDialog(
+      title: const Text('اختر حساب المصروف'),
+      content: SizedBox(
+        width: 360,
+        height: 420,
+        child: Column(
+          children: [
+            TextField(
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'بحث باسم أو رقم الحساب...',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (v) => setState(() => _query = v),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.builder(
+                itemCount: filtered.length,
+                itemBuilder: (context, index) {
+                  final acc = filtered[index];
+                  final isSelected = acc['id'] == widget.selectedId;
+                  return ListTile(
+                    selected: isSelected,
+                    selectedTileColor: const Color(0xFF1976D2).withValues(alpha: 0.08),
+                    leading: Icon(
+                      Icons.account_tree_outlined,
+                      color: isSelected ? const Color(0xFF1976D2) : null,
+                    ),
+                    title: Text(acc['name']?.toString() ?? ''),
+                    subtitle: Text(acc['account_number']?.toString() ?? ''),
+                    onTap: () => Navigator.pop(context, acc),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+      ],
     );
   }
 }

@@ -4,67 +4,135 @@ import os
 import schedule
 import requests
 import datetime
+from typing import Optional
 from models import db
 
-def fetch_gold_price():
-    """
-    Fetches the gold price from the goldprice.org API.
-    The new logic directly accesses the first item in the list.
-    """
-    try:
-        url = "https://data-asg.goldprice.org/dbXRates/USD"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
 
-        # Directly access the price from the first item in the list
-        if data.get('items') and len(data['items']) > 0:
-            price = data['items'][0].get('xauPrice')
-            if price is not None:
-                print(f"[INFO] Gold price fetched successfully: {price}")
+# ---------------------------------------------------------------------------
+# Source 1 – Swissquote public forex feed (free, no API key, reliable)
+# Returns XAU/USD bid/ask – we use mid-price as ounce price in USD.
+# ---------------------------------------------------------------------------
+def _fetch_from_swissquote() -> Optional[float]:
+    """Fetch live gold ounce price from Swissquote public feed."""
+    url = 'https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/120.0.0.0 Safari/537.36',
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=12)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            return None
+        prices = data[0].get('spreadProfilePrices', [])
+        if not prices:
+            return None
+        bid = prices[0].get('bid', 0)
+        ask = prices[0].get('ask', 0)
+        if bid <= 0 or ask <= 0:
+            return None
+        mid = (bid + ask) / 2.0
+        # Sanity check: gold is typically 500 – 15 000 USD/oz
+        if mid < 500 or mid > 15000:
+            print(f'[WARN] Swissquote mid-price {mid} out of sane range – ignoring.')
+            return None
+        print(f'[INFO] Swissquote gold price: ${mid:.2f}/oz (bid={bid}, ask={ask})')
+        return mid
+    except Exception as e:
+        print(f'[WARN] Swissquote fetch failed: {e}')
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Source 2 – goldprice.org (original source, may 403 with rate-limiting)
+# ---------------------------------------------------------------------------
+def _fetch_from_goldprice_org() -> Optional[float]:
+    """Fetch gold ounce price from goldprice.org API."""
+    url = 'https://data-asg.goldprice.org/dbXRates/USD'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/120.0.0.0 Safari/537.36',
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get('items')
+        if items and len(items) > 0:
+            price = items[0].get('xauPrice')
+            if price is not None and float(price) > 0:
+                print(f'[INFO] goldprice.org gold price: ${price}/oz')
                 return float(price)
+        return None
+    except Exception as e:
+        print(f'[WARN] goldprice.org fetch failed: {e}')
+        return None
 
-        print("[ERROR] 'xauPrice' not found in API response.")
-        return fetch_gold_price_fallback()
 
-    except requests.exceptions.RequestException as e:
-        print(f"[ERROR] Exception in fetch_gold_price (goldprice.org API): {e}")
-        return fetch_gold_price_fallback()
-    except (ValueError, KeyError, IndexError) as e:
-        print(f"[ERROR] Error parsing goldprice.org API response: {e}")
-        return fetch_gold_price_fallback()
-
-def fetch_gold_price_fallback():
-    # في حالة الفشل، حاول استخدام Yahoo Finance كبديل
-    print("[INFO] Attempting to fetch gold price from Yahoo Finance as a fallback.")
-    import yfinance as yf
+# ---------------------------------------------------------------------------
+# Source 3 – Yahoo Finance (GC=F futures, requires yfinance)
+# ---------------------------------------------------------------------------
+def _fetch_from_yahoo() -> Optional[float]:
+    """Fetch gold price from Yahoo Finance GC=F futures."""
     try:
-        ticker = yf.Ticker("GC=F")
-        data = ticker.history(period="1d")
-        if not data.empty:
-            price = data['Close'].iloc[-1]
-            return float(price)
-        else:
-            print("[ERROR] لا توجد بيانات من Yahoo Finance.")
-            return get_last_known_price()
-    except Exception as e_yahoo:
-        print(f"[ERROR] Exception in fetch_gold_price (Yahoo): {e_yahoo}")
-        return get_last_known_price()
+        import yfinance as yf
+        ticker = yf.Ticker('GC=F')
+        data = ticker.history(period='1d')
+        if data is not None and not data.empty:
+            price = float(data['Close'].iloc[-1])
+            if price > 0:
+                print(f'[INFO] Yahoo Finance gold price: ${price:.2f}/oz')
+                return price
+        print('[WARN] Yahoo Finance returned no data for GC=F.')
+        return None
+    except Exception as e:
+        print(f'[WARN] Yahoo Finance fetch failed: {e}')
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Aggregate fetcher – tries sources in priority order
+# ---------------------------------------------------------------------------
+def fetch_gold_price() -> Optional[float]:
+    """Try multiple sources in order and return the first successful ounce price (USD)."""
+    sources = [
+        ('Swissquote', _fetch_from_swissquote),
+        ('goldprice.org', _fetch_from_goldprice_org),
+        ('Yahoo Finance', _fetch_from_yahoo),
+    ]
+    for name, fn in sources:
+        try:
+            price = fn()
+            if price is not None and price > 0:
+                return price
+        except Exception as e:
+            print(f'[ERROR] Unexpected error in {name}: {e}')
+    # All sources failed – fall back to last DB value
+    print('[WARN] All live gold price sources failed. Using last known DB price.')
+    return get_last_known_price()
+
 
 def get_last_known_price():
-    """Fetches the most recent gold price from the database."""
-    from models import GoldPrice
-    print("[INFO] Fetching last known gold price from database.")
-    last_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
-    if last_price:
-        print(f"[INFO] Found last known price: {last_price.price}")
-        return last_price.price
-    else:
-        print("[WARNING] No gold price found in the database.")
-        return None
+    """Fetches the most recent gold price from the database.
+    
+    Safe to call both inside and outside Flask app context.
+    """
+    try:
+        from models import GoldPrice
+        last_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
+        if last_price:
+            print(f'[INFO] Last known DB price: {last_price.price}')
+            return last_price.price
+    except RuntimeError:
+        # Outside app context – cannot query DB.
+        print('[WARN] get_last_known_price called outside app context – skipping.')
+    except Exception as e:
+        print(f'[WARN] get_last_known_price error: {e}')
+    return None
+
 
 def save_gold_price(app, price):
     with app.app_context():
@@ -74,26 +142,24 @@ def save_gold_price(app, price):
         db.session.commit()
 
 
-# جدولة تحديث تلقائي لسعر الذهب كل ساعة
+# ---------------------------------------------------------------------------
+# Scheduler – auto-update gold price at a configurable interval
+# ---------------------------------------------------------------------------
 def auto_update_gold_price(app):
     price = fetch_gold_price()
     if price:
         save_gold_price(app, price)
-        print(f"[AutoUpdate] تم تحديث سعر الذهب تلقائياً: {price}")
+        print(f'[AutoUpdate] Gold price updated: ${price:.2f}/oz')
     else:
-        print("[AutoUpdate] لم يتم جلب سعر الذهب.")
+        print('[AutoUpdate] Failed to fetch gold price from all sources.')
+
 
 def start_scheduler(app):
-    # Pass the app instance to the job
     schedule.every(1).minutes.do(auto_update_gold_price, app=app)
+
     def run():
         while True:
             schedule.run_pending()
             time.sleep(60)
+
     Thread(target=run, daemon=True).start()
-
-
-# class GoldPrice(db.Model):
-#     id = db.Column(db.Integer, primary_key=True)
-#     price = db.Column(db.Float, nullable=False)
-#     date = db.Column(db.DateTime, default=db.func.now())

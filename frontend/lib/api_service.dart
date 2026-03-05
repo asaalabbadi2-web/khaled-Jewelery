@@ -3175,6 +3175,7 @@ class ApiService {
     String settlementScheduleType = 'days',
     int? settlementWeekday,
     int? settlementBankSafeBoxId,
+    int? feeExpenseAccountId,
     bool isActive = true,
     List<String>? applicableInvoiceTypes,
   }) async {
@@ -3204,6 +3205,9 @@ class ApiService {
       payload['applicable_invoice_types'] = applicableInvoiceTypes;
     }
 
+    // إرسال حساب مصروف العمولة (اختياري)
+    payload['fee_expense_account_id'] = feeExpenseAccountId;
+
     final response = await http.post(
       Uri.parse('$_baseUrl/payment-methods'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
@@ -3229,6 +3233,7 @@ class ApiService {
     String? settlementScheduleType,
     int? settlementWeekday,
     int? settlementBankSafeBoxId,
+    int? feeExpenseAccountId,
     required bool isActive,
     int? defaultSafeBoxId,
     List<String>? applicableInvoiceTypes,
@@ -3261,6 +3266,9 @@ class ApiService {
     if (settlementBankSafeBoxId != null || (autoSettlementEnabled == true)) {
       payload['settlement_bank_safe_box_id'] = settlementBankSafeBoxId;
     }
+
+    // إرسال حساب مصروف العمولة (يُسمح بإرسال null لمسح الربط)
+    payload['fee_expense_account_id'] = feeExpenseAccountId;
 
     if (applicableInvoiceTypes != null && applicableInvoiceTypes.isNotEmpty) {
       payload['applicable_invoice_types'] = applicableInvoiceTypes;

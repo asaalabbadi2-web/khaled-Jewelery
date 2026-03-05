@@ -6037,12 +6037,12 @@ def get_gold_price():
     now = datetime.now()
     opening = _get_today_opening(now)
     
-    # إذا لم يكن هناك سعر أو السعر قديم (أكثر من 24 ساعة)
+    # إذا لم يكن هناك سعر أو السعر قديم (أكثر من 5 دقائق)
     should_update = False
     if not latest:
         print('[INFO] لا يوجد سعر ذهب في قاعدة البيانات - سيتم الجلب من API')
         should_update = True
-    elif (now - latest.date) > timedelta(hours=24):
+    elif (now - latest.date) > timedelta(minutes=5):
         print(f'[INFO] السعر المحفوظ قديم ({latest.date}) - سيتم التحديث')
         should_update = True
     
