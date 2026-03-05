@@ -25,6 +25,7 @@ from models import (
     Invoice,
     InvoicePayment,
     JournalEntry,
+    JournalEntryLine,
     Account,
     Customer,
     Supplier,
@@ -163,6 +164,197 @@ def _resolve_employee_for_invoice(invoice: Invoice, for_scrap_purchase: bool = F
         pass
 
     return None
+
+
+def _direction_for_invoice_cash(invoice_type: str) -> str:
+    """Map invoice type to cash direction: 'in' (cash received) or 'out' (cash paid)."""
+    t = (invoice_type or '').strip()
+    if t == 'بيع':
+        return 'in'
+    if t == 'مرتجع بيع':
+        return 'out'
+    if t in ('شراء من عميل', 'شراء') or ('شراء' in t and 'مورد' in t and 'مرتجع' not in t):
+        return 'out'
+    if t in ('مرتجع شراء', 'مرتجع شراء (مورد)') or ('مرتجع' in t and 'شراء' in t and 'مورد' in t):
+        return 'in'
+    return 'in'
+
+
+def _is_receivable_pm(pm) -> bool:
+    try:
+        return str(getattr(pm, 'payment_type', '') or '').strip().lower() == 'receivable'
+    except Exception:
+        return False
+
+
+def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
+    """
+    عند ترحيل فاتورة كانت محفوظة بوضع 'غير مرحّلة' (unposted_mode):
+
+    المشكلة:
+      قيد الفاتورة يُمدن ذمم العميل (AR) ← ويبقى معلقاً حتى يُسوَّى.
+      لكن عند الحفظ كمسودة لا يُنشأ سند ولا SafeBoxTransaction.
+      فعند الترحيل لاحقاً: ذمم العميل تظل مدينة والنقد لا يدخل الخزينة!
+
+    الحل:
+      لكل InvoicePayment لم تُسجَّل SafeBoxTransaction خاصة بها بعد:
+        1. ننشئ SafeBoxTransaction (لرصيد الخزينة في لوحة التحكم)
+        2. ننشئ JournalEntry:
+             مدين خزينة / دائن ذمم العميل   (للبيع - cash in)
+             مدين ذمم المورد / دائن خزينة   (للشراء - cash out)
+      → ذمم العميل/المورد تصفر تلقائياً.
+    """
+    payments = list(getattr(invoice, 'payments', []) or [])
+    if not payments:
+        return
+
+    direction = _direction_for_invoice_cash(getattr(invoice, 'invoice_type', None))
+
+    # حساب الطرف (ذمم العميل أو المورد)
+    party_account_id = None
+    try:
+        cust_id = getattr(invoice, 'customer_id', None)
+        supp_id = getattr(invoice, 'supplier_id', None)
+        if cust_id:
+            c = Customer.query.get(int(cust_id))
+            party_account_id = int(c.account_id) if (c and c.account_id) else None
+        elif supp_id:
+            s = Supplier.query.get(int(supp_id))
+            party_account_id = int(s.account_id) if (s and s.account_id) else None
+    except Exception:
+        pass
+
+    for pay in payments:
+        try:
+            pay_id = int(getattr(pay, 'id', 0) or 0)
+        except Exception:
+            pay_id = 0
+        if pay_id <= 0:
+            continue
+
+        # idempotency: تخطّ إذا SafeBoxTransaction موجودة بالفعل
+        already = SafeBoxTransaction.query.filter_by(
+            ref_type='invoice_payment', invoice_payment_id=pay_id
+        ).first()
+        if already:
+            continue
+
+        pm_obj = None
+        try:
+            pm_id = getattr(pay, 'payment_method_id', None)
+            if pm_id not in (None, '', False):
+                pm_obj = PaymentMethod.query.get(int(pm_id))
+        except Exception:
+            pass
+
+        if _is_receivable_pm(pm_obj):
+            continue  # دفع آجل: لا حركة خزينة
+
+        # استرجاع safe_box_id المحفوظ مسبقاً في حقل notes أو invoice
+        explicit_safe_box_id = None
+        notes_user = None
+        try:
+            raw_notes = getattr(pay, 'notes', None)
+            if raw_notes:
+                decoded = json.loads(raw_notes)
+                if isinstance(decoded, dict):
+                    notes_user = decoded.get('user_notes')
+                    raw_sb = decoded.get('safe_box_id')
+                    if raw_sb not in (None, '', 0, '0', False):
+                        explicit_safe_box_id = int(raw_sb)
+        except Exception:
+            notes_user = getattr(pay, 'notes', None)
+
+        safe_box_id = _resolve_cash_safe_box_id_for_invoice(
+            invoice=invoice,
+            pm_obj=pm_obj,
+            explicit_safe_box_id=explicit_safe_box_id,
+        )
+        if safe_box_id is None:
+            print(f'[deferred_payment] تحذير: تعذر إيجاد خزينة لدفعة #{pay_id} في الفاتورة #{invoice.id}')
+            continue
+
+        sb = SafeBox.query.get(int(safe_box_id))
+        if not sb:
+            print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} غير موجودة - دفعة #{pay_id}')
+            continue
+
+        try:
+            amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
+        except Exception:
+            amount_cash = 0.0
+
+        if amount_cash <= 0:
+            continue
+
+        # 1) SafeBoxTransaction
+        db.session.add(SafeBoxTransaction(
+            safe_box_id=int(safe_box_id),
+            ref_type='invoice_payment',
+            ref_id=pay_id,
+            invoice_id=invoice.id,
+            invoice_payment_id=pay_id,
+            payment_method_id=getattr(pay, 'payment_method_id', None),
+            direction=direction,
+            amount_cash=amount_cash,
+            notes=notes_user,
+            created_by=posted_by,
+        ))
+
+        # 2) JournalEntry: مدين خزينة / دائن ذمم -- أو العكس للشراء
+        safe_account_id = getattr(sb, 'account_id', None)
+        if not safe_account_id:
+            print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} لا تحتوي على account_id - لن يُنشأ قيد')
+            continue
+
+        ts = datetime.now().strftime('%Y%m%d%H%M%S')
+        entry_number = f'DEF-{invoice.id}-{pay_id}-{ts}'
+        je = JournalEntry(
+            entry_number=entry_number,
+            date=getattr(invoice, 'date', None) or datetime.now(),
+            description=(
+                f'تسوية دفعة مؤجلة - فاتورة #{getattr(invoice, "invoice_type_id", invoice.id)}'
+            ),
+            reference_type='invoice_payment_deferred',
+            reference_id=invoice.id,
+            is_posted=True,
+            posted_at=datetime.now(),
+            posted_by=posted_by,
+            created_by=posted_by,
+        )
+        db.session.add(je)
+        db.session.flush()
+
+        if direction == 'in':
+            # بيع: مدين خزينة ← دائن ذمم عميل
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=int(safe_account_id),
+                cash_debit=amount_cash,
+                description=f'استلام نقد - دفعة #{pay_id}',
+            ))
+            credit_acc = party_account_id or int(safe_account_id)
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=credit_acc,
+                cash_credit=amount_cash,
+                description=f'تسوية ذمم عميل - دفعة #{pay_id}',
+            ))
+        else:
+            # شراء: مدين ذمم مورد ← دائن خزينة
+            debit_acc = party_account_id or int(safe_account_id)
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=debit_acc,
+                cash_debit=amount_cash,
+                description=f'تسوية ذمم مورد - دفعة #{pay_id}',
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=int(safe_account_id),
+                cash_credit=amount_cash,
+                description=f'صرف نقد - دفعة #{pay_id}',
+            ))
 
 
 def _resolve_cash_safe_box_id_for_invoice(
@@ -1287,6 +1479,13 @@ def post_invoice(invoice_id):
                 _je.posted_by = posted_by
         except Exception as _je_err:
             print(f"[post_invoice] خطأ في ترحيل القيود المرتبطة: {_je_err}")
+
+        # ✅ إنشاء حركات الخزينة وقيود التسوية للدفعات المؤجلة (unposted_mode invoices)
+        # يضمن دخول النقد للخزينة وصفر ذمم العميل بعد الترحيل.
+        try:
+            _create_deferred_payment_entries(invoice, posted_by=posted_by)
+        except Exception as _def_err:
+            print(f"[post_invoice] خطأ في إنشاء قيود الدفع المؤجل: {_def_err}")
         
         db.session.commit()
         
@@ -1362,118 +1561,6 @@ def approve_large_discount_invoice(invoice_id):
         if getattr(invoice, 'is_posted', False):
             return jsonify({'success': False, 'message': 'الفاتورة مرحلة بالفعل'}), 400
 
-        def _direction_for_invoice_cash(t: str) -> str:
-            t = (t or '').strip()
-            if not t:
-                return 'in'
-            if t == 'بيع':
-                return 'in'
-            if t == 'مرتجع بيع':
-                return 'out'
-            if t in ('شراء من عميل', 'شراء') or ('شراء' in t and 'مورد' in t and 'مرتجع' not in t):
-                return 'out'
-            if t in ('مرتجع شراء', 'مرتجع شراء (مورد)') or ('مرتجع' in t and 'شراء' in t and 'مورد' in t):
-                return 'in'
-            return 'in'
-
-        def _is_receivable_payment_method(pm: PaymentMethod | None) -> bool:
-            if pm is None:
-                return False
-            try:
-                pt = str(getattr(pm, 'payment_type', '') or '').strip().lower()
-                return pt == 'receivable'
-            except Exception:
-                return False
-
-        # Create deferred safe box transactions for invoice payments (idempotent).
-        payments = list(getattr(invoice, 'payments', []) or [])
-        for pay in payments:
-            try:
-                pay_id = int(getattr(pay, 'id', 0) or 0)
-            except Exception:
-                pay_id = 0
-            if pay_id <= 0:
-                continue
-
-            exists = (
-                SafeBoxTransaction.query.filter_by(ref_type='invoice_payment', invoice_payment_id=pay_id)
-                .order_by(SafeBoxTransaction.id.desc())
-                .first()
-            )
-            if exists:
-                continue
-
-            pm_obj = None
-            try:
-                pm_id = getattr(pay, 'payment_method_id', None)
-                if pm_id not in (None, '', False):
-                    pm_obj = PaymentMethod.query.get(int(pm_id))
-            except Exception:
-                pm_obj = None
-
-            if _is_receivable_payment_method(pm_obj):
-                continue
-
-            explicit_safe_box_id = None
-            notes_for_tx = None
-            try:
-                raw_notes = getattr(pay, 'notes', None)
-                if raw_notes:
-                    decoded = json.loads(raw_notes)
-                    if isinstance(decoded, dict):
-                        notes_for_tx = decoded.get('user_notes')
-                        raw_sb = decoded.get('safe_box_id')
-                        if raw_sb not in (None, '', 0, '0', False):
-                            explicit_safe_box_id = int(raw_sb)
-            except Exception:
-                notes_for_tx = getattr(pay, 'notes', None)
-
-            safe_box_id = _resolve_cash_safe_box_id_for_invoice(
-                invoice=invoice,
-                pm_obj=pm_obj,
-                explicit_safe_box_id=explicit_safe_box_id,
-            )
-            if safe_box_id is None:
-                db.session.rollback()
-                return jsonify({
-                    'success': False,
-                    'message': 'تعذر تحديد خزينة لوسيلة الدفع أثناء الاعتماد',
-                    'invoice_id': invoice_id,
-                    'invoice_payment_id': pay_id,
-                }), 400
-
-            sb = SafeBox.query.get(int(safe_box_id))
-            if not sb:
-                db.session.rollback()
-                return jsonify({
-                    'success': False,
-                    'message': 'الخزينة المحددة غير موجودة',
-                    'safe_box_id': safe_box_id,
-                    'invoice_id': invoice_id,
-                    'invoice_payment_id': pay_id,
-                }), 400
-
-            direction = _direction_for_invoice_cash(getattr(invoice, 'invoice_type', None))
-            try:
-                amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
-            except Exception:
-                amount_cash = 0.0
-
-            db.session.add(
-                SafeBoxTransaction(
-                    safe_box_id=int(safe_box_id),
-                    ref_type='invoice_payment',
-                    ref_id=pay_id,
-                    invoice_id=invoice.id,
-                    invoice_payment_id=pay_id,
-                    payment_method_id=getattr(pay, 'payment_method_id', None),
-                    direction=direction,
-                    amount_cash=amount_cash,
-                    notes=notes_for_tx,
-                    created_by=approved_by,
-                )
-            )
-
         # Mark invoice as posted (approval implies posting).
         invoice.is_posted = True
         invoice.posted_at = datetime.now()
@@ -1501,6 +1588,10 @@ def approve_large_discount_invoice(invoice_id):
 
         # Append gold inventory movements into SafeBox ledger (append-only)
         _append_safe_transactions_for_invoice_gold(invoice, created_by=approved_by)
+
+        # ✅ إنشاء SafeBoxTransaction + قيود التسوية للدفعات المؤجلة
+        # (مشترك مع post_invoice - يضمن دخول النقد للخزينة وصفر ذمم الطرف)
+        _create_deferred_payment_entries(invoice, posted_by=approved_by)
 
         db.session.commit()
 
@@ -1574,6 +1665,12 @@ def post_invoices_batch():
                         _je.posted_by = posted_by
                 except Exception as _je_err:
                     print(f"[post_invoices_batch] خطأ في ترحيل القيود المرتبطة للفاتورة {invoice.id}: {_je_err}")
+
+                # ✅ إنشاء حركات الخزينة وقيود التسوية للدفعات المؤجلة
+                try:
+                    _create_deferred_payment_entries(invoice, posted_by=posted_by)
+                except Exception as _def_err:
+                    print(f"[post_invoices_batch] خطأ في قيود الدفع المؤجل للفاتورة {invoice.id}: {_def_err}")
 
                 # تسجيل كل عملية ناجحة
                 AuditLog.log_action(
