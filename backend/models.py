@@ -330,6 +330,11 @@ class PaymentMethod(db.Model):
     # إذا كان رصيد التحصيل أقل من هذا المبلغ، تؤجل التسوية التلقائية
     min_settlement_amount = db.Column(db.Float, default=0.0, nullable=False)
 
+    # نمط التسوية:
+    # - bulk: تسوية مجمعة (سند واحد لكل المعاملات المستحقة)
+    # - per_transaction: تسوية فردية (سند لكل معاملة على حدة)
+    settlement_mode = db.Column(db.String(20), default='bulk', nullable=False)
+
     # حساب مصروف العمولة الافتراضي لهذه الوسيلة (يُحمَّل تلقائياً عند التسوية)
     fee_expense_account_id = db.Column(
         db.Integer,
@@ -392,6 +397,7 @@ class PaymentMethod(db.Model):
             'settlement_bank_safe_box_id': getattr(self, 'settlement_bank_safe_box_id', None),
             'fee_expense_account_id': getattr(self, 'fee_expense_account_id', None),
             'min_settlement_amount': float(getattr(self, 'min_settlement_amount', 0.0) or 0.0),
+            'settlement_mode': str(getattr(self, 'settlement_mode', 'bulk') or 'bulk'),
             'is_active': self.is_active,
             'display_order': self.display_order,
             'applicable_invoice_types': list(self.applicable_invoice_types)

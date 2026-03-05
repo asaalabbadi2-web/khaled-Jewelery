@@ -866,6 +866,13 @@ class _PaymentMethodsScreenEnhancedState
       selectedCommissionTiming = 'invoice';
     }
 
+    String selectedSettlementMode =
+        (editingMethod?['settlement_mode']?.toString().trim().toLowerCase() ?? 'bulk');
+    if (selectedSettlementMode != 'bulk' &&
+        selectedSettlementMode != 'per_transaction') {
+      selectedSettlementMode = 'bulk';
+    }
+
     String? selectedType = editingMethod?['payment_type'];
     bool isActive = editingMethod?['is_active'] ?? true;
     String? invoiceTypesError;
@@ -1142,6 +1149,43 @@ class _PaymentMethodsScreenEnhancedState
                       fillColor: Colors.grey.shade50,
                     ),
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  ),
+
+                  SizedBox(height: 16),
+
+                  // نمط التسوية: مجمّعة أو فردية
+                  DropdownButtonFormField<String>(
+                    value: selectedSettlementMode,
+                    decoration: InputDecoration(
+                      labelText: 'نمط التسوية',
+                      prefixIcon: Icon(Icons.sync_alt, color: _infoColor),
+                      helperText: selectedSettlementMode == 'per_transaction'
+                          ? 'سند مستقل لكل معاملة — تظهر فردياً بكشف الحساب'
+                          : 'سند واحد مجمّع لجميع المعاملات المستحقة',
+                      helperStyle: const TextStyle(fontSize: 11),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'bulk',
+                        child: Text('مجمّعة (سند واحد)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'per_transaction',
+                        child: Text('فردية (سند لكل معاملة)'),
+                      ),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setDialogState(() {
+                          selectedSettlementMode = val;
+                        });
+                      }
+                    },
                   ),
 
                   SizedBox(height: 16),
@@ -1822,6 +1866,7 @@ class _PaymentMethodsScreenEnhancedState
                         settlementBankSafeBoxId: settlementBankSafeBoxId,
                         feeExpenseAccountId: feeExpenseAccountId,
                         minSettlementAmount: minSettlementAmount,
+                        settlementMode: selectedSettlementMode,
                         isActive: isActive,
                         applicableInvoiceTypes: invoiceTypeList,
                       );
@@ -1841,6 +1886,7 @@ class _PaymentMethodsScreenEnhancedState
                         settlementBankSafeBoxId: settlementBankSafeBoxId,
                         feeExpenseAccountId: feeExpenseAccountId,
                         minSettlementAmount: minSettlementAmount,
+                        settlementMode: selectedSettlementMode,
                         isActive: isActive,
                         defaultSafeBoxId: selectedDefaultSafeBoxId,
                         applicableInvoiceTypes: invoiceTypeList,

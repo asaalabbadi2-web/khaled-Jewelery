@@ -717,6 +717,11 @@ def create_payment_method():
         if min_settlement_amount < 0:
             min_settlement_amount = 0.0
 
+        # نمط التسوية
+        settlement_mode = str(data.get('settlement_mode') or 'bulk').strip().lower()
+        if settlement_mode not in ('bulk', 'per_transaction'):
+            settlement_mode = 'bulk'
+
         # إنشاء وسيلة الدفع
         try:
             payment_method = PaymentMethod(
@@ -732,6 +737,7 @@ def create_payment_method():
                 settlement_bank_safe_box_id=settlement_bank_safe_box_id,
                 fee_expense_account_id=fee_expense_account_id,
                 min_settlement_amount=min_settlement_amount,
+                settlement_mode=settlement_mode,
                 is_active=data.get('is_active', True),
                 applicable_invoice_types=applicable_invoice_types,
                 default_safe_box_id=default_safe_box_id  # اختياري
@@ -959,6 +965,10 @@ def update_payment_method(id):
                 payment_method.min_settlement_amount = max(0.0, msa)
             except (ValueError, TypeError):
                 pass
+        if 'settlement_mode' in data:
+            mode = str(data.get('settlement_mode') or 'bulk').strip().lower()
+            if mode in ('bulk', 'per_transaction'):
+                payment_method.settlement_mode = mode
 
         db.session.commit()
         
