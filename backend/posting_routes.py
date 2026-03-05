@@ -1197,11 +1197,16 @@ def get_posted_invoices():
 @posting_bp.route('/journal-entries/unposted', methods=['GET'])
 @require_permission('journal.view')
 def get_unposted_entries():
-    """عرض جميع القيود غير المرحلة"""
+    """عرض جميع القيود غير المرحلة (باستثناء قيود الفواتير - تُرحَّل مع الفاتورة)"""
     try:
-        entries = JournalEntry.query.filter_by(
-            is_posted=False, 
-            is_deleted=False
+        entries = JournalEntry.query.filter(
+            JournalEntry.is_posted == False,
+            JournalEntry.is_deleted == False,
+            # استثناء قيود الفواتير — يجب ترحيلها عبر بوابة ترحيل الفواتير
+            db.or_(
+                JournalEntry.reference_type.is_(None),
+                JournalEntry.reference_type != 'invoice',
+            ),
         ).order_by(JournalEntry.date.desc()).all()
         
         return jsonify({
@@ -1270,6 +1275,18 @@ def post_invoice(invoice_id):
 
         # Append gold inventory movements into SafeBox ledger (append-only)
         _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
+
+        # ✅ ترحيل القيود المرتبطة بالفاتورة تلقائياً (لمنع الازدواجية عند ترحيل القيود منفردةً)
+        try:
+            linked_jes = JournalEntry.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id, is_posted=False
+            ).filter(JournalEntry.is_deleted == False).all()
+            for _je in linked_jes:
+                _je.is_posted = True
+                _je.posted_at = datetime.now()
+                _je.posted_by = posted_by
+        except Exception as _je_err:
+            print(f"[post_invoice] خطأ في ترحيل القيود المرتبطة: {_je_err}")
         
         db.session.commit()
         
@@ -1545,7 +1562,19 @@ def post_invoices_batch():
 
                 # Append gold inventory movements into SafeBox ledger (append-only)
                 _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
-                
+
+                # ✅ ترحيل القيود المرتبطة بالفاتورة تلقائياً (لمنع الازدواجية)
+                try:
+                    linked_jes = JournalEntry.query.filter_by(
+                        reference_type='invoice', reference_id=invoice.id, is_posted=False
+                    ).filter(JournalEntry.is_deleted == False).all()
+                    for _je in linked_jes:
+                        _je.is_posted = True
+                        _je.posted_at = datetime.now()
+                        _je.posted_by = posted_by
+                except Exception as _je_err:
+                    print(f"[post_invoices_batch] خطأ في ترحيل القيود المرتبطة للفاتورة {invoice.id}: {_je_err}")
+
                 # تسجيل كل عملية ناجحة
                 AuditLog.log_action(
                     user_name=posted_by,
@@ -1744,6 +1773,13 @@ def post_journal_entry(entry_id):
                 'success': False, 
                 'message': 'القيد مرحل بالفعل'
             }), 400
+
+        # ⛔ منع ترحيل قيود الفواتير بشكل منفرد — يجب ترحيلها مع الفاتورة
+        if getattr(entry, 'reference_type', None) == 'invoice':
+            return jsonify({
+                'success': False,
+                'message': 'لا يمكن ترحيل قيد مرتبط بفاتورة بشكل منفرد. يرجى ترحيل الفاتورة من تبويب الفواتير.'
+            }), 400
         
         # التحقق من التوازن قبل الترحيل (النظام يستخدم cash_debit/credit و karat debits/credits)
         total_cash_debit = sum(line.cash_debit or 0 for line in entry.lines if not line.is_deleted)
@@ -1852,6 +1888,12 @@ def post_journal_entries_batch():
         
         for entry in entries:
             if not entry.is_posted:
+                # ⛔ تخطي قيود الفواتير — يجب ترحيلها عبر بوابة ترحيل الفواتير
+                if getattr(entry, 'reference_type', None) == 'invoice':
+                    errors.append(f"القيد {entry.entry_number} مرتبط بفاتورة — يُرحَّل تلقائياً مع الفاتورة")
+                    skipped_count += 1
+                    continue
+
                 # التحقق من التوازن (النقد)
                 total_cash_debit = sum(line.cash_debit or 0 for line in entry.lines if not line.is_deleted)
                 total_cash_credit = sum(line.cash_credit or 0 for line in entry.lines if not line.is_deleted)
