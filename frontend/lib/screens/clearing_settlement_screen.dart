@@ -63,6 +63,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
   SafeBoxModel? _bankSafe;
   Map<String, dynamic>? _feeAccount;
 
+  // Matched payment method from clearing safe selection
+  Map<String, dynamic>? _matchedPaymentMethod;
+  bool _autoSettlementEnabled = false;
+  String? _settlementScheduleInfo;
+
   DateTime _settlementDate = DateTime.now();
 
   @override
@@ -581,18 +586,82 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       }
     }
 
-    if (matched == null) return;
+    // Build schedule info and auto-settlement flag
+    String? scheduleInfo;
+    bool autoSettlement = false;
+    if (matched != null) {
+      autoSettlement = matched['auto_settlement_enabled'] == true;
+      final scheduleType = matched['settlement_schedule_type']?.toString();
+      final settlementDays = matched['settlement_days'];
+      final settlementWeekday = matched['settlement_weekday'];
+      if (scheduleType == 'days' && settlementDays != null) {
+        scheduleInfo = 'تسوية كل $settlementDays يوم';
+      } else if (scheduleType == 'weekday' && settlementWeekday != null) {
+        const weekdays = [
+          'الاثنين',
+          'الثلاثاء',
+          'الأربعاء',
+          'الخميس',
+          'الجمعة',
+          'السبت',
+          'الأحد',
+        ];
+        final idx =
+            int.tryParse(settlementWeekday.toString()) ?? -1;
+        if (idx >= 0 && idx < weekdays.length) {
+          scheduleInfo = 'تسوية أسبوعية يوم ${weekdays[idx]}';
+        }
+      }
+    }
 
-    final timing =
-        (matched['commission_timing']?.toString().trim().toLowerCase() ??
-        'invoice');
+    final timing = matched == null
+        ? 'invoice'
+        : (matched['commission_timing']?.toString().trim().toLowerCase() ??
+              'invoice');
     final shouldTreatAsAlreadyApplied = timing != 'settlement';
 
-    if (_feeAlreadyAppliedInInvoice == shouldTreatAsAlreadyApplied) return;
+    // Auto-select bank safe from settlement_bank_safe_box_id
+    SafeBoxModel? autoBank;
+    if (matched != null) {
+      final rawBankId = matched['settlement_bank_safe_box_id'];
+      final bankId = rawBankId is int
+          ? rawBankId
+          : int.tryParse(rawBankId?.toString() ?? '');
+      if (bankId != null && _bankSafe?.id != bankId) {
+        try {
+          autoBank = _safeBoxes.firstWhere((s) => s.id == bankId);
+        } catch (_) {}
+      }
+    }
 
     setState(() {
+      _matchedPaymentMethod = matched;
+      _autoSettlementEnabled = autoSettlement;
+      _settlementScheduleInfo = scheduleInfo;
+
       _feeAlreadyAppliedInInvoice = shouldTreatAsAlreadyApplied;
-      if (_feeAlreadyAppliedInInvoice) {
+
+      if (!shouldTreatAsAlreadyApplied && matched != null) {
+        // timing == 'settlement': auto-populate commission fields
+        final rate =
+            (matched['commission_rate'] as num?)?.toDouble() ?? 0.0;
+        final fixed =
+            (matched['commission_fixed_amount'] as num?)?.toDouble() ?? 0.0;
+        _rateController.text = _formatDecimalCompact(rate);
+        _fixedFeeController.text = _formatDecimalCompact(fixed);
+        _autoCalcFee = true;
+
+        // Auto-select fee expense account from PM configuration
+        final feeAccId = matched['fee_expense_account_id'];
+        if (feeAccId != null) {
+          final id = feeAccId is int ? feeAccId : int.tryParse(feeAccId.toString());
+          if (id != null) {
+            final found = _accounts.where((a) => a['id'] == id).firstOrNull;
+            if (found != null) _feeAccount = found;
+          }
+        }
+      } else {
+        // timing == 'invoice': fee already in invoice, disable fee fields
         _autoCalcFee = false;
         _rateController.text = '0';
         _fixedFeeController.text = '0';
@@ -600,9 +669,20 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
         _feeController.text = '0';
         _feeAccount = null;
       }
+
+      // Auto-select bank safe when PM specifies one
+      if (autoBank != null) {
+        _bankSafe = autoBank;
+      }
     });
 
     _recomputeFeeIfNeeded();
+  }
+
+  /// Formats a double compactly: no trailing zeros after decimal.
+  String _formatDecimalCompact(double v) {
+    if (v == v.truncateToDouble()) return v.toInt().toString();
+    return v.toString().replaceAll(RegExp(r'0+$'), '');
   }
 
   Future<void> _pickFeeAccount() async {
@@ -873,6 +953,40 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                       ],
                     ),
                   ),
+                ),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 380),
+                  transitionBuilder: (child, animation) {
+                    final slide = Tween<Offset>(
+                      begin: const Offset(0, 0.12),
+                      end: Offset.zero,
+                    ).animate(
+                      CurvedAnimation(
+                        parent: animation,
+                        curve: Curves.easeOut,
+                      ),
+                    );
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(position: slide, child: child),
+                    );
+                  },
+                  child: _matchedPaymentMethod != null
+                      ? Padding(
+                          key: ValueKey(_matchedPaymentMethod!['id']),
+                          padding: const EdgeInsets.only(top: 12),
+                          child: _PaymentMethodInfoCard(
+                            paymentMethod: _matchedPaymentMethod!,
+                            autoSettlementEnabled: _autoSettlementEnabled,
+                            scheduleInfo: _settlementScheduleInfo,
+                            feeAccountName: _feeAccount == null
+                                ? null
+                                : (_feeAccount?['name'] as String? ?? '').trim().isNotEmpty
+                                    ? _feeAccount!['name'] as String
+                                    : '${_feeAccount?['account_number'] ?? ''} - ${_feeAccount?['name'] ?? ''}',
+                          ),
+                        )
+                      : const SizedBox.shrink(key: ValueKey(0)),
                 ),
                 const SizedBox(height: 12),
                 Card(
@@ -1164,6 +1278,184 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                 ),
               ],
             ),
+    );
+  }
+}
+
+class _PaymentMethodInfoCard extends StatelessWidget {
+  final Map<String, dynamic> paymentMethod;
+  final bool autoSettlementEnabled;
+  final String? scheduleInfo;
+  final String? feeAccountName;
+
+  const _PaymentMethodInfoCard({
+    required this.paymentMethod,
+    required this.autoSettlementEnabled,
+    this.scheduleInfo,
+    this.feeAccountName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final themeData = Theme.of(context);
+    final name = paymentMethod['name']?.toString() ?? '';
+    final timing =
+        (paymentMethod['commission_timing']?.toString().toLowerCase() ?? '')
+            .trim();
+    final rate = (paymentMethod['commission_rate'] as num?)?.toDouble() ?? 0.0;
+    final fixed =
+        (paymentMethod['commission_fixed_amount'] as num?)?.toDouble() ?? 0.0;
+
+    String timingLabel;
+    Color timingColor;
+    if (timing == 'settlement') {
+      timingLabel = 'عمولة عند التسوية';
+      timingColor = Colors.orange.shade700;
+    } else {
+      timingLabel = 'عمولة محسوبة في الفاتورة';
+      timingColor = Colors.green.shade700;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: theme.AppColors.primaryGold.withValues(alpha: 0.10),
+        border: Border.all(
+          color: theme.AppColors.primaryGold.withValues(alpha: 0.40),
+        ),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.credit_card_outlined,
+                size: 18,
+                color: theme.AppColors.darkGold,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'وسيلة الدفع: $name',
+                  style: themeData.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              if (autoSettlementEnabled)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(99),
+                    border: Border.all(
+                      color: Colors.green.withValues(alpha: 0.45),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.autorenew,
+                        size: 13,
+                        color: Colors.green.shade700,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'تسوية تلقائية',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.green.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              _InfoChip(
+                label: timingLabel,
+                color: timingColor,
+                icon: Icons.schedule,
+              ),
+              if (rate > 0)
+                _InfoChip(
+                  label: 'نسبة ${rate.toStringAsFixed(rate == rate.truncateToDouble() ? 0 : 2)}%',
+                  color: Colors.blue.shade700,
+                  icon: Icons.percent,
+                ),
+              if (fixed > 0)
+                _InfoChip(
+                  label: 'ثابت ${fixed.toStringAsFixed(fixed == fixed.truncateToDouble() ? 0 : 2)} ر.س/عملية',
+                  color: Colors.purple.shade700,
+                  icon: Icons.attach_money,
+                ),
+              if (scheduleInfo != null)
+                _InfoChip(
+                  label: scheduleInfo!,
+                  color: Colors.teal.shade700,
+                  icon: Icons.event_repeat,
+                ),
+              if (feeAccountName != null)
+                _InfoChip(
+                  label: 'مصروف العمولة: $feeAccountName',
+                  color: Colors.indigo.shade700,
+                  icon: Icons.account_tree_outlined,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final IconData icon;
+
+  const _InfoChip({
+    required this.label,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

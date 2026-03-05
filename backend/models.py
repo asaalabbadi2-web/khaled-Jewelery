@@ -325,7 +325,19 @@ class PaymentMethod(db.Model):
         foreign_keys=[settlement_bank_safe_box_id],
         backref='payment_methods_settle_to_bank',
     )
-    
+
+    # حساب مصروف العمولة الافتراضي لهذه الوسيلة (يُحمَّل تلقائياً عند التسوية)
+    fee_expense_account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('account.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    fee_expense_account = db.relationship(
+        'Account',
+        foreign_keys='PaymentMethod.fee_expense_account_id',
+        backref='payment_methods_fee_expense',
+    )
+
     # هل وسيلة الدفع نشطة؟
     is_active = db.Column(db.Boolean, default=True)
     
@@ -374,6 +386,7 @@ class PaymentMethod(db.Model):
             'settlement_schedule_type': getattr(self, 'settlement_schedule_type', 'days') or 'days',
             'settlement_weekday': getattr(self, 'settlement_weekday', None),
             'settlement_bank_safe_box_id': getattr(self, 'settlement_bank_safe_box_id', None),
+            'fee_expense_account_id': getattr(self, 'fee_expense_account_id', None),
             'is_active': self.is_active,
             'display_order': self.display_order,
             'applicable_invoice_types': list(self.applicable_invoice_types)

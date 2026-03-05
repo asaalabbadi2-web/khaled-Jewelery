@@ -23574,6 +23574,27 @@ def _create_clearing_settlement_voucher(
     fee_account = None
     if fee_amount > 0:
         if not fee_account_id:
+            # Auto-resolve from the PaymentMethod linked to this clearing safe.
+            # Use joinedload to fetch fee_expense_account in one query (avoids N+1).
+            matched_pm = (
+                PaymentMethod.query
+                .options(joinedload(PaymentMethod.fee_expense_account))
+                .filter_by(default_safe_box_id=clearing_safe_box_id)
+                .first()
+            )
+            if matched_pm and getattr(matched_pm, 'fee_expense_account_id', None):
+                fee_account_id = matched_pm.fee_expense_account_id
+            else:
+                # Fall back to a generic commission-expense account if it exists
+                generic = (
+                    Account.query.filter_by(account_number='5100').first()
+                    or Account.query.filter_by(account_number='5110').first()
+                    or Account.query.filter_by(account_number='5113').first()
+                )
+                if generic:
+                    fee_account_id = generic.id
+
+        if not fee_account_id:
             raise ValueError('fee_account_id_required')
         fee_account = Account.query.get(fee_account_id)
         if not fee_account:

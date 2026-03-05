@@ -1,12 +1,8 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-import time
 from threading import Thread
+import time
 import os
 import schedule
 import requests
-from bs4 import BeautifulSoup
 import datetime
 from models import db
 
@@ -60,7 +56,7 @@ def fetch_gold_price_fallback():
 
 def get_last_known_price():
     """Fetches the most recent gold price from the database."""
-    from backend.models import GoldPrice
+    from models import GoldPrice
     print("[INFO] Fetching last known gold price from database.")
     last_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
     if last_price:
@@ -72,7 +68,7 @@ def get_last_known_price():
 
 def save_gold_price(app, price):
     with app.app_context():
-        from backend.models import GoldPrice
+        from models import GoldPrice
         gp = GoldPrice(price=price, date=datetime.datetime.now())
         db.session.add(gp)
         db.session.commit()

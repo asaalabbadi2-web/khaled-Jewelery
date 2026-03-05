@@ -28,9 +28,9 @@
 		{
 			"label": "Restart All Services",
 			"type": "shell",
-			"command": "export DATABASE_URL=\"sqlite:///${workspaceFolder}/app.db\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing backend (${PORT})...\"; echo \"${pids}\" | xargs kill -TERM 2>/dev/null || true; sleep 0.5; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Force killing backend (${PORT})...\"; echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; fi; for i in $(seq 1 30); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; fi; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"ERROR: Port ${PORT} still in use; cannot restart backend.\"; lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true; exit 1; fi; echo \"Starting backend...\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn --chdir \"${workspaceFolder}/backend\" -b 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 120 app:app; elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py; else python3 app.py; fi",
+			"command": "export DATABASE_URL=\"sqlite:///${workspaceFolder}/app.db\"; BACKEND_PORT=8001; FLUTTER_PORT=8080; echo '--- Stopping services ---'; for PORT in $BACKEND_PORT $FLUTTER_PORT; do pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing port ${PORT}: ${pids}\"; echo \"${pids}\" | xargs kill -TERM 2>/dev/null || true; sleep 0.5; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; fi; for i in $(seq 1 20); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; fi; done; echo '--- Starting backend ---'; cd \"${workspaceFolder}/backend\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn --chdir \"${workspaceFolder}/backend\" -b 0.0.0.0:${BACKEND_PORT} --workers 1 --threads 4 --timeout 120 app:app & elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py & else python3 app.py & fi; sleep 3; echo '--- Starting Flutter Web ---'; cd \"${workspaceFolder}/frontend\" && flutter run -d web-server --web-hostname=127.0.0.1 --web-port=${FLUTTER_PORT} &",
 			"options": {
-				"cwd": "${workspaceFolder}/backend"
+				"cwd": "${workspaceFolder}"
 			},
 			"isBackground": true,
 			"problemMatcher": []
@@ -542,6 +542,13 @@
 			"type": "shell",
 			"command": "python3 -c \"import json,urllib.request; base='http://127.0.0.1:8001/api';\naccounts=json.load(urllib.request.urlopen(base+'/accounts',timeout=8)); acc=[a for a in accounts if str(a.get('account_number'))=='15'][0]; acc_id=acc['id']; st=json.load(urllib.request.urlopen(base+'/accounts/%s/statement'%acc_id,timeout=8)); dash=json.load(urllib.request.urlopen(base+'/dashboard/admin',timeout=8)); safe=(dash.get('safe_boxes') or [])[0]; print('statement', st.get('closing_balance_cash')); print('dashboard_safe', safe.get('balance_cash'));\"",
 			"isBackground": false
+		},
+		{
+			"label": "Test: Gold Price Update",
+			"type": "shell",
+			"command": "python3 - <<'PY'\nimport json, urllib.request, urllib.error\nbase = 'http://127.0.0.1:8001/api'\n\nprint('--- قبل التحديث ---')\ntry:\n    with urllib.request.urlopen(base + '/public/gold_price', timeout=8) as r:\n        d = json.loads(r.read().decode())\n    print('price_usd_per_oz:', d.get('price_usd_per_oz'))\n    print('price_24k (SAR/g):', d.get('price_24k'))\n    print('price_main_karat:', d.get('price_main_karat'), '| karat:', d.get('main_karat'))\n    print('date:', d.get('date'))\n    print('source:', d.get('source'))\nexcept Exception as e:\n    print('ERROR fetching price:', e)\n\nprint()\nprint('--- جاري التحديث من الإنترنت ---')\ntry:\n    req = urllib.request.Request(\n        base + '/gold_price/update',\n        data=b'{}',\n        headers={'Content-Type': 'application/json'},\n        method='POST',\n    )\n    with urllib.request.urlopen(req, timeout=20) as r:\n        upd = json.loads(r.read().decode())\n    print('success:', upd.get('success'))\n    print('fetched_price_usd:', upd.get('price'))\nexcept urllib.error.HTTPError as e:\n    print('HTTP ERROR', e.code, e.read().decode()[:400])\nexcept Exception as e:\n    print('ERROR updating price:', e)\n\nprint()\nprint('--- بعد التحديث ---')\ntry:\n    with urllib.request.urlopen(base + '/public/gold_price', timeout=8) as r:\n        d2 = json.loads(r.read().decode())\n    print('price_usd_per_oz:', d2.get('price_usd_per_oz'))\n    print('price_24k (SAR/g):', d2.get('price_24k'))\n    print('price_main_karat:', d2.get('price_main_karat'), '| karat:', d2.get('main_karat'))\n    print('date:', d2.get('date'))\n    print('source:', d2.get('source'))\nexcept Exception as e:\n    print('ERROR fetching price after update:', e)\nPY",
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }
