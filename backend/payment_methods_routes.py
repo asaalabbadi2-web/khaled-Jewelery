@@ -698,6 +698,17 @@ def create_payment_method():
             if commission_fixed_amount < 0:
                 return jsonify({'error': 'لا يمكن أن تكون العمولة الثابتة سالبة'}), 400
         
+        # حساب مصروف العمولة (اختياري)
+        fee_expense_account_id = None
+        raw_fee_acc = data.get('fee_expense_account_id')
+        if raw_fee_acc not in (None, '', 0, '0', False):
+            try:
+                fee_expense_account_id = int(raw_fee_acc)
+                if not Account.query.get(fee_expense_account_id):
+                    return jsonify({'error': 'حساب مصروف العمولة غير موجود'}), 404
+            except (ValueError, TypeError):
+                return jsonify({'error': 'معرف حساب مصروف العمولة غير صالح'}), 400
+
         # إنشاء وسيلة الدفع
         try:
             payment_method = PaymentMethod(
@@ -711,6 +722,7 @@ def create_payment_method():
                 settlement_schedule_type=settlement_schedule_type,
                 settlement_weekday=settlement_weekday,
                 settlement_bank_safe_box_id=settlement_bank_safe_box_id,
+                fee_expense_account_id=fee_expense_account_id,
                 is_active=data.get('is_active', True),
                 applicable_invoice_types=applicable_invoice_types,
                 default_safe_box_id=default_safe_box_id  # اختياري
@@ -920,7 +932,19 @@ def update_payment_method(id):
                 )
             except ValueError as exc:
                 return jsonify({'error': str(exc)}), 400
-        
+        if 'fee_expense_account_id' in data:
+            raw_fee = data.get('fee_expense_account_id')
+            if raw_fee in (None, '', 0, '0', False):
+                payment_method.fee_expense_account_id = None
+            else:
+                try:
+                    fee_id = int(raw_fee)
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'معرف حساب مصروف العمولة غير صالح'}), 400
+                if not Account.query.get(fee_id):
+                    return jsonify({'error': 'حساب مصروف العمولة غير موجود'}), 404
+                payment_method.fee_expense_account_id = fee_id
+
         db.session.commit()
         
         return jsonify({
