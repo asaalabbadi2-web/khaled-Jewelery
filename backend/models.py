@@ -326,6 +326,10 @@ class PaymentMethod(db.Model):
         backref='payment_methods_settle_to_bank',
     )
 
+    # الحد الأدنى لمبلغ التسوية (0 = بلا حد أدنى)
+    # إذا كان رصيد التحصيل أقل من هذا المبلغ، تؤجل التسوية التلقائية
+    min_settlement_amount = db.Column(db.Float, default=0.0, nullable=False)
+
     # حساب مصروف العمولة الافتراضي لهذه الوسيلة (يُحمَّل تلقائياً عند التسوية)
     fee_expense_account_id = db.Column(
         db.Integer,
@@ -387,6 +391,7 @@ class PaymentMethod(db.Model):
             'settlement_weekday': getattr(self, 'settlement_weekday', None),
             'settlement_bank_safe_box_id': getattr(self, 'settlement_bank_safe_box_id', None),
             'fee_expense_account_id': getattr(self, 'fee_expense_account_id', None),
+            'min_settlement_amount': float(getattr(self, 'min_settlement_amount', 0.0) or 0.0),
             'is_active': self.is_active,
             'display_order': self.display_order,
             'applicable_invoice_types': list(self.applicable_invoice_types)

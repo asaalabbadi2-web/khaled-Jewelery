@@ -821,6 +821,9 @@ class _PaymentMethodsScreenEnhancedState
     final settlementDaysController = TextEditingController(
       text: (editingMethod?['settlement_days'] ?? 0).toString(),
     );
+    final minSettlementAmountController = TextEditingController(
+      text: (editingMethod?['min_settlement_amount']?.toDouble() ?? 0.0).toString(),
+    );
 
     final rawAutoSettlement = editingMethod?['auto_settlement_enabled'];
     bool autoSettlementEnabled = rawAutoSettlement == true ||
@@ -1119,6 +1122,26 @@ class _PaymentMethodsScreenEnhancedState
                       fillColor: Colors.grey.shade50,
                     ),
                     keyboardType: TextInputType.number,
+                  ),
+
+                  SizedBox(height: 16),
+
+                  // الحد الأدنى لمبلغ التسوية
+                  TextFormField(
+                    controller: minSettlementAmountController,
+                    decoration: InputDecoration(
+                      labelText: 'الحد الأدنى لمبلغ التسوية',
+                      hintText: '0 = بلا حد أدنى',
+                      prefixIcon: Icon(Icons.account_balance_wallet_outlined, color: _infoColor),
+                      helperText: 'لن تُنفَّذ التسوية التلقائية إلا بعد بلوغ هذا المبلغ',
+                      helperStyle: TextStyle(fontSize: 11),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   ),
 
                   SizedBox(height: 16),
@@ -1754,6 +1777,8 @@ class _PaymentMethodsScreenEnhancedState
                       double.tryParse(commissionFixedController.text) ?? 0.0;
                     final settlementDays =
                         int.tryParse(settlementDaysController.text) ?? 0; // 🆕
+                    final minSettlementAmount =
+                        double.tryParse(minSettlementAmountController.text) ?? 0.0;
                     final invoiceTypeList = selectedInvoiceTypes.toList();
 
                     if (autoSettlementEnabled) {
@@ -1796,6 +1821,7 @@ class _PaymentMethodsScreenEnhancedState
                         settlementWeekday: settlementWeekday,
                         settlementBankSafeBoxId: settlementBankSafeBoxId,
                         feeExpenseAccountId: feeExpenseAccountId,
+                        minSettlementAmount: minSettlementAmount,
                         isActive: isActive,
                         applicableInvoiceTypes: invoiceTypeList,
                       );
@@ -1814,6 +1840,7 @@ class _PaymentMethodsScreenEnhancedState
                         settlementWeekday: settlementWeekday,
                         settlementBankSafeBoxId: settlementBankSafeBoxId,
                         feeExpenseAccountId: feeExpenseAccountId,
+                        minSettlementAmount: minSettlementAmount,
                         isActive: isActive,
                         defaultSafeBoxId: selectedDefaultSafeBoxId,
                         applicableInvoiceTypes: invoiceTypeList,

@@ -709,6 +709,14 @@ def create_payment_method():
             except (ValueError, TypeError):
                 return jsonify({'error': 'معرف حساب مصروف العمولة غير صالح'}), 400
 
+        # الحد الأدنى لمبلغ التسوية (اختياري)
+        try:
+            min_settlement_amount = float(data.get('min_settlement_amount') or 0.0)
+        except (ValueError, TypeError):
+            min_settlement_amount = 0.0
+        if min_settlement_amount < 0:
+            min_settlement_amount = 0.0
+
         # إنشاء وسيلة الدفع
         try:
             payment_method = PaymentMethod(
@@ -723,6 +731,7 @@ def create_payment_method():
                 settlement_weekday=settlement_weekday,
                 settlement_bank_safe_box_id=settlement_bank_safe_box_id,
                 fee_expense_account_id=fee_expense_account_id,
+                min_settlement_amount=min_settlement_amount,
                 is_active=data.get('is_active', True),
                 applicable_invoice_types=applicable_invoice_types,
                 default_safe_box_id=default_safe_box_id  # اختياري
@@ -944,6 +953,12 @@ def update_payment_method(id):
                 if not Account.query.get(fee_id):
                     return jsonify({'error': 'حساب مصروف العمولة غير موجود'}), 404
                 payment_method.fee_expense_account_id = fee_id
+        if 'min_settlement_amount' in data:
+            try:
+                msa = float(data.get('min_settlement_amount') or 0.0)
+                payment_method.min_settlement_amount = max(0.0, msa)
+            except (ValueError, TypeError):
+                pass
 
         db.session.commit()
         

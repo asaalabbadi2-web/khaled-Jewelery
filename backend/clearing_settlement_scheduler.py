@@ -156,6 +156,15 @@ class ClearingSettlementScheduler:
                     if gross_amount < 0.01:
                         continue
 
+                    # فحص الحد الأدنى للتسوية
+                    min_settle = float(getattr(pm, 'min_settlement_amount', 0.0) or 0.0)
+                    if min_settle > 0.01 and gross_amount < min_settle:
+                        print(
+                            f"[ClearingSettlementScheduler] Skipping PM#{pm.id} ({pm.name}): "
+                            f"balance {gross_amount:.2f} < min_settlement_amount {min_settle:.2f}"
+                        )
+                        continue
+
                     # Cap to current clearing balance for safety
                     try:
                         clearing_balance = float(getattr(getattr(clearing_sb, 'account', None), 'balance_cash', 0.0) or 0.0)

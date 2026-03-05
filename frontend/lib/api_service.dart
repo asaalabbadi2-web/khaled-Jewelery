@@ -3176,6 +3176,7 @@ class ApiService {
     int? settlementWeekday,
     int? settlementBankSafeBoxId,
     int? feeExpenseAccountId,
+    double minSettlementAmount = 0.0,
     bool isActive = true,
     List<String>? applicableInvoiceTypes,
   }) async {
@@ -3190,10 +3191,9 @@ class ApiService {
       'settlement_schedule_type': settlementScheduleType,
       'settlement_weekday': settlementWeekday,
       'settlement_bank_safe_box_id': settlementBankSafeBoxId,
+      'min_settlement_amount': minSettlementAmount,
       'is_active': isActive,
     };
-
-    // 🆕 إرسال الخزينة الافتراضية (أولوية)
     if (defaultSafeBoxId != null) {
       payload['default_safe_box_id'] = defaultSafeBoxId;
     } else if (parentAccountId != null) {
@@ -3234,6 +3234,7 @@ class ApiService {
     int? settlementWeekday,
     int? settlementBankSafeBoxId,
     int? feeExpenseAccountId,
+    double minSettlementAmount = 0.0,
     required bool isActive,
     int? defaultSafeBoxId,
     List<String>? applicableInvoiceTypes,
@@ -3269,6 +3270,7 @@ class ApiService {
 
     // إرسال حساب مصروف العمولة (يُسمح بإرسال null لمسح الربط)
     payload['fee_expense_account_id'] = feeExpenseAccountId;
+    payload['min_settlement_amount'] = minSettlementAmount;
 
     if (applicableInvoiceTypes != null && applicableInvoiceTypes.isNotEmpty) {
       payload['applicable_invoice_types'] = applicableInvoiceTypes;
