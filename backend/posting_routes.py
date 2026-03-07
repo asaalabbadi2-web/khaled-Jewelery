@@ -407,24 +407,26 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
 
         # Extra idempotency for legacy data:
         # If the invoice already has a posted journal entry (reference_type='invoice')
-        # that moved the same cash amount between the same safe account and the
-        # expected party account, do NOT create a duplicate deferred-payment JE.
+        # that already hit the same safe account with the same cash amount,
+        # do NOT create a duplicate deferred-payment JE.
+        #
+        # This covers legacy queued/unposted invoices where the invoice JE was
+        # originally built to debit/credit the SafeBox directly; when those
+        # invoices are posted later, we should not add a second cash movement.
         try:
             safe_account_id_int = int(safe_account_id)
         except Exception:
             safe_account_id_int = None
 
         try:
-            credit_acc = party_account_id or safe_account_id_int
-            if safe_account_id_int and credit_acc and amount_cash > 0:
+            if safe_account_id_int and amount_cash > 0:
                 eps = 0.01
                 if direction == 'in':
                     safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
-                    party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
                 else:
                     safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
-                    party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
 
+                # 1) Safe-only check (legacy cash invoices)
                 invoice_cash_je = (
                     JournalEntry.query
                     .join(JournalEntryLine, JournalEntryLine.journal_entry_id == JournalEntry.id)
@@ -433,19 +435,41 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
                     .filter(JournalEntry.reference_type == 'invoice', JournalEntry.reference_id == int(invoice.id))
                     .filter(JournalEntryLine.account_id == safe_account_id_int)
                     .filter(safe_amt_cond)
-                    .filter(
-                        JournalEntry.lines.any(
-                            and_(
-                                JournalEntryLine.is_deleted == False,
-                                JournalEntryLine.account_id == int(credit_acc),
-                                party_amt_cond,
-                            )
-                        )
-                    )
                     .first()
                 )
                 if invoice_cash_je is not None:
                     existing_je = existing_je or invoice_cash_je
+
+                # 2) Safe + party check (newer behavior, keep as a refinement)
+                if existing_je is None:
+                    credit_acc = party_account_id or safe_account_id_int
+                    if credit_acc:
+                        if direction == 'in':
+                            party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
+                        else:
+                            party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
+
+                        invoice_cash_je_2 = (
+                            JournalEntry.query
+                            .join(JournalEntryLine, JournalEntryLine.journal_entry_id == JournalEntry.id)
+                            .filter(JournalEntry.is_deleted == False)
+                            .filter(JournalEntryLine.is_deleted == False)
+                            .filter(JournalEntry.reference_type == 'invoice', JournalEntry.reference_id == int(invoice.id))
+                            .filter(JournalEntryLine.account_id == safe_account_id_int)
+                            .filter(safe_amt_cond)
+                            .filter(
+                                JournalEntry.lines.any(
+                                    and_(
+                                        JournalEntryLine.is_deleted == False,
+                                        JournalEntryLine.account_id == int(credit_acc),
+                                        party_amt_cond,
+                                    )
+                                )
+                            )
+                            .first()
+                        )
+                        if invoice_cash_je_2 is not None:
+                            existing_je = existing_je or invoice_cash_je_2
         except Exception:
             pass
 

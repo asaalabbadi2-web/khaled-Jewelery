@@ -9176,11 +9176,11 @@ def add_invoice():
         unposted_mode = bool(approval_required) or (not _posting_auto_post and not force_post)
 
         if unposted_mode:
-            # Do not treat as settled/paid until approved/posting occurs.
+            # Keep the invoice unposted, but do not overwrite payment status/amounts.
+            # Payment rows are persisted and can be reflected in the invoice list,
+            # while ledger/safebox effects remain gated by posting/approval.
             try:
                 new_invoice.is_posted = False
-                new_invoice.amount_paid = 0.0
-                new_invoice.status = 'unpaid'
                 db.session.add(new_invoice)
                 db.session.flush()
             except Exception:
@@ -10818,10 +10818,10 @@ def add_invoice():
                     # قيد الفاتورة: مدين ذمم العميل (AR) وليس الخزينة مباشرةً.
                     # السبب: سند القبض المُنشأ أعلاه (Phase 1) يُمدن الخزينة ويُدين
                     # ذمم العميل ← الذمم تصفر والخزينة تُمدن مرة واحدة فقط.
-                    # إذا كانت الفاتورة غير مرحّلة (unposted_mode) لا يُنشأ سند،
-                    # فنستخدم الخزينة مباشرةً (المسار القديم).
+                    # ملاحظة: حتى في وضع غير مُرحّل (unposted_mode) نُبقي القيد على الذمم
+                    # لتفادي تكرار أثر الخزينة عند الترحيل لاحقاً.
                     # ================================================================
-                    _ar_debit_id = party_account.id if (party_account and not unposted_mode) else None
+                    _ar_debit_id = party_account.id if party_account else None
                     if _ar_debit_id:
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,
@@ -10965,10 +10965,10 @@ def add_invoice():
                 # قيد الفاتورة: مدين ذمم العميل (AR) وليس الخزينة مباشرةً.
                 # السبب: سند القبض المُنشأ أعلاه (Phase 1) يُمدن الخزينة ويُدين
                 # ذمم العميل ← الذمم تصفر والخزينة تُمدن مرة واحدة فقط.
-                # إذا كانت الفاتورة غير مرحّلة (unposted_mode) لا يُنشأ سند،
-                # فنستخدم الخزينة مباشرةً (المسار القديم).
+                # ملاحظة: حتى في وضع غير مُرحّل (unposted_mode) نُبقي القيد على الذمم
+                # لتفادي تكرار أثر الخزينة عند الترحيل لاحقاً.
                 # ================================================================
-                _ar_debit_id_single = party_account.id if (party_account and not unposted_mode) else None
+                _ar_debit_id_single = party_account.id if party_account else None
                 if _ar_debit_id_single:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
@@ -13017,6 +13017,25 @@ def add_invoice():
                 journal_entry.posted_at = None
             if hasattr(journal_entry, 'posted_by'):
                 journal_entry.posted_by = None
+
+            # 🧾 Sync payment status for unposted invoices too (UI correctness)
+            try:
+                total_amount = float(new_invoice.total or 0.0)
+                paid_amount = float(new_invoice.amount_paid or 0.0)
+                barter_total_status = float(getattr(new_invoice, 'barter_total', 0.0) or 0.0)
+                total_settled = paid_amount + barter_total_status
+                eps = 0.01
+                if total_amount <= eps:
+                    # Edge-case: zero-total invoices; consider any settlement as paid.
+                    new_invoice.status = 'paid' if total_settled > eps else 'unpaid'
+                elif total_settled <= eps:
+                    new_invoice.status = 'unpaid'
+                elif total_settled >= total_amount - eps:
+                    new_invoice.status = 'paid'
+                else:
+                    new_invoice.status = 'partially_paid'
+            except Exception:
+                pass
 
             # Persistent manager alert (only for approval-gated invoices, not auto-post-disabled).
             if approval_required:
