@@ -50,11 +50,17 @@ try:
 	from routes import api, ensure_weight_closing_support_accounts
 	from routes import public_api
 except ImportError as exc:
-	raise SystemExit(
-		"Missing backend dependencies. Run the backend using the venv:\n"
+	import traceback as _tb
+	print(
+		"\n[STARTUP ERROR] ImportError during backend initialisation:\n"
+		+ _tb.format_exc()
+		+ "\nMissing backend dependencies. Run the backend using the venv:\n"
 		"  cd backend && ./venv/bin/python app.py\n"
-		"(or activate the venv first: source backend/venv/bin/activate)"
-	) from exc
+		"(or activate the venv first: source backend/venv/bin/activate)",
+		file=sys.stderr,
+		flush=True,
+	)
+	raise SystemExit(1) from exc
 
 _log_startup_imports = os.getenv('LOG_STARTUP_IMPORTS', '0') in ('1', 'true', 'True')
 if _log_startup_imports:

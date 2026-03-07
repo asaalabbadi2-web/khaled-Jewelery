@@ -33,6 +33,9 @@ services:
       YASAR_ENV: ${YASAR_ENV:-production}
       BACKUP_DIR: ${BACKUP_DIR:-/data/backups}
       ALLOW_DANGEROUS_RESETS: ${ALLOW_DANGEROUS_RESETS:-false}
+      # Set to "1" to print a DEBUG line for each module imported at startup.
+      # Useful for diagnosing "Missing backend dependencies" container crashes.
+      LOG_STARTUP_IMPORTS: ${LOG_STARTUP_IMPORTS:-0}
     depends_on:
       db:
         condition: service_healthy

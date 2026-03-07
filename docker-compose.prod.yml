@@ -33,6 +33,8 @@ services:
       # Optional: Google Drive backups via Service Account (no browser OAuth)
       GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE: ${GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE:-/run/secrets/google_drive_sa.json}
       GOOGLE_DRIVE_BACKUP_FOLDER_ID: ${GOOGLE_DRIVE_BACKUP_FOLDER_ID:-}
+      # Enable verbose import logging to diagnose startup errors (set to 0 once stable)
+      LOG_STARTUP_IMPORTS: ${LOG_STARTUP_IMPORTS:-1}
     depends_on:
       db:
         condition: service_healthy
