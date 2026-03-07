@@ -13594,6 +13594,30 @@ def get_accounts():
         # استخدام to_dict() من Model
         account_dict = acc.to_dict()
 
+        # If this account is linked to a SafeBox, expose the safe metadata.
+        # This helps the frontend decide default statement views (cash-only vs gold/dual).
+        try:
+            sb = (
+                SafeBox.query.filter(SafeBox.account_id == acc.id)
+                .order_by(SafeBox.is_active.desc(), SafeBox.id.asc())
+                .first()
+            )
+        except Exception:
+            sb = None
+        if sb is not None:
+            try:
+                account_dict['safe_box_id'] = int(sb.id)
+            except Exception:
+                account_dict['safe_box_id'] = None
+            try:
+                account_dict['safe_box_type'] = (getattr(sb, 'safe_type', None) or None)
+            except Exception:
+                account_dict['safe_box_type'] = None
+            try:
+                account_dict['safe_box_name'] = (getattr(sb, 'name', None) or None)
+            except Exception:
+                account_dict['safe_box_name'] = None
+
         # Override stored balances with live, journal-derived balances.
         live = live_by_id.get(int(acc.id)) if getattr(acc, 'id', None) is not None else None
         live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
@@ -13648,6 +13672,29 @@ def get_account(id):
     """
     account = Account.query.get_or_404(id)
     payload = account.to_dict()
+
+    # If this account is linked to a SafeBox, expose the safe metadata.
+    try:
+        sb = (
+            SafeBox.query.filter(SafeBox.account_id == account.id)
+            .order_by(SafeBox.is_active.desc(), SafeBox.id.asc())
+            .first()
+        )
+    except Exception:
+        sb = None
+    if sb is not None:
+        try:
+            payload['safe_box_id'] = int(sb.id)
+        except Exception:
+            payload['safe_box_id'] = None
+        try:
+            payload['safe_box_type'] = (getattr(sb, 'safe_type', None) or None)
+        except Exception:
+            payload['safe_box_type'] = None
+        try:
+            payload['safe_box_name'] = (getattr(sb, 'name', None) or None)
+        except Exception:
+            payload['safe_box_name'] = None
 
     live = live_balances_by_account_ids([account.id]).get(int(account.id))
     live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}

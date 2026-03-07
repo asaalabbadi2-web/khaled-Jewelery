@@ -233,14 +233,16 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             continue
 
         # Idempotency (prevent duplicates): handle legacy rows too.
-        # - SafeBoxTransaction may have invoice_payment_id OR only ref_id.
+        # A payment may have been recorded via voucher flow (receipt/payment voucher),
+        # or via legacy deferred-payment recovery (ref_type=invoice_payment).
+        # - Prefer invoice_payment_id when present.
+        # - Fall back to ref_type/ref_id for older rows.
         existing_safe_tx = (
             SafeBoxTransaction.query
-            .filter(SafeBoxTransaction.ref_type == 'invoice_payment')
             .filter(
                 or_(
                     SafeBoxTransaction.invoice_payment_id == pay_id,
-                    SafeBoxTransaction.ref_id == pay_id,
+                    and_(SafeBoxTransaction.ref_type == 'invoice_payment', SafeBoxTransaction.ref_id == pay_id),
                 )
             )
             .first()
@@ -261,6 +263,42 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             )
             .first()
         )
+
+        # Voucher-based payments create a JournalEntry with reference_type='voucher'.
+        # Those entries are legitimate and should prevent creating a duplicate
+        # deferred-payment recovery entry.
+        try:
+            from models import Voucher
+
+            # Prefer explicit note linkage when available; otherwise fall back
+            # to (invoice_id + amount) which is stable in many legacy DBs.
+            voucher_for_payment = (
+                Voucher.query
+                .filter(Voucher.reference_type == 'invoice', Voucher.reference_id == int(invoice.id))
+                .filter(
+                    or_(
+                        Voucher.notes.like(f'%\"invoice_payment_id\": {pay_id}%'),
+                        and_(
+                            Voucher.amount_cash.isnot(None),
+                            func.abs(func.coalesce(Voucher.amount_cash, 0.0) - float(getattr(pay, 'amount', 0.0) or 0.0)) < 0.01,
+                        ),
+                    )
+                )
+                .order_by(Voucher.id.desc())
+                .first()
+            )
+            if voucher_for_payment and getattr(voucher_for_payment, 'journal_entry_id', None):
+                voucher_je_id = int(voucher_for_payment.journal_entry_id)
+                voucher_je = (
+                    JournalEntry.query
+                    .filter(JournalEntry.is_deleted == False)
+                    .filter(JournalEntry.id == voucher_je_id)
+                    .first()
+                )
+                if voucher_je is not None:
+                    existing_je = existing_je or voucher_je
+        except Exception:
+            pass
 
         # If both artifacts exist, nothing to do.
         if existing_safe_tx and existing_je:
@@ -346,6 +384,50 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         if not safe_account_id:
             print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} لا تحتوي على account_id - لن يُنشأ قيد')
             continue
+
+        # Extra idempotency for legacy data:
+        # If the invoice already has a posted journal entry (reference_type='invoice')
+        # that moved the same cash amount between the same safe account and the
+        # expected party account, do NOT create a duplicate deferred-payment JE.
+        try:
+            safe_account_id_int = int(safe_account_id)
+        except Exception:
+            safe_account_id_int = None
+
+        try:
+            credit_acc = party_account_id or safe_account_id_int
+            if safe_account_id_int and credit_acc and amount_cash > 0:
+                eps = 0.01
+                if direction == 'in':
+                    safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
+                    party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
+                else:
+                    safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
+                    party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
+
+                invoice_cash_je = (
+                    JournalEntry.query
+                    .join(JournalEntryLine, JournalEntryLine.journal_entry_id == JournalEntry.id)
+                    .filter(JournalEntry.is_deleted == False)
+                    .filter(JournalEntryLine.is_deleted == False)
+                    .filter(JournalEntry.reference_type == 'invoice', JournalEntry.reference_id == int(invoice.id))
+                    .filter(JournalEntryLine.account_id == safe_account_id_int)
+                    .filter(safe_amt_cond)
+                    .filter(
+                        JournalEntry.lines.any(
+                            and_(
+                                JournalEntryLine.is_deleted == False,
+                                JournalEntryLine.account_id == int(credit_acc),
+                                party_amt_cond,
+                            )
+                        )
+                    )
+                    .first()
+                )
+                if invoice_cash_je is not None:
+                    existing_je = existing_je or invoice_cash_je
+        except Exception:
+            pass
 
         # 2) JournalEntry (create only if missing)
         if existing_je is None:

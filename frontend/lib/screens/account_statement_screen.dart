@@ -53,6 +53,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _isExporting = false;
   bool _useMergedView = false; // Toggle for merged statement
   bool _resolvedMergedDefault = false;
+  bool _resolvedViewModeDefault = false;
 
   bool _truthy(dynamic v) {
     if (v is bool) return v;
@@ -65,9 +66,14 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   bool _shouldDefaultToMergedView(Map<String, dynamic> account) {
+    // Safe-box accounts that are not gold should not default to merged view.
+    // This avoids showing weight-side memo movements in payment method statements.
     try {
-      final memoId = account['memo_account_id'];
-      if (memoId != null && memoId.toString().trim().isNotEmpty) return true;
+      final safeType = (account['safe_box_type'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (safeType.isNotEmpty && safeType != 'gold') return false;
     } catch (_) {}
 
     try {
@@ -80,6 +86,29 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     } catch (_) {}
 
     return false;
+  }
+
+  int _defaultViewModeForAccount(Map<String, dynamic> account) {
+    // Default cash/bank style accounts to cash-only.
+    // Weight/memo accounts keep the dual view by default.
+    try {
+      final safeType = (account['safe_box_type'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (safeType.isNotEmpty && safeType != 'gold') return 2;
+    } catch (_) {}
+
+    try {
+      if (_truthy(account['tracks_weight'])) return 0;
+    } catch (_) {}
+
+    try {
+      final num = (account['account_number'] ?? '').toString().trim();
+      if (num.startsWith('7')) return 0;
+    } catch (_) {}
+
+    return 2; // cash-only
   }
 
   ({DateTime startInclusive, DateTime endExclusive}) _rangeBounds(
@@ -266,6 +295,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
             final wantsMerged = _shouldDefaultToMergedView(account);
             if (wantsMerged && mounted) {
               setState(() => _useMergedView = true);
+            }
+
+            if (!_resolvedViewModeDefault && mounted) {
+              _resolvedViewModeDefault = true;
+              final wantsViewMode = _defaultViewModeForAccount(account);
+              setState(() => _viewMode = wantsViewMode);
             }
           } catch (_) {
             // If account metadata fetch fails, keep current toggle.
@@ -458,14 +493,23 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           matchesFilterType = line.goldDebit > 0 || line.cashDebit > 0;
         }
 
-        final hasMovement =
-            (line.goldDebit +
-                    line.goldCredit +
-                    line.cashDebit +
-                    line.cashCredit)
-                .abs() >
-            0.0001;
-        final matchesMovement = !_showOnlyMovement || hasMovement;
+        final hasGoldMovement =
+            (line.goldDebit + line.goldCredit).abs() > 0.0001;
+        final hasCashMovement =
+            (line.cashDebit + line.cashCredit).abs() > 0.0001;
+        final hasMovement = hasGoldMovement || hasCashMovement;
+
+        // In single-mode views, hide lines that have no movement
+        // in the selected dimension to avoid confusion.
+        var matchesViewMode = true;
+        if (_viewMode == 2) {
+          matchesViewMode = hasCashMovement || !hasMovement;
+        } else if (_viewMode == 1) {
+          matchesViewMode = hasGoldMovement || !hasMovement;
+        }
+
+        final matchesMovement =
+            (!_showOnlyMovement || hasMovement) && matchesViewMode;
 
         return matchesDateRange &&
             matchesSearch &&
@@ -1351,6 +1395,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                 onChanged: (value) {
                   if (value == null) return;
                   setState(() => _viewMode = value);
+                  _filterLines();
                 },
               )
             else
@@ -1365,6 +1410,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                   selected: {_viewMode},
                   onSelectionChanged: (value) {
                     setState(() => _viewMode = value.first);
+                    _filterLines();
                   },
                 ),
               ),
