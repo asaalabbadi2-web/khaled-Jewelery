@@ -504,7 +504,10 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     final entryNum = (line.entryNumber ?? '').toLowerCase();
     if (entryNum.isNotEmpty && entryNum.contains(query)) return true;
 
-    if (line.id.toString().contains(normalizedQuery)) return true;
+    if (line.journalEntryId != null &&
+        line.journalEntryId.toString().contains(normalizedQuery)) {
+      return true;
+    }
 
     final invoiceId = _tryExtractInvoiceId(line);
     if (invoiceId != null && invoiceId.toString().contains(normalizedQuery)) {
@@ -1796,7 +1799,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     } else if ((line.entryNumber ?? '').trim().isNotEmpty) {
       parts.add('قيد: ${line.entryNumber}');
     }
-    parts.add('ID: ${line.id}');
+    if (line.journalEntryId != null) {
+      parts.add('# ${line.journalEntryId}');
+    }
     return parts.join(' • ');
   }
 

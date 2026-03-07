@@ -1297,6 +1297,7 @@ class InvoiceItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False)
     item_id = db.Column(db.Integer, db.ForeignKey('item.id'))
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
     name = db.Column(db.String(100))
     quantity = db.Column(db.Integer, nullable=False)
     price = db.Column(db.Float, nullable=False)
@@ -1314,10 +1315,21 @@ class InvoiceItem(db.Model):
     profit_weight_price_per_gram = db.Column(db.Float, default=0.0)
 
     def to_dict(self):
+        # Resolve category name via relationship or direct query
+        category_name = None
+        if self.category_id:
+            try:
+                from models import Category
+                cat = Category.query.get(self.category_id)
+                category_name = cat.name if cat else None
+            except Exception:
+                pass
         return {
             'id': self.id,
             'invoice_id': self.invoice_id,
             'item_id': self.item_id,
+            'category_id': self.category_id,
+            'category_name': category_name,
             'name': self.name,
             'quantity': self.quantity,
             'price': self.price,

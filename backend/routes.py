@@ -8795,7 +8795,14 @@ def add_invoice():
                 else (item.karat if item else None)
             )
             item_weight = item_data.get('weight') if item_data.get('weight') is not None else (item.weight if item else None)
-            item_wage = item.wage if item else item_data.get('manufacturing_wage_per_gram', 0)
+            # Prefer the wage sent from the frontend (per-invoice override),
+            # then fall back to manufacturing_wage_per_gram, then catalog item wage.
+            item_wage = (
+                item_data.get('wage')
+                or item_data.get('manufacturing_wage_per_gram')
+                or (item.wage if item else None)
+                or 0
+            )
 
             if item_weight is None:
                 item_weight = item_data.get('total_weight', 0)
@@ -8864,6 +8871,7 @@ def add_invoice():
             db.session.add(InvoiceItem(
                 invoice_id=new_invoice.id,
                 item_id=item.id if item else None,
+                category_id=item_data.get('category_id'),
                 name=item_name,
                 karat=item_karat,
                 weight=weight_per_item,
@@ -20627,9 +20635,18 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
     Notes:
     - We write only for approved vouchers (called by approve endpoint).
     - We best-effort link to a PaymentMethod if one exists whose default safe is this SafeBox.
+    - Idempotent: if SafeBoxTransaction rows already exist for this voucher, skip to prevent duplication.
     """
     if not voucher or not getattr(voucher, 'id', None):
         return []
+
+    # ── Idempotency guard: prevent double-posting ──────────────────────────
+    existing_count = SafeBoxTransaction.query.filter_by(
+        ref_type='voucher', ref_id=voucher.id
+    ).count()
+    if existing_count > 0:
+        return []
+    # ───────────────────────────────────────────────────────────────────────
 
     lines = VoucherAccountLine.query.filter_by(voucher_id=voucher.id).all()
     if not lines:
@@ -27496,6 +27513,108 @@ def get_admin_dashboard():
     except Exception:
         pass
 
+    # --- Sales / Purchases / Expenses Summary (today / this month / this year) ---
+    sales_purchases_summary = {}
+    try:
+        from models import JournalEntryLine as JELine, JournalEntry as JE2, Account as AccModel
+
+        month_start = datetime(now.year, now.month, 1)
+        year_start = datetime(now.year, 1, 1)
+
+        _summary_periods = {
+            'today': (today_start, tomorrow_start),
+            'month': (month_start, tomorrow_start),
+            'year': (year_start, tomorrow_start),
+        }
+
+        def _build_inv_summary(inv_types_dict, start, end):
+            invs = (
+                Invoice.query
+                .filter(Invoice.invoice_type.in_(list(inv_types_dict.keys())))
+                .filter(Invoice.is_posted.is_(True))
+                .filter(Invoice.date >= start)
+                .filter(Invoice.date < end)
+                .all()
+            )
+            total_value = 0.0
+            total_weight = 0.0
+            by_user: dict = {}
+            by_karat: dict = {}
+            for inv in invs:
+                sign = inv_types_dict.get(inv.invoice_type, 1)
+                v = float(inv.total or 0) * sign
+                w = float(inv.total_weight or 0) * sign
+                total_value += v
+                total_weight += w
+                user = ((inv.posted_by or '').strip()) or 'غير معروف'
+                if user not in by_user:
+                    by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
+                by_user[user]['value'] += v
+                by_user[user]['weight'] += w
+                by_user[user]['docs'] += 1
+                for ii in (inv.items or []):
+                    try:
+                        k = f"{int(float(ii.karat))}k" if ii.karat else '?'
+                    except Exception:
+                        k = '?'
+                    wt = float(ii.weight or 0) * sign
+                    vl = float(ii.net or 0) * sign
+                    if k not in by_karat:
+                        by_karat[k] = {'weight': 0.0, 'value': 0.0}
+                    by_karat[k]['weight'] += wt
+                    by_karat[k]['value'] += vl
+            return {
+                'total_value': round(total_value, 2),
+                'total_weight': round(total_weight, 3),
+                'docs': len(invs),
+                'by_user': sorted(
+                    [{'user': u, 'value': round(d['value'], 2), 'weight': round(d['weight'], 3), 'docs': d['docs']} for u, d in by_user.items()],
+                    key=lambda x: -x['value']
+                ),
+                'by_karat': sorted(
+                    [{'karat': k, 'weight': round(d['weight'], 3), 'value': round(d['value'], 2)} for k, d in by_karat.items() if d['weight'] != 0],
+                    key=lambda x: -(x['weight'] or 0)
+                ),
+            }
+
+        def _build_expenses_summary(start, end):
+            try:
+                exp_total = 0.0
+                exp_by_account: dict = {}
+                exp_rows = (
+                    db.session.query(JELine, AccModel)
+                    .join(AccModel, JELine.account_id == AccModel.id)
+                    .join(JE2, JELine.journal_entry_id == JE2.id)
+                    .filter(AccModel.account_number.like('5%'))
+                    .filter(JE2.is_posted.is_(True))
+                    .filter(JE2.date >= start)
+                    .filter(JE2.date < end)
+                    .all()
+                )
+                for line, acc in exp_rows:
+                    amt = float(line.cash_debit or 0)
+                    exp_total += amt
+                    name = (acc.name or acc.account_number or '?').strip()
+                    exp_by_account[name] = exp_by_account.get(name, 0.0) + amt
+                return {
+                    'total_value': round(exp_total, 2),
+                    'by_account': sorted(
+                        [{'account': a, 'value': round(v, 2)} for a, v in exp_by_account.items() if v > 0],
+                        key=lambda x: -x['value']
+                    ),
+                }
+            except Exception:
+                return {'total_value': 0.0, 'by_account': []}
+
+        for period_key, (p_start, p_end) in _summary_periods.items():
+            sales_purchases_summary[period_key] = {
+                'sales': _build_inv_summary(sale_types, p_start, p_end),
+                'purchases': _build_inv_summary(purchase_types, p_start, p_end),
+                'expenses': _build_expenses_summary(p_start, p_end),
+            }
+    except Exception:
+        sales_purchases_summary = {}
+
     return jsonify({
         'success': True,
         'generated_at': now.isoformat(),
@@ -27585,6 +27704,7 @@ def get_admin_dashboard():
         },
         'safe_boxes': safe_boxes_enhanced,
         'sensitive_operations': sensitive_operations,
+        'sales_purchases_summary': sales_purchases_summary,
     }), 200
 
 

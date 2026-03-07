@@ -1722,6 +1722,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         controller: countController,
                         keyboardType: TextInputType.number,
                         textInputAction: TextInputAction.next,
+                        onTap: () => countController.selection = TextSelection(
+                          baseOffset: 0, extentOffset: countController.text.length),
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                         ],
@@ -1765,6 +1767,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           decimal: true,
                         ),
                         textInputAction: TextInputAction.next,
+                        onTap: () => weightController.selection = TextSelection(
+                          baseOffset: 0, extentOffset: weightController.text.length),
                         inputFormatters: [
                           ArabicNumberTextInputFormatter(
                             allowDecimal: true,
@@ -1790,6 +1794,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           decimal: true,
                         ),
                         textInputAction: TextInputAction.next,
+                        onTap: () => wageController.selection = TextSelection(
+                          baseOffset: 0, extentOffset: wageController.text.length),
                         inputFormatters: [
                           ArabicNumberTextInputFormatter(
                             allowDecimal: true,
@@ -1808,6 +1814,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           decimal: true,
                         ),
                         textInputAction: TextInputAction.done,
+                        onTap: () => totalController.selection = TextSelection(
+                          baseOffset: 0, extentOffset: totalController.text.length),
                         inputFormatters: [
                           ArabicNumberTextInputFormatter(
                             allowDecimal: true,
@@ -1952,6 +1960,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         result['karat'] as int? ?? _settingsProvider.mainKarat;
     final weight = result['weight'] as double? ?? 0;
     final wage = result['wage'] as double? ?? 0;
+    final count = (result['count'] as int?) ?? 1;
 
     if (categoryId == null || weight <= 0) return;
 
@@ -1964,6 +1973,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           karat: selectedKarat.toDouble(),
           weight: weight,
           wage: wage,
+          count: count,
           goldPrice24k: _goldPrice24k,
           mainKarat: _settingsProvider.mainKarat,
             taxRate: _uiDisableVat
@@ -4570,6 +4580,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         columns: [
           DataColumn(label: Text('#', style: headerStyle)),
           DataColumn(label: Text('الاسم', style: headerStyle)),
+          DataColumn(label: Text('العدد', style: headerStyle)),
           DataColumn(label: Text('العيار', style: headerStyle)),
           DataColumn(label: Text('الوزن (جم)', style: headerStyle)),
           DataColumn(label: Text('المصنعية', style: headerStyle)),
@@ -4588,6 +4599,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             cells: [
               DataCell(Text('${index + 1}', style: cellStyle)),
               DataCell(Text(item.name, style: cellStyle)),
+              DataCell(Text('${item.count}', style: cellStyle)),
               DataCell(
                 InkWell(
                   onTap: () => _showEditDialog(index, 'karat', item.karat),
@@ -4753,6 +4765,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onTap: () => controller.selection = TextSelection(
+            baseOffset: 0, extentOffset: controller.text.length),
           decoration: InputDecoration(
             labelText: label,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -6577,6 +6591,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   final _categorySearchController = TextEditingController();
   final _weightController = TextEditingController(text: '1.0');
   final _wageController = TextEditingController(text: '0');
+  final _countController = TextEditingController(text: '1');
+
+  final _countFocusNode = FocusNode();
 
   Map<String, dynamic>? _selectedCategory;
   late int _selectedKarat;
@@ -6586,6 +6603,10 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   void initState() {
     super.initState();
     _selectedKarat = widget.mainKarat;
+    // pre-select all text so typing immediately replaces the default
+    for (final c in [_weightController, _wageController, _countController]) {
+      c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
+    }
   }
 
   @override
@@ -6593,6 +6614,8 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     _categorySearchController.dispose();
     _weightController.dispose();
     _wageController.dispose();
+    _countController.dispose();
+    _countFocusNode.dispose();
     super.dispose();
   }
 
@@ -6610,6 +6633,14 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     final categoryName = (_selectedCategory?['name'] ?? '').toString().trim();
     final weight = _tryParseDouble(_weightController.text, 0);
     final wage = _tryParseDouble(_wageController.text, 0);
+    final count = int.tryParse(_countController.text.trim()) ?? 0;
+
+    if (count < 1) {
+      _countFocusNode.requestFocus();
+      _countController.selection = TextSelection(
+        baseOffset: 0, extentOffset: _countController.text.length);
+      return;
+    }
 
     if (categoryId == null || weight <= 0) return;
 
@@ -6619,6 +6650,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
       'karat': _selectedKarat,
       'weight': weight,
       'wage': wage,
+      'count': count,
     });
   }
 
@@ -7008,8 +7040,11 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                   const TextInputType.numberWithOptions(
                                 decimal: true,
                               ),
+                              onTap: () => _weightController.selection =
+                                  TextSelection(baseOffset: 0,
+                                    extentOffset: _weightController.text.length),
                               decoration: InputDecoration(
-                                labelText: 'الوزن (جرام)',
+                                labelText: 'الوزن (جم)',
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
@@ -7024,7 +7059,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                               },
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: TextFormField(
                               controller: _wageController,
@@ -7032,8 +7067,11 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                   const TextInputType.numberWithOptions(
                                 decimal: true,
                               ),
+                              onTap: () => _wageController.selection =
+                                  TextSelection(baseOffset: 0,
+                                    extentOffset: _wageController.text.length),
                               decoration: InputDecoration(
-                                labelText: 'المصنعية/جرام',
+                                labelText: 'المصنعية/جم',
                                 hintText: '0',
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
@@ -7042,6 +7080,32 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                 filled: true,
                                 fillColor: theme.colorScheme.surface,
                               ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _countController,
+                              focusNode: _countFocusNode,
+                              keyboardType: TextInputType.number,
+                              onTap: () => _countController.selection =
+                                  TextSelection(baseOffset: 0,
+                                    extentOffset: _countController.text.length),
+                              decoration: InputDecoration(
+                                labelText: 'العدد',
+                                hintText: '1',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                prefixIcon: const Icon(Icons.numbers, size: 20),
+                                filled: true,
+                                fillColor: theme.colorScheme.surface,
+                              ),
+                              validator: (v) {
+                                final val = int.tryParse(v?.trim() ?? '');
+                                if (val == null || val < 1) return 'عدد ≥ 1';
+                                return null;
+                              },
                             ),
                           ),
                         ],

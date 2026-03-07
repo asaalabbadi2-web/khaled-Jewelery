@@ -49,13 +49,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   static const List<String> _tabTypes = ['بيع', 'شراء', 'مرتجع'];
   static const List<String> _tabTypesEn = ['Sales', 'Purchase', 'Returns'];
 
-  // Filters
-  String _searchQuery = '';
-  String _selectedInvoiceType = 'all';
-  String _selectedStatus = 'all';
-  DateTimeRange? _dateRange;
-  String _sortBy = 'date';
-  bool _sortAscending = false;
+  // Per-tab filter state (index 0=بيع, 1=شراء, 2=مرتجع)
+  late final List<TextEditingController> _searchControllers;
+  final List<String> _tabInvoiceSubType = ['all', 'all', 'all'];
+  final List<String> _tabStatus         = ['all', 'all', 'all'];
+  final List<DateTimeRange?> _tabDateRange = [null, null, null];
+  final List<String> _tabSort = ['date', 'date', 'date'];
+  final List<bool>   _tabSortAsc = [false, false, false];
   int _currentPage = 1;
   int _totalPages = 1;
   int _totalInvoices = 0;
@@ -87,9 +87,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     _tabController.addListener(() {
       if (!mounted) return;
       setState(() {
-        // Rebuild to refresh statistics header/cards when tab changes.
+        // Rebuild to refresh statistics header/search bar when tab changes.
       });
     });
+    _searchControllers = List.generate(3, (_) => TextEditingController());
+    for (final ctrl in _searchControllers) {
+      ctrl.addListener(() { if (mounted) setState(() {}); });
+    }
     _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
     _itemsRevisionListener = () {
       _cachedItems = null;
@@ -102,6 +106,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   @override
   void dispose() {
     _tabController.dispose();
+    for (final c in _searchControllers) { c.dispose(); }
     if (_itemsRevisionListener != null) {
       DataSyncBus.itemsRevision.removeListener(_itemsRevisionListener!);
     }
@@ -114,42 +119,16 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     setState(() => _isLoading = true);
 
     try {
-      DateTime? dateFrom;
-      DateTime? dateTo;
-      if (_dateRange != null) {
-        dateFrom = DateTime(
-          _dateRange!.start.year,
-          _dateRange!.start.month,
-          _dateRange!.start.day,
-        );
-        dateTo = DateTime(
-          _dateRange!.end.year,
-          _dateRange!.end.month,
-          _dateRange!.end.day,
-          23,
-          59,
-          59,
-          999,
-        );
-      }
-
-      final statusForApi = (_selectedStatus == 'paid' ||
-              _selectedStatus == 'partially_paid' ||
-              _selectedStatus == 'unpaid' ||
-              _selectedStatus == 'cancelled')
-          ? _selectedStatus
-          : 'all';
+      const statusForApi = 'all';
 
       final data = await _apiService.getInvoices(
         page: targetPage,
         perPage: _perPage,
-        sortBy: _sortBy == 'recent' || _sortBy == 'number' ? 'date' : _sortBy,
-        sortOrder: _sortAscending ? 'asc' : 'desc',
+        sortBy: 'date',
+        sortOrder: 'desc',
         search: '',
         status: statusForApi,
-        invoiceType: _selectedInvoiceType == 'all' ? null : _selectedInvoiceType,
-        dateFrom: dateFrom,
-        dateTo: dateTo,
+        invoiceType: null,
       );
 
       if (!mounted) return;
@@ -165,8 +144,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
 
       summary ??= await _fetchFullTabSummaryFromApi(
         statusForApi: statusForApi,
-        dateFrom: dateFrom,
-        dateTo: dateTo,
+        dateFrom: null,
+        dateTo: null,
       );
 
       if (!mounted) return;
@@ -201,13 +180,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       final firstPage = await _apiService.getInvoices(
         page: 1,
         perPage: summaryPerPage,
-        sortBy: _sortBy == 'recent' || _sortBy == 'number' ? 'date' : _sortBy,
-        sortOrder: _sortAscending ? 'asc' : 'desc',
+        sortBy: 'date',
+        sortOrder: 'desc',
         search: '',
-        status: statusForApi,
-        invoiceType: _selectedInvoiceType == 'all' ? null : _selectedInvoiceType,
-        dateFrom: dateFrom,
-        dateTo: dateTo,
+        status: 'all',
+        invoiceType: null,
       );
 
       final allInvoices = <dynamic>[];
@@ -218,13 +195,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         final pageData = await _apiService.getInvoices(
           page: page,
           perPage: summaryPerPage,
-          sortBy: _sortBy == 'recent' || _sortBy == 'number' ? 'date' : _sortBy,
-          sortOrder: _sortAscending ? 'asc' : 'desc',
+          sortBy: 'date',
+          sortOrder: 'desc',
           search: '',
-          status: statusForApi,
-          invoiceType: _selectedInvoiceType == 'all' ? null : _selectedInvoiceType,
-          dateFrom: dateFrom,
-          dateTo: dateTo,
+          status: 'all',
+          invoiceType: null,
         );
         allInvoices.addAll((pageData['invoices'] as List?) ?? const []);
       }
@@ -347,148 +322,102 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   }
 
   void _applyFilters() {
-    if (_invoices.isEmpty) {
-      _filteredInvoices = [];
-      return;
-    }
+    _filteredInvoices = List.from(_invoices);
+  }
 
-    try {
-      _filteredInvoices = _invoices.where((invoice) {
-        // Search filter
-        if (_searchQuery.isNotEmpty) {
-          final searchLower = _searchQuery.toLowerCase();
-          final customerName = (invoice['customer_name'] ?? '')
-              .toString()
-              .toLowerCase();
-          final supplierName = (invoice['supplier_name'] ?? '')
-              .toString()
-              .toLowerCase();
-          final invoiceNumber = _getInvoiceDisplayNumber(invoice).toLowerCase();
-          if (!customerName.contains(searchLower) &&
-              !supplierName.contains(searchLower) &&
-              !invoiceNumber.contains(searchLower)) {
-            return false;
-          }
-        }
+  /// Returns the filtered+sorted invoice list for a specific tab.
+  List<dynamic> _getTabFilteredInvoices(int tabIndex, String tabType) {
+    final tabBase = _getInvoicesForTabFromList(tabType, _filteredInvoices);
+    final searchQ = _searchControllers[tabIndex].text.trim().toLowerCase();
+    final subType = _tabInvoiceSubType[tabIndex];
+    final status = _tabStatus[tabIndex];
+    final dateRange = _tabDateRange[tabIndex];
+    final sortField = _tabSort[tabIndex];
+    final sortAsc = _tabSortAsc[tabIndex];
 
-        // Invoice type filter
-        if (_selectedInvoiceType != 'all') {
-          final invoiceType = (invoice['invoice_type'] ?? '').toString().trim();
-          if (invoiceType != _selectedInvoiceType) {
-            return false;
-          }
-        }
-
-        if (_selectedStatus != 'all') {
-          final normalizedStatus = _normalizeStatus(
-            (invoice['status'] ?? '').toString(),
-          );
-          if (_selectedStatus == 'paid_full') {
-            if (normalizedStatus != 'paid') return false;
-          } else if (_selectedStatus == 'remaining') {
-            if (normalizedStatus != 'unpaid' &&
-                normalizedStatus != 'partially_paid') {
-              return false;
-            }
-          } else {
-            if (normalizedStatus != _selectedStatus) {
-              return false;
-            }
-          }
-        }
-
-        // Date range filter
-        if (_dateRange != null && invoice['date'] != null) {
-          try {
-            final invoiceDate = DateTime.parse(invoice['date'].toString());
-            final start = DateTime(
-              _dateRange!.start.year,
-              _dateRange!.start.month,
-              _dateRange!.start.day,
-            );
-            final end = DateTime(
-              _dateRange!.end.year,
-              _dateRange!.end.month,
-              _dateRange!.end.day,
-              23,
-              59,
-              59,
-              999,
-            );
-            if (invoiceDate.isBefore(start) || invoiceDate.isAfter(end)) {
-              return false;
-            }
-          } catch (e) {
-            debugPrint('⚠️ خطأ في تحليل التاريخ: $e');
-            return true; // اترك الفاتورة إذا فشل parsing التاريخ
-          }
-        }
-
-        return true;
-      }).toList();
-
-      // Apply sorting
-      if (_filteredInvoices.isNotEmpty) {
-        _filteredInvoices.sort((a, b) {
-          int comparison = 0;
-          try {
-            switch (_sortBy) {
-              case 'recent':
-                final idA = _tryParseInt(a['id']) ?? 0;
-                final idB = _tryParseInt(b['id']) ?? 0;
-                comparison = idA.compareTo(idB);
-                break;
-              case 'date':
-                final dateA = a['date'] != null
-                    ? DateTime.parse(a['date'].toString())
-                    : DateTime.now();
-                final dateB = b['date'] != null
-                    ? DateTime.parse(b['date'].toString())
-                    : DateTime.now();
-                comparison = dateA.compareTo(dateB);
-                if (comparison == 0) {
-                  final idA = _tryParseInt(a['id']) ?? 0;
-                  final idB = _tryParseInt(b['id']) ?? 0;
-                  comparison = idA.compareTo(idB);
-                }
-                break;
-              case 'customer':
-                comparison = (a['customer_name'] ?? '').toString().compareTo(
-                  (b['customer_name'] ?? '').toString(),
-                );
-                break;
-              case 'amount':
-                final aTotal = ((a['total'] ?? 0) as num).toDouble();
-                final bTotal = ((b['total'] ?? 0) as num).toDouble();
-                comparison = aTotal.compareTo(bTotal);
-                break;
-              case 'number':
-                final aPrefix = _extractInvoicePrefix(a);
-                final bPrefix = _extractInvoicePrefix(b);
-                comparison = aPrefix.compareTo(bPrefix);
-                if (comparison == 0) {
-                  final aYear = _extractInvoiceYear(a);
-                  final bYear = _extractInvoiceYear(b);
-                  comparison = aYear.compareTo(bYear);
-                  if (comparison == 0) {
-                    final aSeq = _extractInvoiceSequence(a);
-                    final bSeq = _extractInvoiceSequence(b);
-                    comparison = aSeq.compareTo(bSeq);
-                  }
-                }
-                break;
-            }
-          } catch (e) {
-            debugPrint('⚠️ خطأ في الترتيب: $e');
-            comparison = 0;
-          }
-          return _sortAscending ? comparison : -comparison;
-        });
+    var result = tabBase.where((invoice) {
+      // Sub-type filter
+      if (subType != 'all') {
+        final invType = (invoice['invoice_type'] ?? '').toString().trim();
+        if (invType != subType) return false;
       }
-    } catch (e) {
-      debugPrint('❌ خطأ في تطبيق الفلاتر: $e');
-      _filteredInvoices = _invoices;
-    }
+
+      // Search filter (number, customer/supplier, amount)
+      if (searchQ.isNotEmpty) {
+        final customerName = (invoice['customer_name'] ?? '').toString().toLowerCase();
+        final supplierName = (invoice['supplier_name'] ?? '').toString().toLowerCase();
+        final invNumber = _getInvoiceDisplayNumber(invoice).toLowerCase();
+        final totalStr = _tryParseDouble(invoice['total']).toStringAsFixed(2);
+        final totalRounded = _tryParseDouble(invoice['total']).toStringAsFixed(0);
+        if (!customerName.contains(searchQ) &&
+            !supplierName.contains(searchQ) &&
+            !invNumber.contains(searchQ) &&
+            !totalStr.contains(searchQ) &&
+            !totalRounded.contains(searchQ)) {
+          return false;
+        }
+      }
+
+      // Status filter
+      if (status != 'all') {
+        final ns = _normalizeStatus((invoice['status'] ?? '').toString());
+        if (status == 'paid_full') {
+          if (ns != 'paid') return false;
+        } else if (status == 'remaining') {
+          if (ns != 'unpaid' && ns != 'partially_paid') return false;
+        } else {
+          if (ns != status) return false;
+        }
+      }
+
+      // Date range filter
+      if (dateRange != null && invoice['date'] != null) {
+        try {
+          final invoiceDate = DateTime.parse(invoice['date'].toString());
+          final start = DateTime(dateRange.start.year, dateRange.start.month, dateRange.start.day);
+          final end   = DateTime(dateRange.end.year,   dateRange.end.month,   dateRange.end.day, 23, 59, 59, 999);
+          if (invoiceDate.isBefore(start) || invoiceDate.isAfter(end)) return false;
+        } catch (_) {}
+      }
+
+      return true;
+    }).toList();
+
+    // Sort
+    result.sort((a, b) {
+      int comparison = 0;
+      try {
+        switch (sortField) {
+          case 'recent':
+            comparison = (_tryParseInt(a['id']) ?? 0).compareTo(_tryParseInt(b['id']) ?? 0);
+            break;
+          case 'date':
+            final da = a['date'] != null ? DateTime.parse(a['date'].toString()) : DateTime.now();
+            final db = b['date'] != null ? DateTime.parse(b['date'].toString()) : DateTime.now();
+            comparison = da.compareTo(db);
+            if (comparison == 0) comparison = (_tryParseInt(a['id']) ?? 0).compareTo(_tryParseInt(b['id']) ?? 0);
+            break;
+          case 'customer':
+            comparison = (a['customer_name'] ?? '').toString().compareTo((b['customer_name'] ?? '').toString());
+            break;
+          case 'amount':
+            comparison = _tryParseDouble(a['total']).compareTo(_tryParseDouble(b['total']));
+            break;
+          case 'number':
+            final ap = _extractInvoicePrefix(a);
+            final bp = _extractInvoicePrefix(b);
+            comparison = ap.compareTo(bp);
+            if (comparison == 0) {
+              comparison = _extractInvoiceYear(a).compareTo(_extractInvoiceYear(b));
+              if (comparison == 0) comparison = _extractInvoiceSequence(a).compareTo(_extractInvoiceSequence(b));
+            }
+            break;
+        }
+      } catch (_) {}
+      return sortAsc ? comparison : -comparison;
+    });
+
+    return result;
   }
 
   String _normalizeStatus(String? rawStatus) {
@@ -949,8 +878,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     }
 
     final summaryKey = resolveSummaryKey(tabType);
+    final tabIndex = _tabTypes.indexOf(tabType);
+    final effectiveIndex = tabIndex >= 0 ? tabIndex : 0;
+
     final globalSummary = _globalTabSummary?[summaryKey];
-    if (globalSummary is Map) {
+    if (globalSummary is Map && _tabStatus[effectiveIndex] == 'all' &&
+        _tabDateRange[effectiveIndex] == null &&
+        _tabInvoiceSubType[effectiveIndex] == 'all' &&
+        _searchControllers[effectiveIndex].text.isEmpty) {
       return {
         'total_invoices': _tryParseInt(globalSummary['total_invoices']) ?? 0,
         'total_amount': _tryParseDouble(globalSummary['total_amount']),
@@ -961,7 +896,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       };
     }
 
-    final tabInvoices = _getInvoicesForTabFromList(tabType, _filteredInvoices);
+    final tabInvoices = _getTabFilteredInvoices(effectiveIndex, tabType);
     return _calculateStatsFromInvoices(tabInvoices);
   }
 
@@ -976,23 +911,27 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   }
 
   void _clearFilters() {
+    final idx = _tabController.index;
     setState(() {
-      _searchQuery = '';
-      _selectedInvoiceType = 'all';
-      _selectedStatus = 'all';
-      _dateRange = null;
+      _searchControllers[idx].clear();
+      _tabInvoiceSubType[idx] = 'all';
+      _tabStatus[idx] = 'all';
+      _tabDateRange[idx] = null;
+      _tabSort[idx] = 'date';
+      _tabSortAsc[idx] = false;
       _currentPage = 1;
     });
     _loadInvoices(page: 1);
   }
 
   int get _activeFiltersCount {
+    final idx = _tabController.index;
     int count = 0;
-    if (_searchQuery.isNotEmpty) count++;
-    if (_selectedInvoiceType != 'all') count++;
-    if (_selectedStatus != 'all') count++;
-    if (_dateRange != null) count++;
-    if (_sortBy != 'date' && _sortBy != 'recent') count++;
+    if (_searchControllers[idx].text.isNotEmpty) count++;
+    if (_tabInvoiceSubType[idx] != 'all') count++;
+    if (_tabStatus[idx] != 'all') count++;
+    if (_tabDateRange[idx] != null) count++;
+    if (_tabSort[idx] != 'date' && _tabSort[idx] != 'recent') count++;
     return count;
   }
 
@@ -1044,12 +983,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
 
   void _showFiltersBottomSheet() {
     final isAr = widget.isArabic;
-    String tempType = _selectedInvoiceType;
-    String tempStatus = _selectedStatus;
-    String tempSort = _sortBy;
-    bool tempAsc = _sortAscending;
-    DateTimeRange? tempDate = _dateRange;
-    final searchCtrl = TextEditingController(text: _searchQuery);
+    final idx = _tabController.index;
+    String tempSubType = _tabInvoiceSubType[idx];
+    String tempStatus  = _tabStatus[idx];
+    String tempSort    = _tabSort[idx];
+    bool   tempAsc     = _tabSortAsc[idx];
+    DateTimeRange? tempDate = _tabDateRange[idx];
 
     showModalBottomSheet(
       context: context,
@@ -1064,10 +1003,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
           final colorScheme = theme.colorScheme;
           final textTheme = theme.textTheme;
           final bdRadius = BorderRadius.circular(12);
-          final border = OutlineInputBorder(
-            borderRadius: bdRadius,
-            borderSide: BorderSide(color: colorScheme.outline.withValues(alpha: 0.28)),
-          );
 
           Widget sheetDropdown({
             required String value,
@@ -1128,7 +1063,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          isAr ? 'تصفية الفواتير' : 'Filter Invoices',
+                          isAr ? 'تصفية: ${_tabTypes[idx]}' : 'Filter: ${_tabTypesEn[idx]}',
                           style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                         ),
                       ),
@@ -1142,31 +1077,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     ],
                   ),
                   const SizedBox(height: 12),
-                  // Search
-                  TextField(
-                    controller: searchCtrl,
-                    style: textTheme.bodyMedium,
-                    decoration: InputDecoration(
-                      hintText: isAr ? 'بحث برقم الفاتورة أو العميل...' : 'Search by number or customer...',
-                      prefixIcon: const Icon(Icons.search, size: 20),
-                      suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                        valueListenable: searchCtrl,
-                        builder: (_, value, child) => value.text.isNotEmpty
-                            ? IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: () { searchCtrl.clear(); setSS(() {}); })
-                            : const SizedBox.shrink(),
-                      ),
-                      filled: true,
-                      fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-                      border: border,
-                      enabledBorder: border,
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: bdRadius,
-                        borderSide: BorderSide(color: colorScheme.primary),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
                   // Date range
                   OutlinedButton.icon(
                     icon: Icon(Icons.date_range, size: 18,
@@ -1214,12 +1124,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                       ),
                     ),
                   const SizedBox(height: 10),
-                  // Invoice type + Status
+                  // Sub-type (scoped to this tab) + Status
                   Row(children: [
                     Expanded(child: sheetDropdown(
-                      value: tempType,
-                      items: _buildInvoiceTypeItems(isAr),
-                      onChanged: (v) { if (v != null) setSS(() => tempType = v); },
+                      value: tempSubType,
+                      items: _buildInvoiceTypeItemsForTab(isAr, idx),
+                      onChanged: (v) { if (v != null) setSS(() => tempSubType = v); },
                     )),
                     const SizedBox(width: 8),
                     Expanded(child: sheetDropdown(
@@ -1234,11 +1144,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     Expanded(child: sheetDropdown(
                       value: tempSort,
                       items: [
-                        {'value': 'recent', 'label': isAr ? 'الأحدث' : 'Most Recent'},
-                        {'value': 'date', 'label': isAr ? 'التاريخ' : 'Date'},
+                        {'value': 'recent',   'label': isAr ? 'الأحدث' : 'Most Recent'},
+                        {'value': 'date',     'label': isAr ? 'التاريخ' : 'Date'},
                         {'value': 'customer', 'label': isAr ? 'العميل' : 'Customer'},
-                        {'value': 'amount', 'label': isAr ? 'المبلغ' : 'Amount'},
-                        {'value': 'number', 'label': isAr ? 'الرقم' : 'Number'},
+                        {'value': 'amount',   'label': isAr ? 'المبلغ' : 'Amount'},
+                        {'value': 'number',   'label': isAr ? 'الرقم' : 'Number'},
                       ],
                       onChanged: (v) { if (v != null) setSS(() => tempSort = v); },
                     )),
@@ -1271,15 +1181,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     onPressed: () {
                       Navigator.pop(ctx);
                       setState(() {
-                        _searchQuery = searchCtrl.text;
-                        _selectedInvoiceType = tempType;
-                        _selectedStatus = tempStatus;
-                        _sortBy = tempSort;
-                        _sortAscending = tempAsc;
-                        _dateRange = tempDate;
+                        _tabInvoiceSubType[idx] = tempSubType;
+                        _tabStatus[idx]    = tempStatus;
+                        _tabSort[idx]      = tempSort;
+                        _tabSortAsc[idx]   = tempAsc;
+                        _tabDateRange[idx] = tempDate;
                         _currentPage = 1;
                       });
-                      _loadInvoices(page: 1);
                     },
                   ),
                 ],
@@ -1329,20 +1237,57 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
             ),
           ],
           bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(50),
-            child: TabBar(
-              controller: _tabController,
-              isScrollable: false,
-              labelColor: primary,
-              unselectedLabelColor: colorScheme.onSurface.withValues(alpha: 0.6),
-              indicatorColor: primary,
-              indicatorSize: TabBarIndicatorSize.label,
-              tabs: List.generate(tabLabels.length, (index) {
-                return Tab(
-                  icon: Icon(tabIcons[index]),
-                  text: tabLabels[index],
-                );
-              }),
+            preferredSize: const Size.fromHeight(102),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TabBar(
+                  controller: _tabController,
+                  isScrollable: false,
+                  labelColor: primary,
+                  unselectedLabelColor: colorScheme.onSurface.withValues(alpha: 0.6),
+                  indicatorColor: primary,
+                  indicatorSize: TabBarIndicatorSize.label,
+                  tabs: List.generate(tabLabels.length, (index) {
+                    return Tab(
+                      icon: Icon(tabIcons[index]),
+                      text: tabLabels[index],
+                    );
+                  }),
+                ),
+                // Pinned search bar — one per tab
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                  child: TextField(
+                    controller: _searchControllers[_tabController.index],
+                    style: Theme.of(context).textTheme.bodyMedium,
+                    onTap: () {
+                      final ctrl = _searchControllers[_tabController.index];
+                      ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+                    },
+                    decoration: InputDecoration(
+                      hintText: isAr
+                          ? 'بحث برقم الفاتورة أو العميل أو المبلغ...'
+                          : 'Search: number, customer, amount...',
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      suffixIcon: _searchControllers[_tabController.index].text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 16),
+                              onPressed: () => setState(() => _searchControllers[_tabController.index].clear()),
+                            )
+                          : null,
+                      isDense: true,
+                      filled: true,
+                      fillColor: colorScheme.surface.withValues(alpha: 0.92),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1369,9 +1314,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
               : TabBarView(
                   controller: _tabController,
                   children: List.generate(tabLabels.length, (index) {
-                    final tabInvoices = _getInvoicesForTabFromList(
+                    final tabInvoices = _getTabFilteredInvoices(
+                      index,
                       tabLabels[index],
-                      _filteredInvoices,
                     );
 
                     if (tabInvoices.isEmpty) {
@@ -1623,65 +1568,29 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     ];
   }
 
-  List<Map<String, String>> _buildInvoiceTypeItems(bool isArabic) {
-    const defaultOrder = [
-      'شراء',
-      'شراء من عميل',
-      'شراء خردة',
-      'شراء مستعمل',
-      'بيع',
-      'بيع جديد',
-      'بيع مستعمل',
-      'مرتجع شراء',
-      'مرتجع شراء (مورد)',
-      'مرتجع شراء من عميل',
-      'مرتجع بيع',
-      'مرتجع بيع خردة',
-      'مقايضة',
-    ];
-
-    const englishLabels = {
-      'شراء': 'Purchase',
-      'شراء من عميل': 'Purchase (Customer)',
-      'شراء خردة': 'Scrap Purchase',
-      'شراء مستعمل': 'Used Gold Purchase',
-      'بيع': 'Sale',
-      'بيع جديد': 'New Sale',
-      'بيع مستعمل': 'Used Sale',
-      'مرتجع شراء': 'Purchase Return',
-      'مرتجع شراء (مورد)': 'Supplier Purchase Return',
-      'مرتجع شراء من عميل': 'Customer Purchase Return',
-      'مرتجع بيع': 'Sales Return',
-      'مرتجع بيع خردة': 'Scrap Sales Return',
-      'مقايضة': 'Exchange',
+  /// Returns invoice sub-type dropdown items scoped to the given tab index.
+  List<Map<String, String>> _buildInvoiceTypeItemsForTab(bool isAr, int tabIndex) {
+    const salesTypes    = ['بيع', 'بيع جديد', 'بيع مستعمل', 'مقايضة'];
+    const purchaseTypes = ['شراء', 'شراء من عميل', 'شراء خردة', 'شراء مستعمل'];
+    const returnTypes   = ['مرتجع بيع', 'مرتجع بيع خردة', 'مرتجع شراء', 'مرتجع شراء (مورد)', 'مرتجع شراء من عميل'];
+    const englishMap = {
+      'بيع': 'Sale', 'بيع جديد': 'New Sale', 'بيع مستعمل': 'Used Sale', 'مقايضة': 'Exchange',
+      'شراء': 'Purchase', 'شراء من عميل': 'Purchase (Customer)', 'شراء خردة': 'Scrap Purchase', 'شراء مستعمل': 'Used Purchase',
+      'مرتجع بيع': 'Sales Return', 'مرتجع بيع خردة': 'Scrap Sales Return',
+      'مرتجع شراء': 'Purchase Return', 'مرتجع شراء (مورد)': 'Supplier Return', 'مرتجع شراء من عميل': 'Customer Return',
     };
 
-    final collectedTypes = <String>{
-      for (final invoice in _invoices)
-        if (((invoice['invoice_type'] ?? '').toString().trim()).isNotEmpty)
-          (invoice['invoice_type'] ?? '').toString().trim(),
-    };
-
-    final orderedTypes = <String>[];
-    for (final type in defaultOrder) {
-      if (collectedTypes.contains(type) || collectedTypes.isEmpty) {
-        orderedTypes.add(type);
-        collectedTypes.remove(type);
-      }
-    }
-
-    final remaining = collectedTypes.toList()..sort();
-    orderedTypes.addAll(remaining);
+    final tabTypes = tabIndex == 0 ? salesTypes : tabIndex == 1 ? purchaseTypes : returnTypes;
+    final existing = _invoices.map((inv) => (inv['invoice_type'] ?? '').toString().trim()).toSet();
 
     final items = <Map<String, String>>[
-      {'value': 'all', 'label': isArabic ? 'الكل' : 'All'},
+      {'value': 'all', 'label': isAr ? 'الكل' : 'All'},
     ];
-
-    for (final type in orderedTypes) {
-      final label = isArabic ? type : (englishLabels[type] ?? type);
-      items.add({'value': type, 'label': label});
+    for (final t in tabTypes) {
+      if (existing.contains(t) || existing.isEmpty) {
+        items.add({'value': t, 'label': isAr ? t : (englishMap[t] ?? t)});
+      }
     }
-
     return items;
   }
 

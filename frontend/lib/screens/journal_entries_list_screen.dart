@@ -135,14 +135,24 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     // Search filter
     final query = _searchController.text.toLowerCase();
     if (query.isNotEmpty) {
+      final isNumericQuery = RegExp(r'^\d+$').hasMatch(query);
+      final numericQuery = query.replaceFirst('#', '');
       filtered = filtered.where((entry) {
+        final id = (entry['id'] as int? ?? 0).toString();
+        final entryNumber =
+            (entry['entry_number'] as String? ?? '').toLowerCase();
+        // Pure number → exact ID match only (avoids matching years/amounts in descriptions)
+        if (isNumericQuery) {
+          return id == numericQuery;
+        }
+        // '#N' prefix → exact ID match
+        if (query.startsWith('#')) {
+          return id == numericQuery;
+        }
+        // Text → search description and entry_number
         final description = (entry['description'] as String? ?? '')
             .toLowerCase();
-        final date = (entry['date'] as String? ?? '').toLowerCase();
-        final id = (entry['id'] as int? ?? 0).toString();
-        return description.contains(query) ||
-            date.contains(query) ||
-            id.contains(query);
+        return description.contains(query) || entryNumber.contains(query);
       }).toList();
     }
 

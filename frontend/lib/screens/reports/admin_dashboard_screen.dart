@@ -16,7 +16,7 @@ import 'gold_price_history_report_screen.dart';
 import 'sales_vs_purchases_trend_report_screen.dart';
 import 'system_alerts_screen.dart';
 
-enum _TimeRange { today, week, month }
+enum _TimeRange { today, month, year }
 
 class AdminDashboardScreen extends StatefulWidget {
   final ApiService api;
@@ -40,7 +40,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int? _expandedVaultSafeBoxId;
   int? _pressedVaultSafeBoxId;
 
-  _TimeRange _timeRange = _TimeRange.week;
+  _TimeRange _timeRange = _TimeRange.today;
+
+  /// Maps the unified top-level time selector to the backend summary key.
+  String get _summaryPeriod {
+    switch (_timeRange) {
+      case _TimeRange.today:
+        return 'today';
+      case _TimeRange.month:
+        return 'month';
+      case _TimeRange.year:
+        return 'year';
+    }
+  }
 
   double _uiScale(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
@@ -179,6 +191,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final safeBoxes = (_response?['safe_boxes'] as List?) ?? [];
     final sensitiveOps = (_response?['sensitive_operations'] as List?) ?? [];
     final series = (_response?['series'] as Map<String, dynamic>?) ?? {};
+    final salesPurchasesSummary =
+        (_response?['sales_purchases_summary'] as Map<String, dynamic>?) ?? {};
 
     final goldByKarat = (kpis['gold_by_karat'] as Map<String, dynamic>?) ?? {};
 
@@ -225,6 +239,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 goldByKarat: goldByKarat,
                 liquidity: liquidity,
               ),
+            ),
+          ),
+
+          // === 3.5 Sales / Purchases / Expenses Summary ===
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: _s(16),
+                vertical: _s(8),
+              ),
+              child: _buildSalesSummaryCard(salesPurchasesSummary),
             ),
           ),
 
@@ -377,15 +402,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     setState(() => _timeRange = _TimeRange.today),
               ),
               ChoiceChip(
-                label: Text(isArabic ? '٧ أيام' : '7D'),
-                selected: _timeRange == _TimeRange.week,
-                onSelected: (_) => setState(() => _timeRange = _TimeRange.week),
-              ),
-              ChoiceChip(
-                label: Text(isArabic ? '٣٠ يوم' : '30D'),
+                label: Text(isArabic ? 'هذا الشهر' : 'This Month'),
                 selected: _timeRange == _TimeRange.month,
                 onSelected: (_) =>
                     setState(() => _timeRange = _TimeRange.month),
+              ),
+              ChoiceChip(
+                label: Text(isArabic ? 'هذه السنة' : 'This Year'),
+                selected: _timeRange == _TimeRange.year,
+                onSelected: (_) =>
+                    setState(() => _timeRange = _TimeRange.year),
               ),
             ],
           ),
@@ -396,6 +422,419 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           label: Text(isArabic ? 'تحديث' : 'Refresh'),
         ),
       ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SALES / PURCHASES / EXPENSES SUMMARY CARD
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildSalesSummaryCard(Map<String, dynamic> summary) {
+    final isArabic = widget.isArabic;
+    final theme = Theme.of(context);
+
+    final periodData =
+        (summary[_summaryPeriod] as Map<String, dynamic>?) ?? {};
+    final sales = (periodData['sales'] as Map<String, dynamic>?) ?? {};
+    final purchases = (periodData['purchases'] as Map<String, dynamic>?) ?? {};
+    final expenses = (periodData['expenses'] as Map<String, dynamic>?) ?? {};
+
+    final salesValue = _asDouble(sales['total_value']);
+    final salesWeight = _asDouble(sales['total_weight']);
+    final salesDocs = sales['docs'] as int? ?? 0;
+
+    final purchasesValue = _asDouble(purchases['total_value']);
+    final purchasesWeight = _asDouble(purchases['total_weight']);
+    final purchasesDocs = purchases['docs'] as int? ?? 0;
+
+    final expensesValue = _asDouble(expenses['total_value']);
+
+    final byKaratSales = (sales['by_karat'] as List?) ?? [];
+    final byKaratPurchases = (purchases['by_karat'] as List?) ?? [];
+    final byUserSales = (sales['by_user'] as List?) ?? [];
+    final byUserPurchases = (purchases['by_user'] as List?) ?? [];
+    final expByAccount = (expenses['by_account'] as List?) ?? [];
+
+    Widget metricTile(
+      String label,
+      String value,
+      String sub,
+      IconData icon,
+      Color color,
+    ) {
+      return Container(
+        padding: EdgeInsets.all(_s(12)),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.2)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: _s(16), color: color),
+                SizedBox(width: _s(6)),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: _s(11),
+                    color: theme.textTheme.bodySmall?.color,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: _s(6)),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: _s(15),
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+            if (sub.isNotEmpty)
+              Text(
+                sub,
+                style: TextStyle(
+                  fontSize: _s(10),
+                  color: theme.textTheme.bodySmall?.color,
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    // Subtle full-width underline beneath each row
+    final rowDivider = BorderSide(
+      color: theme.dividerColor.withValues(alpha: 0.25),
+      width: 0.7,
+    );
+
+    Widget karatChips(List items) {
+      if (items.isEmpty) {
+        return Text(
+          isArabic ? 'لا يوجد' : 'None',
+          style: TextStyle(
+            fontSize: _s(11),
+            color: theme.textTheme.bodySmall?.color,
+          ),
+        );
+      }
+      return Column(
+        children: items.map((k) {
+          final karat = k['karat'] as String? ?? '?';
+          final weight = _asDouble(k['weight']);
+          final value = _asDouble(k['value']);
+          return Container(
+            decoration: BoxDecoration(
+              border: Border(bottom: rowDivider),
+            ),
+            padding: EdgeInsets.symmetric(vertical: _s(5)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: _s(7),
+                    vertical: _s(2),
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGold.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    karat,
+                    style: TextStyle(
+                      fontSize: _s(11),
+                      color: AppColors.primaryGold,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                SizedBox(width: _s(6)),
+                Expanded(
+                  child: Text(
+                    '${_weightFormat.format(weight)} ${isArabic ? "جم" : "g"}',
+                    style: TextStyle(
+                      fontSize: _s(10),
+                      color: theme.textTheme.bodySmall?.color,
+                    ),
+                  ),
+                ),
+                Text(
+                  _currencyFormat.format(value),
+                  style: TextStyle(
+                    fontSize: _s(12),
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primaryGold,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      );
+    }
+
+    Widget userRows(List items, Color accentColor) {
+      if (items.isEmpty) {
+        return Text(
+          isArabic ? 'لا يوجد' : 'None',
+          style: TextStyle(
+            fontSize: _s(11),
+            color: theme.textTheme.bodySmall?.color,
+          ),
+        );
+      }
+      return Column(
+        children: items.take(5).map((u) {
+          final user = u['user'] as String? ?? '—';
+          final value = _asDouble(u['value']);
+          final weight = _asDouble(u['weight']);
+          final docs = u['docs'] as int? ?? 0;
+          return Container(
+            decoration: BoxDecoration(
+              border: Border(bottom: rowDivider),
+            ),
+            padding: EdgeInsets.symmetric(vertical: _s(5)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(Icons.person_outline,
+                    size: _s(14), color: accentColor),
+                SizedBox(width: _s(4)),
+                Expanded(
+                  child: Text(
+                    user,
+                    style: TextStyle(
+                      fontSize: _s(11),
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _currencyFormat.format(value),
+                      style: TextStyle(
+                        fontSize: _s(12),
+                        fontWeight: FontWeight.w700,
+                        color: accentColor,
+                      ),
+                    ),
+                    Text(
+                      '${_weightFormat.format(weight)}${isArabic ? "جم" : "g"} · $docs ${isArabic ? "فاتورة" : "inv"}',
+                      style: TextStyle(
+                        fontSize: _s(9),
+                        color: theme.textTheme.bodySmall?.color,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      );
+    }
+
+    Widget expenseRows(List items) {
+      if (items.isEmpty) {
+        return Text(
+          isArabic ? 'لا يوجد' : 'None',
+          style: TextStyle(
+            fontSize: _s(11),
+            color: theme.textTheme.bodySmall?.color,
+          ),
+        );
+      }
+      return Column(
+        children: items.take(6).map((e) {
+          final acc = e['account'] as String? ?? '—';
+          final value = _asDouble(e['value']);
+          return Container(
+            decoration: BoxDecoration(
+              border: Border(bottom: rowDivider),
+            ),
+            padding: EdgeInsets.symmetric(vertical: _s(5)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(Icons.receipt_long_outlined,
+                    size: _s(13), color: Colors.orange),
+                SizedBox(width: _s(4)),
+                Expanded(
+                  child: Text(
+                    acc,
+                    style: TextStyle(fontSize: _s(11)),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+                Text(
+                  _currencyFormat.format(value),
+                  style: TextStyle(
+                    fontSize: _s(12),
+                    color: Colors.orange,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      );
+    }
+
+    return Container(
+      padding: EdgeInsets.all(_s(16)),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGold.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row
+          Row(
+            children: [
+              Icon(Icons.bar_chart_rounded,
+                  size: _s(20), color: AppColors.primaryGold),
+              SizedBox(width: _s(8)),
+              Expanded(
+                child: Text(
+                  isArabic
+                      ? 'ملخص المبيعات والمشتريات والمصروفات'
+                      : 'Sales, Purchases & Expenses Summary',
+                  style: TextStyle(
+                    fontSize: _s(14),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(14)),
+
+          // Metric tiles row
+          LayoutBuilder(
+            builder: (ctx, constraints) {
+              final w = constraints.maxWidth;
+              if (w >= 700) {
+                return Row(
+                  children: [
+                    Expanded(
+                      child: metricTile(
+                        isArabic ? 'إجمالي المبيعات' : 'Total Sales',
+                        _currencyFormat.format(salesValue),
+                        '${_weightFormat.format(salesWeight)} ${isArabic ? "جم" : "g"} · $salesDocs ${isArabic ? "فاتورة" : "inv"}',
+                        Icons.trending_up,
+                        Colors.green,
+                      ),
+                    ),
+                    SizedBox(width: _s(10)),
+                    Expanded(
+                      child: metricTile(
+                        isArabic ? 'إجمالي المشتريات' : 'Total Purchases',
+                        _currencyFormat.format(purchasesValue),
+                        '${_weightFormat.format(purchasesWeight)} ${isArabic ? "جم" : "g"} · $purchasesDocs ${isArabic ? "فاتورة" : "inv"}',
+                        Icons.trending_down,
+                        Colors.blue,
+                      ),
+                    ),
+                    SizedBox(width: _s(10)),
+                    Expanded(
+                      child: metricTile(
+                        isArabic ? 'إجمالي المصروفات' : 'Total Expenses',
+                        _currencyFormat.format(expensesValue),
+                        '',
+                        Icons.receipt_long_outlined,
+                        Colors.orange,
+                      ),
+                    ),
+                  ],
+                );
+              } else {
+                return Column(
+                  children: [
+                    metricTile(
+                      isArabic ? 'إجمالي المبيعات' : 'Total Sales',
+                      _currencyFormat.format(salesValue),
+                      '${_weightFormat.format(salesWeight)} ${isArabic ? "جم" : "g"} · $salesDocs ${isArabic ? "فاتورة" : "inv"}',
+                      Icons.trending_up,
+                      Colors.green,
+                    ),
+                    SizedBox(height: _s(8)),
+                    metricTile(
+                      isArabic ? 'إجمالي المشتريات' : 'Total Purchases',
+                      _currencyFormat.format(purchasesValue),
+                      '${_weightFormat.format(purchasesWeight)} ${isArabic ? "جم" : "g"} · $purchasesDocs ${isArabic ? "فاتورة" : "inv"}',
+                      Icons.trending_down,
+                      Colors.blue,
+                    ),
+                    SizedBox(height: _s(8)),
+                    metricTile(
+                      isArabic ? 'إجمالي المصروفات' : 'Total Expenses',
+                      _currencyFormat.format(expensesValue),
+                      '',
+                      Icons.receipt_long_outlined,
+                      Colors.orange,
+                    ),
+                  ],
+                );
+              }
+            },
+          ),
+          SizedBox(height: _s(16)),
+
+          // Karat breakdown
+          _SummarySection(
+            title: isArabic ? 'توزيع المبيعات بالعيار (وزن + قيمة)' : 'Sales by Karat (weight + value)',
+            scale: _s(1),
+            child: karatChips(byKaratSales),
+          ),
+          SizedBox(height: _s(10)),
+          _SummarySection(
+            title: isArabic ? 'توزيع المشتريات بالعيار (وزن + قيمة)' : 'Purchases by Karat (weight + value)',
+            scale: _s(1),
+            child: karatChips(byKaratPurchases),
+          ),
+          SizedBox(height: _s(10)),
+
+          // By user
+          _SummarySection(
+            title: isArabic ? 'المبيعات بالمستخدم' : 'Sales by User',
+            scale: _s(1),
+            child: userRows(byUserSales, Colors.green),
+          ),
+          SizedBox(height: _s(10)),
+          _SummarySection(
+            title: isArabic ? 'المشتريات بالمستخدم' : 'Purchases by User',
+            scale: _s(1),
+            child: userRows(byUserPurchases, Colors.blue),
+          ),
+          SizedBox(height: _s(10)),
+
+          // Expenses by account
+          _SummarySection(
+            title: isArabic ? 'المصروفات بالحساب' : 'Expenses by Account',
+            scale: _s(1),
+            child: expenseRows(expByAccount),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1135,10 +1574,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     switch (range) {
       case _TimeRange.today:
         return const ['today', '1d', 'day', 'last_1_day', 'last_24_hours'];
-      case _TimeRange.week:
-        return const ['week', '7d', 'last_7_days', 'last7', 'last_week'];
       case _TimeRange.month:
         return const ['month', '30d', 'last_30_days', 'last30', 'last_month'];
+      case _TimeRange.year:
+        return const ['year', '12m', 'last_year', 'ytd', 'annual'];
     }
   }
 
@@ -2188,6 +2627,67 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
             );
           }),
+      ],
+    );
+  }
+}
+
+/// Collapsible section header used inside the summary card.
+class _SummarySection extends StatefulWidget {
+  final String title;
+  final Widget child;
+  final double scale;
+
+  const _SummarySection({
+    required this.title,
+    required this.child,
+    required this.scale,
+  });
+
+  @override
+  State<_SummarySection> createState() => _SummarySectionState();
+}
+
+class _SummarySectionState extends State<_SummarySection> {
+  bool _expanded = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(
+                  _expanded
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_left,
+                  size: 16 * widget.scale,
+                  color: AppColors.primaryGold,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  widget.title,
+                  style: TextStyle(
+                    fontSize: 12 * widget.scale,
+                    fontWeight: FontWeight.w600,
+                    color: theme.textTheme.bodySmall?.color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_expanded) ...[
+          const SizedBox(height: 6),
+          widget.child,
+        ],
       ],
     );
   }

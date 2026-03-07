@@ -313,7 +313,7 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             entry_number=entry_number,
             date=getattr(invoice, 'date', None) or datetime.now(),
             description=(
-                f'تسوية دفعة مؤجلة - فاتورة #{getattr(invoice, "invoice_type_id", invoice.id)}'
+                f'تسوية دفعة مؤجلة - فاتورة #{getattr(invoice, "invoice_number", None) or invoice.id}'
             ),
             reference_type='invoice_payment_deferred',
             reference_id=invoice.id,
