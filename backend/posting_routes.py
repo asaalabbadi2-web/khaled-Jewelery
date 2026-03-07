@@ -232,11 +232,38 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         if pay_id <= 0:
             continue
 
-        # idempotency: تخطّ إذا SafeBoxTransaction موجودة بالفعل
-        already = SafeBoxTransaction.query.filter_by(
-            ref_type='invoice_payment', invoice_payment_id=pay_id
-        ).first()
-        if already:
+        # Idempotency (prevent duplicates): handle legacy rows too.
+        # - SafeBoxTransaction may have invoice_payment_id OR only ref_id.
+        existing_safe_tx = (
+            SafeBoxTransaction.query
+            .filter(SafeBoxTransaction.ref_type == 'invoice_payment')
+            .filter(
+                or_(
+                    SafeBoxTransaction.invoice_payment_id == pay_id,
+                    SafeBoxTransaction.ref_id == pay_id,
+                )
+            )
+            .first()
+        )
+
+        # JournalEntry idempotency:
+        # - New format uses reference_type='invoice_payment' and reference_id=pay_id
+        # - Older formats used entry_number prefix DEF-{invoice_id}-{pay_id}-...
+        existing_je = (
+            JournalEntry.query
+            .filter(JournalEntry.is_deleted == False)
+            .filter(
+                or_(
+                    and_(JournalEntry.reference_type == 'invoice_payment', JournalEntry.reference_id == pay_id),
+                    JournalEntry.entry_number.like(f'PAY-{invoice.id}-{pay_id}-%'),
+                    JournalEntry.entry_number.like(f'DEF-{invoice.id}-{pay_id}-%'),
+                )
+            )
+            .first()
+        )
+
+        # If both artifacts exist, nothing to do.
+        if existing_safe_tx and existing_je:
             continue
 
         pm_obj = None
@@ -265,7 +292,15 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         except Exception:
             notes_user = getattr(pay, 'notes', None)
 
-        safe_box_id = _resolve_cash_safe_box_id_for_invoice(
+        # If we already have a safe transaction, trust its safe_box_id.
+        safe_box_id = None
+        if existing_safe_tx and getattr(existing_safe_tx, 'safe_box_id', None):
+            try:
+                safe_box_id = int(existing_safe_tx.safe_box_id)
+            except Exception:
+                safe_box_id = None
+
+        safe_box_id = safe_box_id or _resolve_cash_safe_box_id_for_invoice(
             invoice=invoice,
             pm_obj=pm_obj,
             explicit_safe_box_id=explicit_safe_box_id,
@@ -279,27 +314,32 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} غير موجودة - دفعة #{pay_id}')
             continue
 
+        # Use existing safe tx amount if present (supports partial recovery).
         try:
-            amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
+            if existing_safe_tx is not None:
+                amount_cash = float(getattr(existing_safe_tx, 'amount_cash', 0.0) or 0.0)
+            else:
+                amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
         except Exception:
             amount_cash = 0.0
 
         if amount_cash <= 0:
             continue
 
-        # 1) SafeBoxTransaction
-        db.session.add(SafeBoxTransaction(
-            safe_box_id=int(safe_box_id),
-            ref_type='invoice_payment',
-            ref_id=pay_id,
-            invoice_id=invoice.id,
-            invoice_payment_id=pay_id,
-            payment_method_id=getattr(pay, 'payment_method_id', None),
-            direction=direction,
-            amount_cash=amount_cash,
-            notes=notes_user,
-            created_by=posted_by,
-        ))
+        # 1) SafeBoxTransaction (create only if missing)
+        if existing_safe_tx is None:
+            db.session.add(SafeBoxTransaction(
+                safe_box_id=int(safe_box_id),
+                ref_type='invoice_payment',
+                ref_id=pay_id,
+                invoice_id=invoice.id,
+                invoice_payment_id=pay_id,
+                payment_method_id=getattr(pay, 'payment_method_id', None),
+                direction=direction,
+                amount_cash=amount_cash,
+                notes=notes_user,
+                created_by=posted_by,
+            ))
 
         # 2) JournalEntry: مدين خزينة / دائن ذمم -- أو العكس للشراء
         safe_account_id = getattr(sb, 'account_id', None)
@@ -307,54 +347,59 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} لا تحتوي على account_id - لن يُنشأ قيد')
             continue
 
-        ts = datetime.now().strftime('%Y%m%d%H%M%S')
-        entry_number = f'DEF-{invoice.id}-{pay_id}-{ts}'
-        je = JournalEntry(
-            entry_number=entry_number,
-            date=getattr(invoice, 'date', None) or datetime.now(),
-            description=(
-                f'تسوية دفعة مؤجلة - فاتورة #{getattr(invoice, "invoice_number", None) or invoice.id}'
-            ),
-            reference_type='invoice_payment_deferred',
-            reference_id=invoice.id,
-            is_posted=True,
-            posted_at=datetime.now(),
-            posted_by=posted_by,
-            created_by=posted_by,
-        )
-        db.session.add(je)
-        db.session.flush()
+        # 2) JournalEntry (create only if missing)
+        if existing_je is None:
+            ts = datetime.now().strftime('%Y%m%d%H%M%S')
+            # NOTE: This journal entry represents posting a previously persisted invoice payment
+            # for an unposted/approval-gated invoice. It is not a credit (آجل) invoice payment.
+            entry_number = f'PAY-{invoice.id}-{pay_id}-{ts}'
+            je = JournalEntry(
+                entry_number=entry_number,
+                date=getattr(invoice, 'date', None) or datetime.now(),
+                description=(
+                    f'ترحيل دفعة فاتورة - فاتورة #{getattr(invoice, "invoice_number", None) or invoice.id}'
+                ),
+                reference_type='invoice_payment',
+                reference_id=pay_id,
+                reference_number=(getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', '') or '')),
+                is_posted=True,
+                posted_at=datetime.now(),
+                posted_by=posted_by,
+                created_by=posted_by,
+            )
+            db.session.add(je)
+            db.session.flush()
 
-        if direction == 'in':
-            # بيع: مدين خزينة ← دائن ذمم عميل
-            db.session.add(JournalEntryLine(
-                journal_entry_id=je.id,
-                account_id=int(safe_account_id),
-                cash_debit=amount_cash,
-                description=f'استلام نقد - دفعة #{pay_id}',
-            ))
-            credit_acc = party_account_id or int(safe_account_id)
-            db.session.add(JournalEntryLine(
-                journal_entry_id=je.id,
-                account_id=credit_acc,
-                cash_credit=amount_cash,
-                description=f'تسوية ذمم عميل - دفعة #{pay_id}',
-            ))
-        else:
-            # شراء: مدين ذمم مورد ← دائن خزينة
-            debit_acc = party_account_id or int(safe_account_id)
-            db.session.add(JournalEntryLine(
-                journal_entry_id=je.id,
-                account_id=debit_acc,
-                cash_debit=amount_cash,
-                description=f'تسوية ذمم مورد - دفعة #{pay_id}',
-            ))
-            db.session.add(JournalEntryLine(
-                journal_entry_id=je.id,
-                account_id=int(safe_account_id),
-                cash_credit=amount_cash,
-                description=f'صرف نقد - دفعة #{pay_id}',
-            ))
+            if direction == 'in':
+                # بيع: مدين خزينة ← دائن ذمم عميل
+                db.session.add(JournalEntryLine(
+                    journal_entry_id=je.id,
+                    account_id=int(safe_account_id),
+                    cash_debit=amount_cash,
+                    description=f'استلام نقد - دفعة #{pay_id}',
+                ))
+                credit_acc = party_account_id or int(safe_account_id)
+                db.session.add(JournalEntryLine(
+                    journal_entry_id=je.id,
+                    account_id=credit_acc,
+                    cash_credit=amount_cash,
+                    description=f'تسوية ذمم عميل - دفعة #{pay_id}',
+                ))
+            else:
+                # شراء: مدين ذمم مورد ← دائن خزينة
+                debit_acc = party_account_id or int(safe_account_id)
+                db.session.add(JournalEntryLine(
+                    journal_entry_id=je.id,
+                    account_id=debit_acc,
+                    cash_debit=amount_cash,
+                    description=f'تسوية ذمم مورد - دفعة #{pay_id}',
+                ))
+                db.session.add(JournalEntryLine(
+                    journal_entry_id=je.id,
+                    account_id=int(safe_account_id),
+                    cash_credit=amount_cash,
+                    description=f'صرف نقد - دفعة #{pay_id}',
+                ))
 
 
 def _resolve_cash_safe_box_id_for_invoice(
