@@ -272,17 +272,37 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
 
             # Prefer explicit note linkage when available; otherwise fall back
             # to (invoice_id + amount) which is stable in many legacy DBs.
+            note_like = or_(
+                Voucher.notes.like(f'%\"invoice_payment_id\": {pay_id}%'),
+                Voucher.notes.like(f'%\"invoice_payment_id\":{pay_id}%'),
+                Voucher.notes.like(f'%\"invoice_payment_id\"%{pay_id}%'),
+            )
+
+            voucher_filters = [
+                Voucher.reference_type == 'invoice',
+                Voucher.reference_id == int(invoice.id),
+                # Some DBs support soft-delete semantics via voucher status.
+                Voucher.status != 'cancelled',
+            ]
+            # Best-effort: if the Voucher model has an is_deleted column (some installs),
+            # respect it.
+            try:
+                if hasattr(Voucher, 'is_deleted'):
+                    voucher_filters.append(Voucher.is_deleted == False)
+            except Exception:
+                pass
+
             voucher_for_payment = (
                 Voucher.query
-                .filter(Voucher.reference_type == 'invoice', Voucher.reference_id == int(invoice.id))
                 .filter(
+                    *voucher_filters,
                     or_(
-                        Voucher.notes.like(f'%\"invoice_payment_id\": {pay_id}%'),
+                        note_like,
                         and_(
                             Voucher.amount_cash.isnot(None),
                             func.abs(func.coalesce(Voucher.amount_cash, 0.0) - float(getattr(pay, 'amount', 0.0) or 0.0)) < 0.01,
                         ),
-                    )
+                    ),
                 )
                 .order_by(Voucher.id.desc())
                 .first()
