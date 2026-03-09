@@ -123,6 +123,11 @@ def record_category_weight_movements_for_invoice_payload(
     invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
     gold_type = (getattr(invoice, 'gold_type', None) or 'new').strip() or 'new'
 
+    is_customer_scrap_purchase = (
+        invoice_type in ('شراء من عميل', 'مرتجع شراء')
+        and gold_type == 'scrap'
+    )
+
     # Determine sign by invoice type.
     sign = 0
     if invoice_type in ('بيع', 'مرتجع شراء', 'مرتجع شراء (مورد)'):
@@ -186,7 +191,8 @@ def record_category_weight_movements_for_invoice_payload(
         if weight_per <= 0 and item_obj is not None:
             weight_per = _coerce_float(getattr(item_obj, 'weight', None), 0.0)
 
-        total_weight = float(weight_per) * float(qty)
+        qty_multiplier = 1.0 if is_customer_scrap_purchase else float(qty)
+        total_weight = float(weight_per) * float(qty_multiplier)
         if total_weight <= 0:
             continue
 

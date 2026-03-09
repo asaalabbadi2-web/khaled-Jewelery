@@ -9,6 +9,7 @@ import '../theme/app_theme.dart';
 import '../providers/quick_actions_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/sales_race_refresh_provider.dart';
 import '../models/quick_action_item.dart';
 import '../widgets/gold_price_ticker_bar.dart';
 import '../widgets/app_logo.dart';
@@ -111,6 +112,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   bool _leaderboardLoading = false;
   String? _leaderboardError;
   String _leaderboardPeriod = 'today';
+  int _lastHandledSalesRaceRefreshToken = 0;
+  bool _pendingLeaderboardRefresh = false;
 
   // Bottom Navigation
   int _selectedNavIndex = 0;
@@ -225,9 +228,22 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   Future<void> _loadLeaderboard({String? period}) async {
     try {
       final auth = context.read<AuthProvider>();
+      final settings = context.read<SettingsProvider>();
       if (!auth.isAuthenticated) return;
 
-      final selectedPeriod = (period ?? _leaderboardPeriod).trim().toLowerCase();
+        final raceSettings =
+          (settings.settings['sales_race_settings'] as Map?)
+            ?.cast<String, dynamic>() ??
+          const <String, dynamic>{};
+        final configuredDefaultPeriod =
+          raceSettings['default_period']?.toString().trim().toLowerCase() ==
+            'week'
+          ? 'week'
+          : 'today';
+        final selectedPeriod =
+          (period ?? (_leaderboardData == null ? configuredDefaultPeriod : _leaderboardPeriod))
+            .trim()
+            .toLowerCase();
 
       if (mounted) {
         setState(() {
@@ -239,7 +255,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
       final data = await api.getHomeLeaderboard(
         period: selectedPeriod,
-        metric: 'weight',
+        metric: 'points',
       );
       if (!mounted) return;
       setState(() {
@@ -256,6 +272,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       setState(() {
         _leaderboardLoading = false;
       });
+      if (_pendingLeaderboardRefresh) {
+        _pendingLeaderboardRefresh = false;
+        await _loadLeaderboard(period: _leaderboardPeriod);
+      }
     }
   }
 
@@ -1378,6 +1398,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   @override
   Widget build(BuildContext context) {
     final isAr = widget.isArabic;
+    final salesRaceRefreshToken =
+        context.watch<SalesRaceRefreshProvider>().refreshToken;
+
+    if (salesRaceRefreshToken != _lastHandledSalesRaceRefreshToken) {
+      _lastHandledSalesRaceRefreshToken = salesRaceRefreshToken;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        final auth = context.read<AuthProvider>();
+        final quickActions = context.read<QuickActionsProvider>();
+        if (!auth.isAuthenticated || !quickActions.showSalesRaceCard) return;
+        if (_leaderboardLoading) {
+          _pendingLeaderboardRefresh = true;
+          return;
+        }
+        await _loadLeaderboard(period: _leaderboardPeriod);
+      });
+    }
 
     return Directionality(
       textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
@@ -1780,16 +1817,30 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final colorScheme = theme.colorScheme;
 
     final data = _leaderboardData;
+    final config = data?['config'] as Map?;
     final period = (data?['period'] ?? _leaderboardPeriod).toString();
     final isWeek = period == 'week';
     final ranking = (data?['ranking'] as List?) ?? const [];
     final champion = data?['champion'] as Map?;
     final adminSummary = data?['admin_summary'] as Map?;
+    final raceEnabled = config?['enabled'] != false;
+    final showInvoiceCount = config?['show_invoice_count'] != false;
+    final showSalesAmountPerEmployee =
+      config?['show_sales_amount_per_employee'] == true;
+    final showChampion = config?['show_champion'] != false;
+    final isFallback = data?['is_fallback'] == true;
+    final effectiveStartDate = DateTime.tryParse(
+      (data?['effective_start_date'] ?? '').toString(),
+    );
 
     final weeklyTarget = (data?['weekly_target_weight_g'] as num?)?.toDouble();
     final teamWeight = (data?['team_weight_g'] as num?)?.toDouble();
     final remainingWeight =
         (data?['remaining_weight_g'] as num?)?.toDouble();
+
+    final weeklyTargetPoints = (data?['weekly_target_points'] as num?)?.toInt();
+    final teamPoints = (data?['team_points'] as num?)?.toInt();
+    final remainingPoints = (data?['remaining_points'] as num?)?.toInt();
     final targetProgress =
         (data?['target_progress'] as num?)?.toDouble() ?? 0.0;
 
@@ -1808,6 +1859,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 : 'Together towards the weekly goal 💪'))
         : (isAr ? 'هدف اليوم: سرعة + دقة' : 'Today\'s goal: speed + accuracy');
 
+    String? fallbackText() {
+      if (!isFallback || effectiveStartDate == null) return null;
+      final formatted = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
+      if (isWeek) {
+      return isAr
+        ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $formatted'
+        : 'No sales this week — showing the latest week starting $formatted';
+      }
+      return isAr
+        ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $formatted'
+        : 'No sales today — showing the latest sales day on $formatted';
+    }
+
+    final fallbackMessage = fallbackText();
+
     String rankLabel(int index) {
       if (index == 0) return '🥇';
       if (index == 1) return '🥈';
@@ -1820,6 +1886,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final score = (row['score'] as num?)?.toDouble() ?? 0.0;
       final share = (row['share'] as num?)?.toDouble() ?? 0.0;
       final count = (row['count'] as num?)?.toInt() ?? 0;
+      final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
 
       final isLeader = index == 0;
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
@@ -1827,9 +1894,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
           final metricText = (metric == 'count')
             ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
-            : (isAr
-              ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
-              : '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn');
+            : (metric == 'points')
+              ? (isAr
+                    ? showInvoiceCount
+                        ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
+                        : '${score.toStringAsFixed(0)} نقطة'
+                    : showInvoiceCount
+                        ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
+                        : '${score.toStringAsFixed(0)} pts')
+              : (isAr
+                    ? showInvoiceCount
+                        ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
+                        : '${score.toStringAsFixed(1)} جم'
+                    : showInvoiceCount
+                        ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
+                        : '${score.toStringAsFixed(1)} g');
 
       return Padding(
         padding: const EdgeInsetsDirectional.only(bottom: 12),
@@ -1894,6 +1973,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         ),
                       ],
                     ),
+                    if (showSalesAmountPerEmployee) ...[
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          isAr
+                              ? 'مبلغ المبيعات: ${salesAmount.toStringAsFixed(2)} $currencySymbol'
+                              : 'Sales amount: ${salesAmount.toStringAsFixed(2)} $currencySymbol',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurface.withValues(alpha: 0.7),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 6),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(6),
@@ -1983,8 +2077,53 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 color: colorScheme.onSurface.withValues(alpha: 0.65),
               ),
             ),
+            if (fallbackMessage != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colorScheme.primary.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.history_toggle_off_rounded,
+                      size: 18,
+                      color: colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        fallbackMessage,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
-            if (_leaderboardLoading)
+            if (!raceEnabled)
+              Text(
+                isAr
+                    ? 'تم إيقاف سباق المبيعات من الإعدادات.'
+                    : 'Sales race is disabled from settings.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurface.withValues(alpha: 0.7),
+                ),
+              )
+            else if (_leaderboardLoading)
               LinearProgressIndicator(
                 minHeight: 6,
                 backgroundColor: colorScheme.onSurface.withValues(alpha: 0.08),
@@ -2000,7 +2139,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 ),
               )
             else ...[
-              if (isWeek && weeklyTarget != null && teamWeight != null) ...[
+              if (isWeek && ((metric == 'points' && weeklyTargetPoints != null && teamPoints != null) || (metric != 'points' && weeklyTarget != null && teamWeight != null))) ...[
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -2036,9 +2175,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           Row(
                             children: [
                               Text(
-                                isAr
-                                    ? '${teamWeight.toStringAsFixed(1)} / ${weeklyTarget.toStringAsFixed(0)} جم'
-                                    : '${teamWeight.toStringAsFixed(1)} / ${weeklyTarget.toStringAsFixed(0)} g',
+                                metric == 'points'
+                                    ? (isAr
+                                        ? '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} نقطة'
+                                        : '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} pts')
+                                    : (isAr
+                                        ? '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} جم'
+                                        : '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} g'),
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: colorScheme.onSurface.withValues(
                                     alpha: 0.65,
@@ -2081,13 +2224,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        (remainingWeight != null && remainingWeight > 0)
-                            ? (isAr
-                                ? 'بقيت ${remainingWeight.toStringAsFixed(0)} جم لتحقيق هدف الأسبوع'
-                                : '${remainingWeight.toStringAsFixed(0)} g remaining to hit the weekly goal')
-                            : (isAr
-                                ? 'تم تحقيق هدف الأسبوع! 🎉'
-                                : 'Weekly goal achieved! 🎉'),
+                        (metric == 'points')
+                            ? ((remainingPoints != null && remainingPoints > 0)
+                                ? (isAr
+                                    ? 'بقيت $remainingPoints نقطة لتحقيق هدف الأسبوع'
+                                    : '$remainingPoints pts remaining to hit the weekly goal')
+                                : (isAr
+                                    ? 'تم تحقيق هدف الأسبوع! 🎉'
+                                    : 'Weekly goal achieved! 🎉'))
+                            : ((remainingWeight != null && remainingWeight > 0)
+                                ? (isAr
+                                    ? 'بقيت ${remainingWeight.toStringAsFixed(0)} جم لتحقيق هدف الأسبوع'
+                                    : '${remainingWeight.toStringAsFixed(0)} g remaining to hit the weekly goal')
+                                : (isAr
+                                    ? 'تم تحقيق هدف الأسبوع! 🎉'
+                                    : 'Weekly goal achieved! 🎉')),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurface.withValues(alpha: 0.75),
                         ),
@@ -2136,7 +2287,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                   style: theme.textTheme.bodySmall,
                 )
               else ...[
-                if (champion != null)
+                if (showChampion && champion != null)
                   Padding(
                     padding: const EdgeInsetsDirectional.only(bottom: 12),
                     child: Row(
@@ -2165,11 +2316,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                   if (ranking[i] is Map) buildRow(ranking[i] as Map, i),
               ],
             ],
-            if (adminSummary != null) ...[
+            if (raceEnabled &&
+              adminSummary != null &&
+                ((adminSummary['total_cash'] != null) ||
+                    (adminSummary['total_profit'] != null))) ...[
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(
+                  if (adminSummary['total_cash'] != null)
+                    Expanded(
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
@@ -2197,8 +2352,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
+                  if (adminSummary['total_cash'] != null &&
+                      adminSummary['total_profit'] != null)
+                    const SizedBox(width: 12),
+                  if (adminSummary['total_profit'] != null)
+                    Expanded(
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(

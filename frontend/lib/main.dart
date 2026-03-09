@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/quick_actions_provider.dart';
 import 'providers/auth_provider.dart';
+import 'providers/sales_race_refresh_provider.dart';
 import 'app_route_observer.dart';
 import 'theme/app_theme.dart'; // 🆕 نظام الثيم الموحد
 import 'screens/home_screen_enhanced.dart';
@@ -70,6 +71,9 @@ Future<void> main() async {
         ChangeNotifierProvider(
           create: (context) =>
               QuickActionsProvider(), // 🆕 مزود الأزرار السريعة
+        ),
+        ChangeNotifierProvider(
+          create: (context) => SalesRaceRefreshProvider(),
         ),
       ],
       child: const MyApp(),

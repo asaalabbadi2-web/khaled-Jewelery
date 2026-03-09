@@ -2104,6 +2104,7 @@ class Settings(db.Model):
     # ==========================================
     # هدف وزن مبيعات الأسبوع (بالجرام) لاستخدامه في تحدي الفريق.
     weekly_sales_target_weight = db.Column(db.Float, default=2000.0)
+    sales_race_settings = db.Column(db.Text, nullable=True)
     
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
@@ -2145,6 +2146,26 @@ class Settings(db.Model):
 
         # Existing to_dict continues below...
 
+        sales_race_settings = {
+            'enabled': True,
+            'default_period': 'today',
+            'points_per_gram': 10.0,
+            'allow_fallback_to_latest_period': True,
+            'show_invoice_count': True,
+            'show_sales_amount_per_employee': False,
+            'show_champion': True,
+            'show_total_cash_to_all_users': True,
+            'show_total_profit_to_all_users': False,
+        }
+        raw_sales_race = getattr(self, 'sales_race_settings', None)
+        if raw_sales_race:
+            try:
+                decoded_sales_race = json.loads(raw_sales_race)
+                if isinstance(decoded_sales_race, dict):
+                    sales_race_settings.update(decoded_sales_race)
+            except Exception:
+                pass
+
         # Gamification targets
         weekly_target = None
         try:
@@ -2157,6 +2178,7 @@ class Settings(db.Model):
             'main_karat': self.main_karat,
             'currency_symbol': self.currency_symbol,
             'weekly_sales_target_weight': weekly_target,
+            'sales_race_settings': sales_race_settings,
             'tax_rate': self.tax_rate,
             'tax_enabled': self.tax_enabled,
             'vat_exempt_karats': exempt_karats,

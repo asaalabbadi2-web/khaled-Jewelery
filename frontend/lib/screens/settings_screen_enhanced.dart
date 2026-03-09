@@ -75,6 +75,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       TextEditingController();
   final TextEditingController _invoicePrefixController =
       TextEditingController();
+    final TextEditingController _weeklySalesTargetWeightController =
+      TextEditingController();
+    final TextEditingController _salesRacePointsPerGramController =
+      TextEditingController();
 
   final List<int> _karatOptions = const [18, 21, 22, 24];
   final List<int> _decimalOptions = const [2, 3, 4];
@@ -109,6 +113,15 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   bool _allowPartialInvoicePayments = false;
 
   bool _voucherAutoPost = false;
+
+  bool _salesRaceEnabled = true;
+  String _salesRaceDefaultPeriod = 'today';
+  bool _salesRaceAllowFallback = true;
+  bool _salesRaceShowInvoiceCount = true;
+  bool _salesRaceShowSalesAmountPerEmployee = false;
+  bool _salesRaceShowChampion = true;
+  bool _salesRaceShowTotalCashToAllUsers = true;
+  bool _salesRaceShowTotalProfitToAllUsers = false;
 
   // ---------------------------------------------------------------------------
   // 🆕 Feature toggles + default safes (employee routing)
@@ -179,6 +192,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     _companyPhoneController.dispose();
     _companyTaxNumberController.dispose();
     _invoicePrefixController.dispose();
+    _weeklySalesTargetWeightController.dispose();
+    _salesRacePointsPerGramController.dispose();
     super.dispose();
   }
 
@@ -259,6 +274,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           settings['company_tax_number']?.toString() ?? '';
       _invoicePrefixController.text =
           settings['invoice_prefix']?.toString() ?? 'INV';
+
+        final raceSettings =
+          (settings['sales_race_settings'] as Map?)?.cast<String, dynamic>() ??
+          const <String, dynamic>{};
 
       setState(() {
         _isInitialized = true;
@@ -353,6 +372,48 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           fallback: false,
         );
 
+        _salesRaceEnabled = _safeBool(
+          raceSettings['enabled'],
+          fallback: true,
+        );
+        final racePeriod =
+            raceSettings['default_period']?.toString().trim().toLowerCase() ??
+            'today';
+        _salesRaceDefaultPeriod =
+            racePeriod == 'week' ? 'week' : 'today';
+        _salesRaceAllowFallback = _safeBool(
+          raceSettings['allow_fallback_to_latest_period'],
+          fallback: true,
+        );
+        _salesRaceShowInvoiceCount = _safeBool(
+          raceSettings['show_invoice_count'],
+          fallback: true,
+        );
+        _salesRaceShowSalesAmountPerEmployee = _safeBool(
+          raceSettings['show_sales_amount_per_employee'],
+          fallback: false,
+        );
+        _salesRaceShowChampion = _safeBool(
+          raceSettings['show_champion'],
+          fallback: true,
+        );
+        _salesRaceShowTotalCashToAllUsers = _safeBool(
+          raceSettings['show_total_cash_to_all_users'],
+          fallback: true,
+        );
+        _salesRaceShowTotalProfitToAllUsers = _safeBool(
+          raceSettings['show_total_profit_to_all_users'],
+          fallback: false,
+        );
+        _weeklySalesTargetWeightController.text = _safeDouble(
+          settings['weekly_sales_target_weight'],
+          fallback: 2000.0,
+        ).toStringAsFixed(0);
+        _salesRacePointsPerGramController.text = _safeDouble(
+          raceSettings['points_per_gram'],
+          fallback: 10.0,
+        ).toStringAsFixed(0);
+
         // 🆕 Feature toggles + default safes
         _employeeCashSafesEnabled = _safeBool(
           settings['employee_cash_safes_enabled'],
@@ -429,6 +490,20 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'idle_timeout_enabled': _idleTimeoutEnabled,
       'idle_timeout_minutes': _idleTimeoutMinutes,
       'allow_partial_invoice_payments': _allowPartialInvoicePayments,
+      'weekly_sales_target_weight':
+          _safeDouble(_weeklySalesTargetWeightController.text, fallback: 2000.0),
+      'sales_race_settings': {
+        'enabled': _salesRaceEnabled,
+        'default_period': _salesRaceDefaultPeriod,
+        'points_per_gram':
+            _safeDouble(_salesRacePointsPerGramController.text, fallback: 10.0),
+        'allow_fallback_to_latest_period': _salesRaceAllowFallback,
+        'show_invoice_count': _salesRaceShowInvoiceCount,
+        'show_sales_amount_per_employee': _salesRaceShowSalesAmountPerEmployee,
+        'show_champion': _salesRaceShowChampion,
+        'show_total_cash_to_all_users': _salesRaceShowTotalCashToAllUsers,
+        'show_total_profit_to_all_users': _salesRaceShowTotalProfitToAllUsers,
+      },
 
       // 🆕 Feature toggles + default safes (employee routing)
       'employee_cash_safes_enabled': _employeeCashSafesEnabled,
@@ -1388,6 +1463,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       controller: _systemScrollController,
       padding: const EdgeInsets.all(20),
       children: [
+        _buildSalesRaceSettingsSection(),
+        const SizedBox(height: 20),
         _buildSectionCard(
           sectionKey: _systemSectionKeys[SettingsEntry.goldPrice],
           icon: Icons.monetization_on_outlined,
@@ -1755,6 +1832,113 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
               label: const Text('عرض تفاصيل أكثر'),
             ),
           ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSalesRaceSettingsSection() {
+    return _buildSectionCard(
+      icon: Icons.emoji_events_outlined,
+      iconColor: _primaryColor,
+      title: 'إدارة سباق المبيعات',
+      children: [
+        Text(
+          'تحكم في آلية احتساب النقاط، الفترة الافتراضية، وما الذي يظهر لجميع المستخدمين في بطاقة سباق المبيعات.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceEnabled,
+          onChanged: (value) => setState(() => _salesRaceEnabled = value),
+          title: const Text('تفعيل سباق المبيعات'),
+          subtitle: const Text('عند التعطيل يمكن إخفاء البطاقة أو إيقاف استخدامها لاحقاً.'),
+        ),
+        const SizedBox(height: 12),
+        Text('الفترة الافتراضية', style: _fieldLabelStyle()),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('اليوم'),
+              selected: _salesRaceDefaultPeriod == 'today',
+              onSelected: (_) => setState(() => _salesRaceDefaultPeriod = 'today'),
+            ),
+            ChoiceChip(
+              label: const Text('الأسبوع'),
+              selected: _salesRaceDefaultPeriod == 'week',
+              onSelected: (_) => setState(() => _salesRaceDefaultPeriod = 'week'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Text('عدد النقاط لكل 1 جم', style: _fieldLabelStyle()),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _salesRacePointsPerGramController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: _inputDecoration(
+            icon: Icons.exposure_plus_1,
+            accentColor: _primaryColor,
+            label: 'مثال: 10',
+          ),
+        ),
+        const SizedBox(height: 20),
+        Text('هدف مبيعات الأسبوع بالجرام', style: _fieldLabelStyle()),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _weeklySalesTargetWeightController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: _inputDecoration(
+            icon: Icons.flag_outlined,
+            accentColor: _successColor,
+            label: 'مثال: 2000',
+          ),
+        ),
+        const SizedBox(height: 20),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceAllowFallback,
+          onChanged: (value) => setState(() => _salesRaceAllowFallback = value),
+          title: const Text('عرض آخر فترة متاحة عند عدم وجود مبيعات'),
+          subtitle: const Text('يعرض آخر يوم/أسبوع مبيعات بدلاً من بطاقة فارغة.'),
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceShowInvoiceCount,
+          onChanged: (value) => setState(() => _salesRaceShowInvoiceCount = value),
+          title: const Text('إظهار عدد الفواتير مع النقاط'),
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceShowSalesAmountPerEmployee,
+          onChanged: (value) =>
+              setState(() => _salesRaceShowSalesAmountPerEmployee = value),
+          title: const Text('إظهار مبلغ مبيعات كل موظف'),
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceShowChampion,
+          onChanged: (value) => setState(() => _salesRaceShowChampion = value),
+          title: const Text('إظهار المتصدر'),
+        ),
+        const Divider(height: 24),
+        Text('ما يظهر لجميع المستخدمين', style: _fieldLabelStyle()),
+        const SizedBox(height: 8),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceShowTotalCashToAllUsers,
+          onChanged: (value) => setState(() => _salesRaceShowTotalCashToAllUsers = value),
+          title: const Text('إظهار إجمالي مبلغ البيع للجميع'),
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _salesRaceShowTotalProfitToAllUsers,
+          onChanged: (value) => setState(() => _salesRaceShowTotalProfitToAllUsers = value),
+          title: const Text('إظهار إجمالي الربح للجميع'),
         ),
       ],
     );
@@ -2199,6 +2383,16 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     if (value is num) return value.toInt();
     if (value is String) {
       final parsed = int.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+    return fallback;
+  }
+
+  double _safeDouble(dynamic value, {double fallback = 0.0}) {
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      final parsed = double.tryParse(value.trim());
       if (parsed != null) return parsed;
     }
     return fallback;

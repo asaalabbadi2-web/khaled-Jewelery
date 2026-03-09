@@ -35,14 +35,44 @@ if ! command -v pg_restore >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v psql >/dev/null 2>&1; then
+  echo "ERROR: psql not found. Install PostgreSQL client tools on the server." >&2
+  exit 1
+fi
+
 echo "Restoring: $BACKUP_FILE"
 
+psql \
+  --dbname "$DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid();"
+
+set +e
+RESTORE_STDERR_FILE="$(mktemp -t yasargold_pg_restore_stderr.XXXXXX)"
 pg_restore \
   --clean \
   --if-exists \
   --no-owner \
   --no-acl \
   --dbname "$DATABASE_URL" \
-  "$BACKUP_FILE"
+  "$BACKUP_FILE" 2>"$RESTORE_STDERR_FILE"
+RESTORE_EXIT=$?
+set -e
+
+if [[ "$RESTORE_EXIT" -ne 0 ]]; then
+  if grep -Eqi 'text format dump|please use psql' "$RESTORE_STDERR_FILE"; then
+    echo "Detected plain SQL dump. Falling back to psql..."
+    psql \
+      --dbname "$DATABASE_URL" \
+      -v ON_ERROR_STOP=1 \
+      -f "$BACKUP_FILE"
+  else
+    cat "$RESTORE_STDERR_FILE" >&2 || true
+    rm -f "$RESTORE_STDERR_FILE"
+    exit "$RESTORE_EXIT"
+  fi
+fi
+
+rm -f "$RESTORE_STDERR_FILE"
 
 echo "OK: restore completed. Run migrations next: alembic upgrade head"

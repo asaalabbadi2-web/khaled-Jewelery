@@ -48,6 +48,11 @@ class _ScrapPurchaseInvoiceScreenState
   // Items List
   final List<InvoiceItem> _items = [];
 
+  // 🆕 تصنيفات (للتسمية فقط في سطور شراء من عميل)
+  List<Map<String, dynamic>> _categories = [];
+  bool _isLoadingCategories = false;
+  String? _categoriesError;
+
   // 🆕 قائمة أصناف شراء بسيطة (اسم + عيار)
   List<Map<String, dynamic>> _purchaseItems = [];
 
@@ -116,9 +121,96 @@ class _ScrapPurchaseInvoiceScreenState
     _smartInputFocus.requestFocus();
   }
 
+  Future<void> _ensureCategoriesLoaded() async {
+    if (_isLoadingCategories) return;
+    if (_categories.isNotEmpty) return;
+
+    setState(() {
+      _isLoadingCategories = true;
+      _categoriesError = null;
+    });
+
+    try {
+      final api = ApiService();
+      final response = await api.getCategories();
+      final parsed = response
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      parsed.sort((a, b) {
+        final an = (a['name'] ?? '').toString();
+        final bn = (b['name'] ?? '').toString();
+        return an.compareTo(bn);
+      });
+
+      if (!mounted) return;
+      setState(() {
+        _categories = parsed;
+        _isLoadingCategories = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _categories = [];
+        _isLoadingCategories = false;
+        _categoriesError = 'فشل تحميل التصنيفات: $e';
+      });
+    }
+  }
+
+  Future<void> _addCategoryLine() async {
+    await _ensureCategoriesLoaded();
+    if (!mounted) return;
+
+    if (_categories.isEmpty) {
+      _showError(
+        _categoriesError ??
+            'لا توجد تصنيفات. أنشئ تصنيفاً أولاً من شاشة الأصناف.',
+      );
+      return;
+    }
+
+    final result = await showDialog<_ScrapCategoryLineResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _ScrapCategoryLineDialog(
+        categories: _categories,
+        currencySymbol: _settingsProvider.currencySymbol,
+        mainKarat: _settingsProvider.mainKarat,
+      ),
+    );
+
+    if (result == null || !mounted) return;
+
+    setState(() {
+      final item = InvoiceItem(
+        itemId: null,
+        name: result.categoryName,
+        barcode: '',
+        karat: result.karat,
+        standingWeight: result.weight,
+        stonesWeight: 0.0,
+        quantity: result.count,
+        weight: result.weight,
+        wage: result.wage,
+        goldPrice24k: _effectivePurchasePrice24k,
+        mainKarat: _settingsProvider.mainKarat,
+        isCategoryLine: true,
+      );
+      item.updateWeightFromStandingAndStones();
+      if (result.amountCash > 0) {
+        item.setManualTotal(result.amountCash);
+      }
+      _items.add(item);
+    });
+  }
+
   Future<void> _loadInvoiceUiSettingsFromPrefs() async {
     try {
-      final loaded = await InvoiceUiSettings.load(InvoiceUiContext.scrapPurchase);
+      final loaded = await InvoiceUiSettings.load(
+        InvoiceUiContext.scrapPurchase,
+      );
       if (!mounted) return;
       setState(() {
         _uiLockPriceEdits = loaded.lockPriceEdits;
@@ -714,17 +806,35 @@ class _ScrapPurchaseInvoiceScreenState
   void _distributeAmount(double targetTotal) {
     if (_items.isEmpty) return;
 
+    final fixedTotal = _items
+        .where((i) => i._hasManualTotal && i._targetTotal != null)
+        .fold<double>(0.0, (sum, item) => sum + item.totalWithTax);
+
+    final adjustableItems = _items
+        .where(
+          (i) => i.weight > 0 && !(i._hasManualTotal && i._targetTotal != null),
+        )
+        .toList();
+
+    if (adjustableItems.isEmpty) {
+      _showError('لا توجد أصناف وزن قابلة للتوزيع');
+      return;
+    }
+
     // الخطوة 1: حساب إجمالي التكاليف
-    final totalCosts = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
+    final totalCosts = adjustableItems.fold<double>(
+      0.0,
+      (sum, item) => sum + item.cost,
+    );
 
     // الخطوة 2: المبلغ المستهدف (لا توجد ضريبة على شراء الكسر)
     final amountWithoutTax = targetTotal;
 
     // الخطوة 3: حساب الربح المتاح للتوزيع
-    final profitPool = amountWithoutTax - totalCosts;
+    final profitPool = (amountWithoutTax - fixedTotal) - totalCosts;
 
     // الخطوة 4: حساب إجمالي الأوزان
-    final totalWeight = _items.fold<double>(
+    final totalWeight = adjustableItems.fold<double>(
       0.0,
       (sum, item) => sum + item.weight,
     );
@@ -733,11 +843,8 @@ class _ScrapPurchaseInvoiceScreenState
 
     // الخطوة 5: توزيع الربح حسب نسبة الوزن
     setState(() {
-      for (var item in _items) {
-        // 🔥 إزالة حالة التعديل اليدوي قبل التوزيع التلقائي
+      for (final item in adjustableItems) {
         item.clearManualTotal();
-
-        // توزيع الربح بناءً على نسبة وزن الصنف من الوزن الكلي
         item.profit = (item.weight / totalWeight) * profitPool;
       }
     });
@@ -745,7 +852,7 @@ class _ScrapPurchaseInvoiceScreenState
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbol} على ${_items.length} صنف\n'
+          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbol} على ${adjustableItems.length} صنف\n'
           'التكاليف: ${totalCosts.toStringAsFixed(2)} • الربح الموزع: ${profitPool.toStringAsFixed(2)}',
         ),
         backgroundColor: AppColors.success,
@@ -827,6 +934,22 @@ class _ScrapPurchaseInvoiceScreenState
       // Ensure weight is always derived from standing - stones.
       item.updateWeightFromStandingAndStones();
 
+      final hasManualTotal = item._hasManualTotal && item._targetTotal != null;
+      final hasWeight = item.weight > 0;
+      if (!hasWeight && !hasManualTotal) {
+        _showError('يرجى إدخال الوزن أو المبلغ للصنف: ${item.name}');
+        return false;
+      }
+
+      // Amount-only lines (manual total) are allowed; skip weight-based checks.
+      if (!hasWeight && hasManualTotal) {
+        if (item.totalWithTax <= 0) {
+          _showError('يرجى إدخال مبلغ صحيح للصنف: ${item.name}');
+          return false;
+        }
+        continue;
+      }
+
       if (item.standingWeight <= 0) {
         _showError('يرجى إدخال الوزن القائم لجميع الأصناف');
         return false;
@@ -836,9 +959,7 @@ class _ScrapPurchaseInvoiceScreenState
         return false;
       }
       if (item.stonesWeight > item.standingWeight + 0.0001) {
-        _showError(
-          'وزن الأحجار أكبر من الوزن القائم للصنف: ${item.name}',
-        );
+        _showError('وزن الأحجار أكبر من الوزن القائم للصنف: ${item.name}');
         return false;
       }
       if (item.weight <= 0) {
@@ -852,14 +973,12 @@ class _ScrapPurchaseInvoiceScreenState
       final paidPerGram = item.net / item.weight;
       final maxAllowed = livePerGram * (1 + tolerancePct);
 
+      // لا نمنع الحفظ هنا؛ إذا تجاوز السعر الحد يُحوَّل القرار إلى
+      // نظام الاعتماد في السيرفر مثل فاتورة البيع.
       if (livePerGram > 0 && paidPerGram > maxAllowed) {
-        _showError(
-          'سعر الشراء/جرام للصنف (${item.name}) أعلى من سعر الذهب المباشر\n'
-          'العيار: ${item.karat.toStringAsFixed(0)}\n'
-          'سعر الشراء/جرام: ${paidPerGram.toStringAsFixed(2)}\n'
-          'سعر الذهب المباشر/جرام: ${livePerGram.toStringAsFixed(2)}',
+        debugPrint(
+          '⚠️ purchase_above_live_price: ${item.name} paid=${paidPerGram.toStringAsFixed(2)} live=${livePerGram.toStringAsFixed(2)}',
         );
-        return false;
       }
     }
 
@@ -894,7 +1013,10 @@ class _ScrapPurchaseInvoiceScreenState
     }
 
     final total = _calculateGrandTotal();
-    final totalWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
+    final totalWeight = _items.fold<double>(
+      0.0,
+      (sum, item) => sum + item.weight,
+    );
     final paid = _totalPayments;
     final remaining = total - paid;
 
@@ -977,11 +1099,12 @@ class _ScrapPurchaseInvoiceScreenState
 
       // حساب الإجماليات
       final totalAmount = _calculateGrandTotal();
-      final totalWeight = _items.fold<double>(
+      final weightItems = _items.where((i) => i.weight > 0).toList();
+      final totalWeight = weightItems.fold<double>(
         0.0,
         (sum, item) => sum + item.weight,
       );
-      final totalCost = _items.fold<double>(
+      final totalCost = weightItems.fold<double>(
         0.0,
         (sum, item) => sum + item.cost,
       );
@@ -992,11 +1115,11 @@ class _ScrapPurchaseInvoiceScreenState
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final currentUser = authProvider.currentUser;
       final employeeId = currentUser?.employeeId;
-        final employeeName =
+      final employeeName =
           currentUser?.employee?.name ?? currentUser?.fullName ?? '';
       final employeeGoldSafeId = currentUser?.employee?.goldSafeBoxId;
 
-        final effectiveSafeBoxId = employeeGoldSafeId ?? _selectedSafeBoxId;
+      final effectiveSafeBoxId = employeeGoldSafeId ?? _selectedSafeBoxId;
 
       final invoiceData = {
         'customer_id': customerId,
@@ -1026,6 +1149,54 @@ class _ScrapPurchaseInvoiceScreenState
 
       final response = await apiService.addInvoice(invoiceData);
 
+      final approvalRequired = response['approval_required'] == true;
+      final approvalReasons = (response['approval_reasons'] is List)
+          ? List<String>.from(response['approval_reasons'])
+          : <String>[
+              if (response['approval_reason'] != null)
+                response['approval_reason'].toString(),
+            ];
+
+      String? approvalWarning;
+      if (approvalRequired) {
+        final parts = <String>[];
+        if (approvalReasons.contains('above_live_price')) {
+          final above = (response['above_live_price'] is Map)
+              ? Map<String, dynamic>.from(response['above_live_price'])
+              : const <String, dynamic>{};
+          final items = (above['items'] is List)
+              ? List<Map<String, dynamic>>.from(
+                  (above['items'] as List).whereType<Map>(),
+                )
+              : const <Map<String, dynamic>>[];
+          if (items.isNotEmpty) {
+            final first = items.first;
+            parts.add(
+              '⚠️ شراء أعلى من السعر المباشر: ${first['name'] ?? 'صنف'} '
+              'بسعر/جرام ${((first['paid_per_gram'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)} '
+              'مقابل مباشر ${((first['live_per_gram'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
+            );
+          } else {
+            parts.add('⚠️ شراء أعلى من السعر المباشر');
+          }
+        }
+
+        approvalWarning = parts.isNotEmpty
+            ? '${parts.join('\n')}\nسيتم حفظ الفاتورة لكن لن تُرحَّل حتى اعتماد المدير.'
+            : '⚠️ تم حفظ الفاتورة لكن تحتاج اعتماد مدير قبل الترحيل.';
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(approvalWarning),
+              backgroundColor: Colors.orange.shade800,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+      }
+
       if (!mounted) return;
 
       final invoiceForPrint = Map<String, dynamic>.from(response);
@@ -1043,18 +1214,21 @@ class _ScrapPurchaseInvoiceScreenState
 
       final shouldPrint = _uiAutoOpenPrintAfterSave
           ? true
-          : await _showPostSaveInvoiceSummary(invoice: invoiceForPrint);
+          : await _showPostSaveInvoiceSummary(
+              invoice: invoiceForPrint,
+              approvalRequired: approvalRequired,
+              approvalWarning: approvalWarning,
+            );
 
       if (!mounted) return;
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) =>
-                InvoicePrintScreen(
-                  invoice: invoiceForPrint,
-                  isArabic: true,
-                  printSettings: {'paperSize': _uiPaperSize},
-                ),
+            builder: (_) => InvoicePrintScreen(
+              invoice: invoiceForPrint,
+              isArabic: true,
+              printSettings: {'paperSize': _uiPaperSize},
+            ),
           ),
         );
       }
@@ -1138,7 +1312,9 @@ class _ScrapPurchaseInvoiceScreenState
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: AppColors.primaryGold.withValues(alpha: 0.10),
+                            color: AppColors.primaryGold.withValues(
+                              alpha: 0.10,
+                            ),
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: const Icon(Icons.receipt_long),
@@ -1163,7 +1339,8 @@ class _ScrapPurchaseInvoiceScreenState
                     if (customerLabel.trim().isNotEmpty)
                       line('العميل', customerLabel.trim()),
                     line('عدد الأصناف', itemsCount.toString()),
-                    if (imagesCount > 0) line('عدد الصور', imagesCount.toString()),
+                    if (imagesCount > 0)
+                      line('عدد الصور', imagesCount.toString()),
                     const Divider(height: 18),
                     line(
                       'الإجمالي',
@@ -1206,16 +1383,14 @@ class _ScrapPurchaseInvoiceScreenState
                       children: [
                         Expanded(
                           child: OutlinedButton(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, false),
+                            onPressed: () => Navigator.pop(sheetContext, false),
                             child: const Text('رجوع'),
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, true),
+                            onPressed: () => Navigator.pop(sheetContext, true),
                             icon: const Icon(Icons.save),
                             label: const Text('حفظ الفاتورة'),
                           ),
@@ -1356,6 +1531,8 @@ class _ScrapPurchaseInvoiceScreenState
 
   Future<bool> _showPostSaveInvoiceSummary({
     required Map<String, dynamic> invoice,
+    bool approvalRequired = false,
+    String? approvalWarning,
   }) async {
     double asDouble(dynamic value) {
       if (value is num) return value.toDouble();
@@ -1435,7 +1612,9 @@ class _ScrapPurchaseInvoiceScreenState
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            'تم حفظ الفاتورة',
+                            approvalRequired
+                                ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                                : 'تم حفظ الفاتورة',
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -1451,8 +1630,27 @@ class _ScrapPurchaseInvoiceScreenState
                     const SizedBox(height: 10),
                     if (invoiceId.isNotEmpty)
                       line('رقم الفاتورة', '#$invoiceId'),
-                    if (customerName.isNotEmpty)
-                      line('العميل', customerName),
+                    if (customerName.isNotEmpty) line('العميل', customerName),
+                    if (approvalRequired && approvalWarning != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.orange.withValues(alpha: 0.28),
+                          ),
+                        ),
+                        child: Text(
+                          approvalWarning,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: Colors.orange.shade900,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
                     const Divider(height: 18),
                     line(
                       'الإجمالي',
@@ -1476,16 +1674,14 @@ class _ScrapPurchaseInvoiceScreenState
                       children: [
                         Expanded(
                           child: TextButton(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, false),
+                            onPressed: () => Navigator.pop(sheetContext, false),
                             child: const Text('تم'),
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, true),
+                            onPressed: () => Navigator.pop(sheetContext, true),
                             icon: const Icon(Icons.print),
                             label: const Text('طباعة'),
                           ),
@@ -2314,6 +2510,13 @@ class _ScrapPurchaseInvoiceScreenState
                 AppColors.success,
                 'قائمة',
                 _showItemSelectionDialog,
+              ),
+              const SizedBox(width: 8),
+              _buildQuickButton(
+                Icons.category_outlined,
+                AppColors.warning,
+                'سطر تصنيف',
+                _addCategoryLine,
               ),
             ],
           ),
@@ -4036,6 +4239,452 @@ class _ScrapPurchaseInvoiceScreenState
   }
 }
 
+class _ScrapCategoryLineResult {
+  final String categoryName;
+  final double amountCash;
+  final double karat;
+  final double weight;
+  final double wage;
+  final int count;
+
+  const _ScrapCategoryLineResult({
+    required this.categoryName,
+    required this.amountCash,
+    required this.karat,
+    required this.weight,
+    required this.wage,
+    required this.count,
+  });
+}
+
+class _ScrapCategoryLineDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> categories;
+  final String currencySymbol;
+  final int mainKarat;
+
+  const _ScrapCategoryLineDialog({
+    required this.categories,
+    required this.currencySymbol,
+    required this.mainKarat,
+  });
+
+  @override
+  State<_ScrapCategoryLineDialog> createState() =>
+      _ScrapCategoryLineDialogState();
+}
+
+class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _searchController = TextEditingController();
+  final _weightController = TextEditingController(text: '1.0');
+  final _wageController = TextEditingController(text: '0');
+  final _countController = TextEditingController(text: '1');
+  final _amountController = TextEditingController();
+
+  Map<String, dynamic>? _selected;
+  String _query = '';
+
+  late int _selectedKarat;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedKarat = widget.mainKarat;
+    for (final c in [_weightController, _wageController, _countController]) {
+      c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _weightController.dispose();
+    _wageController.dispose();
+    _countController.dispose();
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  double _tryParseDouble(String value) {
+    final normalized = normalizeNumber(value).trim();
+    return double.tryParse(normalized) ?? 0.0;
+  }
+
+  int? _tryParseCategoryKarat(Map<String, dynamic> category) {
+    final raw = category['karat'];
+    final parsed = int.tryParse('${raw ?? ''}');
+    if (parsed == null) return null;
+    if (const [18, 21, 22, 24].contains(parsed)) return parsed;
+    return null;
+  }
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final selected = _selected;
+    if (selected == null) return;
+
+    final name = (selected['name'] ?? '').toString().trim();
+    final weight = _tryParseDouble(_weightController.text);
+    final wage = _tryParseDouble(_wageController.text);
+    final count =
+        int.tryParse(normalizeNumber(_countController.text).trim()) ?? 0;
+    final amount = _tryParseDouble(_amountController.text);
+
+    if (name.isEmpty) return;
+    if (count < 1) return;
+    if (weight <= 0 && amount <= 0) return;
+
+    Navigator.of(context).pop(
+      _ScrapCategoryLineResult(
+        categoryName: name,
+        amountCash: amount,
+        karat: _selectedKarat.toDouble(),
+        weight: weight,
+        wage: wage,
+        count: count,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final filtered = widget.categories.where((c) {
+      final name = (c['name'] ?? '').toString().toLowerCase();
+      if (_query.isEmpty) return true;
+      return name.contains(_query);
+    }).toList();
+
+    final limited = filtered.take(120).toList();
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(18),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.category_outlined, color: colorScheme.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'إضافة سطر تصنيف',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'يُستخدم اسم التصنيف للتسمية فقط ولا يؤثر على حركة التصنيفات.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.75),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _searchController,
+                        autofocus: true,
+                        decoration: const InputDecoration(
+                          labelText: 'ابحث عن التصنيف',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.search),
+                        ),
+                        onChanged: (v) => setState(() {
+                          _query = v.trim().toLowerCase();
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                      FormField<int>(
+                        validator: (_) =>
+                            _selected == null ? 'الرجاء اختيار تصنيف' : null,
+                        builder: (state) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Container(
+                                height: 240,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: state.hasError
+                                        ? colorScheme.error
+                                        : theme.dividerColor,
+                                  ),
+                                ),
+                                child: limited.isEmpty
+                                    ? const Center(child: Text('لا توجد نتائج'))
+                                    : ListView.builder(
+                                        padding: const EdgeInsets.all(8),
+                                        itemCount: limited.length,
+                                        itemBuilder: (_, idx) {
+                                          final c = limited[idx];
+                                          final id = c['id'];
+                                          final selectedId = _selected?['id'];
+                                          final isSelected =
+                                              (id != null && selectedId != null)
+                                              ? id.toString() ==
+                                                    selectedId.toString()
+                                              : identical(c, _selected);
+
+                                          return Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 6,
+                                            ),
+                                            child: InkWell(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              onTap: () {
+                                                setState(() {
+                                                  _selected = c;
+                                                  final karat =
+                                                      _tryParseCategoryKarat(c);
+                                                  if (karat != null) {
+                                                    _selectedKarat = karat;
+                                                  }
+                                                });
+                                                state.didChange(1);
+                                              },
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 12,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  color: isSelected
+                                                      ? colorScheme.primary
+                                                            .withValues(
+                                                              alpha: 0.12,
+                                                            )
+                                                      : colorScheme
+                                                            .surfaceContainerHighest
+                                                            .withValues(
+                                                              alpha: 0.25,
+                                                            ),
+                                                  border: Border.all(
+                                                    color: isSelected
+                                                        ? colorScheme.primary
+                                                        : Colors.transparent,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    const Icon(Icons.label),
+                                                    const SizedBox(width: 10),
+                                                    Expanded(
+                                                      child: Text(
+                                                        (c['name'] ?? '')
+                                                            .toString(),
+                                                        style: theme
+                                                            .textTheme
+                                                            .bodyMedium
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  isSelected
+                                                                  ? FontWeight
+                                                                        .w700
+                                                                  : FontWeight
+                                                                        .w600,
+                                                            ),
+                                                      ),
+                                                    ),
+                                                    if (isSelected)
+                                                      const Icon(Icons.check),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                              ),
+                              if (state.hasError) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  state.errorText ?? '',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.error,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        value: _selectedKarat,
+                        decoration: const InputDecoration(
+                          labelText: 'العيار',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 18, child: Text('18')),
+                          DropdownMenuItem(value: 21, child: Text('21')),
+                          DropdownMenuItem(value: 22, child: Text('22')),
+                          DropdownMenuItem(value: 24, child: Text('24')),
+                        ],
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() {
+                            _selectedKarat = v;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _weightController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                        decoration: const InputDecoration(
+                          labelText: 'الوزن',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.scale_outlined),
+                        ),
+                        validator: (v) {
+                          final w = _tryParseDouble(v ?? '');
+                          final amount = _tryParseDouble(
+                            _amountController.text,
+                          );
+                          if (w <= 0 && amount <= 0) {
+                            return 'أدخل الوزن أو المبلغ';
+                          }
+                          return null;
+                        },
+                        onFieldSubmitted: (_) => _submit(),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _wageController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                        decoration: const InputDecoration(
+                          labelText: 'المصنعية/جم',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.handyman_outlined),
+                        ),
+                        validator: (v) {
+                          final value = _tryParseDouble(v ?? '');
+                          if (value < 0) return 'قيمة غير صحيحة';
+                          return null;
+                        },
+                        onFieldSubmitted: (_) => _submit(),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _countController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: false,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                        decoration: const InputDecoration(
+                          labelText: 'العدد',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.numbers),
+                        ),
+                        validator: (v) {
+                          final count =
+                              int.tryParse(normalizeNumber(v ?? '').trim()) ??
+                              0;
+                          if (count < 1) return 'العدد يجب أن يكون 1 أو أكثر';
+                          return null;
+                        },
+                        onFieldSubmitted: (_) => _submit(),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _amountController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                        decoration: InputDecoration(
+                          labelText: 'المبلغ (اختياري)',
+                          suffixText: widget.currencySymbol,
+                          border: const OutlineInputBorder(),
+                          prefixIcon: const Icon(Icons.payments_outlined),
+                        ),
+                        validator: (v) {
+                          if ((v ?? '').trim().isEmpty) return null;
+                          final amount = _tryParseDouble(v ?? '');
+                          if (amount <= 0) return 'أدخل مبلغ صحيح';
+                          return null;
+                        },
+                        onFieldSubmitted: (_) => _submit(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colorScheme.surface,
+                  borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(18),
+                  ),
+                  border: Border(
+                    top: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('إلغاء'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton.icon(
+                      onPressed: _submit,
+                      icon: const Icon(Icons.check),
+                      label: const Text('إضافة'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ==================== Invoice Item Model ====================
 class InvoiceItem {
   final int? itemId;
@@ -4049,6 +4698,7 @@ class InvoiceItem {
   double wage; // أجور المصنعية للجرام الواحد
   final double goldPrice24k; // سعر الشراء لعيار 24 بعد أي خصم مطبق
   final int mainKarat;
+  final bool isCategoryLine;
 
   // الربح الموزع (يتم حسابه في _distributeAmount)
   double profit = 0.0;
@@ -4069,6 +4719,7 @@ class InvoiceItem {
     required this.wage,
     required this.goldPrice24k,
     required this.mainKarat,
+    this.isCategoryLine = false,
   });
 
   // حساب سعر الجرام الخام (سعر الذهب فقط حسب العيار)
@@ -4142,7 +4793,7 @@ class InvoiceItem {
 
   Map<String, dynamic> toJson() {
     return {
-      'item_id': itemId,
+      'item_id': isCategoryLine ? null : itemId,
       'name': name,
       'karat': karat,
       'weight': weight,

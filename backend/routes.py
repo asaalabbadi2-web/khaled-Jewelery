@@ -310,6 +310,53 @@ def _create_postgres_backup_to_file(dest_path: str) -> None:
         ) from exc
 
 
+def _run_postgres_psql_command(
+    parts: dict,
+    env: dict,
+    *,
+    sql: str | None = None,
+    file_path: str | None = None,
+) -> None:
+    cmd = ['psql']
+    if parts.get('host'):
+        cmd += ['-h', str(parts['host'])]
+    if parts.get('port'):
+        cmd += ['-p', str(parts['port'])]
+    if parts.get('user'):
+        cmd += ['-U', str(parts['user'])]
+    cmd += ['-d', str(parts['database']), '-v', 'ON_ERROR_STOP=1']
+
+    if sql is not None:
+        cmd += ['-c', sql]
+    elif file_path is not None:
+        cmd += ['-f', file_path]
+    else:
+        raise ValueError('Either sql or file_path must be provided')
+
+    try:
+        subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or '').strip()
+        action = 'أمر PostgreSQL' if sql is not None else 'استعادة PostgreSQL عبر psql'
+        raise RuntimeError(
+            f'{action} فشل.' + (f" التفاصيل: {stderr}" if stderr else '')
+        ) from exc
+
+
+def _terminate_postgres_connections(parts: dict, env: dict) -> None:
+    database_name = str(parts.get('database') or '').strip()
+    if not database_name:
+        raise RuntimeError('PostgreSQL database name is missing')
+
+    safe_database_name = database_name.replace("'", "''")
+    sql = (
+        "SELECT pg_terminate_backend(pid) "
+        "FROM pg_stat_activity "
+        f"WHERE datname = '{safe_database_name}' AND pid <> pg_backend_pid();"
+    )
+    _run_postgres_psql_command(parts, env, sql=sql)
+
+
 def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
     if not _is_postgres_database():
         raise RuntimeError('PostgreSQL backend is not active')
@@ -338,23 +385,12 @@ def _restore_postgres_from_backup_file(src_backup_path: str) -> None:
     if parts.get('password'):
         env['PGPASSWORD'] = str(parts['password'])
 
+    _terminate_postgres_connections(parts, env)
+
     ext = os.path.splitext(src_backup_path)[1].lower()
+
     def _run_psql() -> None:
-        cmd = ['psql']
-        if parts.get('host'):
-            cmd += ['-h', str(parts['host'])]
-        if parts.get('port'):
-            cmd += ['-p', str(parts['port'])]
-        if parts.get('user'):
-            cmd += ['-U', str(parts['user'])]
-        cmd += ['-d', str(parts['database']), '-f', src_backup_path]
-        try:
-            subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or '').strip()
-            raise RuntimeError(
-                'فشل استعادة PostgreSQL عبر psql.' + (f" التفاصيل: {stderr}" if stderr else '')
-            ) from exc
+        _run_postgres_psql_command(parts, env, file_path=src_backup_path)
 
     if ext in {'.sql'}:
         _run_psql()
@@ -1650,7 +1686,16 @@ def _invoice_weight_in_main_karat(invoice: Invoice) -> float:
         return weight
     for item in invoice.items or []:
         karat = item.karat or get_main_karat()
-        weight += convert_to_main_karat((item.weight or 0.0) * (item.quantity or 1), karat)
+        try:
+            is_customer_scrap_purchase = (
+                (getattr(invoice, 'invoice_type', None) or '').strip() == 'شراء من عميل'
+                and str(getattr(invoice, 'gold_type', '') or '').strip().lower() == 'scrap'
+            )
+        except Exception:
+            is_customer_scrap_purchase = False
+
+        qty_multiplier = 1 if is_customer_scrap_purchase else (item.quantity or 1)
+        weight += convert_to_main_karat((item.weight or 0.0) * qty_multiplier, karat)
     return weight
 
 
@@ -1948,6 +1993,52 @@ def update_settings():
     # 🆕 إعدادات الدفع الجزئي/البيع الآجل
     if 'allow_partial_invoice_payments' in data:
         settings.allow_partial_invoice_payments = data['allow_partial_invoice_payments']
+
+    # 🆕 إعدادات سباق المبيعات
+    if 'weekly_sales_target_weight' in data:
+        try:
+            weekly_target = float(data.get('weekly_sales_target_weight') or 0.0)
+            settings.weekly_sales_target_weight = max(0.0, weekly_target)
+        except Exception:
+            pass
+
+    if 'sales_race_settings' in data:
+        defaults = {
+            'enabled': True,
+            'default_period': 'today',
+            'points_per_gram': 10.0,
+            'allow_fallback_to_latest_period': True,
+            'show_invoice_count': True,
+            'show_sales_amount_per_employee': False,
+            'show_champion': True,
+            'show_total_cash_to_all_users': True,
+            'show_total_profit_to_all_users': False,
+        }
+        raw = data.get('sales_race_settings')
+        if isinstance(raw, dict):
+            merged = dict(defaults)
+            merged.update(raw)
+
+            period_value = str(merged.get('default_period') or 'today').strip().lower()
+            merged['default_period'] = period_value if period_value in {'today', 'week'} else 'today'
+
+            try:
+                merged['points_per_gram'] = max(0.0, float(merged.get('points_per_gram') or 10.0))
+            except Exception:
+                merged['points_per_gram'] = 10.0
+
+            for key in (
+                'enabled',
+                'allow_fallback_to_latest_period',
+                'show_invoice_count',
+                'show_sales_amount_per_employee',
+                'show_champion',
+                'show_total_cash_to_all_users',
+                'show_total_profit_to_all_users',
+            ):
+                merged[key] = bool(merged.get(key))
+
+            settings.sales_race_settings = json.dumps(merged, ensure_ascii=False)
 
     # 🆕 تحديث سعر الذهب تلقائياً حسب توقيت معين
     if 'gold_price_auto_update_enabled' in data:
@@ -3438,7 +3529,20 @@ def get_account_statement(account_id):
     try:
         if force_separate:
             raise RuntimeError('force_separate_statement')
-        has_memo_pair = bool(getattr(account, 'memo_account_id', None))
+        # Do not auto-merge statements for pure payment accounts (cash/bank/wallet),
+        # even if they have a memo_account_id. These accounts should remain cash-only
+        # in the default statement UX.
+        try:
+            payment_account_types = {'cash', 'bank_account', 'digital_wallet', 'bnpl'}
+            is_payment_account = (
+                (str(getattr(account, 'account_type', '') or '').strip().lower() in payment_account_types)
+                or bool(getattr(account, 'bank_name', None))
+                or bool(getattr(account, 'account_number_external', None))
+            )
+        except Exception:
+            is_payment_account = False
+
+        has_memo_pair = (not is_payment_account) and bool(getattr(account, 'memo_account_id', None))
         if not has_memo_pair and getattr(account, 'tracks_weight', False):
             has_memo_pair = Account.query.filter_by(memo_account_id=account.id).first() is not None
         if has_memo_pair:
@@ -4275,6 +4379,51 @@ def add_customer():
     # Basic validation
     if 'name' not in data or not str(data.get('name') or '').strip():
         return jsonify({'error': 'الاسم مطلوب'}), 400
+
+    # ✅ Prevent duplicate "cash customer" records created by invoices/screens.
+    # The frontend may call POST /customers multiple times if its local cache
+    # doesn't include the cash customer yet; treat this creation as idempotent.
+    def _norm_name(value: str) -> str:
+        try:
+            return ' '.join(str(value or '').strip().split())
+        except Exception:
+            return str(value or '').strip()
+
+    requested_name = _norm_name(data.get('name'))
+    cash_customer_aliases = {
+        'عميل نقدي',
+        'نقدي',
+        'عميل كاش',
+    }
+    if requested_name in cash_customer_aliases:
+        try:
+            from sqlalchemy import func
+
+            existing_cash = (
+                Customer.query
+                .filter(Customer.active == True)
+                .filter(func.trim(Customer.name) == requested_name)
+                .order_by(Customer.id.asc())
+                .first()
+            )
+            if existing_cash is not None:
+                ensure_accounts = _boolish(data.get('ensure_accounts'), True)
+                if ensure_accounts:
+                    try:
+                        ensure_customer_accounts(existing_cash)
+                    except Exception:
+                        pass
+
+                try:
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+
+                # Return as "created" to keep older clients happy (they expect 201).
+                return jsonify(existing_cash.to_dict_with_account()), 201
+        except Exception:
+            # If anything goes wrong, fall back to normal creation.
+            pass
 
     birth_date_str = data.get('birth_date')
     birth_date = None
@@ -8155,6 +8304,14 @@ def add_invoice():
     except Exception:
         settings_row = None
 
+    # Snapshot posting policy early because payment validation happens before
+    # we compute approval gates/unposted_mode later in the flow.
+    auto_post_invoices_enabled = True
+    try:
+        auto_post_invoices_enabled = bool(getattr(settings_row, 'auto_post_invoices', True)) if settings_row else True
+    except Exception:
+        auto_post_invoices_enabled = True
+
     vat_enabled = True
     vat_rate = 0.15
     vat_exempt_karats = {24}
@@ -8458,9 +8615,12 @@ def add_invoice():
     if payments_data and isinstance(payments_data, list) and len(payments_data) > 0:
         total_payments = sum(_to_float_request(p.get('amount', 0.0)) for p in payments_data)
         effective_settled = total_payments + (barter_total or 0.0)
+        # In unposted workflows (auto-post disabled), allow saving partial settlements
+        # even if partial payments are disabled globally.
+        partial_allowed_for_request = bool(allow_partial_payments) or (not bool(auto_post_invoices_enabled))
         # التحقق من الدفعات مقابل إجمالي الفاتورة
         if data_total > 0:
-            if allow_partial_payments:
+            if partial_allowed_for_request:
                 # ✅ السماح بالدفع الجزئي طالما لا يوجد تجاوز
                 if (effective_settled - data_total) > 0.01:  # tolerance للفواصل العشرية
                     return jsonify({
@@ -8539,7 +8699,7 @@ def add_invoice():
         # عند تفعيل الدفع الجزئي، لا يمكن معرفة عمولة الجزء غير المدفوع (وسيلة الدفع غير معروفة بعد)
         # لذلك نترك net_amount = إجمالي الفاتورة إذا كانت الدفعات أقل من الإجمالي.
         gross_amount = data_total if data_total > 0 else total_payments
-        if allow_partial_payments and data_total > 0 and effective_settled < (data_total - 0.01):
+        if partial_allowed_for_request and data_total > 0 and effective_settled < (data_total - 0.01):
             net_amount = data_total
         else:
             net_amount = gross_amount - commission_amount - commission_vat_total
@@ -8709,6 +8869,22 @@ def add_invoice():
             except Exception:
                 employee_id_for_invoice = None
 
+        # Always store a stable posted_by label for audit + leaderboard fallback.
+        try:
+            posted_by_username = str(posted_by_username).strip() if posted_by_username else ''
+        except Exception:
+            posted_by_username = ''
+        if not posted_by_username:
+            try:
+                posted_by_username = str(
+                    getattr(current_user, 'full_name', None)
+                    or getattr(current_user, 'name', None)
+                    or getattr(current_user, 'username', None)
+                    or 'system'
+                ).strip()
+            except Exception:
+                posted_by_username = 'system'
+
         new_invoice = Invoice(
             invoice_type_id=next_invoice_type_id,
             customer_id=data.get('customer_id'),
@@ -8747,6 +8923,11 @@ def add_invoice():
         db.session.flush()
 
         computed_total_weight = 0.0
+
+        is_customer_scrap_purchase = (
+            str(invoice_type).strip() in ('شراء من عميل', 'مرتجع شراء')
+            and str(gold_type).strip().lower() == 'scrap'
+        )
 
         # 🧮 Profit for customer scrap purchase (used by rewards)
         # الربح = (الوزن القائم - وزن الأحجار - الوزن) * سعر الشراء المباشر للعيار
@@ -8861,7 +9042,8 @@ def add_invoice():
                 diff_weight = standing_weight_val - stones_weight_val - weight_per_item
                 purchase_profit_cash += diff_weight * direct_price_per_gram
 
-            item_total_weight = weight_per_item * quantity_value
+            qty_multiplier = 1.0 if is_customer_scrap_purchase else quantity_value
+            item_total_weight = weight_per_item * (qty_multiplier if qty_multiplier > 0 else 1.0)
             if item_total_weight > 0:
                 if not has_valid_karat_lines:
                     computed_total_weight += item_total_weight
@@ -9037,6 +9219,12 @@ def add_invoice():
             'avg_total_cost_per_gram': 0.0,
             'profit_cash_estimate': 0.0,
         }
+        purchase_above_live_price_details = {
+            'enabled': False,
+            'price_24k': 0.0,
+            'tolerance_pct': 0.5,
+            'items': [],
+        }
 
         def _safe_float(v, default=0.0):
             try:
@@ -9087,6 +9275,56 @@ def add_invoice():
                 return 0.0
 
             return round(max(total_main, 0.0), 4)
+
+        # Gate 0: Customer scrap purchase above live direct gold price.
+        try:
+            if str(invoice_type).strip() == 'شراء من عميل':
+                purchase_above_live_price_details['enabled'] = True
+                purchase_above_live_price_details['price_24k'] = float(price_per_gram_24k or 0.0)
+
+                tolerance_pct = 0.5
+                tol_factor = 1.0 + (tolerance_pct / 100.0)
+
+                for item in (data.get('items') or []):
+                    if not isinstance(item, dict):
+                        continue
+
+                    weight_val = _to_float_request(item.get('weight', item.get('total_weight')), 0.0)
+                    standing_weight_val = _to_float_request(item.get('standing_weight'), 0.0)
+                    stones_weight_val = _to_float_request(item.get('stones_weight'), 0.0)
+                    karat_val = _to_float_request(item.get('karat'), 0.0)
+                    if karat_val <= 0:
+                        karat_val = float(get_main_karat() or 21.0)
+
+                    effective_weight = weight_val
+                    if standing_weight_val > 0:
+                        effective_weight = max(0.0, standing_weight_val - stones_weight_val)
+                    if effective_weight <= 0:
+                        continue
+
+                    total_paid = _to_float_request(
+                        item.get('net', item.get('price', item.get('subtotal'))),
+                        0.0,
+                    )
+                    paid_per_gram = (total_paid / effective_weight) if effective_weight > 0 else 0.0
+                    live_per_gram = (float(price_per_gram_24k or 0.0) * float(karat_val) / 24.0) if price_per_gram_24k > 0 else 0.0
+                    max_allowed = live_per_gram * tol_factor
+
+                    if live_per_gram > 0 and paid_per_gram > max_allowed:
+                        purchase_above_live_price_details['items'].append({
+                            'name': str(item.get('name') or 'صنف'),
+                            'karat': float(karat_val),
+                            'weight': round(float(effective_weight), 4),
+                            'paid_per_gram': round(float(paid_per_gram), 2),
+                            'live_per_gram': round(float(live_per_gram), 2),
+                            'max_allowed_per_gram': round(float(max_allowed), 2),
+                            'difference_per_gram': round(float(paid_per_gram - live_per_gram), 2),
+                        })
+
+                if purchase_above_live_price_details['items']:
+                    approval_reasons.append('above_live_price')
+        except Exception:
+            pass
 
         # Gate 1: Large discount
         try:
@@ -9675,11 +9913,18 @@ def add_invoice():
                     }, ensure_ascii=False)
                 except Exception:
                     payment_notes = None
+
+            # Legacy single-payment path:
+            # - If the client provided amount_paid (partial), record that.
+            # - Otherwise fall back to the invoice total (historical behavior).
+            single_payment_amount = _extract_float('amount_paid', 0.0)
+            if single_payment_amount <= 0.01:
+                single_payment_amount = _extract_float('total', 0.0)
             
             payment_row = InvoicePayment(
                 invoice_id=new_invoice.id,
                 payment_method_id=payment_method_id,
-                amount=_extract_float('total', 0.0),
+                amount=single_payment_amount,
                 commission_rate=pm_commission_rate,
                 commission_amount=commission_amount,
                 net_amount=net_amount,
@@ -9700,7 +9945,7 @@ def add_invoice():
 
                 direction = _direction_for_invoice_type(new_invoice.invoice_type)
                 voucher_type = 'receipt' if direction == 'in' else 'payment'
-                amount_value = float(_extract_float('total', 0.0))
+                amount_value = float(single_payment_amount or 0.0)
 
                 party_type = None
                 party_id = None
@@ -10295,6 +10540,11 @@ def add_invoice():
         # Aggregate weights by karat from invoice items (using DB data)
         gold_by_karat = {'18': 0.0, '21': 0.0, '22': 0.0, '24': 0.0}
 
+        is_customer_scrap_purchase = (
+            ((new_invoice.invoice_type or '').strip() in ('شراء من عميل', 'مرتجع شراء'))
+            and (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower() == 'scrap')
+        )
+
         def _register_gold_weight(karat_val, weight_val):
             karat_float = _to_float(karat_val, 0.0)
             weight_float = _to_float(weight_val, 0.0)
@@ -10319,7 +10569,8 @@ def add_invoice():
                     weight_value = item_data.get('total_weight')
 
                 quantity_value = _to_float(item_data.get('quantity', 1), 1.0) or 1.0
-                total_weight_value = _to_float(weight_value, 0.0) * (quantity_value if quantity_value > 0 else 1.0)
+                qty_multiplier = 1.0 if is_customer_scrap_purchase else (quantity_value if quantity_value > 0 else 1.0)
+                total_weight_value = _to_float(weight_value, 0.0) * qty_multiplier
 
                 _register_gold_weight(karat_value, total_weight_value)
 
@@ -10329,18 +10580,20 @@ def add_invoice():
                 weight_val = line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight')))
                 _register_gold_weight(karat_val, weight_val)
 
-        # --- Scrap purchase: deposit received gold into a gold safe (employee or main) ---
+        # --- Customer scrap purchase/return: move physical gold through a gold safe (employee or main) ---
         # Also expose the resolved gold safe account for weight journal entries.
         scrap_purchase_gold_safe_account_id = None
         try:
-            is_scrap_purchase = (
-                (new_invoice.invoice_type == 'شراء من عميل')
-                and (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower() == 'scrap')
+            inv_type_tmp = (new_invoice.invoice_type or '').strip()
+            inv_gold_type_tmp = (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower())
+            is_customer_scrap_move = (
+                inv_type_tmp in ('شراء من عميل', 'مرتجع شراء')
+                and inv_gold_type_tmp == 'scrap'
             )
         except Exception:
-            is_scrap_purchase = False
+            is_customer_scrap_move = False
 
-        if is_scrap_purchase:
+        if is_customer_scrap_move:
             target_gold_safe_id = None
             settings_row = None
             try:
@@ -10433,15 +10686,22 @@ def add_invoice():
                             }
                             has_any_weight = any(v > 0 for v in weight_kwargs.values())
                             if has_any_weight:
+                                try:
+                                    inv_type_tmp_2 = (new_invoice.invoice_type or '').strip()
+                                except Exception:
+                                    inv_type_tmp_2 = ''
+                                direction = 'out' if inv_type_tmp_2 == 'مرتجع شراء' else 'in'
+                                ref_type = 'invoice_scrap_return' if inv_type_tmp_2 == 'مرتجع شراء' else 'invoice_scrap_receipt'
+                                notes = 'scrap return' if inv_type_tmp_2 == 'مرتجع شراء' else 'scrap receipt'
                                 db.session.add(
                                     SafeBoxTransaction(
                                         safe_box_id=target_gold_safe_id,
-                                        ref_type='invoice_scrap_receipt',
+                                        ref_type=ref_type,
                                         ref_id=new_invoice.id,
                                         invoice_id=new_invoice.id,
-                                        direction='in',
+                                        direction=direction,
                                         amount_cash=0.0,
-                                        notes='scrap receipt',
+                                        notes=notes,
                                         created_by=posted_by_username,
                                         **weight_kwargs,
                                     )
@@ -11670,12 +11930,11 @@ def add_invoice():
             memo_cash_credit_account_id = None
             try:
                 memo_cash_credit_account_id = (
-                    (cash_account.memo_account_id if cash_account else None)
-                    or default_memo_cash_account_id
+                    default_memo_cash_account_id
                     or customer_account_id
                 )
             except Exception:
-                memo_cash_credit_account_id = (cash_account.memo_account_id if cash_account else None)
+                memo_cash_credit_account_id = default_memo_cash_account_id or customer_account_id
 
             if cash_account and memo_cash_credit_account_id:
                 settlement_method_raw_w = (
@@ -11912,13 +12171,49 @@ def add_invoice():
             # Line 2: دائن المخزون
             if inventory_acc_id:
                 purchase_return_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry.id,
-                    account_id=inventory_acc_id,
-                    cash_credit=total_cash,
-                    **purchase_return_credit,
-                    description="خصم من المخزون (مرتجع)"
-                )
+
+                # For customer scrap returns, remove the physical weights from the same
+                # scrap gold safe account used for customer scrap purchases.
+                is_scrap_return = False
+                try:
+                    is_scrap_return = (
+                        (invoice_type == 'مرتجع شراء')
+                        and (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower() == 'scrap')
+                    )
+                except Exception:
+                    is_scrap_return = False
+
+                weight_credit_account_id = None
+                if is_scrap_return and scrap_purchase_gold_safe_account_id not in (None, 0):
+                    weight_credit_account_id = int(scrap_purchase_gold_safe_account_id)
+                else:
+                    weight_credit_account_id = int(inventory_acc_id)
+
+                if weight_credit_account_id == int(inventory_acc_id):
+                    # Default behavior: cash + weight credit on inventory
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=inventory_acc_id,
+                        cash_credit=total_cash,
+                        **purchase_return_credit,
+                        description="خصم من المخزون (مرتجع)"
+                    )
+                else:
+                    # Split: cash valuation to inventory, physical weight out of gold safe
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=inventory_acc_id,
+                        cash_credit=total_cash,
+                        apply_golden_rule=False,
+                        description="خصم من المخزون (قيمة) - مرتجع شراء"
+                    )
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=weight_credit_account_id,
+                        **purchase_return_credit,
+                        apply_golden_rule=False,
+                        description="خصم وزني من خزنة الكسر (مرتجع شراء)"
+                    )
         
         elif invoice_type == 'شراء':
             # 5. شراء (مورد)
@@ -13045,6 +13340,7 @@ def add_invoice():
                 reason_labels = {
                     'large_discount': 'خصم كبير',
                     'below_cost': 'بيع تحت التكلفة',
+                    'above_live_price': 'شراء أعلى من السعر المباشر',
                 }
                 reasons_human = [reason_labels.get(r, r) for r in (approval_reasons or ([approval_reason] if approval_reason else []))]
                 reasons_human = [r for r in reasons_human if r]
@@ -13071,6 +13367,17 @@ def add_invoice():
                     except Exception:
                         message_parts.append("بيع تحت التكلفة")
 
+                if 'above_live_price' in (approval_reasons or []):
+                    try:
+                        items = (purchase_above_live_price_details or {}).get('items') or []
+                        first_item = items[0] if items else {}
+                        message_parts.append(
+                            f"شراء أعلى من السعر المباشر: {first_item.get('name', 'صنف')} "
+                            f"بسعر/جرام {first_item.get('paid_per_gram', 0)} مقابل مباشر {first_item.get('live_per_gram', 0)}"
+                        )
+                    except Exception:
+                        message_parts.append("شراء أعلى من السعر المباشر")
+
                 if not message_parts and reasons_human:
                     message_parts.append(" / ".join(reasons_human))
 
@@ -13093,6 +13400,11 @@ def add_invoice():
                 if 'below_cost' in (approval_reasons or []):
                     try:
                         alert_details['below_cost'] = below_cost_details
+                    except Exception:
+                        pass
+                if 'above_live_price' in (approval_reasons or []):
+                    try:
+                        alert_details['above_live_price'] = purchase_above_live_price_details
                     except Exception:
                         pass
 
@@ -13157,6 +13469,22 @@ def add_invoice():
                         user_agent=request.headers.get('User-Agent'),
                         success=True,
                     )
+
+                if 'above_live_price' in (approval_reasons or []):
+                    AuditLog.log_action(
+                        user_name=new_invoice.posted_by or posted_by_username or 'system',
+                        action='above_live_price',
+                        entity_type='Invoice',
+                        entity_id=new_invoice.id,
+                        entity_number=getattr(new_invoice, 'invoice_number', None),
+                        details=json.dumps({
+                            **audit_base,
+                            'above_live_price': purchase_above_live_price_details,
+                        }, ensure_ascii=False),
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get('User-Agent'),
+                        success=True,
+                    )
               except Exception:
                 pass
 
@@ -13168,6 +13496,8 @@ def add_invoice():
             resp['approval_reasons'] = approval_reasons or ([] if not approval_reason else [approval_reason])
             if 'below_cost' in (approval_reasons or []):
                 resp['below_cost'] = below_cost_details
+            if 'above_live_price' in (approval_reasons or []):
+                resp['above_live_price'] = purchase_above_live_price_details
             resp['discount_pct'] = round(float(discount_pct or 0.0), 2) if discount_pct is not None else None
             resp['threshold_pct'] = float(large_discount_pct_threshold or 0.0)
             return jsonify(resp), 201
@@ -17343,7 +17673,7 @@ def get_home_leaderboard():
     """Gamification leaderboard (safe for employees).
 
     Contract:
-    - Query Params: period=today|week, metric=weight|count
+    - Query Params: period=today|week, metric=weight|count|points
     - Uses posted sales invoices only (invoice_type == 'بيع', is_posted == True)
     - Excludes returns in phase 1
     - Admin summary is included only for admins/financial report viewers
@@ -17352,38 +17682,220 @@ def get_home_leaderboard():
 
     period = (request.args.get('period') or 'today').strip().lower()
     metric = (request.args.get('metric') or 'weight').strip().lower()
+    requested_period = period
 
-    now = datetime.now()
-    if period == 'week':
-        start_date = now.date() - timedelta(days=now.date().weekday())
-        start_dt = datetime.combine(start_date, datetime.min.time())
-        end_dt = start_dt + timedelta(days=7)
-    else:
-        start_dt = datetime.combine(now.date(), datetime.min.time())
-        end_dt = start_dt + timedelta(days=1)
-        period = 'today'
+    sales_race_config = {
+        'enabled': True,
+        'default_period': 'today',
+        'points_per_gram': 10.0,
+        'allow_fallback_to_latest_period': True,
+        'show_invoice_count': True,
+        'show_sales_amount_per_employee': False,
+        'show_champion': True,
+        'show_total_cash_to_all_users': True,
+        'show_total_profit_to_all_users': False,
+    }
+    try:
+        settings_row = Settings.query.first()
+    except Exception:
+        settings_row = None
 
-    # Sales only, posted only, attributed to an employee.
+    if settings_row and getattr(settings_row, 'sales_race_settings', None):
+        try:
+            parsed_sales_race = json.loads(settings_row.sales_race_settings)
+            if isinstance(parsed_sales_race, dict):
+                sales_race_config.update(parsed_sales_race)
+        except Exception:
+            pass
+
+    default_period = str(sales_race_config.get('default_period') or 'today').strip().lower()
+    if default_period not in {'today', 'week'}:
+        default_period = 'today'
+    if period not in {'today', 'week'}:
+        period = default_period
+
+    try:
+        points_per_gram = max(0.0, float(sales_race_config.get('points_per_gram') or 10.0))
+    except Exception:
+        points_per_gram = 10.0
+
+    if metric not in {'weight', 'count', 'points'}:
+        metric = 'weight'
+
+    def _resolve_period_bounds(period_value: str, anchor_dt: datetime | None = None):
+        ref = anchor_dt or datetime.now()
+        normalized = (period_value or 'today').strip().lower()
+        if normalized == 'week':
+            start_date = ref.date() - timedelta(days=ref.date().weekday())
+            start_value = datetime.combine(start_date, datetime.min.time())
+            end_value = start_value + timedelta(days=7)
+            return normalized, start_value, end_value
+
+        start_value = datetime.combine(ref.date(), datetime.min.time())
+        end_value = start_value + timedelta(days=1)
+        return 'today', start_value, end_value
+
+    period, start_dt, end_dt = _resolve_period_bounds(period)
+
+    is_fallback = False
+    effective_period = period
+    effective_source_date = start_dt.date().isoformat() if start_dt else None
+
+    has_sales_in_period = (
+        db.session.query(Invoice.id)
+        .filter(
+            Invoice.is_posted.is_(True),
+            Invoice.invoice_type == 'بيع',
+            Invoice.date >= start_dt,
+            Invoice.date < end_dt,
+        )
+        .first()
+        is not None
+    )
+
+    if not has_sales_in_period and bool(sales_race_config.get('allow_fallback_to_latest_period', True)):
+        latest_sale_dt = (
+            db.session.query(func.max(Invoice.date))
+            .filter(
+                Invoice.is_posted.is_(True),
+                Invoice.invoice_type == 'بيع',
+            )
+            .scalar()
+        )
+        if latest_sale_dt is not None:
+            effective_period, start_dt, end_dt = _resolve_period_bounds(period, latest_sale_dt)
+            effective_source_date = latest_sale_dt.date().isoformat()
+            is_fallback = True
+
+    # Sales only, posted only.
+    # NOTE: For `metric=points`, we can infer employee attribution from `posted_by`
+    # when `employee_id` is missing, so we don't filter it out at the DB level.
     base_filters = [
         Invoice.is_posted.is_(True),
         Invoice.invoice_type == 'بيع',
         Invoice.date >= start_dt,
         Invoice.date < end_dt,
-        Invoice.employee_id.isnot(None),
     ]
 
-    rows = (
-        db.session.query(
-            Invoice.employee_id.label('employee_id'),
-            func.count(Invoice.id).label('count'),
-            func.coalesce(func.sum(Invoice.total_weight), 0.0).label('weight_sum'),
-            func.coalesce(func.sum(Invoice.total), 0.0).label('cash_sum'),
-            func.coalesce(func.sum(Invoice.profit_cash), 0.0).label('profit_sum'),
+    if metric != 'points':
+        # For weight/count leaderboards we rely on SQL group_by employee_id.
+        base_filters.append(Invoice.employee_id.isnot(None))
+
+    rows = []
+    employee_points_map = {}
+    employee_sales_map = {}
+    points_invoices = None
+    if metric == 'points':
+        invoices = Invoice.query.filter(*base_filters).all()
+        points_invoices = invoices
+
+        def _normalize_key(value: str) -> str:
+            return (value or '').strip().lower()
+
+        def _infer_employee_id(inv: Invoice) -> int | None:
+            try:
+                if getattr(inv, 'employee_id', None) not in (None, '', 0, '0', False):
+                    return int(inv.employee_id)
+            except Exception:
+                pass
+
+            posted_by = _normalize_key(str(getattr(inv, 'posted_by', '') or ''))
+            if not posted_by:
+                return None
+
+            # 1) Match AppUser.username
+            try:
+                app_user = AppUser.query.filter(
+                    func.lower(func.trim(AppUser.username)) == posted_by
+                ).first()
+                if app_user and getattr(app_user, 'employee_id', None):
+                    return int(app_user.employee_id)
+            except Exception:
+                pass
+
+            # 2) Match AppUser.full_name
+            try:
+                app_user = AppUser.query.filter(
+                    func.lower(func.trim(func.coalesce(AppUser.full_name, ''))) == posted_by
+                ).first()
+                if app_user and getattr(app_user, 'employee_id', None):
+                    return int(app_user.employee_id)
+            except Exception:
+                pass
+
+            # 3) Match Employee.name directly
+            try:
+                emp = Employee.query.filter(
+                    func.lower(func.trim(func.coalesce(Employee.name, ''))) == posted_by
+                ).first()
+                if emp:
+                    return int(emp.id)
+            except Exception:
+                pass
+
+            return None
+
+        def _infer_actor(inv: Invoice) -> tuple[int, str] | None:
+            emp_id = _infer_employee_id(inv)
+            if emp_id:
+                try:
+                    emp = Employee.query.get(emp_id)
+                    if emp and (emp.name or '').strip():
+                        return int(emp_id), (emp.name or '').strip()
+                except Exception:
+                    pass
+                return int(emp_id), f'Employee {int(emp_id)}'
+
+            posted_by_raw = str(getattr(inv, 'posted_by', '') or '').strip()
+            if not posted_by_raw:
+                return None
+
+            # Deterministic negative id based on string hash (keeps JSON stable).
+            try:
+                import zlib
+
+                actor_id = -int(zlib.adler32(posted_by_raw.encode('utf-8')) or 1)
+            except Exception:
+                actor_id = -1
+            return actor_id, posted_by_raw
+
+        counts_by_employee = {}
+        actor_name_map = {}
+        for inv in invoices:
+            actor = _infer_actor(inv)
+            if not actor:
+                continue
+            actor_id, actor_name = actor
+            actor_name_map[int(actor_id)] = actor_name
+
+            counts_by_employee[int(actor_id)] = counts_by_employee.get(int(actor_id), 0) + 1
+            employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + float(getattr(inv, 'total', 0.0) or 0.0)
+
+            earned_main = float(getattr(inv, 'profit_gold', 0.0) or 0.0)
+            points = int(round(max(0.0, earned_main) * points_per_gram))
+            employee_points_map[int(actor_id)] = employee_points_map.get(int(actor_id), 0) + max(0, points)
+
+        # Create a rows-like list so downstream logic stays consistent.
+        class _Row:
+            def __init__(self, employee_id, count, weight_sum):
+                self.employee_id = employee_id
+                self.count = count
+                self.weight_sum = weight_sum
+
+        rows = [_Row(actor_id, counts_by_employee.get(actor_id, 0), 0.0) for actor_id in counts_by_employee.keys()]
+    else:
+        rows = (
+            db.session.query(
+                Invoice.employee_id.label('employee_id'),
+                func.count(Invoice.id).label('count'),
+                func.coalesce(func.sum(Invoice.total_weight), 0.0).label('weight_sum'),
+                func.coalesce(func.sum(Invoice.total), 0.0).label('cash_sum'),
+                func.coalesce(func.sum(Invoice.profit_cash), 0.0).label('profit_sum'),
+            )
+            .filter(*base_filters)
+            .group_by(Invoice.employee_id)
+            .all()
         )
-        .filter(*base_filters)
-        .group_by(Invoice.employee_id)
-        .all()
-    )
 
     employee_ids = [int(r.employee_id) for r in rows if getattr(r, 'employee_id', None) is not None]
     name_map = {}
@@ -17394,9 +17906,20 @@ def get_home_leaderboard():
         except Exception:
             name_map = {}
 
-    def _to_float(value, default=0.0):
+    # For points metric, we may have negative actor ids (fallback to posted_by).
+    if metric == 'points':
         try:
-            return float(value or 0.0)
+            for actor_id, actor_name in (locals().get('actor_name_map') or {}).items():
+                if actor_name and actor_id not in name_map:
+                    name_map[int(actor_id)] = str(actor_name).strip()
+        except Exception:
+            pass
+
+    def _to_float(value, default=0.0):
+        if value in (None, '', False):
+            return default
+        try:
+            return float(value)
         except Exception:
             return default
 
@@ -17410,16 +17933,28 @@ def get_home_leaderboard():
             'name': name_map.get(emp_id) or f'Employee {emp_id}',
             'count': count_value,
             'weight': round(weight_value, 3),
+            'points': int(employee_points_map.get(emp_id, 0) or 0),
+            'sales_amount': round(
+                _to_float(
+                    employee_sales_map.get(emp_id, getattr(r, 'cash_sum', 0.0)),
+                    0.0,
+                ),
+                2,
+            ),
         })
 
     metric_key = 'weight_g'
     if metric == 'count':
         metric_key = 'count'
+    elif metric == 'points':
+        metric_key = 'points'
 
     # Compute score + sort
     for it in ranking_raw:
         if metric_key == 'count':
             it['score'] = float(it['count'])
+        elif metric_key == 'points':
+            it['score'] = float(int(it.get('points') or 0))
         else:
             it['score'] = float(it['weight'])
 
@@ -17435,11 +17970,12 @@ def get_home_leaderboard():
             'name': it['name'],
             'count': int(it.get('count') or 0),
             'score': round(score_value, 3 if metric_key == 'weight_g' else 0),
+            'sales_amount': round(_to_float(it.get('sales_amount', 0.0), 0.0), 2),
             'share': round(float(share), 4),
         })
 
     champion = None
-    if ranking:
+    if ranking and bool(sales_race_config.get('show_champion', True)):
         champion = {
             'id': ranking[0]['id'],
             'name': ranking[0]['name'],
@@ -17452,44 +17988,92 @@ def get_home_leaderboard():
     weekly_target_weight_g = None
     remaining_weight_g = None
 
-    if period == 'week':
-        team_weight_value = (
-            db.session.query(func.coalesce(func.sum(Invoice.total_weight), 0.0))
-            .filter(*base_filters)
-            .scalar()
-        )
-        team_weight_g = round(_to_float(team_weight_value, 0.0), 3)
+    team_points = None
+    weekly_target_points = None
+    remaining_points = None
 
-        settings_row = Settings.query.first()
+    if period == 'week':
+        if metric == 'points':
+            invoices = points_invoices
+            if invoices is None:
+                invoices = Invoice.query.filter(*base_filters).all()
+
+            team_weight_main = 0.0
+            for inv in invoices:
+                team_weight_main += max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
+            team_weight_g = round(team_weight_main, 3)
+            team_points = int(round(team_weight_main * points_per_gram))
+        else:
+            team_weight_value = (
+                db.session.query(func.coalesce(func.sum(Invoice.total_weight), 0.0))
+                .filter(*base_filters)
+                .scalar()
+            )
+            team_weight_g = round(_to_float(team_weight_value, 0.0), 3)
+
+        settings_row = None
+        try:
+            settings_row = Settings.query.first()
+        except Exception:
+            settings_row = None
+
         if not settings_row:
-            settings_row = Settings(main_karat=get_main_karat() or 21)
-            db.session.add(settings_row)
-            db.session.commit()
+            try:
+                settings_row = Settings(main_karat=get_main_karat() or 21)
+                db.session.add(settings_row)
+                db.session.commit()
+            except Exception:
+                settings_row = None
 
         weekly_target_weight_g = _to_float(
-            getattr(settings_row, 'weekly_sales_target_weight', None),
+            getattr(settings_row, 'weekly_sales_target_weight', None) if settings_row else None,
             2000.0,
         )
         if weekly_target_weight_g < 0:
             weekly_target_weight_g = 0.0
 
+        weekly_target_points = int(round(float(weekly_target_weight_g) * points_per_gram))
+
         if weekly_target_weight_g > 0:
             target_progress = float(team_weight_g / weekly_target_weight_g)
             target_progress = max(0.0, min(1.0, target_progress))
             remaining_weight_g = round(max(0.0, weekly_target_weight_g - team_weight_g), 3)
+            if team_points is None:
+                team_points = int(round(float(team_weight_g) * points_per_gram))
+            remaining_points = max(0, int(weekly_target_points or 0) - int(team_points or 0))
         else:
             target_progress = 0.0
             remaining_weight_g = 0.0
+            remaining_points = 0
 
     payload = {
         'period': period,
+        'requested_period': requested_period,
         'metric': metric_key,
+        'config': {
+            'enabled': bool(sales_race_config.get('enabled', True)),
+            'default_period': default_period,
+            'points_per_gram': points_per_gram,
+            'allow_fallback_to_latest_period': bool(sales_race_config.get('allow_fallback_to_latest_period', True)),
+            'show_invoice_count': bool(sales_race_config.get('show_invoice_count', True)),
+            'show_sales_amount_per_employee': bool(sales_race_config.get('show_sales_amount_per_employee', False)),
+            'show_champion': bool(sales_race_config.get('show_champion', True)),
+            'show_total_cash_to_all_users': bool(sales_race_config.get('show_total_cash_to_all_users', True)),
+            'show_total_profit_to_all_users': bool(sales_race_config.get('show_total_profit_to_all_users', False)),
+        },
         'champion': champion,
         'ranking': ranking,
+        'is_fallback': is_fallback,
+        'effective_period': effective_period,
+        'effective_start_date': start_dt.date().isoformat() if start_dt else None,
+        'effective_source_date': effective_source_date,
         'target_progress': target_progress,
         'team_weight_g': team_weight_g,
         'weekly_target_weight_g': weekly_target_weight_g,
         'remaining_weight_g': remaining_weight_g,
+        'team_points': team_points,
+        'weekly_target_points': weekly_target_points,
+        'remaining_points': remaining_points,
     }
 
     # Admin summary (only for admins / financial report viewers)
@@ -17501,7 +18085,10 @@ def get_home_leaderboard():
         except Exception:
             can_view_admin = False
 
-    if can_view_admin:
+    can_view_total_cash = bool(sales_race_config.get('show_total_cash_to_all_users', True)) or can_view_admin
+    can_view_total_profit = bool(sales_race_config.get('show_total_profit_to_all_users', False)) or can_view_admin
+
+    if can_view_total_cash or can_view_total_profit:
         # Aggregate across all sales (not per employee) for the same period.
         totals = (
             db.session.query(
@@ -17516,11 +18103,12 @@ def get_home_leaderboard():
             )
             .first()
         )
-        payload['admin_summary'] = {
-            'total_cash': round(_to_float(getattr(totals, 'cash_total', 0.0), 0.0), 2),
-            'total_profit': round(_to_float(getattr(totals, 'profit_total', 0.0), 0.0), 2),
-            'currency': 'SAR',
-        }
+        summary_payload = {'currency': 'SAR'}
+        if can_view_total_cash:
+            summary_payload['total_cash'] = round(_to_float(getattr(totals, 'cash_total', 0.0), 0.0), 2)
+        if can_view_total_profit:
+            summary_payload['total_profit'] = round(_to_float(getattr(totals, 'profit_total', 0.0), 0.0), 2)
+        payload['admin_summary'] = summary_payload
 
     return jsonify(payload)
 
@@ -24845,7 +25433,8 @@ def execute_weight_closing_profile():
         )
 
     memo_debit_account = Account.query.get(financial_account.memo_account_id) if financial_account.memo_account_id else None
-    memo_credit_account = Account.query.get(cash_account.memo_account_id) if cash_account.memo_account_id else None
+    default_memo_cash_account = Account.query.filter_by(account_number='71100').first()
+    memo_credit_account = default_memo_cash_account
     if memo_debit_account and memo_credit_account and weight_main > 0:
         _record_memo_weight_transfer(
             journal_entry.id,

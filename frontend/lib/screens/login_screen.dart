@@ -110,7 +110,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'نظام نقاط بيع وإدارة متكامل',
+                                '',
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color: Colors.grey.shade600,
                                 ),

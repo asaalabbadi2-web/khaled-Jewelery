@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/sales_race_refresh_provider.dart';
 import 'add_customer_screen.dart';
 import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
@@ -1949,6 +1950,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       builder: (dialogContext) => _CategoryLineDialog(
         categories: _categories,
         mainKarat: _settingsProvider.mainKarat,
+        currencySymbol: _settingsProvider.currencySymbol,
       ),
     );
 
@@ -1961,12 +1963,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final weight = result['weight'] as double? ?? 0;
     final wage = result['wage'] as double? ?? 0;
     final count = (result['count'] as int?) ?? 1;
+    final amount = result['amount'] as double? ?? 0;
 
     if (categoryId == null || weight <= 0) return;
 
     setState(() {
-      _items.add(
-        InvoiceItem(
+      final item = InvoiceItem(
           id: null,
           name: categoryName.isNotEmpty ? categoryName : 'تصنيف',
           barcode: '',
@@ -1983,8 +1985,13 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
           categoryId: categoryId,
           categoryName: categoryName,
-        ),
-      );
+        );
+
+      if (amount > 0) {
+        item.setManualTotal(amount);
+      }
+
+      _items.add(item);
     });
 
     _recomputeCostingPreview();
@@ -2525,6 +2532,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       final response = _isEditMode
           ? await apiService.updateUnpostedInvoice(widget.editInvoiceId!, invoiceData)
           : await apiService.addInvoice(invoiceData);
+
+      if (mounted) {
+        context.read<SalesRaceRefreshProvider>().notifySaleInvoiceSaved();
+      }
 
       final approvalRequired = response['approval_required'] == true;
       final approvalReasons = (response['approval_reasons'] is List)
@@ -6576,10 +6587,12 @@ class InvoiceItem {
 class _CategoryLineDialog extends StatefulWidget {
   final List<Map<String, dynamic>> categories;
   final int mainKarat;
+  final String currencySymbol;
 
   const _CategoryLineDialog({
     required this.categories,
     required this.mainKarat,
+    required this.currencySymbol,
   });
 
   @override
@@ -6592,6 +6605,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   final _weightController = TextEditingController(text: '1.0');
   final _wageController = TextEditingController(text: '0');
   final _countController = TextEditingController(text: '1');
+  final _amountController = TextEditingController();
 
   final _countFocusNode = FocusNode();
 
@@ -6615,6 +6629,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     _weightController.dispose();
     _wageController.dispose();
     _countController.dispose();
+    _amountController.dispose();
     _countFocusNode.dispose();
     super.dispose();
   }
@@ -6634,6 +6649,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     final weight = _tryParseDouble(_weightController.text, 0);
     final wage = _tryParseDouble(_wageController.text, 0);
     final count = int.tryParse(_countController.text.trim()) ?? 0;
+    final amount = _tryParseDouble(_amountController.text, 0);
 
     if (count < 1) {
       _countFocusNode.requestFocus();
@@ -6651,6 +6667,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
       'weight': weight,
       'wage': wage,
       'count': count,
+      'amount': amount,
     });
   }
 
@@ -7109,6 +7126,35 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _amountController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: const [
+                          ArabicNumberTextInputFormatter(allowDecimal: true),
+                        ],
+                        onTap: () => _amountController.selection =
+                            TextSelection(
+                              baseOffset: 0,
+                              extentOffset: _amountController.text.length,
+                            ),
+                        decoration: InputDecoration(
+                          labelText: 'المبلغ (اختياري)',
+                          hintText: 'اتركه فارغاً للحساب التلقائي',
+                          suffixText: widget.currencySymbol,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.payments_outlined,
+                            size: 20,
+                          ),
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       Container(

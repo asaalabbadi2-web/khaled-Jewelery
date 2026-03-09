@@ -34,7 +34,8 @@ class InvoicesListScreen extends StatefulWidget {
   State<InvoicesListScreen> createState() => _InvoicesListScreenState();
 }
 
-class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProviderStateMixin {
+class _InvoicesListScreenState extends State<InvoicesListScreen>
+    with TickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   List<dynamic> _invoices = [];
   List<dynamic> _filteredInvoices = [];
@@ -46,16 +47,26 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
 
   // Tab controller
   late TabController _tabController;
-  static const List<String> _tabTypes = ['بيع', 'شراء', 'مرتجع'];
-  static const List<String> _tabTypesEn = ['Sales', 'Purchase', 'Returns'];
+  static const List<String> _tabTypes = [
+    'بيع',
+    'شراء من عميل',
+    'شراء مورد',
+    'مرتجع',
+  ];
+  static const List<String> _tabTypesEn = [
+    'Sales',
+    'Customer Purchase',
+    'Supplier Purchase',
+    'Returns',
+  ];
 
-  // Per-tab filter state (index 0=بيع, 1=شراء, 2=مرتجع)
+  // Per-tab filter state (index 0=بيع, 1=شراء من عميل, 2=شراء مورد, 3=مرتجع)
   late final List<TextEditingController> _searchControllers;
-  final List<String> _tabInvoiceSubType = ['all', 'all', 'all'];
-  final List<String> _tabStatus         = ['all', 'all', 'all'];
-  final List<DateTimeRange?> _tabDateRange = [null, null, null];
-  final List<String> _tabSort = ['date', 'date', 'date'];
-  final List<bool>   _tabSortAsc = [false, false, false];
+  final List<String> _tabInvoiceSubType = ['all', 'all', 'all', 'all'];
+  final List<String> _tabStatus = ['all', 'all', 'all', 'all'];
+  final List<DateTimeRange?> _tabDateRange = [null, null, null, null];
+  final List<String> _tabSort = ['date', 'date', 'date', 'date'];
+  final List<bool> _tabSortAsc = [false, false, false, false];
   int _currentPage = 1;
   int _totalPages = 1;
   int _totalInvoices = 0;
@@ -83,16 +94,21 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: _tabTypes.length, vsync: this);
     _tabController.addListener(() {
       if (!mounted) return;
       setState(() {
         // Rebuild to refresh statistics header/search bar when tab changes.
       });
     });
-    _searchControllers = List.generate(3, (_) => TextEditingController());
+    _searchControllers = List.generate(
+      _tabTypes.length,
+      (_) => TextEditingController(),
+    );
     for (final ctrl in _searchControllers) {
-      ctrl.addListener(() { if (mounted) setState(() {}); });
+      ctrl.addListener(() {
+        if (mounted) setState(() {});
+      });
     }
     _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
     _itemsRevisionListener = () {
@@ -106,7 +122,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   @override
   void dispose() {
     _tabController.dispose();
-    for (final c in _searchControllers) { c.dispose(); }
+    for (final c in _searchControllers) {
+      c.dispose();
+    }
     if (_itemsRevisionListener != null) {
       DataSyncBus.itemsRevision.removeListener(_itemsRevisionListener!);
     }
@@ -142,11 +160,15 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       Map<String, dynamic>? summary =
           meta?['tab_summary'] as Map<String, dynamic>?;
 
-      summary ??= await _fetchFullTabSummaryFromApi(
-        statusForApi: statusForApi,
-        dateFrom: null,
-        dateTo: null,
-      );
+      if (summary == null ||
+          summary['customer_purchase'] == null ||
+          summary['supplier_purchase'] == null) {
+        summary = await _fetchFullTabSummaryFromApi(
+          statusForApi: statusForApi,
+          dateFrom: null,
+          dateTo: null,
+        );
+      }
 
       if (!mounted) return;
 
@@ -344,11 +366,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
 
       // Search filter (number, customer/supplier, amount)
       if (searchQ.isNotEmpty) {
-        final customerName = (invoice['customer_name'] ?? '').toString().toLowerCase();
-        final supplierName = (invoice['supplier_name'] ?? '').toString().toLowerCase();
+        final customerName = (invoice['customer_name'] ?? '')
+            .toString()
+            .toLowerCase();
+        final supplierName = (invoice['supplier_name'] ?? '')
+            .toString()
+            .toLowerCase();
         final invNumber = _getInvoiceDisplayNumber(invoice).toLowerCase();
         final totalStr = _tryParseDouble(invoice['total']).toStringAsFixed(2);
-        final totalRounded = _tryParseDouble(invoice['total']).toStringAsFixed(0);
+        final totalRounded = _tryParseDouble(
+          invoice['total'],
+        ).toStringAsFixed(0);
         if (!customerName.contains(searchQ) &&
             !supplierName.contains(searchQ) &&
             !invNumber.contains(searchQ) &&
@@ -374,9 +402,23 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       if (dateRange != null && invoice['date'] != null) {
         try {
           final invoiceDate = DateTime.parse(invoice['date'].toString());
-          final start = DateTime(dateRange.start.year, dateRange.start.month, dateRange.start.day);
-          final end   = DateTime(dateRange.end.year,   dateRange.end.month,   dateRange.end.day, 23, 59, 59, 999);
-          if (invoiceDate.isBefore(start) || invoiceDate.isAfter(end)) return false;
+          final start = DateTime(
+            dateRange.start.year,
+            dateRange.start.month,
+            dateRange.start.day,
+          );
+          final end = DateTime(
+            dateRange.end.year,
+            dateRange.end.month,
+            dateRange.end.day,
+            23,
+            59,
+            59,
+            999,
+          );
+          if (invoiceDate.isBefore(start) || invoiceDate.isAfter(end)) {
+            return false;
+          }
         } catch (_) {}
       }
 
@@ -389,27 +431,47 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       try {
         switch (sortField) {
           case 'recent':
-            comparison = (_tryParseInt(a['id']) ?? 0).compareTo(_tryParseInt(b['id']) ?? 0);
+            comparison = (_tryParseInt(a['id']) ?? 0).compareTo(
+              _tryParseInt(b['id']) ?? 0,
+            );
             break;
           case 'date':
-            final da = a['date'] != null ? DateTime.parse(a['date'].toString()) : DateTime.now();
-            final db = b['date'] != null ? DateTime.parse(b['date'].toString()) : DateTime.now();
+            final da = a['date'] != null
+                ? DateTime.parse(a['date'].toString())
+                : DateTime.now();
+            final db = b['date'] != null
+                ? DateTime.parse(b['date'].toString())
+                : DateTime.now();
             comparison = da.compareTo(db);
-            if (comparison == 0) comparison = (_tryParseInt(a['id']) ?? 0).compareTo(_tryParseInt(b['id']) ?? 0);
+            if (comparison == 0) {
+              comparison = (_tryParseInt(a['id']) ?? 0).compareTo(
+                _tryParseInt(b['id']) ?? 0,
+              );
+            }
             break;
           case 'customer':
-            comparison = (a['customer_name'] ?? '').toString().compareTo((b['customer_name'] ?? '').toString());
+            comparison = (a['customer_name'] ?? '').toString().compareTo(
+              (b['customer_name'] ?? '').toString(),
+            );
             break;
           case 'amount':
-            comparison = _tryParseDouble(a['total']).compareTo(_tryParseDouble(b['total']));
+            comparison = _tryParseDouble(
+              a['total'],
+            ).compareTo(_tryParseDouble(b['total']));
             break;
           case 'number':
             final ap = _extractInvoicePrefix(a);
             final bp = _extractInvoicePrefix(b);
             comparison = ap.compareTo(bp);
             if (comparison == 0) {
-              comparison = _extractInvoiceYear(a).compareTo(_extractInvoiceYear(b));
-              if (comparison == 0) comparison = _extractInvoiceSequence(a).compareTo(_extractInvoiceSequence(b));
+              comparison = _extractInvoiceYear(
+                a,
+              ).compareTo(_extractInvoiceYear(b));
+              if (comparison == 0) {
+                comparison = _extractInvoiceSequence(
+                  a,
+                ).compareTo(_extractInvoiceSequence(b));
+              }
             }
             break;
         }
@@ -468,11 +530,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   }
 
   double _extractInvoiceTotalWeight(Map<String, dynamic> invoice) {
-    final direct = _tryParseDouble(invoice['total_weight']);
-    if (direct > 0) return direct;
-
     final items = invoice['items'];
-    if (items is List) {
+    // Prefer deriving from items when available.
+    // Some backends/legacy invoices store `total_weight` already multiplied by
+    // quantity; the invoice details view shows per-line weight, so the list
+    // should match that and avoid qty multiplication.
+    if (items is List && items.isNotEmpty) {
       var sum = 0.0;
       for (final entry in items) {
         if (entry is Map) {
@@ -486,6 +549,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       }
       return sum;
     }
+
+    final direct = _tryParseDouble(invoice['total_weight']);
+    if (direct > 0) return direct;
 
     return 0.0;
   }
@@ -710,12 +776,18 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     }
   }
 
-  List<dynamic> _getInvoicesForTabFromList(String tabType, List<dynamic> source) {
+  List<dynamic> _getInvoicesForTabFromList(
+    String tabType,
+    List<dynamic> source,
+  ) {
     if (source.isEmpty) return [];
 
     final normalizedLabel = tabType.trim().toLowerCase();
     final isSalesTab = tabType == 'بيع' || normalizedLabel == 'sales';
-    final isPurchaseTab = tabType == 'شراء' || normalizedLabel == 'purchase';
+    final isCustomerPurchaseTab =
+        tabType == 'شراء من عميل' || normalizedLabel == 'customer purchase';
+    final isSupplierPurchaseTab =
+        tabType == 'شراء مورد' || normalizedLabel == 'supplier purchase';
     final isReturnsTab = tabType == 'مرتجع' || normalizedLabel == 'returns';
 
     bool isReturnInvoiceType(String type) {
@@ -741,10 +813,26 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       return t.contains('شراء') || lower == 'buy' || lower.contains('purchase');
     }
 
+    bool isCustomerPurchaseInvoiceType(String type) {
+      final t = type.trim();
+      if (t.isEmpty) return false;
+      if (isReturnInvoiceType(t)) return false;
+      return t == 'شراء من عميل' || t == 'شراء خردة' || t == 'شراء مستعمل';
+    }
+
+    bool isSupplierPurchaseInvoiceType(String type) {
+      final t = type.trim();
+      if (t.isEmpty) return false;
+      if (isReturnInvoiceType(t)) return false;
+      if (t == 'شراء') return true;
+      return isPurchaseInvoiceType(t) && !isCustomerPurchaseInvoiceType(t);
+    }
+
     return source.where((inv) {
       final type = (inv['invoice_type'] ?? '').toString();
       if (isReturnsTab) return isReturnInvoiceType(type);
-      if (isPurchaseTab) return isPurchaseInvoiceType(type);
+      if (isCustomerPurchaseTab) return isCustomerPurchaseInvoiceType(type);
+      if (isSupplierPurchaseTab) return isSupplierPurchaseInvoiceType(type);
       if (isSalesTab) return isSalesInvoiceType(type);
       return false;
     }).toList();
@@ -789,7 +877,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
             invoice['amount_paid'] ?? invoice['total_payments_amount'],
           );
           final barterTotal = _tryParseDouble(invoice['barter_total']);
-          final hasTotalSettledKey = invoice.containsKey('total_settled_amount');
+          final hasTotalSettledKey = invoice.containsKey(
+            'total_settled_amount',
+          );
           final totalSettled = hasTotalSettledKey
               ? _tryParseDouble(invoice['total_settled_amount'])
               : (paidCash + barterTotal);
@@ -812,7 +902,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
             invoice['amount_paid'] ?? invoice['total_payments_amount'],
           );
           final barterTotal = _tryParseDouble(invoice['barter_total']);
-          final hasTotalSettledKey = invoice.containsKey('total_settled_amount');
+          final hasTotalSettledKey = invoice.containsKey(
+            'total_settled_amount',
+          );
           final totalSettled = hasTotalSettledKey
               ? _tryParseDouble(invoice['total_settled_amount'])
               : (paidCash + barterTotal);
@@ -858,8 +950,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
       'sales': _calculateStatsFromInvoices(
         _getInvoicesForTabFromList('بيع', source),
       ),
-      'purchase': _calculateStatsFromInvoices(
-        _getInvoicesForTabFromList('شراء', source),
+      'customer_purchase': _calculateStatsFromInvoices(
+        _getInvoicesForTabFromList('شراء من عميل', source),
+      ),
+      'supplier_purchase': _calculateStatsFromInvoices(
+        _getInvoicesForTabFromList('شراء مورد', source),
       ),
       'returns': _calculateStatsFromInvoices(
         _getInvoicesForTabFromList('مرتجع', source),
@@ -872,7 +967,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     String resolveSummaryKey(String label) {
       final normalizedLabel = label.trim().toLowerCase();
       if (label == 'بيع' || normalizedLabel == 'sales') return 'sales';
-      if (label == 'شراء' || normalizedLabel == 'purchase') return 'purchase';
+      if (label == 'شراء من عميل' || normalizedLabel == 'customer purchase') {
+        return 'customer_purchase';
+      }
+      if (label == 'شراء مورد' || normalizedLabel == 'supplier purchase') {
+        return 'supplier_purchase';
+      }
       if (label == 'مرتجع' || normalizedLabel == 'returns') return 'returns';
       return 'sales';
     }
@@ -882,7 +982,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     final effectiveIndex = tabIndex >= 0 ? tabIndex : 0;
 
     final globalSummary = _globalTabSummary?[summaryKey];
-    if (globalSummary is Map && _tabStatus[effectiveIndex] == 'all' &&
+    if (globalSummary is Map &&
+        _tabStatus[effectiveIndex] == 'all' &&
         _tabDateRange[effectiveIndex] == null &&
         _tabInvoiceSubType[effectiveIndex] == 'all' &&
         _searchControllers[effectiveIndex].text.isEmpty) {
@@ -892,7 +993,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         'paid_amount': _tryParseDouble(globalSummary['paid_amount']),
         'unpaid_amount': _tryParseDouble(globalSummary['unpaid_amount']),
         'vat_total': _tryParseDouble(globalSummary['vat_total']),
-        'sold_weight_total': _tryParseDouble(globalSummary['sold_weight_total']),
+        'sold_weight_total': _tryParseDouble(
+          globalSummary['sold_weight_total'],
+        ),
       };
     }
 
@@ -962,7 +1065,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
               padding: EdgeInsets.zero,
               icon: const Icon(Icons.chevron_left, size: 18),
               tooltip: isAr ? 'السابق' : 'Previous',
-              onPressed: (_isLoading || _currentPage <= 1) ? null : () => _loadInvoices(page: _currentPage - 1),
+              onPressed: (_isLoading || _currentPage <= 1)
+                  ? null
+                  : () => _loadInvoices(page: _currentPage - 1),
             ),
           ),
           SizedBox(
@@ -973,7 +1078,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
               padding: EdgeInsets.zero,
               icon: const Icon(Icons.chevron_right, size: 18),
               tooltip: isAr ? 'التالي' : 'Next',
-              onPressed: (_isLoading || _currentPage >= _totalPages) ? null : () => _loadInvoices(page: _currentPage + 1),
+              onPressed: (_isLoading || _currentPage >= _totalPages)
+                  ? null
+                  : () => _loadInvoices(page: _currentPage + 1),
             ),
           ),
         ],
@@ -985,9 +1092,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     final isAr = widget.isArabic;
     final idx = _tabController.index;
     String tempSubType = _tabInvoiceSubType[idx];
-    String tempStatus  = _tabStatus[idx];
-    String tempSort    = _tabSort[idx];
-    bool   tempAsc     = _tabSortAsc[idx];
+    String tempStatus = _tabStatus[idx];
+    String tempSort = _tabSort[idx];
+    bool tempAsc = _tabSortAsc[idx];
     DateTimeRange? tempDate = _tabDateRange[idx];
 
     showModalBottomSheet(
@@ -1010,24 +1117,34 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
             required ValueChanged<String?> onChanged,
           }) {
             final hasMatch = items.any((i) => i['value'] == value);
-            final eff = hasMatch ? value : (items.isNotEmpty ? items.first['value']! : value);
+            final eff = hasMatch
+                ? value
+                : (items.isNotEmpty ? items.first['value']! : value);
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
               decoration: BoxDecoration(
                 color: colorScheme.surface,
                 borderRadius: bdRadius,
-                border: Border.all(color: colorScheme.outline.withValues(alpha: 0.25)),
+                border: Border.all(
+                  color: colorScheme.outline.withValues(alpha: 0.25),
+                ),
               ),
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<String>(
                   value: eff,
                   isExpanded: true,
                   dropdownColor: colorScheme.surface,
-                  style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurface),
-                  items: items.map((i) => DropdownMenuItem(
-                    value: i['value']!,
-                    child: Text(i['label']!, style: textTheme.bodyMedium),
-                  )).toList(),
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurface,
+                  ),
+                  items: items
+                      .map(
+                        (i) => DropdownMenuItem(
+                          value: i['value']!,
+                          child: Text(i['label']!, style: textTheme.bodyMedium),
+                        ),
+                      )
+                      .toList(),
                   onChanged: onChanged,
                 ),
               ),
@@ -1038,7 +1155,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
             textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
             child: Padding(
               padding: EdgeInsets.only(
-                top: 16, left: 16, right: 16,
+                top: 16,
+                left: 16,
+                right: 16,
                 bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
               ),
               child: Column(
@@ -1048,7 +1167,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                   // Handle
                   Center(
                     child: Container(
-                      width: 40, height: 4,
+                      width: 40,
+                      height: 4,
                       margin: const EdgeInsets.only(bottom: 12),
                       decoration: BoxDecoration(
                         color: colorScheme.onSurface.withValues(alpha: 0.18),
@@ -1063,15 +1183,25 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          isAr ? 'تصفية: ${_tabTypes[idx]}' : 'Filter: ${_tabTypesEn[idx]}',
-                          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                          isAr
+                              ? 'تصفية: ${_tabTypes[idx]}'
+                              : 'Filter: ${_tabTypesEn[idx]}',
+                          style: textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                       TextButton(
-                        onPressed: () { Navigator.pop(ctx); _clearFilters(); },
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _clearFilters();
+                        },
                         child: Text(
                           isAr ? 'مسح الكل' : 'Clear All',
-                          style: TextStyle(color: colorScheme.error, fontSize: 13),
+                          style: TextStyle(
+                            color: colorScheme.error,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ],
@@ -1079,8 +1209,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                   const SizedBox(height: 12),
                   // Date range
                   OutlinedButton.icon(
-                    icon: Icon(Icons.date_range, size: 18,
-                        color: tempDate != null ? colorScheme.primary : colorScheme.onSurface.withValues(alpha: 0.6)),
+                    icon: Icon(
+                      Icons.date_range,
+                      size: 18,
+                      color: tempDate != null
+                          ? colorScheme.primary
+                          : colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
                     label: Text(
                       tempDate == null
                           ? (isAr ? 'اختر نطاق تاريخ' : 'Select date range')
@@ -1092,7 +1227,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     ),
                     style: OutlinedButton.styleFrom(
                       alignment: AlignmentDirectional.centerStart,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                       side: BorderSide(
                         color: tempDate != null
                             ? colorScheme.primary.withValues(alpha: 0.5)
@@ -1118,54 +1256,95 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                         icon: const Icon(Icons.close, size: 14),
                         label: Text(isAr ? 'مسح التاريخ' : 'Clear date'),
                         style: TextButton.styleFrom(
-                          foregroundColor: colorScheme.onSurface.withValues(alpha: 0.55),
+                          foregroundColor: colorScheme.onSurface.withValues(
+                            alpha: 0.55,
+                          ),
                           visualDensity: VisualDensity.compact,
                         ),
                       ),
                     ),
                   const SizedBox(height: 10),
                   // Sub-type (scoped to this tab) + Status
-                  Row(children: [
-                    Expanded(child: sheetDropdown(
-                      value: tempSubType,
-                      items: _buildInvoiceTypeItemsForTab(isAr, idx),
-                      onChanged: (v) { if (v != null) setSS(() => tempSubType = v); },
-                    )),
-                    const SizedBox(width: 8),
-                    Expanded(child: sheetDropdown(
-                      value: tempStatus,
-                      items: _buildStatusItems(isAr),
-                      onChanged: (v) { if (v != null) setSS(() => tempStatus = v); },
-                    )),
-                  ]),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: sheetDropdown(
+                          value: tempSubType,
+                          items: _buildInvoiceTypeItemsForTab(isAr, idx),
+                          onChanged: (v) {
+                            if (v != null) setSS(() => tempSubType = v);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: sheetDropdown(
+                          value: tempStatus,
+                          items: _buildStatusItems(isAr),
+                          onChanged: (v) {
+                            if (v != null) setSS(() => tempStatus = v);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   // Sort
-                  Row(children: [
-                    Expanded(child: sheetDropdown(
-                      value: tempSort,
-                      items: [
-                        {'value': 'recent',   'label': isAr ? 'الأحدث' : 'Most Recent'},
-                        {'value': 'date',     'label': isAr ? 'التاريخ' : 'Date'},
-                        {'value': 'customer', 'label': isAr ? 'العميل' : 'Customer'},
-                        {'value': 'amount',   'label': isAr ? 'المبلغ' : 'Amount'},
-                        {'value': 'number',   'label': isAr ? 'الرقم' : 'Number'},
-                      ],
-                      onChanged: (v) { if (v != null) setSS(() => tempSort = v); },
-                    )),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      icon: Icon(tempAsc ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                      label: Text(
-                        tempAsc ? (isAr ? 'تصاعدي' : 'Asc') : (isAr ? 'تنازلي' : 'Desc'),
-                        style: textTheme.bodySmall,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: sheetDropdown(
+                          value: tempSort,
+                          items: [
+                            {
+                              'value': 'recent',
+                              'label': isAr ? 'الأحدث' : 'Most Recent',
+                            },
+                            {
+                              'value': 'date',
+                              'label': isAr ? 'التاريخ' : 'Date',
+                            },
+                            {
+                              'value': 'customer',
+                              'label': isAr ? 'العميل' : 'Customer',
+                            },
+                            {
+                              'value': 'amount',
+                              'label': isAr ? 'المبلغ' : 'Amount',
+                            },
+                            {
+                              'value': 'number',
+                              'label': isAr ? 'الرقم' : 'Number',
+                            },
+                          ],
+                          onChanged: (v) {
+                            if (v != null) setSS(() => tempSort = v);
+                          },
+                        ),
                       ),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: bdRadius),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        icon: Icon(
+                          tempAsc ? Icons.arrow_upward : Icons.arrow_downward,
+                          size: 16,
+                        ),
+                        label: Text(
+                          tempAsc
+                              ? (isAr ? 'تصاعدي' : 'Asc')
+                              : (isAr ? 'تنازلي' : 'Desc'),
+                          style: textTheme.bodySmall,
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          shape: RoundedRectangleBorder(borderRadius: bdRadius),
+                        ),
+                        onPressed: () => setSS(() => tempAsc = !tempAsc),
                       ),
-                      onPressed: () => setSS(() => tempAsc = !tempAsc),
-                    ),
-                  ]),
+                    ],
+                  ),
                   const SizedBox(height: 18),
                   // Apply
                   FilledButton.icon(
@@ -1176,15 +1355,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     ),
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                     onPressed: () {
                       Navigator.pop(ctx);
                       setState(() {
                         _tabInvoiceSubType[idx] = tempSubType;
-                        _tabStatus[idx]    = tempStatus;
-                        _tabSort[idx]      = tempSort;
-                        _tabSortAsc[idx]   = tempAsc;
+                        _tabStatus[idx] = tempStatus;
+                        _tabSort[idx] = tempSort;
+                        _tabSortAsc[idx] = tempAsc;
                         _tabDateRange[idx] = tempDate;
                         _currentPage = 1;
                       });
@@ -1207,7 +1388,12 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     final primary = colorScheme.primary;
     final scaffoldBackground = theme.scaffoldBackgroundColor;
     final tabLabels = isAr ? _tabTypes : _tabTypesEn;
-    final tabIcons = [Icons.shopping_bag, Icons.shopping_cart, Icons.undo];
+    final tabIcons = [
+      Icons.shopping_bag,
+      Icons.person_search,
+      Icons.local_shipping,
+      Icons.undo,
+    ];
 
     return Directionality(
       textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
@@ -1243,9 +1429,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
               children: [
                 TabBar(
                   controller: _tabController,
-                  isScrollable: false,
+                  isScrollable: true,
                   labelColor: primary,
-                  unselectedLabelColor: colorScheme.onSurface.withValues(alpha: 0.6),
+                  unselectedLabelColor: colorScheme.onSurface.withValues(
+                    alpha: 0.6,
+                  ),
                   indicatorColor: primary,
                   indicatorSize: TabBarIndicatorSize.label,
                   tabs: List.generate(tabLabels.length, (index) {
@@ -1263,17 +1451,26 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                     style: Theme.of(context).textTheme.bodyMedium,
                     onTap: () {
                       final ctrl = _searchControllers[_tabController.index];
-                      ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+                      ctrl.selection = TextSelection(
+                        baseOffset: 0,
+                        extentOffset: ctrl.text.length,
+                      );
                     },
                     decoration: InputDecoration(
                       hintText: isAr
                           ? 'بحث برقم الفاتورة أو العميل أو المبلغ...'
                           : 'Search: number, customer, amount...',
                       prefixIcon: const Icon(Icons.search, size: 18),
-                      suffixIcon: _searchControllers[_tabController.index].text.isNotEmpty
+                      suffixIcon:
+                          _searchControllers[_tabController.index]
+                              .text
+                              .isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.clear, size: 16),
-                              onPressed: () => setState(() => _searchControllers[_tabController.index].clear()),
+                              onPressed: () => setState(
+                                () => _searchControllers[_tabController.index]
+                                    .clear(),
+                              ),
                             )
                           : null,
                       isDense: true,
@@ -1283,7 +1480,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                         borderRadius: BorderRadius.circular(10),
                         borderSide: BorderSide.none,
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                     ),
                   ),
                 ),
@@ -1300,9 +1500,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                   child: _buildStatisticsSection(),
                 ),
               ),
-              SliverToBoxAdapter(
-                child: _buildPaginationStrip(),
-              ),
+              SliverToBoxAdapter(child: _buildPaginationStrip()),
             ];
           },
           body: _isLoading
@@ -1327,7 +1525,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                   }),
                 ),
         ),
-
       ),
     );
   }
@@ -1371,10 +1568,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
 
     // Get current tab type
     final tabLabels = isAr ? _tabTypes : _tabTypesEn;
-    final currentTabType = _tabController.index < tabLabels.length 
-        ? tabLabels[_tabController.index] 
+    final currentTabType = _tabController.index < tabLabels.length
+        ? tabLabels[_tabController.index]
         : tabLabels[0];
-    
+
     // Get statistics for current tab
     final tabStats = _getTabStatistics(currentTabType);
 
@@ -1547,8 +1744,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     );
   }
 
-
-
   List<Map<String, String>> _buildStatusItems(bool isArabic) {
     return [
       {'value': 'all', 'label': isArabic ? 'الكل' : 'All'},
@@ -1569,19 +1764,46 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
   }
 
   /// Returns invoice sub-type dropdown items scoped to the given tab index.
-  List<Map<String, String>> _buildInvoiceTypeItemsForTab(bool isAr, int tabIndex) {
-    const salesTypes    = ['بيع', 'بيع جديد', 'بيع مستعمل', 'مقايضة'];
-    const purchaseTypes = ['شراء', 'شراء من عميل', 'شراء خردة', 'شراء مستعمل'];
-    const returnTypes   = ['مرتجع بيع', 'مرتجع بيع خردة', 'مرتجع شراء', 'مرتجع شراء (مورد)', 'مرتجع شراء من عميل'];
+  List<Map<String, String>> _buildInvoiceTypeItemsForTab(
+    bool isAr,
+    int tabIndex,
+  ) {
+    const salesTypes = ['بيع', 'بيع جديد', 'بيع مستعمل', 'مقايضة'];
+    const customerPurchaseTypes = ['شراء من عميل', 'شراء خردة', 'شراء مستعمل'];
+    const supplierPurchaseTypes = ['شراء'];
+    const returnTypes = [
+      'مرتجع بيع',
+      'مرتجع بيع خردة',
+      'مرتجع شراء',
+      'مرتجع شراء (مورد)',
+      'مرتجع شراء من عميل',
+    ];
     const englishMap = {
-      'بيع': 'Sale', 'بيع جديد': 'New Sale', 'بيع مستعمل': 'Used Sale', 'مقايضة': 'Exchange',
-      'شراء': 'Purchase', 'شراء من عميل': 'Purchase (Customer)', 'شراء خردة': 'Scrap Purchase', 'شراء مستعمل': 'Used Purchase',
-      'مرتجع بيع': 'Sales Return', 'مرتجع بيع خردة': 'Scrap Sales Return',
-      'مرتجع شراء': 'Purchase Return', 'مرتجع شراء (مورد)': 'Supplier Return', 'مرتجع شراء من عميل': 'Customer Return',
+      'بيع': 'Sale',
+      'بيع جديد': 'New Sale',
+      'بيع مستعمل': 'Used Sale',
+      'مقايضة': 'Exchange',
+      'شراء': 'Purchase',
+      'شراء من عميل': 'Purchase (Customer)',
+      'شراء خردة': 'Scrap Purchase',
+      'شراء مستعمل': 'Used Purchase',
+      'مرتجع بيع': 'Sales Return',
+      'مرتجع بيع خردة': 'Scrap Sales Return',
+      'مرتجع شراء': 'Purchase Return',
+      'مرتجع شراء (مورد)': 'Supplier Return',
+      'مرتجع شراء من عميل': 'Customer Return',
     };
 
-    final tabTypes = tabIndex == 0 ? salesTypes : tabIndex == 1 ? purchaseTypes : returnTypes;
-    final existing = _invoices.map((inv) => (inv['invoice_type'] ?? '').toString().trim()).toSet();
+    final tabTypes = tabIndex == 0
+        ? salesTypes
+        : tabIndex == 1
+        ? customerPurchaseTypes
+        : tabIndex == 2
+        ? supplierPurchaseTypes
+        : returnTypes;
+    final existing = _invoices
+        .map((inv) => (inv['invoice_type'] ?? '').toString().trim())
+        .toSet();
 
     final items = <Map<String, String>>[
       {'value': 'all', 'label': isAr ? 'الكل' : 'All'},
@@ -1610,7 +1832,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
           : (isPaid ? Colors.green : Colors.orange);
       final invoiceType = (invoice['invoice_type'] ?? '').toString();
       final bool isPurchase =
-          invoiceType == 'شراء' || invoiceType.toLowerCase() == 'buy';
+          invoiceType.contains('شراء') || invoiceType.toLowerCase() == 'buy';
       final Color typeColor = isPurchase ? Colors.blue : colorScheme.primary;
       final invoiceDisplayNumber = _getInvoiceDisplayNumber(invoice);
 
@@ -2148,8 +2370,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
         : const [];
 
     final payments = (invoice['payments'] is List)
-      ? (invoice['payments'] as List)
-      : const [];
+        ? (invoice['payments'] as List)
+        : const [];
 
     final auth = Provider.of<AuthProvider>(sheetContext, listen: false);
     final canSeeLogs = auth.isManager;
@@ -2500,8 +2722,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                           child: Column(
                             children: payments.map<Widget>((raw) {
                               final Map<String, dynamic> payment = raw is Map
-                                  ? raw
-                                      .map((k, v) => MapEntry(k.toString(), v))
+                                  ? raw.map((k, v) => MapEntry(k.toString(), v))
                                   : <String, dynamic>{};
 
                               final paymentId = _tryParseInt(payment['id']);
@@ -2511,8 +2732,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                                       .toString();
                               final createdAt = (payment['created_at'] ?? '')
                                   .toString();
-                              final notes =
-                                  (payment['notes'] ?? '').toString().trim();
+                              final notes = (payment['notes'] ?? '')
+                                  .toString()
+                                  .trim();
 
                               return Padding(
                                 padding: const EdgeInsets.only(bottom: 10),
@@ -2571,13 +2793,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                                                   : 'Date: ${_formatDate(createdAt, isAr)}',
                                               style: textTheme.bodySmall
                                                   ?.copyWith(
-                                                    color: colorScheme
-                                                        .onSurface
-                                                        .withValues(
-                                                          alpha: 0.7,
-                                                        ),
-                                                    fontWeight:
-                                                        FontWeight.w600,
+                                                    color: colorScheme.onSurface
+                                                        .withValues(alpha: 0.7),
+                                                    fontWeight: FontWeight.w600,
                                                   ),
                                             ),
                                           ],
@@ -2587,13 +2805,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
                                               notes,
                                               style: textTheme.bodySmall
                                                   ?.copyWith(
-                                                    color: colorScheme
-                                                        .onSurface
-                                                        .withValues(
-                                                          alpha: 0.7,
-                                                        ),
-                                                    fontStyle:
-                                                        FontStyle.italic,
+                                                    color: colorScheme.onSurface
+                                                        .withValues(alpha: 0.7),
+                                                    fontStyle: FontStyle.italic,
                                                   ),
                                               maxLines: 2,
                                               overflow: TextOverflow.ellipsis,
@@ -2826,10 +3040,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
           final parsed = json.decode(notesRaw);
           if (parsed is Map) {
             final pid = parsed['invoice_payment_id'];
-            final parsedPid = pid is int ? pid : int.tryParse(pid?.toString() ?? '');
+            final parsedPid = pid is int
+                ? pid
+                : int.tryParse(pid?.toString() ?? '');
             if (parsedPid == invoicePaymentId) {
               final vid = v['id'];
-              linkedVoucherId = vid is int ? vid : int.tryParse(vid?.toString() ?? '');
+              linkedVoucherId = vid is int
+                  ? vid
+                  : int.tryParse(vid?.toString() ?? '');
               if (linkedVoucherId != null) break;
             }
           }
@@ -3125,9 +3343,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
 
     if (invoice['is_posted'] == true) {
       _showSnackBar(
-        isAr
-            ? 'لا يمكن تعديل فاتورة مرحّلة'
-            : 'Cannot edit a posted invoice',
+        isAr ? 'لا يمكن تعديل فاتورة مرحّلة' : 'Cannot edit a posted invoice',
         isError: true,
       );
       return;
@@ -3487,5 +3703,3 @@ class _InvoicesListScreenState extends State<InvoicesListScreen> with TickerProv
     }
   }
 }
-
-

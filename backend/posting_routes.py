@@ -710,6 +710,13 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
 
     weights_by_karat = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
 
+    invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
+    gold_type = (str(getattr(invoice, 'gold_type', '') or '').strip().lower() or 'new')
+    is_customer_scrap_purchase = (
+        invoice_type in ('شراء من عميل', 'مرتجع شراء')
+        and gold_type == 'scrap'
+    )
+
     used_karat_lines = False
     try:
         karat_lines = getattr(invoice, 'karat_lines', None) or []
@@ -754,7 +761,8 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
             weight_per_unit = getattr(inv_item, 'weight', None)
             if weight_per_unit in (None, '', False) and getattr(inv_item, 'item', None):
                 weight_per_unit = getattr(inv_item.item, 'weight', None)
-            grams = _to_float(weight_per_unit) * float(qty)
+            qty_multiplier = 1 if is_customer_scrap_purchase else qty
+            grams = _to_float(weight_per_unit) * float(qty_multiplier)
             if grams <= 0:
                 continue
             weights_by_karat[karat] += float(grams)
@@ -1619,7 +1627,23 @@ def post_invoice(invoice_id):
     """
     try:
         # استخدام اسم المستخدم المصادق عليه
-        posted_by = g.current_user.username
+        posted_by = None
+        try:
+            user = getattr(g, 'current_user', None)
+            posted_by = (
+                getattr(user, 'username', None)
+                or getattr(user, 'full_name', None)
+                or getattr(user, 'name', None)
+            )
+        except Exception:
+            posted_by = None
+
+        try:
+            posted_by = str(posted_by or '').strip()
+        except Exception:
+            posted_by = ''
+        if not posted_by:
+            posted_by = 'system'
         
         invoice = Invoice.query.get(invoice_id)
         if not invoice:
@@ -1634,7 +1658,7 @@ def post_invoice(invoice_id):
         # ترحيل الفاتورة
         invoice.is_posted = True
         invoice.posted_at = datetime.now()
-        invoice.posted_by = posted_by
+        invoice.posted_by = posted_by or (invoice.posted_by or 'system')
 
         # Append gold inventory movements into SafeBox ledger (append-only)
         _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
@@ -1739,6 +1763,7 @@ def approve_large_discount_invoice(invoice_id):
 
         # Restore basic payment status based on persisted payments.
         try:
+            payments = list(getattr(invoice, 'payments', []) or [])
             total_paid = 0.0
             for pay in payments:
                 try:

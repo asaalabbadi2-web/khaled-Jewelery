@@ -1,12 +1,37 @@
 import os
+import time
 import pytest
+from datetime import datetime
+
+# IMPORTANT: tests must never run against the real dev/prod database.
+# Force an isolated SQLite DB for pytest BEFORE importing the Flask app.
+_DEFAULT_SAFE_TEST_DB = None
+try:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    safe_dir = os.path.join(base_dir, '.pytest_db')
+    os.makedirs(safe_dir, exist_ok=True)
+    _DEFAULT_SAFE_TEST_DB = os.path.join(
+        safe_dir,
+        f"yasargold_test_{int(time.time())}_{os.getpid()}.db",
+    )
+except Exception:
+    _DEFAULT_SAFE_TEST_DB = None
+
+if os.getenv('PYTEST_ALLOW_REAL_DB', '').strip() not in ('1', 'true', 'yes'):
+    # Override any existing DATABASE_URL to protect user data.
+    if _DEFAULT_SAFE_TEST_DB:
+        os.environ['DATABASE_URL'] = f"sqlite:///{_DEFAULT_SAFE_TEST_DB}"
+    else:
+        os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+
+    # Mark environment as test to reduce side effects.
+    os.environ.setdefault('YASAR_ENV', 'test')
 
 # Ensure backend package is importable
 import app as flask_app_module
 
 from app import app, reset_database
 from models import db, Account, Supplier, Customer, Employee, Invoice, User
-from datetime import datetime
 
 
 @pytest.fixture(scope='session', autouse=True)
