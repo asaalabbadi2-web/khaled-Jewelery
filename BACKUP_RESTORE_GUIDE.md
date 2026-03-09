@@ -160,6 +160,16 @@ Optional (Google Workspace):
 Restore safety:
 - The existing restore endpoint is still protected in production (see `ALLOW_DANGEROUS_RESETS`).
 
+### Safe production dry run (recommended)
+- Restore the backup into a temporary database instead of the live database first.
+- Script: `backend/verify_postgres_restore_dry_run.sh`
+- Example:
+  - `CONFIRM_DRY_RUN=YES DATABASE_URL=postgresql://USER:PASS@HOST:5432/yasargold BACKUP_FILE=/path/to/yasargold_pg_....dump TEST_DB_NAME=yasargold_test ./backend/verify_postgres_restore_dry_run.sh`
+- Notes:
+  - By default the temporary database is kept for inspection.
+  - Set `KEEP_TEST_DB=0` to drop it automatically after the smoke checks.
+  - The script terminates sessions connected to the temporary database only; it does not restore over the live database.
+
 ## Suggested schedule (baseline)
 - Hourly: PostgreSQL dump (or every 30–60 minutes depending on RPO)
 - Daily: Full dump + offsite upload
