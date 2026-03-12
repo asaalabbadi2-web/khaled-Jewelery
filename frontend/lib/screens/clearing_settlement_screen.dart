@@ -12,11 +12,15 @@ import '../widgets/safe_box_picker_dialog.dart';
 class ClearingSettlementScreen extends StatefulWidget {
   final int? initialClearingSafeBoxId;
   final int? initialBankSafeBoxId;
+  /// Maximum settleable amount (due amount) from the monitor screen.
+  /// When provided, overrides the clearing balance as the cap.
+  final double? initialDueAmount;
 
   const ClearingSettlementScreen({
     super.key,
     this.initialClearingSafeBoxId,
     this.initialBankSafeBoxId,
+    this.initialDueAmount,
   });
 
   @override
@@ -73,16 +77,90 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
   List<Map<String, dynamic>> _pendingTransactions = [];
   bool _loadingPendingTxs = false;
 
+  /// المبلغ المستحق الفعلي من API (المستحقات - ما تمت تسويته)
+  double? _dueAmount;
+
   DateTime _settlementDate = DateTime.now();
 
   @override
   void initState() {
     super.initState();
+    _dueAmount = widget.initialDueAmount;
+    // Track last text values to avoid unnecessary setState on cursor-only changes
+    _lastGrossText = _grossController.text;
+    _lastRateText = _rateController.text;
+    _lastFixedFeeText = _fixedFeeController.text;
+    _lastTxCountText = _txCountController.text;
+    _lastFeeText = _feeController.text;
+    _grossController.addListener(_onGrossChanged);
+    _rateController.addListener(_onRateChanged);
+    _fixedFeeController.addListener(_onFixedFeeChanged);
+    _txCountController.addListener(_onTxCountChanged);
+    _feeController.addListener(_onFeeFieldChanged);
     _load();
+  }
+
+  // Last-known text values to detect real text changes vs cursor moves
+  String _lastGrossText = '';
+  String _lastRateText = '';
+  String _lastFixedFeeText = '';
+  String _lastTxCountText = '';
+  String _lastFeeText = '';
+  bool _summaryRefreshScheduled = false;
+
+  /// Schedule a single post-frame setState to refresh the summary card.
+  /// Coalesces multiple rapid changes into one rebuild.
+  void _scheduleRefresh() {
+    if (_summaryRefreshScheduled) return;
+    _summaryRefreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _summaryRefreshScheduled = false;
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _onGrossChanged() {
+    if (_grossController.text == _lastGrossText) return;
+    _lastGrossText = _grossController.text;
+    _recomputeFeeIfNeeded();
+    _scheduleRefresh();
+  }
+
+  void _onRateChanged() {
+    if (_rateController.text == _lastRateText) return;
+    _lastRateText = _rateController.text;
+    _recomputeFeeIfNeeded();
+    _scheduleRefresh();
+  }
+
+  void _onFixedFeeChanged() {
+    if (_fixedFeeController.text == _lastFixedFeeText) return;
+    _lastFixedFeeText = _fixedFeeController.text;
+    _recomputeFeeIfNeeded();
+    _scheduleRefresh();
+  }
+
+  void _onTxCountChanged() {
+    if (_txCountController.text == _lastTxCountText) return;
+    _lastTxCountText = _txCountController.text;
+    _recomputeFeeIfNeeded();
+    _scheduleRefresh();
+  }
+
+  void _onFeeFieldChanged() {
+    if (_updatingFee) return;
+    if (_feeController.text == _lastFeeText) return;
+    _lastFeeText = _feeController.text;
+    _scheduleRefresh();
   }
 
   @override
   void dispose() {
+    _grossController.removeListener(_onGrossChanged);
+    _rateController.removeListener(_onRateChanged);
+    _fixedFeeController.removeListener(_onFixedFeeChanged);
+    _txCountController.removeListener(_onTxCountChanged);
+    _feeController.removeListener(_onFeeFieldChanged);
     _grossController.dispose();
     _feeController.dispose();
     _rateController.dispose();
@@ -274,7 +352,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     final rounded = totalFee.isFinite ? totalFee : 0.0;
 
     _updatingFee = true;
-    _feeController.text = rounded.toStringAsFixed(2);
+    final newFeeText = rounded.toStringAsFixed(2);
+    _feeController.text = newFeeText;
+    _lastFeeText = newFeeText;
     _updatingFee = false;
   }
 
@@ -689,15 +769,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     _recomputeFeeIfNeeded();
 
-    // Load pending transactions when per_transaction mode
-    if (_settlementMode == 'per_transaction') {
-      _loadPendingTransactions();
-    } else {
-      setState(() => _pendingTransactions = []);
-    }
+    // Always load due_amount and pending transactions
+    _loadPendingTransactions();
   }
 
-  /// Loads unsettled transactions for the selected clearing safe box.
+  /// Loads unsettled transactions and due_amount for the selected clearing safe box.
   Future<void> _loadPendingTransactions() async {
     final clearingId = _clearingSafe?.id;
     if (clearingId == null) return;
@@ -712,9 +788,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
               ?.whereType<Map<String, dynamic>>()
               .toList() ??
           [];
+      final dueAmt = (res['due_amount'] as num?)?.toDouble();
       if (mounted) {
         setState(() {
           _pendingTransactions = txList;
+          if (dueAmt != null) _dueAmount = dueAmt;
           _loadingPendingTxs = false;
         });
       }
@@ -790,10 +868,14 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       return;
     }
 
-    // Prevent obvious server-side rejection: cannot settle more than available in clearing.
-    if (availableClearing > 0 && gross > (availableClearing + 0.01)) {
+    // Check against due_amount (if known) or clearing balance
+    final cap = (_dueAmount != null && _dueAmount! > 0)
+        ? _dueAmount!
+        : availableClearing;
+    if (cap > 0 && gross > (cap + 0.01)) {
+      final label = _dueAmount != null ? 'المبلغ المستحق' : 'الرصيد المتاح في خزينة المستحقات';
       _showSnack(
-        'الرصيد المتاح في خزينة المستحقات ${_formatMoney(availableClearing)} ولا يمكن تسوية مبلغ إجمالي ${_formatMoney(gross)}',
+        '$label ${_formatMoney(cap)} ولا يمكن تسوية مبلغ إجمالي ${_formatMoney(gross)}',
         error: true,
       );
       return;
@@ -901,6 +983,12 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
             } else {
               msg = 'الرصيد المتاح في خزينة المستحقات غير كافٍ لتنفيذ التسوية';
             }
+          } else if (err == 'no_due_amount') {
+            msg = decoded['message']?.toString() ??
+                'لا يوجد مبلغ مستحق للتسوية';
+          } else if (err == 'exceeds_due_amount') {
+            msg = decoded['message']?.toString() ??
+                'المبلغ المطلوب يتجاوز المبلغ المستحق للتسوية';
           } else {
             msg = (decoded['message'] ?? decoded['error'] ?? msg).toString();
           }
@@ -1016,8 +1104,12 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     final net = gross - fee - feeVat;
 
     final availableClearing = _clearingSafe?.cashBalance ?? 0.0;
+    // Use due_amount as the primary cap; fall back to clearing balance
+    final effectiveCap = (_dueAmount != null && _dueAmount! > 0)
+        ? _dueAmount!
+        : availableClearing;
     final exceedsAvailable =
-        availableClearing > 0 && gross > (availableClearing + 0.01);
+        effectiveCap > 0 && gross > (effectiveCap + 0.01);
 
     return Scaffold(
       appBar: AppBar(
@@ -1033,18 +1125,25 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 _SummaryCard(gross: gross, fee: fee, feeVat: feeVat, net: net),
-                if (feeVat > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      'ملاحظة: الصافي محسوب بعد خصم ضريبة العمولة (${(_taxRate * 100).toStringAsFixed(0)}%)'
-                      '${_settingsLoaded ? '' : ' (قد تختلف حسب الإعدادات)'}',
-                      style: TextStyle(
-                        color: Colors.grey.shade700,
-                        fontSize: 12,
+                // Keep a stable ListView child to avoid index shifts that can
+                // make TextFields lose focus while typing.
+                Builder(
+                  key: const ValueKey('clearing.vat_note'),
+                  builder: (_) {
+                    if (feeVat <= 0) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'ملاحظة: الصافي محسوب بعد خصم ضريبة العمولة (${(_taxRate * 100).toStringAsFixed(0)}%)'
+                        '${_settingsLoaded ? '' : ' (قد تختلف حسب الإعدادات)'}',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 12,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
+                ),
                 const SizedBox(height: 12),
                 Card(
                   child: Padding(
@@ -1287,6 +1386,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                         ),
                         const SizedBox(height: 10),
                         TextField(
+                          key: const ValueKey('clearing.gross'),
                           controller: _grossController,
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
@@ -1298,15 +1398,16 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                             border: const OutlineInputBorder(),
                             helperText: (_clearingSafe == null)
                                 ? null
-                                : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
+                                : _dueAmount != null
+                                    ? 'المستحق: ${_formatMoney(_dueAmount!)} ر.س  |  رصيد الخزينة: ${_formatMoney(availableClearing)}'
+                                    : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
+                            helperMaxLines: 2,
                             errorText: exceedsAvailable
-                                ? 'الإجمالي يتجاوز الرصيد المتاح'
+                                ? (_dueAmount != null
+                                    ? 'الإجمالي يتجاوز المبلغ المستحق (${_formatMoney(_dueAmount!)})'
+                                    : 'الإجمالي يتجاوز الرصيد المتاح')
                                 : null,
                           ),
-                          onChanged: (_) {
-                            setState(() {});
-                            _recomputeFeeIfNeeded();
-                          },
                         ),
                         const SizedBox(height: 10),
 
@@ -1368,6 +1469,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                                 children: [
                                   Expanded(
                                     child: TextField(
+                                      key: const ValueKey('clearing.fee_rate'),
                                       controller: _rateController,
                                       keyboardType:
                                           const TextInputType.numberWithOptions(
@@ -1382,15 +1484,12 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                                         prefixIcon: Icon(Icons.percent),
                                         border: OutlineInputBorder(),
                                       ),
-                                      onChanged: (_) {
-                                        setState(() {});
-                                        _recomputeFeeIfNeeded();
-                                      },
                                     ),
                                   ),
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: TextField(
+                                      key: const ValueKey('clearing.fee_fixed_per_tx'),
                                       controller: _fixedFeeController,
                                       keyboardType:
                                           const TextInputType.numberWithOptions(
@@ -1405,16 +1504,13 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                                         prefixIcon: Icon(Icons.attach_money),
                                         border: OutlineInputBorder(),
                                       ),
-                                      onChanged: (_) {
-                                        setState(() {});
-                                        _recomputeFeeIfNeeded();
-                                      },
                                     ),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 10),
                               TextField(
+                                key: const ValueKey('clearing.tx_count'),
                                 controller: _txCountController,
                                 keyboardType: TextInputType.number,
                                 inputFormatters: [NormalizeNumberFormatter()],
@@ -1426,15 +1522,12 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                                   ),
                                   border: OutlineInputBorder(),
                                 ),
-                                onChanged: (_) {
-                                  setState(() {});
-                                  _recomputeFeeIfNeeded();
-                                },
                               ),
                             ],
                           )
                         else
                           TextField(
+                            key: const ValueKey('clearing.fee_manual'),
                             controller: _feeController,
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
@@ -1446,13 +1539,13 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                               prefixIcon: Icon(Icons.percent),
                               border: OutlineInputBorder(),
                             ),
-                            onChanged: (_) => setState(() {}),
                           ),
 
                         if (_autoCalcFee && !_feeAlreadyAppliedInInvoice)
                           Padding(
                             padding: const EdgeInsets.only(top: 10),
                             child: TextField(
+                              key: const ValueKey('clearing.fee_computed_readonly'),
                               controller: _feeController,
                               readOnly: true,
                               decoration: const InputDecoration(

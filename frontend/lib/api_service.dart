@@ -4570,6 +4570,23 @@ class ApiService {
     throw Exception(bodyStr);
   }
 
+  Future<Map<String, dynamic>> runAutoClearingSettlementsNow() async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/clearing/settlements/auto-run'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(<String, dynamic>{}),
+    );
+
+    final bodyStr = utf8.decode(response.bodyBytes);
+    if (response.statusCode == 200) {
+      final decoded = json.decode(bodyStr);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{'raw': decoded};
+    }
+
+    throw Exception(bodyStr);
+  }
+
   /// الحصول على خزينة محددة
   Future<SafeBoxModel> getSafeBox(int id, {bool includeBalance = true}) async {
     final queryParams = <String, String>{};

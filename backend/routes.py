@@ -21295,8 +21295,9 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
         return []
 
     # ── Idempotency guard: prevent double-posting ──────────────────────────
-    existing_count = SafeBoxTransaction.query.filter_by(
-        ref_type='voucher', ref_id=voucher.id
+    existing_count = SafeBoxTransaction.query.filter(
+        SafeBoxTransaction.ref_id == voucher.id,
+        SafeBoxTransaction.ref_type.in_(['voucher', 'invoice_payment']),
     ).count()
     if existing_count > 0:
         return []
@@ -21368,9 +21369,11 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
                 )
 
         direction = 'in' if (line.line_type == 'debit') else 'out'
+        # Tag as 'invoice_payment' when voucher originates from an invoice payment
+        effective_ref_type = 'invoice_payment' if linked_invoice_payment_id else 'voucher'
         tx = SafeBoxTransaction(
             safe_box_id=sb.id,
-            ref_type='voucher',
+            ref_type=effective_ref_type,
             ref_id=voucher.id,
             invoice_id=linked_invoice_id,
             invoice_payment_id=linked_invoice_payment_id,
@@ -21415,7 +21418,10 @@ def _append_safe_reversal_transactions_for_voucher(voucher: Voucher, created_by=
     if existing_reversal:
         return []
 
-    original = SafeBoxTransaction.query.filter_by(ref_type='voucher', ref_id=voucher.id).all()
+    original = SafeBoxTransaction.query.filter(
+        SafeBoxTransaction.ref_id == voucher.id,
+        SafeBoxTransaction.ref_type.in_(['voucher', 'invoice_payment']),
+    ).all()
     if not original:
         return []
 
@@ -24108,6 +24114,53 @@ def create_safe_box_transfer_voucher():
 # =========================================================================
 
 
+def _compute_clearing_due_amount(safe_box_id):
+    """Compute how much is actually owed in a clearing safe box.
+
+    due = sum(invoice_payment ins) - sum(clearing_settlement outs)
+    This prevents over-settling and duplicate settlements.
+    """
+    payments_signed = func.coalesce(
+        func.sum(
+            case(
+                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
+                else_=-SafeBoxTransaction.amount_cash,
+            )
+        ),
+        0.0,
+    )
+    payments_total = (
+        db.session.query(payments_signed)
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'invoice_payment',
+        )
+        .scalar()
+    ) or 0.0
+
+    settled_signed = func.coalesce(
+        func.sum(
+            case(
+                (SafeBoxTransaction.direction == 'out', SafeBoxTransaction.amount_cash),
+                else_=-SafeBoxTransaction.amount_cash,
+            )
+        ),
+        0.0,
+    )
+    settled_total = (
+        db.session.query(settled_signed)
+        .join(Voucher, Voucher.id == SafeBoxTransaction.ref_id)
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+            Voucher.reference_type == 'clearing_settlement',
+        )
+        .scalar()
+    ) or 0.0
+
+    return round(float(payments_total) - float(settled_total), 2)
+
+
 def _create_clearing_settlement_voucher(
     *,
     clearing_safe_box_id,
@@ -24294,9 +24347,31 @@ def _create_clearing_settlement_voucher(
         if not commission_vat_account:
             raise ValueError('commission_vat_account_not_found')
 
-    clearing_balance = float(getattr(clearing_account, 'balance_cash', 0.0) or 0.0)
+    def _live_cash_balance(account_obj, fallback=0.0):
+        account_id = getattr(account_obj, 'id', None)
+        if account_id is None:
+            return float(fallback or 0.0)
+        try:
+            live = live_balances_by_account_ids([int(account_id)]).get(int(account_id))
+            if isinstance(live, dict):
+                return float(live.get('cash') or 0.0)
+        except Exception:
+            pass
+        return float(fallback or 0.0)
+
+    clearing_balance = _live_cash_balance(
+        clearing_account,
+        fallback=float(getattr(clearing_account, 'balance_cash', 0.0) or 0.0),
+    )
     if clearing_balance < gross_amount:
         raise ValueError('insufficient_clearing_balance')
+
+    # Due-amount guard: prevent settling more than what's actually owed.
+    due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
+    if due_amount < 0.01:
+        raise ValueError('no_due_amount')
+    if gross_amount > due_amount + 0.01:
+        raise ValueError(f'exceeds_due_amount:{due_amount:.2f}')
 
     voucher_number = generate_voucher_number('adjustment', voucher_date=settlement_dt)
 
@@ -24384,10 +24459,10 @@ def _create_clearing_settlement_voucher(
         'success': True,
         'voucher': voucher.to_dict(),
         'balances': {
-            'clearing_account_cash': round(float(getattr(clearing_account, 'balance_cash', 0.0) or 0.0), 2),
-            'bank_account_cash': round(float(getattr(bank_account, 'balance_cash', 0.0) or 0.0), 2),
-            **({'fee_account_cash': round(float(getattr(fee_account, 'balance_cash', 0.0) or 0.0), 2)} if fee_account else {}),
-            **({'commission_vat_account_cash': round(float(getattr(commission_vat_account, 'balance_cash', 0.0) or 0.0), 2)} if commission_vat_account else {}),
+            'clearing_account_cash': round(_live_cash_balance(clearing_account, fallback=float(getattr(clearing_account, 'balance_cash', 0.0) or 0.0)), 2),
+            'bank_account_cash': round(_live_cash_balance(bank_account, fallback=float(getattr(bank_account, 'balance_cash', 0.0) or 0.0)), 2),
+            **({'fee_account_cash': round(_live_cash_balance(fee_account, fallback=float(getattr(fee_account, 'balance_cash', 0.0) or 0.0)), 2)} if fee_account else {}),
+            **({'commission_vat_account_cash': round(_live_cash_balance(commission_vat_account, fallback=float(getattr(commission_vat_account, 'balance_cash', 0.0) or 0.0)), 2)} if commission_vat_account else {}),
         }
     }
 
@@ -24487,11 +24562,30 @@ def create_clearing_settlement():
             return jsonify({'error': 'Safe box must be linked to an account'}), 400
         if msg == 'fee_account_id_required':
             return jsonify({'error': 'fee_account_id is required for fee_amount > 0'}), 400
+        if msg == 'no_due_amount':
+            return jsonify({
+                'error': 'no_due_amount',
+                'message': 'لا يوجد مبلغ مستحق للتسوية في هذه الخزينة — قد تكون جميع الدفعات تمت تسويتها مسبقاً.',
+                'due_amount': 0.0,
+            }), 400
+        if msg.startswith('exceeds_due_amount:'):
+            due_str = msg.split(':', 1)[1]
+            return jsonify({
+                'error': 'exceeds_due_amount',
+                'message': f'المبلغ المطلوب يتجاوز المبلغ المستحق للتسوية ({due_str} ر.س)',
+                'due_amount': float(due_str),
+                'gross_amount': round(float(data.get('gross_amount') or data.get('amount') or 0.0), 2),
+            }), 400
         if msg == 'insufficient_clearing_balance':
             try:
                 clearing_safe_box_id = data.get('clearing_safe_box_id') or data.get('from_safe_box_id')
                 clearing_safe_box = SafeBox.query.get(clearing_safe_box_id)
-                clearing_balance = float(getattr(getattr(clearing_safe_box, 'account', None), 'balance_cash', 0.0) or 0.0)
+                clearing_account = getattr(clearing_safe_box, 'account', None)
+                if clearing_account and getattr(clearing_account, 'id', None) is not None:
+                    live = live_balances_by_account_ids([int(clearing_account.id)]).get(int(clearing_account.id))
+                    clearing_balance = float((live or {}).get('cash') or 0.0)
+                else:
+                    clearing_balance = 0.0
             except Exception:
                 clearing_balance = 0.0
             gross_amount = float(data.get('gross_amount') or data.get('amount') or 0.0)
@@ -24661,8 +24755,8 @@ def create_per_transaction_clearing_settlement():
     # Filter unsettled
     pending = []
     for tx in unsettled_txs:
-        ip_id = tx.invoice_payment_id
-        if ip_id and ip_id in settled_ip_ids:
+        ip_id = tx.invoice_payment_id or tx.id
+        if ip_id in settled_ip_ids:
             continue
         pending.append(tx)
 
@@ -24807,8 +24901,8 @@ def get_pending_settlement_transactions():
 
     pending = []
     for tx in all_txs:
-        ip_id = tx.invoice_payment_id
-        if ip_id and ip_id in settled_ip_ids:
+        ip_id = tx.invoice_payment_id or tx.id
+        if ip_id in settled_ip_ids:
             continue
         invoice_number = None
         if tx.invoice_id:
@@ -24827,11 +24921,50 @@ def get_pending_settlement_transactions():
             'date': tx.created_at.isoformat() if tx.created_at else None,
         })
 
+    # Compute aggregate due_amount for bulk settlement cap
+    due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
+
     return jsonify({
         'clearing_safe_box_id': clearing_safe_box_id,
         'pending_count': len(pending),
+        'due_amount': round(due_amount, 2),
         'transactions': pending,
     }), 200
+
+
+@api.route('/clearing/settlements/auto-run', methods=['POST'])
+@require_permission('vouchers.create')
+def run_auto_clearing_settlements_now():
+    """Run the clearing auto-settlement scheduler immediately.
+
+    This is intended for manual operational triggering and verification.
+    The actual settlement logic remains centralized in the scheduler.
+    """
+    try:
+        from clearing_settlement_scheduler import get_clearing_settlement_scheduler
+
+        enabled_methods = (
+            PaymentMethod.query
+            .filter_by(is_active=True, auto_settlement_enabled=True)
+            .count()
+        )
+
+        scheduler = get_clearing_settlement_scheduler(current_app._get_current_object())
+        scheduler.process_due_settlements()
+
+        return jsonify({
+            'success': True,
+            'enabled_methods': int(enabled_methods or 0),
+            'message': 'تم تشغيل التسوية التلقائية يدوياً',
+        }), 200
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'error': f'failed_to_run_auto_settlement: {exc}',
+        }), 500
+
+
 @require_permission('vouchers.create')
 def create_bnpl_settlement():
     """Create a BNPL settlement voucher and update balances.

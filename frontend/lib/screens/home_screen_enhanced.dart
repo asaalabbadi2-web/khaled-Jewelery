@@ -44,6 +44,7 @@ import 'attendance_screen.dart';
 import 'payroll_report_screen.dart';
 import 'bonus_management_screen.dart';
 import 'safe_boxes_screen.dart';
+import 'clearing_monitor_screen.dart';
 import 'payment_methods_screen_enhanced.dart';
 import 'melting_renewal_screen.dart';
 import 'gold_reservation_screen.dart';
@@ -112,6 +113,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   bool _leaderboardLoading = false;
   String? _leaderboardError;
   String _leaderboardPeriod = 'today';
+  DateTime? _leaderboardFetchedAt;
   int _lastHandledSalesRaceRefreshToken = 0;
   bool _pendingLeaderboardRefresh = false;
 
@@ -231,19 +233,22 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final settings = context.read<SettingsProvider>();
       if (!auth.isAuthenticated) return;
 
-        final raceSettings =
+      final raceSettings =
           (settings.settings['sales_race_settings'] as Map?)
-            ?.cast<String, dynamic>() ??
+              ?.cast<String, dynamic>() ??
           const <String, dynamic>{};
-        final configuredDefaultPeriod =
+      final configuredDefaultPeriod =
           raceSettings['default_period']?.toString().trim().toLowerCase() ==
-            'week'
+              'week'
           ? 'week'
           : 'today';
-        final selectedPeriod =
-          (period ?? (_leaderboardData == null ? configuredDefaultPeriod : _leaderboardPeriod))
-            .trim()
-            .toLowerCase();
+      final selectedPeriod =
+          (period ??
+                  (_leaderboardData == null
+                      ? configuredDefaultPeriod
+                      : _leaderboardPeriod))
+              .trim()
+              .toLowerCase();
 
       if (mounted) {
         setState(() {
@@ -260,12 +265,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       if (!mounted) return;
       setState(() {
         _leaderboardData = data;
+        _leaderboardFetchedAt = DateTime.now();
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _leaderboardError = e.toString();
         _leaderboardData = null;
+        _leaderboardFetchedAt = null;
       });
     } finally {
       if (!mounted) return;
@@ -608,7 +615,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => const SecuritySessionsScreen(),
+                                  builder: (_) =>
+                                      const SecuritySessionsScreen(),
                                 ),
                               );
                             },
@@ -1170,7 +1178,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       onSelected: () async {
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => SafeBoxesScreen(balancesView: true)),
+          MaterialPageRoute(
+            builder: (_) => SafeBoxesScreen(balancesView: true),
+          ),
+        );
+        await _loadAllData();
+      },
+    );
+    addDestination(
+      icon: Icons.swap_horiz,
+      title: isAr ? 'مراقبة تسوية المقاصة' : 'Clearing Settlement',
+      color: Colors.teal.shade600,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const ClearingMonitorScreen(),
+          ),
         );
         await _loadAllData();
       },
@@ -1182,7 +1206,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       onSelected: () async {
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const PaymentMethodsScreenEnhanced()),
+          MaterialPageRoute(
+            builder: (_) => const PaymentMethodsScreenEnhanced(),
+          ),
         );
         await _loadAllData();
       },
@@ -1398,8 +1424,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   @override
   Widget build(BuildContext context) {
     final isAr = widget.isArabic;
-    final salesRaceRefreshToken =
-        context.watch<SalesRaceRefreshProvider>().refreshToken;
+    final salesRaceRefreshToken = context
+        .watch<SalesRaceRefreshProvider>()
+        .refreshToken;
 
     if (salesRaceRefreshToken != _lastHandledSalesRaceRefreshToken) {
       _lastHandledSalesRaceRefreshToken = salesRaceRefreshToken;
@@ -1743,7 +1770,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
   // Original home screen content
   Widget _buildHomeTabContent(bool isAr) {
-    final showSalesRaceCard = context.watch<QuickActionsProvider>().showSalesRaceCard;
+    final showSalesRaceCard = context
+        .watch<QuickActionsProvider>()
+        .showSalesRaceCard;
     return Column(
       children: [
         Expanded(
@@ -1825,18 +1854,17 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final adminSummary = data?['admin_summary'] as Map?;
     final raceEnabled = config?['enabled'] != false;
     final showInvoiceCount = config?['show_invoice_count'] != false;
-    final showSalesAmountPerEmployee =
-      config?['show_sales_amount_per_employee'] == true;
+    final showSalesAmountPerEmployee = true;
     final showChampion = config?['show_champion'] != false;
     final isFallback = data?['is_fallback'] == true;
     final effectiveStartDate = DateTime.tryParse(
       (data?['effective_start_date'] ?? '').toString(),
     );
+    final fetchedAt = _leaderboardFetchedAt;
 
     final weeklyTarget = (data?['weekly_target_weight_g'] as num?)?.toDouble();
     final teamWeight = (data?['team_weight_g'] as num?)?.toDouble();
-    final remainingWeight =
-        (data?['remaining_weight_g'] as num?)?.toDouble();
+    final remainingWeight = (data?['remaining_weight_g'] as num?)?.toDouble();
 
     final weeklyTargetPoints = (data?['weekly_target_points'] as num?)?.toInt();
     final teamPoints = (data?['team_points'] as num?)?.toInt();
@@ -1853,26 +1881,50 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
     final microcopy = isWeek
         ? (isGoalAchieved
-            ? (isAr ? 'إنجاز جماعي رائع 👏' : 'Amazing team achievement 👏')
-            : (isAr
-                ? 'معًا نحو تحقيق هدف الأسبوع 💪'
-                : 'Together towards the weekly goal 💪'))
+              ? (isAr ? 'إنجاز جماعي رائع 👏' : 'Amazing team achievement 👏')
+              : (isAr
+                    ? 'معًا نحو تحقيق هدف الأسبوع 💪'
+                    : 'Together towards the weekly goal 💪'))
         : (isAr ? 'هدف اليوم: سرعة + دقة' : 'Today\'s goal: speed + accuracy');
 
     String? fallbackText() {
       if (!isFallback || effectiveStartDate == null) return null;
       final formatted = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
       if (isWeek) {
-      return isAr
-        ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $formatted'
-        : 'No sales this week — showing the latest week starting $formatted';
+        return isAr
+            ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $formatted'
+            : 'No sales this week — showing the latest week starting $formatted';
       }
       return isAr
-        ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $formatted'
-        : 'No sales today — showing the latest sales day on $formatted';
+          ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $formatted'
+          : 'No sales today — showing the latest sales day on $formatted';
     }
 
     final fallbackMessage = fallbackText();
+
+    String? effectivePeriodText() {
+      if (effectiveStartDate == null) return null;
+      if (isWeek) {
+        final weekEnd = effectiveStartDate.add(const Duration(days: 6));
+        final startText = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
+        final endText = DateFormat('dd/MM/yyyy').format(weekEnd);
+        return isAr
+            ? 'فترة البيانات: $startText - $endText'
+            : 'Data range: $startText - $endText';
+      }
+
+      final todayText = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
+      return isAr ? 'بيانات اليوم: $todayText' : 'Today data: $todayText';
+    }
+
+    String? lastUpdatedText() {
+      if (fetchedAt == null) return null;
+      final formatted = DateFormat('dd/MM/yyyy HH:mm').format(fetchedAt);
+      return isAr ? 'آخر تحديث: $formatted' : 'Last update: $formatted';
+    }
+
+    final effectivePeriodLabel = effectivePeriodText();
+    final updateLabel = lastUpdatedText();
 
     String rankLabel(int index) {
       if (index == 0) return '🥇';
@@ -1891,24 +1943,24 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final isLeader = index == 0;
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
 
-          final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
-          final metricText = (metric == 'count')
-            ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
-            : (metric == 'points')
-              ? (isAr
-                    ? showInvoiceCount
-                        ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
-                        : '${score.toStringAsFixed(0)} نقطة'
-                    : showInvoiceCount
-                        ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
-                        : '${score.toStringAsFixed(0)} pts')
-              : (isAr
-                    ? showInvoiceCount
-                        ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
-                        : '${score.toStringAsFixed(1)} جم'
-                    : showInvoiceCount
-                        ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
-                        : '${score.toStringAsFixed(1)} g');
+      final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
+      final metricText = (metric == 'count')
+          ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
+          : (metric == 'points')
+          ? (isAr
+                ? showInvoiceCount
+                      ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
+                      : '${score.toStringAsFixed(0)} نقطة'
+                : showInvoiceCount
+                ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
+                : '${score.toStringAsFixed(0)} pts')
+          : (isAr
+                ? showInvoiceCount
+                      ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
+                      : '${score.toStringAsFixed(1)} جم'
+                : showInvoiceCount
+                ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
+                : '${score.toStringAsFixed(1)} g');
 
       return Padding(
         padding: const EdgeInsetsDirectional.only(bottom: 12),
@@ -2022,9 +2074,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                   child: Text(
                     isAr
                         ? (isWeek ? 'تحدي الأسبوع' : 'سباق المبيعات — اليوم')
-                        : (isWeek
-                            ? 'Weekly Challenge'
-                            : 'Sales Race — Today'),
+                        : (isWeek ? 'Weekly Challenge' : 'Sales Race — Today'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -2077,6 +2127,54 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 color: colorScheme.onSurface.withValues(alpha: 0.65),
               ),
             ),
+            if (effectivePeriodLabel != null || updateLabel != null) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (effectivePeriodLabel != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.onSurface.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        effectivePeriodLabel,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.72),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  if (updateLabel != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: colorScheme.primary.withValues(alpha: 0.16),
+                        ),
+                      ),
+                      child: Text(
+                        updateLabel,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
             if (fallbackMessage != null) ...[
               const SizedBox(height: 8),
               Container(
@@ -2127,9 +2225,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               LinearProgressIndicator(
                 minHeight: 6,
                 backgroundColor: colorScheme.onSurface.withValues(alpha: 0.08),
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  colorScheme.primary,
-                ),
+                valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
               )
             else if (_leaderboardError != null)
               Text(
@@ -2139,7 +2235,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 ),
               )
             else ...[
-              if (isWeek && ((metric == 'points' && weeklyTargetPoints != null && teamPoints != null) || (metric != 'points' && weeklyTarget != null && teamWeight != null))) ...[
+              if (isWeek &&
+                  ((metric == 'points' &&
+                          weeklyTargetPoints != null &&
+                          teamPoints != null) ||
+                      (metric != 'points' &&
+                          weeklyTarget != null &&
+                          teamWeight != null))) ...[
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -2177,11 +2279,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               Text(
                                 metric == 'points'
                                     ? (isAr
-                                        ? '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} نقطة'
-                                        : '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} pts')
+                                          ? '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} نقطة'
+                                          : '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} pts')
                                     : (isAr
-                                        ? '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} جم'
-                                        : '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} g'),
+                                          ? '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} جم'
+                                          : '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} g'),
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: colorScheme.onSurface.withValues(
                                     alpha: 0.65,
@@ -2211,34 +2313,33 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           duration: const Duration(milliseconds: 700),
                           builder: (context, value, child) =>
                               LinearProgressIndicator(
-                            value: value,
-                            minHeight: 10,
-                            backgroundColor: colorScheme.onSurface.withValues(
-                              alpha: 0.08,
-                            ),
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              goalColor,
-                            ),
-                          ),
+                                value: value,
+                                minHeight: 10,
+                                backgroundColor: colorScheme.onSurface
+                                    .withValues(alpha: 0.08),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  goalColor,
+                                ),
+                              ),
                         ),
                       ),
                       const SizedBox(height: 8),
                       Text(
                         (metric == 'points')
                             ? ((remainingPoints != null && remainingPoints > 0)
-                                ? (isAr
-                                    ? 'بقيت $remainingPoints نقطة لتحقيق هدف الأسبوع'
-                                    : '$remainingPoints pts remaining to hit the weekly goal')
-                                : (isAr
-                                    ? 'تم تحقيق هدف الأسبوع! 🎉'
-                                    : 'Weekly goal achieved! 🎉'))
+                                  ? (isAr
+                                        ? 'بقيت $remainingPoints نقطة لتحقيق هدف الأسبوع'
+                                        : '$remainingPoints pts remaining to hit the weekly goal')
+                                  : (isAr
+                                        ? 'تم تحقيق هدف الأسبوع! 🎉'
+                                        : 'Weekly goal achieved! 🎉'))
                             : ((remainingWeight != null && remainingWeight > 0)
-                                ? (isAr
-                                    ? 'بقيت ${remainingWeight.toStringAsFixed(0)} جم لتحقيق هدف الأسبوع'
-                                    : '${remainingWeight.toStringAsFixed(0)} g remaining to hit the weekly goal')
-                                : (isAr
-                                    ? 'تم تحقيق هدف الأسبوع! 🎉'
-                                    : 'Weekly goal achieved! 🎉')),
+                                  ? (isAr
+                                        ? 'بقيت ${remainingWeight.toStringAsFixed(0)} جم لتحقيق هدف الأسبوع'
+                                        : '${remainingWeight.toStringAsFixed(0)} g remaining to hit the weekly goal')
+                                  : (isAr
+                                        ? 'تم تحقيق هدف الأسبوع! 🎉'
+                                        : 'Weekly goal achieved! 🎉')),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurface.withValues(alpha: 0.75),
                         ),
@@ -2279,11 +2380,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 Text(
                   isAr
                       ? (isWeek
-                          ? 'لم يبدأ التحدي هذا الأسبوع بعد.'
-                          : 'لا توجد مبيعات مسجلة اليوم بعد.')
+                            ? 'لم يبدأ التحدي هذا الأسبوع بعد.'
+                            : 'لا توجد مبيعات مسجلة اليوم بعد.')
                       : (isWeek
-                          ? 'The weekly challenge hasn\'t started yet.'
-                          : 'No sales recorded today yet.'),
+                            ? 'The weekly challenge hasn\'t started yet.'
+                            : 'No sales recorded today yet.'),
                   style: theme.textTheme.bodySmall,
                 )
               else ...[
@@ -2317,7 +2418,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               ],
             ],
             if (raceEnabled &&
-              adminSummary != null &&
+                adminSummary != null &&
                 ((adminSummary['total_cash'] != null) ||
                     (adminSummary['total_profit'] != null))) ...[
               const SizedBox(height: 8),
@@ -2325,65 +2426,67 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 children: [
                   if (adminSummary['total_cash'] != null)
                     Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: colorScheme.primary.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: colorScheme.primary.withValues(alpha: 0.18),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: colorScheme.primary.withValues(alpha: 0.18),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isAr ? 'إجمالي النقد' : 'Total Cash',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${(adminSummary['total_cash'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            isAr ? 'إجمالي النقد' : 'Total Cash',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${(adminSummary['total_cash'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
                     ),
-                  ),
                   if (adminSummary['total_cash'] != null &&
                       adminSummary['total_profit'] != null)
                     const SizedBox(width: 12),
                   if (adminSummary['total_profit'] != null)
                     Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: colorScheme.secondary.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: colorScheme.secondary.withValues(alpha: 0.18),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            isAr ? 'إجمالي الربح' : 'Total Profit',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${(adminSummary['total_profit'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: colorScheme.secondary.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: colorScheme.secondary.withValues(
+                              alpha: 0.18,
                             ),
                           ),
-                        ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isAr ? 'إجمالي الربح' : 'Total Profit',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${(adminSummary['total_profit'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ],
@@ -3242,7 +3345,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => GoldReservationScreen(api: api, isArabic: widget.isArabic),
+            builder: (_) =>
+                GoldReservationScreen(api: api, isArabic: widget.isArabic),
           ),
         );
         break;
@@ -3250,7 +3354,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => ShiftClosingScreen(api: api, isArabic: widget.isArabic),
+            builder: (_) =>
+                ShiftClosingScreen(api: api, isArabic: widget.isArabic),
           ),
         );
         break;

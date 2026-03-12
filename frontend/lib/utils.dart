@@ -13,9 +13,40 @@ class NormalizeNumberFormatter extends TextInputFormatter {
     TextEditingValue newValue,
   ) {
     final normalized = normalizeNumber(newValue.text);
+
+    // If the text itself did not change after normalization, return the
+    // original value untouched. Rebuilding a new TextEditingValue on every
+    // keystroke breaks some numeric keyboards/IME composition and causes the
+    // field to appear to lose focus.
+    if (normalized == newValue.text) {
+      return newValue;
+    }
+
+    final baseOffset = newValue.selection.baseOffset;
+    final extentOffset = newValue.selection.extentOffset;
+    final normalizedLength = normalized.length;
+
+    int clampOffset(int offset) {
+      if (offset < 0) return 0;
+      if (offset > normalizedLength) return normalizedLength;
+      return offset;
+    }
+
+    TextRange clampRange(TextRange range) {
+      if (!range.isValid) return TextRange.empty;
+      final start = clampOffset(range.start);
+      final end = clampOffset(range.end);
+      if (start >= end) return TextRange.empty;
+      return TextRange(start: start, end: end);
+    }
+
     return TextEditingValue(
       text: normalized,
-      selection: TextSelection.collapsed(offset: normalized.length),
+      selection: TextSelection(
+        baseOffset: clampOffset(baseOffset),
+        extentOffset: clampOffset(extentOffset),
+      ),
+      composing: clampRange(newValue.composing),
     );
   }
 }

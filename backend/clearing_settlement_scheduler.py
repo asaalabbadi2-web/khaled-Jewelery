@@ -22,6 +22,7 @@ import schedule
 from sqlalchemy import case, func
 
 from models import db, PaymentMethod, SafeBoxTransaction, Voucher
+from services.live_balances import live_balances_by_account_ids
 
 
 @dataclass
@@ -35,6 +36,20 @@ class ClearingSettlementScheduler:
     def __init__(self, app):
         self.app = app
         self.is_running = False
+
+    def _live_cash_balance_for_safe_box(self, safe_box) -> float:
+        account = getattr(safe_box, 'account', None)
+        account_id = getattr(account, 'id', None)
+        fallback = float(getattr(account, 'balance_cash', 0.0) or 0.0) if account is not None else 0.0
+        if account_id is None:
+            return fallback
+        try:
+            live = live_balances_by_account_ids([int(account_id)]).get(int(account_id))
+            if isinstance(live, dict):
+                return float(live.get('cash') or 0.0)
+        except Exception:
+            pass
+        return fallback
 
     def _compute_due_amount(self, safe_box_id: int, cutoff_dt: datetime) -> _DueAmounts:
         # Sum invoice payments up to cutoff
@@ -88,6 +103,52 @@ class ClearingSettlementScheduler:
             settled_total=float(settled_total or 0.0),
             due_amount=float(due_amount or 0.0),
         )
+
+    def _count_bulk_due_transactions(self, safe_box_id: int, cutoff_dt: datetime) -> int:
+        """Approximate how many invoice-payment rows belong to the next bulk settlement.
+
+        We use the latest clearing-settlement voucher timestamp on this safe box as the
+        lower bound, then count incoming invoice payments up to the current cutoff.
+        This enables fixed-fee auto settlement for bulk mode without changing the
+        voucher data model.
+        """
+
+        last_settlement_dt = (
+            db.session.query(func.max(Voucher.date))
+            .join(SafeBoxTransaction, SafeBoxTransaction.ref_id == Voucher.id)
+            .filter(
+                SafeBoxTransaction.safe_box_id == safe_box_id,
+                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+                Voucher.reference_type == 'clearing_settlement',
+            )
+            .scalar()
+        )
+
+        query = SafeBoxTransaction.query.filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'invoice_payment',
+            SafeBoxTransaction.direction == 'in',
+            SafeBoxTransaction.created_at <= cutoff_dt,
+        )
+        if last_settlement_dt is not None:
+            query = query.filter(SafeBoxTransaction.created_at > last_settlement_dt)
+
+        return int(query.count() or 0)
+
+    def _compute_bulk_fee_amount(self, *, pm, safe_box_id: int, cutoff_dt: datetime, gross_amount: float) -> tuple[float, int]:
+        timing = str(getattr(pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+        if timing != 'settlement':
+            return 0.0, 0
+
+        rate = float(getattr(pm, 'commission_rate', 0.0) or 0.0)
+        fixed = float(getattr(pm, 'commission_fixed_amount', 0.0) or 0.0)
+        if rate <= 0.0 and fixed <= 0.0:
+            return 0.0, 0
+
+        transaction_count = self._count_bulk_due_transactions(safe_box_id, cutoff_dt)
+        effective_count = transaction_count if transaction_count > 0 else 1
+        fee_amount = round((gross_amount * rate / 100.0) + (fixed * effective_count), 2)
+        return fee_amount, transaction_count
 
     def process_due_settlements(self):
         with self.app.app_context():
@@ -167,7 +228,7 @@ class ClearingSettlementScheduler:
 
                     # Cap to current clearing balance for safety
                     try:
-                        clearing_balance = float(getattr(getattr(clearing_sb, 'account', None), 'balance_cash', 0.0) or 0.0)
+                        clearing_balance = self._live_cash_balance_for_safe_box(clearing_sb)
                     except Exception:
                         clearing_balance = 0.0
 
@@ -177,17 +238,6 @@ class ClearingSettlementScheduler:
                         gross_amount = round(clearing_balance, 2)
 
                     if gross_amount < 0.01:
-                        continue
-
-                    # Fee policy: we currently only auto-settle with fee=0.0
-                    try:
-                        timing = str(getattr(pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
-                    except Exception:
-                        timing = 'invoice'
-                    if timing == 'settlement' and float(getattr(pm, 'commission_rate', 0.0) or 0.0) > 0:
-                        print(
-                            f"[ClearingSettlementScheduler] Skipping PM#{pm.id} ({pm.name}): commission_timing=settlement requires fee handling"
-                        )
                         continue
 
                     # نمط التسوية: bulk أو per_transaction
@@ -211,16 +261,28 @@ class ClearingSettlementScheduler:
                         f"({clearing_sb.name} → {bank_sb.name})"
                     )
 
+                    fee_amount, fee_tx_count = self._compute_bulk_fee_amount(
+                        pm=pm,
+                        safe_box_id=clearing_sb.id,
+                        cutoff_dt=cutoff_dt,
+                        gross_amount=gross_amount,
+                    )
+                    if fee_amount >= gross_amount:
+                        print(
+                            f"[ClearingSettlementScheduler] Skipping PM#{pm.id} ({pm.name}): fee {fee_amount:.2f} >= gross {gross_amount:.2f}"
+                        )
+                        continue
+
                     try:
                         result = _create_clearing_settlement_voucher(
                             clearing_safe_box_id=clearing_sb.id,
                             bank_safe_box_id=bank_sb.id,
                             gross_amount=gross_amount,
-                            fee_amount=0.0,
+                            fee_amount=fee_amount,
                             settlement_dt=datetime.now(),
                             reference_number=reference_number,
                             created_by='scheduler',
-                            fee_account_id=None,
+                            fee_account_id=getattr(pm, 'fee_expense_account_id', None),
                             description_override=description,
                             notes='auto_settlement',
                             ensure_unique_reference=True,
@@ -232,7 +294,8 @@ class ClearingSettlementScheduler:
 
                         db.session.commit()
                         print(
-                            f"[ClearingSettlementScheduler] ✓ Settled {gross_amount:.2f} for PM#{pm.id} ({pm.name})"
+                            f"[ClearingSettlementScheduler] ✓ Settled {gross_amount:.2f}"
+                            f" (fee {fee_amount:.2f}, tx_count {fee_tx_count}) for PM#{pm.id} ({pm.name})"
                         )
                     except Exception as exc:
                         db.session.rollback()
@@ -308,9 +371,7 @@ class ClearingSettlementScheduler:
 
         # 4. Cap total to the clearing safe-box balance
         try:
-            clearing_balance = float(
-                getattr(getattr(clearing_sb, 'account', None), 'balance_cash', 0.0) or 0.0
-            )
+            clearing_balance = self._live_cash_balance_for_safe_box(clearing_sb)
         except Exception:
             clearing_balance = 0.0
         if clearing_balance <= 0.0:
