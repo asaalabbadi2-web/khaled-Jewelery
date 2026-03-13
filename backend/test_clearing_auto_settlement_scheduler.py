@@ -55,6 +55,8 @@ def test_auto_settlement_bulk_supports_settlement_fee(monkeypatch):
             SafeBoxTransaction(
                 safe_box_id=clearing_safe.id,
                 ref_type='invoice_payment',
+                ref_id=20001,
+                invoice_payment_id=20001,
                 direction='in',
                 amount_cash=100.0,
                 created_at=datetime.now(),
@@ -93,6 +95,8 @@ def test_bulk_due_transaction_count_uses_latest_settlement_boundary():
             SafeBoxTransaction(
                 safe_box_id=clearing_safe.id,
                 ref_type='invoice_payment',
+                ref_id=20002,
+                invoice_payment_id=20002,
                 direction='in',
                 amount_cash=50.0,
                 created_at=now,
@@ -102,6 +106,8 @@ def test_bulk_due_transaction_count_uses_latest_settlement_boundary():
             SafeBoxTransaction(
                 safe_box_id=clearing_safe.id,
                 ref_type='invoice_payment',
+                ref_id=20003,
+                invoice_payment_id=20003,
                 direction='in',
                 amount_cash=75.0,
                 created_at=now,

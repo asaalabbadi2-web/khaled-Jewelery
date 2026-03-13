@@ -2,6 +2,7 @@ import os
 import time
 import pytest
 from datetime import datetime
+import sys
 
 # IMPORTANT: tests must never run against the real dev/prod database.
 # Force an isolated SQLite DB for pytest BEFORE importing the Flask app.
@@ -28,6 +29,10 @@ if os.getenv('PYTEST_ALLOW_REAL_DB', '').strip() not in ('1', 'true', 'yes'):
     os.environ.setdefault('YASAR_ENV', 'test')
 
 # Ensure backend package is importable
+base_dir = os.path.dirname(os.path.abspath(__file__))
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
+
 import app as flask_app_module
 
 from app import app, reset_database

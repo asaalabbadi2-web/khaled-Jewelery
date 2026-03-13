@@ -2619,6 +2619,34 @@ class SafeBoxTransaction(db.Model):
         }
 
 
+def _validate_safe_box_transaction_or_raise(tx: 'SafeBoxTransaction') -> None:
+    ref_type = (getattr(tx, 'ref_type', None) or '').strip()
+    if ref_type != 'invoice_payment':
+        return
+
+    invoice_payment_id = getattr(tx, 'invoice_payment_id', None)
+    ref_id = getattr(tx, 'ref_id', None)
+
+    if invoice_payment_id in (None, 0, '', False) or ref_id in (None, 0, '', False):
+        raise ValueError(
+            "Invalid SafeBoxTransaction(invoice_payment): missing invoice_payment_id/ref_id; "
+            "this would desync safe ledger and posted journals."
+        )
+
+    # NOTE: ref_id may be either invoice_payment_id OR an originating voucher.id.
+    # We only require that both references exist.
+
+
+@event.listens_for(SafeBoxTransaction, 'before_insert')
+def _guard_safe_box_tx_before_insert(mapper, connection, target):
+    _validate_safe_box_transaction_or_raise(target)
+
+
+@event.listens_for(SafeBoxTransaction, 'before_update')
+def _guard_safe_box_tx_before_update(mapper, connection, target):
+    _validate_safe_box_transaction_or_raise(target)
+
+
 
 
 class Employee(db.Model):

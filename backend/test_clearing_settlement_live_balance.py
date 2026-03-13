@@ -3,6 +3,7 @@ from datetime import datetime
 import routes
 from app import app
 from models import Account, SafeBox, SafeBoxTransaction, Voucher, db
+from sqlalchemy import text
 
 
 def _create_safe_box(name: str, safe_type: str, account_number: str) -> SafeBox:
@@ -35,8 +36,10 @@ def test_clearing_settlement_uses_live_balance(monkeypatch):
         ip_tx = SafeBoxTransaction(
             safe_box_id=clearing_safe.id,
             ref_type='invoice_payment',
+            ref_id=10001,
             direction='in',
             amount_cash=250.0,
+            invoice_payment_id=10001,
         )
         db.session.add(ip_tx)
         db.session.commit()
@@ -75,16 +78,44 @@ def test_pending_transactions_skip_settled_rows_without_invoice_payment_id(auth_
         db.session.commit()
         clearing_safe_id = clearing_safe.id
 
-        pending_tx = SafeBoxTransaction(
-            safe_box_id=clearing_safe.id,
-            ref_type='invoice_payment',
-            direction='in',
-            amount_cash=80.0,
-            invoice_payment_id=None,
-            notes='pending tx without invoice_payment_id',
+        # Insert a legacy/orphan row via raw SQL (bypasses ORM guard) to ensure
+        # the endpoint remains robust against old data.
+        legacy_note = 'pending tx without invoice_payment_id'
+        db.session.execute(
+            text(
+                """
+                                INSERT INTO safe_box_transaction (
+                                    safe_box_id, ref_type, ref_id, invoice_payment_id,
+                                    direction, amount_cash,
+                                    weight_18k, weight_21k, weight_22k, weight_24k,
+                                    created_at,
+                                    notes
+                                )
+                                VALUES (
+                                    :safe_box_id, 'invoice_payment', NULL, NULL,
+                                    'in', :amount_cash,
+                                    0.0, 0.0, 0.0, 0.0,
+                                    CURRENT_TIMESTAMP,
+                                    :notes
+                                )
+                """
+            ),
+            {
+                'safe_box_id': int(clearing_safe.id),
+                'amount_cash': 80.0,
+                'notes': legacy_note,
+            },
         )
-        db.session.add(pending_tx)
         db.session.flush()
+
+        pending_tx_id = (
+            db.session.query(SafeBoxTransaction.id)
+            .filter(SafeBoxTransaction.safe_box_id == clearing_safe.id)
+            .filter(SafeBoxTransaction.notes == legacy_note)
+            .order_by(SafeBoxTransaction.id.desc())
+            .scalar()
+        )
+        assert pending_tx_id is not None
 
         voucher = Voucher(
             voucher_number='ADJ-TEST-PENDING-0001',
@@ -108,7 +139,7 @@ def test_pending_transactions_skip_settled_rows_without_invoice_payment_id(auth_
             ref_id=voucher.id,
             direction='out',
             amount_cash=80.0,
-            notes=f'per_tx:ip_{pending_tx.id}',
+            notes=f'per_tx:ip_{pending_tx_id}',
         )
         db.session.add(settled_marker)
         db.session.commit()
