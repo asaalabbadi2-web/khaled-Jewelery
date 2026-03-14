@@ -168,3 +168,18 @@ def test_sales_race_partial_update_preserves_other_fields():
             f"points_per_gram was reset! Got {race['points_per_gram']}"
         assert data['weekly_sales_target_weight'] == 500.0, \
             f"weekly target was reset! Got {data['weekly_sales_target_weight']}"
+
+
+def test_settings_rejects_unknown_keys_instead_of_silent_drop():
+    with app.app_context():
+        _clear_settings_rows()
+
+    with app.test_client() as client:
+        resp = client.put('/api/settings', json={
+            'sales_race_settings': {'enabled': True},
+            'unknown_new_toggle': True,
+        })
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body['error'] == 'unknown_settings_keys'
+        assert 'unknown_new_toggle' in body.get('unknown_keys', [])

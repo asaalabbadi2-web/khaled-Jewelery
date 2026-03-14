@@ -1944,6 +1944,62 @@ def update_settings():
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return jsonify({'error': 'invalid_payload'}), 400
+
+    # Fail fast for unknown top-level keys to avoid silent drops.
+    allowed_keys = {
+        'main_karat',
+        'currency_symbol',
+        'tax_rate',
+        'tax_enabled',
+        'vat_exempt_karats',
+        'payment_methods',
+        'invoice_prefix',
+        'show_company_logo',
+        'company_name',
+        'company_logo_base64',
+        'company_address',
+        'company_phone',
+        'company_tax_number',
+        'print_template_by_invoice_type',
+        'decimal_places',
+        'date_format',
+        'default_discount_rate',
+        'allow_discount',
+        'allow_manual_invoice_items',
+        'employee_cash_safes_enabled',
+        'employee_gold_safes_enabled',
+        'main_cash_safe_box_id',
+        'sale_gold_safe_box_id',
+        'main_scrap_gold_safe_box_id',
+        'manufacturing_wage_mode',
+        'voucher_auto_post',
+        'auto_post_invoices',
+        'auto_post_entries',
+        'require_approval_before_post',
+        'allow_unposting',
+        'require_auth_for_invoice_create',
+        'idle_timeout_enabled',
+        'idle_timeout_minutes',
+        'allow_partial_invoice_payments',
+        'weekly_sales_target_weight',
+        'sales_race_settings',
+        'gold_price_auto_update_enabled',
+        'gold_price_auto_update_time',
+        'gold_price_auto_update_mode',
+        'gold_price_auto_update_interval_minutes',
+        'backup_auto_enabled',
+        'backup_auto_mode',
+        'backup_auto_time',
+        'backup_auto_interval_minutes',
+        'backup_retention_count',
+    }
+    unknown_keys = sorted(set(data.keys()) - allowed_keys)
+    if unknown_keys:
+        return jsonify({
+            'error': 'unknown_settings_keys',
+            'message': 'تحتوي الحمولة على مفاتيح إعدادات غير مدعومة',
+            'unknown_keys': unknown_keys,
+        }), 400
     
     # إعدادات أساسية
     if 'main_karat' in data:
@@ -2122,7 +2178,10 @@ def update_settings():
             weekly_target = float(data.get('weekly_sales_target_weight') or 0.0)
             settings.weekly_sales_target_weight = max(0.0, weekly_target)
         except Exception:
-            pass
+            return jsonify({
+                'error': 'invalid_weekly_sales_target_weight',
+                'message': 'قيمة weekly_sales_target_weight غير صالحة',
+            }), 400
 
     if 'sales_race_settings' in data:
         defaults = {
@@ -2141,7 +2200,10 @@ def update_settings():
             try:
                 raw = json.loads(raw)
             except Exception:
-                raw = None
+                return jsonify({
+                    'error': 'invalid_sales_race_settings',
+                    'message': 'قيمة sales_race_settings يجب أن تكون JSON object صالح',
+                }), 400
 
         if isinstance(raw, dict):
             merged = dict(defaults)
@@ -2167,6 +2229,11 @@ def update_settings():
                 merged[key] = bool(merged.get(key))
 
             settings.sales_race_settings = json.dumps(merged, ensure_ascii=False)
+        else:
+            return jsonify({
+                'error': 'invalid_sales_race_settings',
+                'message': 'قيمة sales_race_settings يجب أن تكون كائنًا (object)',
+            }), 400
 
     # 🆕 تحديث سعر الذهب تلقائياً حسب توقيت معين
     if 'gold_price_auto_update_enabled' in data:
