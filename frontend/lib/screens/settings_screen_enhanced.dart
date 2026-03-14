@@ -75,9 +75,9 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       TextEditingController();
   final TextEditingController _invoicePrefixController =
       TextEditingController();
-    final TextEditingController _weeklySalesTargetWeightController =
+  final TextEditingController _weeklySalesTargetWeightController =
       TextEditingController();
-    final TextEditingController _salesRacePointsPerGramController =
+  final TextEditingController _salesRacePointsPerGramController =
       TextEditingController();
 
   final List<int> _karatOptions = const [18, 21, 22, 24];
@@ -140,7 +140,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   bool _accountsLoaded = false;
   bool _isLoadingAccounts = false;
   List<Map<String, dynamic>> _allAccounts = const [];
-
 
   bool _printerAutoConnect = true;
   bool _printerShowPreview = false;
@@ -235,14 +234,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       List<SafeBoxModel> goldSafes = const [];
       try {
         final results = await Future.wait<List<SafeBoxModel>>([
-          _apiService.getSafeBoxes(
-            safeType: 'cash',
-            includeAccount: true,
-          ),
-          _apiService.getSafeBoxes(
-            safeType: 'gold',
-            includeAccount: true,
-          ),
+          _apiService.getSafeBoxes(safeType: 'cash', includeAccount: true),
+          _apiService.getSafeBoxes(safeType: 'gold', includeAccount: true),
         ]);
 
         cashSafes = results[0];
@@ -275,7 +268,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       _invoicePrefixController.text =
           settings['invoice_prefix']?.toString() ?? 'INV';
 
-        final raceSettings =
+      final raceSettings =
           (settings['sales_race_settings'] as Map?)?.cast<String, dynamic>() ??
           const <String, dynamic>{};
 
@@ -372,15 +365,11 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           fallback: false,
         );
 
-        _salesRaceEnabled = _safeBool(
-          raceSettings['enabled'],
-          fallback: true,
-        );
+        _salesRaceEnabled = _safeBool(raceSettings['enabled'], fallback: true);
         final racePeriod =
             raceSettings['default_period']?.toString().trim().toLowerCase() ??
             'today';
-        _salesRaceDefaultPeriod =
-            racePeriod == 'week' ? 'week' : 'today';
+        _salesRaceDefaultPeriod = racePeriod == 'week' ? 'week' : 'today';
         _salesRaceAllowFallback = _safeBool(
           raceSettings['allow_fallback_to_latest_period'],
           fallback: true,
@@ -423,8 +412,12 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           settings['employee_gold_safes_enabled'],
           fallback: false,
         );
-        _mainCashSafeBoxId = _safeNullableInt(settings['main_cash_safe_box_id']);
-        _saleGoldSafeBoxId = _safeNullableInt(settings['sale_gold_safe_box_id']);
+        _mainCashSafeBoxId = _safeNullableInt(
+          settings['main_cash_safe_box_id'],
+        );
+        _saleGoldSafeBoxId = _safeNullableInt(
+          settings['sale_gold_safe_box_id'],
+        );
         _mainScrapGoldSafeBoxId = _safeNullableInt(
           settings['main_scrap_gold_safe_box_id'],
         );
@@ -440,7 +433,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             ? printerPaperSize
             : '80 مم';
         _preferredPrinterName = preferredPrinterName;
-
       });
     } catch (error) {
       if (!mounted) return;
@@ -490,13 +482,17 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'idle_timeout_enabled': _idleTimeoutEnabled,
       'idle_timeout_minutes': _idleTimeoutMinutes,
       'allow_partial_invoice_payments': _allowPartialInvoicePayments,
-      'weekly_sales_target_weight':
-          _safeDouble(_weeklySalesTargetWeightController.text, fallback: 2000.0),
+      'weekly_sales_target_weight': _safeDouble(
+        _weeklySalesTargetWeightController.text,
+        fallback: 2000.0,
+      ),
       'sales_race_settings': {
         'enabled': _salesRaceEnabled,
         'default_period': _salesRaceDefaultPeriod,
-        'points_per_gram':
-            _safeDouble(_salesRacePointsPerGramController.text, fallback: 10.0),
+        'points_per_gram': _safeDouble(
+          _salesRacePointsPerGramController.text,
+          fallback: 10.0,
+        ),
         'allow_fallback_to_latest_period': _salesRaceAllowFallback,
         'show_invoice_count': _salesRaceShowInvoiceCount,
         'show_sales_amount_per_employee': _salesRaceShowSalesAmountPerEmployee,
@@ -1056,10 +1052,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => SafeBoxesScreen(
-                      api: _apiService,
-                      balancesView: true,
-                    ),
+                    builder: (_) =>
+                        SafeBoxesScreen(api: _apiService, balancesView: true),
                   ),
                 );
               },
@@ -1104,7 +1098,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             const SizedBox(height: 12),
             SwitchListTile.adaptive(
               value: _employeeCashSafesEnabled,
-              onChanged: (value) => setState(() => _employeeCashSafesEnabled = value),
+              onChanged: (value) =>
+                  setState(() => _employeeCashSafesEnabled = value),
               title: const Text('تفعيل خزائن الموظفين للنقد'),
               subtitle: const Text(
                 'عند التفعيل: إذا كانت الفاتورة مرتبطة بموظف لديه خزينة نقدية، تُستخدم كمسار افتراضي للنقد.\n'
@@ -1115,7 +1110,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             ),
             SwitchListTile.adaptive(
               value: _employeeGoldSafesEnabled,
-              onChanged: (value) => setState(() => _employeeGoldSafesEnabled = value),
+              onChanged: (value) =>
+                  setState(() => _employeeGoldSafesEnabled = value),
               title: const Text('تفعيل خزائن الموظفين للذهب (الكسر)'),
               subtitle: const Text(
                 'عند التفعيل: في شراء الكسر من العميل، تُضاف الأوزان إلى خزينة الذهب الخاصة بالموظف إن كانت مربوطة.\n'
@@ -1148,9 +1144,9 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
                   'لم يتم تحميل قائمة الخزائن. يمكنك فتح شاشة الخزائن أو إعادة المحاولة.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: _mutedTextColor,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: _mutedTextColor),
                 ),
               ),
             Row(
@@ -1853,7 +1849,9 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           value: _salesRaceEnabled,
           onChanged: (value) => setState(() => _salesRaceEnabled = value),
           title: const Text('تفعيل سباق المبيعات'),
-          subtitle: const Text('عند التعطيل يمكن إخفاء البطاقة أو إيقاف استخدامها لاحقاً.'),
+          subtitle: const Text(
+            'عند التعطيل يمكن إخفاء البطاقة أو إيقاف استخدامها لاحقاً.',
+          ),
         ),
         const SizedBox(height: 12),
         Text('الفترة الافتراضية', style: _fieldLabelStyle()),
@@ -1865,12 +1863,14 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             ChoiceChip(
               label: const Text('اليوم'),
               selected: _salesRaceDefaultPeriod == 'today',
-              onSelected: (_) => setState(() => _salesRaceDefaultPeriod = 'today'),
+              onSelected: (_) =>
+                  setState(() => _salesRaceDefaultPeriod = 'today'),
             ),
             ChoiceChip(
               label: const Text('الأسبوع'),
               selected: _salesRaceDefaultPeriod == 'week',
-              onSelected: (_) => setState(() => _salesRaceDefaultPeriod = 'week'),
+              onSelected: (_) =>
+                  setState(() => _salesRaceDefaultPeriod = 'week'),
             ),
           ],
         ),
@@ -1904,20 +1904,16 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           value: _salesRaceAllowFallback,
           onChanged: (value) => setState(() => _salesRaceAllowFallback = value),
           title: const Text('عرض آخر فترة متاحة عند عدم وجود مبيعات'),
-          subtitle: const Text('يعرض آخر يوم/أسبوع مبيعات بدلاً من بطاقة فارغة.'),
+          subtitle: const Text(
+            'يعرض آخر يوم/أسبوع مبيعات بدلاً من بطاقة فارغة.',
+          ),
         ),
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
           value: _salesRaceShowInvoiceCount,
-          onChanged: (value) => setState(() => _salesRaceShowInvoiceCount = value),
-          title: const Text('إظهار عدد الفواتير مع النقاط'),
-        ),
-        SwitchListTile.adaptive(
-          contentPadding: EdgeInsets.zero,
-          value: _salesRaceShowSalesAmountPerEmployee,
           onChanged: (value) =>
-              setState(() => _salesRaceShowSalesAmountPerEmployee = value),
-          title: const Text('إظهار مبلغ مبيعات كل موظف'),
+              setState(() => _salesRaceShowInvoiceCount = value),
+          title: const Text('إظهار عدد الفواتير مع النقاط'),
         ),
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
@@ -1930,14 +1926,23 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
         const SizedBox(height: 8),
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
+          value: _salesRaceShowSalesAmountPerEmployee,
+          onChanged: (value) =>
+              setState(() => _salesRaceShowSalesAmountPerEmployee = value),
+          title: const Text('إظهار مبلغ مبيعات كل موظف'),
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
           value: _salesRaceShowTotalCashToAllUsers,
-          onChanged: (value) => setState(() => _salesRaceShowTotalCashToAllUsers = value),
+          onChanged: (value) =>
+              setState(() => _salesRaceShowTotalCashToAllUsers = value),
           title: const Text('إظهار إجمالي مبلغ البيع للجميع'),
         ),
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
           value: _salesRaceShowTotalProfitToAllUsers,
-          onChanged: (value) => setState(() => _salesRaceShowTotalProfitToAllUsers = value),
+          onChanged: (value) =>
+              setState(() => _salesRaceShowTotalProfitToAllUsers = value),
           title: const Text('إظهار إجمالي الربح للجميع'),
         ),
       ],
@@ -2463,10 +2468,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     Color? accentColor,
   }) {
     final items = <DropdownMenuItem<int?>>[
-      const DropdownMenuItem<int?>(
-        value: null,
-        child: Text('— غير محدد —'),
-      ),
+      const DropdownMenuItem<int?>(value: null, child: Text('— غير محدد —')),
     ];
 
     if (value != null && !_containsSafeId(options, value)) {
@@ -2482,10 +2484,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       final id = sb.id;
       if (id == null) continue;
       items.add(
-        DropdownMenuItem<int?>(
-          value: id,
-          child: Text(_safeBoxLabel(sb)),
-        ),
+        DropdownMenuItem<int?>(value: id, child: Text(_safeBoxLabel(sb))),
       );
     }
 
@@ -2686,7 +2685,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
 
     // Soft warning when choosing a weight-tracking account for a cash safe.
     if (mounted && safeType == 'cash' && _accountTracksWeight(account)) {
-      _showSnack('تنبيه: اخترت حساب وزني لصندوق نقدي. تأكد أن هذا مقصود.', isError: true);
+      _showSnack(
+        'تنبيه: اخترت حساب وزني لصندوق نقدي. تأكد أن هذا مقصود.',
+        isError: true,
+      );
     }
 
     // Try existing first.
@@ -2707,9 +2709,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     final number = (account['account_number'] ?? '').toString().trim();
     final label = name.isNotEmpty ? name : number;
 
-    final safeName = safeType == 'gold'
-        ? 'خزينة ذهب $label'
-        : 'صندوق $label';
+    final safeName = safeType == 'gold' ? 'خزينة ذهب $label' : 'صندوق $label';
 
     try {
       final created = await _apiService.createSafeBox(
@@ -2738,14 +2738,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
 
     try {
       final results = await Future.wait<List<SafeBoxModel>>([
-        _apiService.getSafeBoxes(
-          safeType: 'cash',
-          includeAccount: true,
-        ),
-        _apiService.getSafeBoxes(
-          safeType: 'gold',
-          includeAccount: true,
-        ),
+        _apiService.getSafeBoxes(safeType: 'cash', includeAccount: true),
+        _apiService.getSafeBoxes(safeType: 'gold', includeAccount: true),
       ]);
 
       final cashSafes = results[0]..sort((a, b) => a.name.compareTo(b.name));

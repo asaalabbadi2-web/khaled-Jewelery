@@ -116,6 +116,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   DateTime? _leaderboardFetchedAt;
   int _lastHandledSalesRaceRefreshToken = 0;
   bool _pendingLeaderboardRefresh = false;
+  String _salesRaceSettingsFingerprint = '';
 
   // Bottom Navigation
   int _selectedNavIndex = 0;
@@ -149,6 +150,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     }
 
     _syncGoldPriceAutoRefresh(settings);
+    _syncSalesRaceSettingsRefresh(settings);
   }
 
   @override
@@ -177,6 +179,63 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final auth = context.read<AuthProvider>();
       if (!auth.isAuthenticated) return;
       await _loadGoldPrice();
+    });
+  }
+
+  String _buildSalesRaceSettingsFingerprint(SettingsProvider settings) {
+    final raceSettings =
+        (settings.settings['sales_race_settings'] as Map?) ?? const {};
+    final enabled = raceSettings['enabled'] != false;
+    final period =
+        (raceSettings['default_period']?.toString().trim().toLowerCase() ??
+        'today');
+    final pointsPerGram = raceSettings['points_per_gram'];
+    final allowFallback =
+        raceSettings['allow_fallback_to_latest_period'] != false;
+    final showInvoiceCount = raceSettings['show_invoice_count'] != false;
+    final showSalesAmountPerEmployee =
+        raceSettings['show_sales_amount_per_employee'] == true;
+    final showChampion = raceSettings['show_champion'] != false;
+    final showTotalCash = raceSettings['show_total_cash_to_all_users'] != false;
+    final showTotalProfit =
+        raceSettings['show_total_profit_to_all_users'] == true;
+    final weeklyTarget = settings.settings['weekly_sales_target_weight'];
+
+    return [
+      enabled,
+      period,
+      pointsPerGram,
+      allowFallback,
+      showInvoiceCount,
+      showSalesAmountPerEmployee,
+      showChampion,
+      showTotalCash,
+      showTotalProfit,
+      weeklyTarget,
+    ].join('|');
+  }
+
+  void _syncSalesRaceSettingsRefresh(SettingsProvider settings) {
+    final nextFingerprint = _buildSalesRaceSettingsFingerprint(settings);
+    if (_salesRaceSettingsFingerprint == nextFingerprint) return;
+
+    final hadPreviousFingerprint = _salesRaceSettingsFingerprint.isNotEmpty;
+    _salesRaceSettingsFingerprint = nextFingerprint;
+    if (!hadPreviousFingerprint) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      final auth = context.read<AuthProvider>();
+      final quickActions = context.read<QuickActionsProvider>();
+      if (!auth.isAuthenticated || !quickActions.showSalesRaceCard) return;
+
+      if (_leaderboardLoading) {
+        _pendingLeaderboardRefresh = true;
+        return;
+      }
+
+      await _loadLeaderboard(period: _leaderboardPeriod);
     });
   }
 
@@ -1192,9 +1251,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       onSelected: () async {
         await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => const ClearingMonitorScreen(),
-          ),
+          MaterialPageRoute(builder: (_) => const ClearingMonitorScreen()),
         );
         await _loadAllData();
       },
@@ -1855,8 +1912,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final raceEnabled = config?['enabled'] != false;
     final showInvoiceCount = config?['show_invoice_count'] != false;
     final showSalesAmountPerEmployee =
-      config?['show_sales_amount_per_employee'] == null ||
-      config?['show_sales_amount_per_employee'] == true;
+        config?['show_sales_amount_per_employee'] == null ||
+        config?['show_sales_amount_per_employee'] == true;
     final showChampion = config?['show_champion'] != false;
     final isFallback = data?['is_fallback'] == true;
     final effectiveStartDate = DateTime.tryParse(
@@ -1946,23 +2003,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
 
       final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
-        final metricText = (metric == 'count')
+      final metricText = (metric == 'count')
           ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
           : (metric == 'points')
           ? (isAr
-            ? showInvoiceCount
-                ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
-                : '${score.toStringAsFixed(0)} نقطة'
-            : showInvoiceCount
-            ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
-            : '${score.toStringAsFixed(0)} pts')
+                ? showInvoiceCount
+                      ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
+                      : '${score.toStringAsFixed(0)} نقطة'
+                : showInvoiceCount
+                ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
+                : '${score.toStringAsFixed(0)} pts')
           : (isAr
-            ? showInvoiceCount
-                ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
-                : '${score.toStringAsFixed(1)} جم'
-            : showInvoiceCount
-            ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
-            : '${score.toStringAsFixed(1)} g');
+                ? showInvoiceCount
+                      ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
+                      : '${score.toStringAsFixed(1)} جم'
+                : showInvoiceCount
+                ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
+                : '${score.toStringAsFixed(1)} g');
 
       return Padding(
         padding: const EdgeInsetsDirectional.only(bottom: 12),
