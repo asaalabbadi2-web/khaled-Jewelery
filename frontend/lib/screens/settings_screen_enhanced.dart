@@ -268,9 +268,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       _invoicePrefixController.text =
           settings['invoice_prefix']?.toString() ?? 'INV';
 
-      final raceSettings =
-          (settings['sales_race_settings'] as Map?)?.cast<String, dynamic>() ??
-          const <String, dynamic>{};
+      final raceSettings = _safeMap(settings['sales_race_settings']);
 
       setState(() {
         _isInitialized = true;
@@ -2408,6 +2406,29 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     if (value is num) return value != 0;
     if (value is String) return value.toLowerCase() == 'true';
     return fallback;
+  }
+
+  Map<String, dynamic> _safeMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, mapValue) => MapEntry(key.toString(), mapValue));
+    }
+    if (value is String) {
+      final raw = value.trim();
+      if (raw.isEmpty) return const <String, dynamic>{};
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is Map) {
+          return decoded.map(
+            (key, mapValue) => MapEntry(key.toString(), mapValue),
+          );
+        }
+      } catch (_) {
+        return const <String, dynamic>{};
+      }
+    }
+    return const <String, dynamic>{};
   }
 
   WidgetStateProperty<Color?> _thumbColorFor(Color color) {

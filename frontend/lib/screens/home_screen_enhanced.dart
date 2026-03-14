@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
@@ -292,10 +293,29 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final settings = context.read<SettingsProvider>();
       if (!auth.isAuthenticated) return;
 
-      final raceSettings =
-          (settings.settings['sales_race_settings'] as Map?)
-              ?.cast<String, dynamic>() ??
-          const <String, dynamic>{};
+      final rawRaceSettings = settings.settings['sales_race_settings'];
+      Map<String, dynamic> raceSettings = const <String, dynamic>{};
+      if (rawRaceSettings is Map<String, dynamic>) {
+        raceSettings = rawRaceSettings;
+      } else if (rawRaceSettings is Map) {
+        raceSettings = rawRaceSettings.map(
+          (key, value) => MapEntry(key.toString(), value),
+        );
+      } else if (rawRaceSettings is String &&
+          rawRaceSettings.trim().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(rawRaceSettings);
+          if (decoded is Map<String, dynamic>) {
+            raceSettings = decoded;
+          } else if (decoded is Map) {
+            raceSettings = decoded.map(
+              (key, value) => MapEntry(key.toString(), value),
+            );
+          }
+        } catch (_) {
+          raceSettings = const <String, dynamic>{};
+        }
+      }
       final configuredDefaultPeriod =
           raceSettings['default_period']?.toString().trim().toLowerCase() ==
               'week'
