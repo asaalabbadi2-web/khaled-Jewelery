@@ -2730,7 +2730,7 @@ class ApiService {
     }
   }
 
-  Future<void> updateSettings(Map<String, dynamic> settingsData) async {
+  Future<Map<String, dynamic>> updateSettings(Map<String, dynamic> settingsData) async {
     final response = await _authedPut(
       Uri.parse('$_baseUrl/settings'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
@@ -2739,6 +2739,7 @@ class ApiService {
     if (response.statusCode != 200) {
       throw Exception(_errorMessageFromResponse(response));
     }
+    return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// إعدادات التسكير الوزني (auto-close)

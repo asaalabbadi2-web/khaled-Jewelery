@@ -352,20 +352,17 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      await ApiService().updateSettings(newSettings);
+      // Send to server and use the server response as source of truth.
+      final serverResponse = await ApiService().updateSettings(newSettings);
 
-      // Update local settings immediately
-      _settings = {..._settings, ...newSettings};
+      // Use server response directly (it contains normalized/merged values).
+      _settings = serverResponse;
 
-      // Cache updated settings
+      // Cache the server-confirmed settings locally.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('app_settings', json.encode(_settings));
 
-      // Notify all listeners to update UI
       notifyListeners();
-
-      // Fetch fresh settings from API
-      await fetchSettings();
     } catch (e) {
       _error = e.toString();
       rethrow;
