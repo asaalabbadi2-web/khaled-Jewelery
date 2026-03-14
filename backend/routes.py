@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+import hashlib
+import socket
 from functools import wraps
 from flask import Blueprint, request, jsonify, g, current_app, send_file
 import io
@@ -223,6 +225,35 @@ def _sqlite_db_path() -> str | None:
         return os.path.abspath(path)
     except Exception:
         return None
+
+
+def _settings_diag_headers(settings_row: Settings | None) -> dict[str, str]:
+    """Return lightweight diagnostics to debug production save/read mismatches.
+
+    These headers help detect traffic hitting different instances or databases.
+    """
+    try:
+        configured_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI')
+    except Exception:
+        configured_uri = None
+
+    uri_text = str(configured_uri or '')
+    db_fingerprint = hashlib.sha1(uri_text.encode('utf-8')).hexdigest()[:12] if uri_text else 'none'
+
+    try:
+        backend_name = (db.engine.url.get_backend_name() or '').lower() or 'unknown'
+    except Exception:
+        backend_name = 'unknown'
+
+    instance_id = (os.getenv('HOSTNAME') or '').strip() or socket.gethostname() or 'unknown'
+    row_id = str(getattr(settings_row, 'id', '') or '')
+
+    return {
+        'X-Yasar-Instance-Id': instance_id,
+        'X-Yasar-DB-Backend': backend_name,
+        'X-Yasar-DB-Fingerprint': db_fingerprint,
+        'X-Yasar-Settings-Row-Id': row_id,
+    }
 
 
 def _create_sqlite_backup_to_file(dest_path: str) -> None:
@@ -1934,6 +1965,7 @@ def get_settings():
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
+    response.headers.update(_settings_diag_headers(settings))
     return response
 
 @api.route('/settings', methods=['PUT'])
@@ -2346,6 +2378,7 @@ def update_settings():
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
+    response.headers.update(_settings_diag_headers(settings))
     return response
 
 @api.route('/system/reset', methods=['POST'])
