@@ -1818,7 +1818,11 @@ def get_settings():
         settings = Settings(main_karat=21)
         db.session.add(settings)
         db.session.commit()
-    return jsonify(settings.to_dict())
+    response = jsonify(settings.to_dict())
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @api.route('/settings', methods=['PUT'])
 def update_settings():
@@ -2143,7 +2147,11 @@ def update_settings():
             settings.backup_retention_count = count
     
     db.session.commit()
-    return jsonify(settings.to_dict())
+    response = jsonify(settings.to_dict())
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @api.route('/system/reset', methods=['POST'])
 @require_permission('system.settings')
@@ -14097,7 +14105,11 @@ def get_account(id):
             'total': round(w18 + w21 + w22 + w24, 3),
         }
 
-    return jsonify(payload)
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @api.route('/accounts/export', methods=['GET'])

@@ -2718,7 +2718,11 @@ class ApiService {
 
   // Settings Methods
   Future<Map<String, dynamic>> getSettings() async {
-    final response = await _authedGet(Uri.parse('$_baseUrl/settings'));
+    final response = await _authedGet(
+      Uri.parse('$_baseUrl/settings').replace(
+        queryParameters: {'_ts': '${DateTime.now().millisecondsSinceEpoch}'},
+      ),
+    );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -4058,9 +4062,13 @@ class ApiService {
     String period = 'today',
     String metric = 'weight',
   }) async {
-    final uri = Uri.parse(
-      '$_baseUrl/home/leaderboard',
-    ).replace(queryParameters: {'period': period, 'metric': metric});
+    final uri = Uri.parse('$_baseUrl/home/leaderboard').replace(
+      queryParameters: {
+        'period': period,
+        'metric': metric,
+        '_ts': '${DateTime.now().millisecondsSinceEpoch}',
+      },
+    );
 
     final response = await _authedGet(uri);
     final decoded = json.decode(utf8.decode(response.bodyBytes));
@@ -4553,11 +4561,12 @@ class ApiService {
   Future<Map<String, dynamic>> getPendingSettlementTransactions({
     required int clearingSafeBoxId,
   }) async {
-    final uri = Uri.parse(
-      '$_baseUrl/clearing/settlements/pending-transactions',
-    ).replace(queryParameters: {
-      'clearing_safe_box_id': clearingSafeBoxId.toString(),
-    });
+    final uri = Uri.parse('$_baseUrl/clearing/settlements/pending-transactions')
+        .replace(
+          queryParameters: {
+            'clearing_safe_box_id': clearingSafeBoxId.toString(),
+          },
+        );
 
     final response = await _authedGet(uri);
     final bodyStr = utf8.decode(response.bodyBytes);
@@ -5121,7 +5130,8 @@ class ApiService {
 
   /// Unpost multiple journal entries (batch)
   Future<Map<String, dynamic>> unpostJournalEntriesBatch(
-      List<int> entryIds) async {
+    List<int> entryIds,
+  ) async {
     final response = await _authedPost(
       Uri.parse('$_baseUrl/journal-entries/unpost-batch'),
       body: json.encode({'entry_ids': entryIds}),
@@ -5129,7 +5139,9 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to unpost journal entries batch: ${response.body}');
+      throw Exception(
+        'Failed to unpost journal entries batch: ${response.body}',
+      );
     }
   }
 
