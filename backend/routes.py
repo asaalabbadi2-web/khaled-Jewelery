@@ -1810,14 +1810,126 @@ def _generate_employee_code():
 
     return f"{prefix}-{last_sequence + 1:04d}"
 
+
+def _get_settings_singleton(create_if_missing: bool = True) -> Settings | None:
+    """Return the canonical Settings row.
+
+    In production (multi-worker), using `Settings.query.first()` without an
+    ORDER BY can yield different rows if multiple Settings records exist.
+    This helper makes selection deterministic and opportunistically dedupes
+    duplicates by keeping the most recently updated row.
+    """
+
+    rows = Settings.query.order_by(Settings.id.asc()).all()
+    if not rows:
+        if not create_if_missing:
+            return None
+        row = Settings(main_karat=21)
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def _sort_key(s: Settings):
+        # Prefer the most recently updated row; fall back to created_at then id.
+        dt = getattr(s, 'updated_at', None) or getattr(s, 'created_at', None)
+        if dt is None:
+            dt = datetime.min
+        return (dt, int(getattr(s, 'id', 0) or 0))
+
+    canonical = max(rows, key=_sort_key)
+
+    # If duplicates exist, merge non-empty values into canonical then delete others.
+    if len(rows) > 1:
+        def _is_blank(v) -> bool:
+            if v is None:
+                return True
+            if isinstance(v, str) and not v.strip():
+                return True
+            return False
+
+        merged_any = False
+        for other in rows:
+            if other.id == canonical.id:
+                continue
+
+            # Merge only when canonical is blank/None.
+            for attr in (
+                'main_karat',
+                'currency_symbol',
+                'manufacturing_wage_mode',
+                'tax_rate',
+                'tax_enabled',
+                'vat_exempt_karats',
+                'payment_methods',
+                'invoice_prefix',
+                'show_company_logo',
+                'company_name',
+                'company_logo_base64',
+                'company_address',
+                'company_phone',
+                'company_tax_number',
+                'print_template_by_invoice_type',
+                'decimal_places',
+                'date_format',
+                'default_discount_rate',
+                'allow_discount',
+                'allow_manual_invoice_items',
+                'require_auth_for_invoice_create',
+                'idle_timeout_enabled',
+                'idle_timeout_minutes',
+                'allow_partial_invoice_payments',
+                'employee_cash_safes_enabled',
+                'employee_gold_safes_enabled',
+                'main_cash_safe_box_id',
+                'sale_gold_safe_box_id',
+                'main_scrap_gold_safe_box_id',
+                'auto_post_invoices',
+                'auto_post_entries',
+                'require_approval_before_post',
+                'allow_unposting',
+                'voucher_auto_post',
+                'weight_closing_settings',
+                'gold_price_auto_update_enabled',
+                'gold_price_auto_update_time',
+                'gold_price_auto_update_mode',
+                'gold_price_auto_update_interval_minutes',
+                'backup_auto_enabled',
+                'backup_auto_mode',
+                'backup_auto_time',
+                'backup_auto_interval_minutes',
+                'backup_retention_count',
+                'password_policy',
+                'disable_startup_bootstrap',
+                'weekly_sales_target_weight',
+                'sales_race_settings',
+            ):
+                try:
+                    current = getattr(canonical, attr)
+                    incoming = getattr(other, attr)
+                except Exception:
+                    continue
+
+                if _is_blank(current) and not _is_blank(incoming):
+                    try:
+                        setattr(canonical, attr, incoming)
+                        merged_any = True
+                    except Exception:
+                        pass
+
+            try:
+                db.session.delete(other)
+            except Exception:
+                pass
+
+        if merged_any:
+            db.session.add(canonical)
+        db.session.commit()
+
+    return canonical
+
 @api.route('/settings', methods=['GET'])
 def get_settings():
-    settings = Settings.query.first()
-    if not settings:
-        # If no settings exist, create one with default value
-        settings = Settings(main_karat=21)
-        db.session.add(settings)
-        db.session.commit()
+    settings = _get_settings_singleton(create_if_missing=True)
     response = jsonify(settings.to_dict())
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
@@ -1827,12 +1939,11 @@ def get_settings():
 @api.route('/settings', methods=['PUT'])
 def update_settings():
     import json
-    settings = Settings.query.first()
-    if not settings:
-        settings = Settings()
-        db.session.add(settings)
-    
-    data = request.get_json()
+    settings = _get_settings_singleton(create_if_missing=True)
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'invalid_payload'}), 400
     
     # إعدادات أساسية
     if 'main_karat' in data:
@@ -1882,7 +1993,14 @@ def update_settings():
     
     # وسائل الدفع
     if 'payment_methods' in data:
-        settings.payment_methods = json.dumps(data['payment_methods'], ensure_ascii=False)
+        pm_raw = data.get('payment_methods')
+        if isinstance(pm_raw, str):
+            try:
+                pm_raw = json.loads(pm_raw)
+            except Exception:
+                pm_raw = None
+        if isinstance(pm_raw, (list, tuple)):
+            settings.payment_methods = json.dumps(list(pm_raw), ensure_ascii=False)
     
     # إعدادات الفواتير
     if 'invoice_prefix' in data:
@@ -2019,6 +2137,12 @@ def update_settings():
             'show_total_profit_to_all_users': False,
         }
         raw = data.get('sales_race_settings')
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = None
+
         if isinstance(raw, dict):
             merged = dict(defaults)
             merged.update(raw)
@@ -2147,6 +2271,10 @@ def update_settings():
             settings.backup_retention_count = count
     
     db.session.commit()
+    try:
+        db.session.refresh(settings)
+    except Exception:
+        pass
     response = jsonify(settings.to_dict())
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
