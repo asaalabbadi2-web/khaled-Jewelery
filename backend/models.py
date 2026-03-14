@@ -2329,23 +2329,58 @@ class Voucher(db.Model):
     rejected_at = db.Column(db.DateTime, nullable=True)
     rejection_reason = db.Column(db.Text, nullable=True)
 
+    def _gold_display_summary(self):
+        main_karat = _configured_main_karat_f()
+        debit_by_karat = {}
+        credit_by_karat = {}
+
+        for line in self.account_lines.all():
+            if line.amount_type != 'gold':
+                continue
+
+            amount = float(line.amount or 0.0)
+            if amount <= 0:
+                continue
+
+            karat = float(line.karat or main_karat or 21.0)
+            bucket = debit_by_karat if line.line_type == 'debit' else credit_by_karat
+            bucket[karat] = bucket.get(karat, 0.0) + amount
+
+        display_breakdown = debit_by_karat or credit_by_karat
+        breakdown_items = []
+        equivalent_total = 0.0
+        for karat in sorted(display_breakdown.keys()):
+            weight = float(display_breakdown[karat] or 0.0)
+            weight_main = (weight * karat) / main_karat if main_karat > 0 else weight
+            equivalent_total += weight_main
+            breakdown_items.append({
+                'karat': round(float(karat), 3),
+                'weight': round(weight, 6),
+                'weight_main_karat': round(weight_main, 6),
+            })
+
+        display_karat = None
+        if len(breakdown_items) == 1:
+            display_karat = breakdown_items[0]['karat']
+        elif len(breakdown_items) > 1:
+            display_karat = 'متعدد'
+
+        total_gold_display = round(
+            sum(float(item['weight']) for item in breakdown_items),
+            6,
+        ) if breakdown_items else round(float(self.amount_gold or 0.0), 6)
+
+        return {
+            'main_karat': round(float(main_karat), 3),
+            'display_karat': display_karat,
+            'amount_gold_display': total_gold_display,
+            'amount_gold_main_karat': round(float(equivalent_total), 6),
+            'gold_breakdown': breakdown_items,
+        }
+
     def to_dict(self):
         """تحويل السند إلى dictionary"""
-        # جمع معلومات الذهب من سطور الحسابات
-        gold_lines = [line for line in self.account_lines.all() if line.amount_type == 'gold']
-        
-        # إذا كان هناك سطر ذهب واحد فقط، نعرض عياره
-        # إذا كان هناك عدة أعيرة، نعرض "متعدد"
-        display_karat = None
-        if len(gold_lines) == 1:
-            display_karat = gold_lines[0].karat
-        elif len(gold_lines) > 1:
-            # فحص إذا كانت جميع السطور بنفس العيار
-            karats = set(line.karat for line in gold_lines if line.karat is not None)
-            if len(karats) == 1:
-                display_karat = karats.pop()
-            else:
-                display_karat = 'متعدد'  # أعيرة مختلفة
+        gold_summary = self._gold_display_summary()
         
         result = {
             'id': self.id,
@@ -2357,8 +2392,11 @@ class Voucher(db.Model):
             'supplier_id': self.supplier_id,
             'party_name': self.party_name,
             'amount_cash': self.amount_cash,
-            'amount_gold': self.amount_gold,
-            'gold_karat': display_karat,  # العيار المحسوب من السطور
+            'amount_gold': gold_summary['amount_gold_display'],
+            'amount_gold_main_karat': gold_summary['amount_gold_main_karat'],
+            'main_karat': gold_summary['main_karat'],
+            'gold_karat': gold_summary['display_karat'],
+            'gold_breakdown': gold_summary['gold_breakdown'],
             'description': self.description,
             'reference_type': self.reference_type,
             'reference_id': self.reference_id,

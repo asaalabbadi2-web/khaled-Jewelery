@@ -3077,11 +3077,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       }
 
       if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => VoucherDetailsScreen(voucherId: linkedVoucherId!),
-        ),
-      );
+      await showVoucherDetailsSheet(context, voucherId: linkedVoucherId);
     } catch (e) {
       if (loaderVisible && mounted) {
         Navigator.of(sheetContext, rootNavigator: true).pop();

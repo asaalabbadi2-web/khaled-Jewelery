@@ -1854,7 +1854,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final adminSummary = data?['admin_summary'] as Map?;
     final raceEnabled = config?['enabled'] != false;
     final showInvoiceCount = config?['show_invoice_count'] != false;
-    final showSalesAmountPerEmployee = true;
+    final showSalesAmountPerEmployee =
+      config?['show_sales_amount_per_employee'] == null ||
+      config?['show_sales_amount_per_employee'] == true;
     final showChampion = config?['show_champion'] != false;
     final isFallback = data?['is_fallback'] == true;
     final effectiveStartDate = DateTime.tryParse(
@@ -1944,23 +1946,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
 
       final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
-      final metricText = (metric == 'count')
+        final metricText = (metric == 'count')
           ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
           : (metric == 'points')
           ? (isAr
-                ? showInvoiceCount
-                      ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
-                      : '${score.toStringAsFixed(0)} نقطة'
-                : showInvoiceCount
-                ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
-                : '${score.toStringAsFixed(0)} pts')
+            ? showInvoiceCount
+                ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
+                : '${score.toStringAsFixed(0)} نقطة'
+            : showInvoiceCount
+            ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
+            : '${score.toStringAsFixed(0)} pts')
           : (isAr
-                ? showInvoiceCount
-                      ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
-                      : '${score.toStringAsFixed(1)} جم'
-                : showInvoiceCount
-                ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
-                : '${score.toStringAsFixed(1)} g');
+            ? showInvoiceCount
+                ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
+                : '${score.toStringAsFixed(1)} جم'
+            : showInvoiceCount
+            ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
+            : '${score.toStringAsFixed(1)} g');
 
       return Padding(
         padding: const EdgeInsetsDirectional.only(bottom: 12),
@@ -2017,10 +2019,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         const SizedBox(width: 12),
                         Text(
                           metricText,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurface.withValues(
-                              alpha: 0.65,
-                            ),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: valueColor,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ],
@@ -2033,9 +2034,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           isAr
                               ? 'مبلغ المبيعات: ${salesAmount.toStringAsFixed(2)} $currencySymbol'
                               : 'Sales amount: ${salesAmount.toStringAsFixed(2)} $currencySymbol',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurface.withValues(alpha: 0.7),
-                            fontWeight: FontWeight.w600,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: AppColors.primaryGold,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ),

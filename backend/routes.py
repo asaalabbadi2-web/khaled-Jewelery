@@ -17817,6 +17817,7 @@ def get_home_leaderboard():
 
     rows = []
     employee_points_map = {}
+    employee_profit_gold_map = {}
     employee_sales_map = {}
     points_invoices = None
     if metric == 'points':
@@ -17906,8 +17907,15 @@ def get_home_leaderboard():
             employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + float(getattr(inv, 'total', 0.0) or 0.0)
 
             earned_main = float(getattr(inv, 'profit_gold', 0.0) or 0.0)
-            points = int(round(max(0.0, earned_main) * points_per_gram))
-            employee_points_map[int(actor_id)] = employee_points_map.get(int(actor_id), 0) + max(0, points)
+            employee_profit_gold_map[int(actor_id)] = (
+                employee_profit_gold_map.get(int(actor_id), 0.0) + max(0.0, earned_main)
+            )
+
+        for actor_id, earned_main_total in employee_profit_gold_map.items():
+            employee_points_map[int(actor_id)] = max(
+                0,
+                int(round(float(earned_main_total) * points_per_gram)),
+            )
 
         # Create a rows-like list so downstream logic stays consistent.
         class _Row:
@@ -21585,6 +21593,145 @@ def get_voucher(voucher_id):
     return jsonify(voucher.to_dict())
 
 
+def _validate_and_summarize_voucher_account_lines(account_lines_data):
+    if not account_lines_data:
+        return None, jsonify({'error': 'account_lines is required and cannot be empty'}), 400
+
+    main_karat = _coerce_float(get_main_karat(), 21.0)
+    if main_karat <= 0:
+        main_karat = 21.0
+
+    total_debit_cash = 0.0
+    total_credit_cash = 0.0
+    total_debit_gold_raw = 0.0
+    total_credit_gold_raw = 0.0
+    total_debit_gold_main = 0.0
+    total_credit_gold_main = 0.0
+
+    for line in account_lines_data:
+        if not isinstance(line, dict):
+            return None, jsonify({'error': 'Each account line must be an object'}), 400
+
+        if 'account_id' not in line or 'line_type' not in line or 'amount_type' not in line or 'amount' not in line:
+            return None, jsonify({'error': 'Each account line must have account_id, line_type, amount_type, and amount'}), 400
+
+        line_type = str(line.get('line_type') or '').strip().lower()
+        amount_type = str(line.get('amount_type') or '').strip().lower()
+        if line_type not in ['debit', 'credit']:
+            return None, jsonify({'error': 'line_type must be either debit or credit'}), 400
+        if amount_type not in ['cash', 'gold']:
+            return None, jsonify({'error': 'amount_type must be either cash or gold'}), 400
+
+        amount = _coerce_float(line.get('amount'), None)
+        if amount is None or amount <= 0:
+            return None, jsonify({'error': 'Amount must be greater than zero'}), 400
+
+        if amount_type == 'cash':
+            if line_type == 'debit':
+                total_debit_cash += amount
+            else:
+                total_credit_cash += amount
+            continue
+
+        karat = _coerce_float(line.get('karat'), None)
+        if karat is None or karat <= 0:
+            return None, jsonify({'error': 'karat is required when amount_type is gold'}), 400
+
+        amount_main = (amount * karat) / main_karat
+        if line_type == 'debit':
+            total_debit_gold_raw += amount
+            total_debit_gold_main += amount_main
+        else:
+            total_credit_gold_raw += amount
+            total_credit_gold_main += amount_main
+
+    if abs(total_debit_cash - total_credit_cash) > 0.01:
+        return None, jsonify({'error': f'Cash amounts not balanced: Debit={total_debit_cash}, Credit={total_credit_cash}'}), 400
+
+    if abs(total_debit_gold_main - total_credit_gold_main) > 0.001:
+        return None, jsonify({
+            'error': (
+                'Gold amounts not balanced in main karat: '
+                f'Debit={round(total_debit_gold_main, 6)}, '
+                f'Credit={round(total_credit_gold_main, 6)}'
+            ),
+            'main_karat': int(round(main_karat)),
+        }), 400
+
+    return {
+        'amount_cash': round(total_debit_cash, 6),
+        'amount_gold': round(total_debit_gold_raw or total_credit_gold_raw, 6),
+    }, None, None
+
+
+def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid request body'}), 400
+
+    voucher_type = str(data.get('voucher_type') or voucher.voucher_type or '').strip().lower()
+    if voucher_type not in ['receipt', 'payment', 'adjustment']:
+        return jsonify({'error': 'Invalid voucher_type'}), 400
+
+    account_lines_data = data.get('account_lines')
+    if account_lines_data is None:
+        account_lines_data = [
+            {
+                'account_id': line.account_id,
+                'line_type': line.line_type,
+                'amount_type': line.amount_type,
+                'amount': float(line.amount or 0.0),
+                'karat': line.karat,
+                'description': line.description,
+            }
+            for line in voucher.account_lines.all()
+        ]
+
+    summary, error_response, status_code = _validate_and_summarize_voucher_account_lines(account_lines_data)
+    if error_response is not None:
+        return error_response, status_code
+
+    for line in account_lines_data:
+        account = Account.query.get(line['account_id'])
+        if not account:
+            return jsonify({'error': f'Account {line["account_id"]} not found'}), 404
+
+    voucher_date_raw = data.get('date')
+    if voucher_date_raw:
+        voucher.date = datetime.fromisoformat(voucher_date_raw)
+    elif is_create and not voucher.date:
+        voucher.date = datetime.now()
+
+    voucher.voucher_type = voucher_type
+    voucher.party_type = data.get('party_type')
+    voucher.customer_id = data.get('customer_id') if voucher.party_type == 'customer' else None
+    voucher.supplier_id = data.get('supplier_id') if voucher.party_type == 'supplier' else None
+    voucher.party_name = data.get('party_name') if voucher.party_type not in ('customer', 'supplier') else None
+    voucher.amount_cash = summary['amount_cash']
+    voucher.amount_gold = summary['amount_gold']
+    voucher.gold_karat = None
+    voucher.description = data.get('description')
+    voucher.reference_type = data.get('reference_type', voucher.reference_type)
+    voucher.reference_id = data.get('reference_id', voucher.reference_id)
+    voucher.reference_number = data.get('reference_number', voucher.reference_number)
+    voucher.notes = data.get('notes')
+
+    for existing_line in voucher.account_lines.all():
+        db.session.delete(existing_line)
+
+    for line_data in account_lines_data:
+        db.session.add(VoucherAccountLine(
+            voucher_id=voucher.id,
+            account_id=line_data['account_id'],
+            line_type=str(line_data['line_type']).strip().lower(),
+            amount_type=str(line_data['amount_type']).strip().lower(),
+            amount=float(line_data['amount']),
+            karat=_coerce_float(line_data.get('karat'), None),
+            description=line_data.get('description'),
+        ))
+
+    return None
+
+
 @api.route('/vouchers', methods=['POST'])
 def create_voucher():
     """
@@ -21618,7 +21765,7 @@ def create_voucher():
     data = request.get_json()
     
     # Validation
-    if 'voucher_type' not in data:
+    if not isinstance(data, dict) or 'voucher_type' not in data:
         return jsonify({'error': 'voucher_type is required'}), 400
     
     if data['voucher_type'] not in ['receipt', 'payment', 'adjustment']:
@@ -21627,103 +21774,41 @@ def create_voucher():
     if 'account_lines' not in data or not data['account_lines']:
         return jsonify({'error': 'account_lines is required and cannot be empty'}), 400
     
-    account_lines_data = data['account_lines']
-    
-    # التحقق من وجود حسابات وأرصدة صحيحة
-    total_debit_cash = 0
-    total_credit_cash = 0
-    total_debit_gold = 0
-    total_credit_gold = 0
-    
-    for line in account_lines_data:
-        if 'account_id' not in line or 'line_type' not in line or 'amount_type' not in line or 'amount' not in line:
-            return jsonify({'error': 'Each account line must have account_id, line_type, amount_type, and amount'}), 400
-        
-        if line['line_type'] not in ['debit', 'credit']:
-            return jsonify({'error': 'line_type must be either debit or credit'}), 400
-        
-        if line['amount_type'] not in ['cash', 'gold']:
-            return jsonify({'error': 'amount_type must be either cash or gold'}), 400
-        
-        if line['amount_type'] == 'gold' and 'karat' not in line:
-            return jsonify({'error': 'karat is required when amount_type is gold'}), 400
-        
-        amount = float(line['amount'])
-        if amount <= 0:
-            return jsonify({'error': 'Amount must be greater than zero'}), 400
-        
-        # حساب المجاميع للتحقق من التوازن
-        if line['amount_type'] == 'cash':
-            if line['line_type'] == 'debit':
-                total_debit_cash += amount
-            else:
-                total_credit_cash += amount
-        elif line['amount_type'] == 'gold':
-            if line['line_type'] == 'debit':
-                total_debit_gold += amount
-            else:
-                total_credit_gold += amount
-    
-    # التحقق من التوازن (مع تسامح بسيط للأخطاء العائمة)
-    if abs(total_debit_cash - total_credit_cash) > 0.01:
-        return jsonify({'error': f'Cash amounts not balanced: Debit={total_debit_cash}, Credit={total_credit_cash}'}), 400
-    
-    if abs(total_debit_gold - total_credit_gold) > 0.001:
-        return jsonify({'error': f'Gold amounts not balanced: Debit={total_debit_gold}, Credit={total_credit_gold}'}), 400
-    
     try:
-        # التحقق من وجود جميع الحسابات
-        for line in account_lines_data:
-            account = Account.query.get(line['account_id'])
-            if not account:
-                return jsonify({'error': f'Account {line["account_id"]} not found'}), 404
-        
         # Parse date
         voucher_date = datetime.fromisoformat(data.get('date', datetime.now().isoformat()))
 
         # Generate voucher number (date-aware)
         voucher_number = generate_voucher_number(data['voucher_type'], voucher_date=voucher_date)
-        
-        # حساب المجاميع للسند (للعرض)
-        amount_cash = total_debit_cash  # أو total_credit_cash (متساوية)
-        amount_gold = total_debit_gold  # أو total_credit_gold (متساوية)
-        
+
         # Create voucher
         voucher = Voucher(
             voucher_number=voucher_number,
             voucher_type=data['voucher_type'],
             date=voucher_date,
-            party_type=data.get('party_type'),
-            customer_id=data.get('customer_id'),
-            supplier_id=data.get('supplier_id'),
-            party_name=data.get('party_name'),
-            amount_cash=amount_cash,
-            amount_gold=amount_gold,
+            party_type=None,
+            customer_id=None,
+            supplier_id=None,
+            party_name=None,
+            amount_cash=0.0,
+            amount_gold=0.0,
             gold_karat=None,  # لم يعد يستخدم (الآن في سطور الحسابات)
-            description=data.get('description'),
-            reference_type=data.get('reference_type'),
-            reference_id=data.get('reference_id'),
-            reference_number=data.get('reference_number'),
-            notes=data.get('notes'),
+            description=None,
+            reference_type=None,
+            reference_id=None,
+            reference_number=None,
+            notes=None,
             created_by=data.get('created_by', 'system'),
             status='pending'
         )
         
         db.session.add(voucher)
         db.session.flush()  # Get the voucher ID
-        
-        # إنشاء سطور الحسابات
-        for line_data in account_lines_data:
-            account_line = VoucherAccountLine(
-                voucher_id=voucher.id,
-                account_id=line_data['account_id'],
-                line_type=line_data['line_type'],
-                amount_type=line_data['amount_type'],
-                amount=float(line_data['amount']),
-                karat=line_data.get('karat'),
-                description=line_data.get('description')
-            )
-            db.session.add(account_line)
+
+        upsert_error = _upsert_voucher_from_payload(voucher, data, is_create=True)
+        if upsert_error is not None:
+            db.session.rollback()
+            return upsert_error
         
         db.session.commit()
         
@@ -21738,49 +21823,19 @@ def create_voucher():
 
 @api.route('/vouchers/<int:voucher_id>', methods=['PUT'])
 def update_voucher(voucher_id):
-    """Update voucher - only active vouchers can be edited"""
+    """Update voucher and replace its account lines for editable statuses."""
     voucher = Voucher.query.get_or_404(voucher_id)
     
-    if voucher.status != 'active':
-        return jsonify({'error': 'Cannot edit cancelled or voided voucher'}), 400
+    if voucher.status in {'approved', 'cancelled', 'voided'}:
+        return jsonify({'error': 'Cannot edit this voucher in its current status'}), 400
     
     data = request.get_json()
     
     try:
-        # Update allowed fields
-        if 'date' in data:
-            voucher.date = datetime.fromisoformat(data['date'])
-        
-        if 'party_type' in data:
-            voucher.party_type = data['party_type']
-        
-        if 'customer_id' in data:
-            voucher.customer_id = data['customer_id']
-        
-        if 'supplier_id' in data:
-            voucher.supplier_id = data['supplier_id']
-        
-        if 'party_name' in data:
-            voucher.party_name = data['party_name']
-        
-        if 'amount_cash' in data:
-            voucher.amount_cash = float(data['amount_cash'])
-        
-        if 'amount_gold' in data:
-            voucher.amount_gold = float(data['amount_gold'])
-        
-        if 'gold_karat' in data:
-            voucher.gold_karat = data['gold_karat']
-        
-        if 'description' in data:
-            voucher.description = data['description']
-        
-        if 'notes' in data:
-            voucher.notes = data['notes']
-        
-        # Validation
-        if voucher.amount_cash <= 0 and voucher.amount_gold <= 0:
-            return jsonify({'error': 'Amount must be greater than zero'}), 400
+        upsert_error = _upsert_voucher_from_payload(voucher, data or {}, is_create=False)
+        if upsert_error is not None:
+            db.session.rollback()
+            return upsert_error
         
         db.session.commit()
         

@@ -16,6 +16,33 @@ import '../widgets/account_picker_sheet.dart';
 import '../widgets/party_picker_dialog.dart';
 import '../widgets/searchable_picker_field.dart';
 
+class GoldLineEntryModel {
+  double amount;
+  double? karat;
+
+  GoldLineEntryModel({this.amount = 0, this.karat});
+
+  Map<String, dynamic> toJson() => {
+    'amount': amount,
+    if (karat != null) 'karat': karat,
+  };
+
+  factory GoldLineEntryModel.fromJson(Map<String, dynamic> map) {
+    double? toDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    return GoldLineEntryModel(
+      amount: toDouble(map['amount']) ?? 0,
+      karat: toDouble(map['karat']),
+    );
+  }
+}
+
 /// نموذج لسطر حساب في السند
 class AccountLineModel {
   int? accountId;
@@ -23,6 +50,7 @@ class AccountLineModel {
   String amountType; // 'cash' or 'gold'
   double amount;
   double? karat;
+  final List<GoldLineEntryModel> goldEntries;
   String? description;
 
   AccountLineModel({
@@ -31,8 +59,42 @@ class AccountLineModel {
     required this.amountType,
     this.amount = 0,
     this.karat,
+    List<GoldLineEntryModel>? goldEntries,
     this.description,
-  });
+  }) : goldEntries = goldEntries ?? [];
+
+  void ensureGoldEntries(double defaultKarat) {
+    if (amountType != 'gold') return;
+    if (goldEntries.isEmpty) {
+      goldEntries.add(
+        GoldLineEntryModel(
+          amount: amount > 0 ? amount : 0,
+          karat: karat ?? defaultKarat,
+        ),
+      );
+    }
+  }
+
+  void syncFromGoldEntries({required double defaultKarat}) {
+    if (amountType != 'gold') {
+      amount = 0;
+      karat = null;
+      return;
+    }
+
+    if (goldEntries.isEmpty) {
+      amount = 0;
+      karat = defaultKarat;
+      return;
+    }
+
+    amount = goldEntries.fold<double>(0, (sum, e) => sum + e.amount);
+    if (goldEntries.length == 1) {
+      karat = goldEntries.first.karat ?? defaultKarat;
+    } else {
+      karat = null;
+    }
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -41,6 +103,8 @@ class AccountLineModel {
       'amount_type': amountType,
       'amount': amount,
       if (karat != null) 'karat': karat,
+      if (goldEntries.isNotEmpty)
+        'gold_entries': goldEntries.map((e) => e.toJson()).toList(),
       if (description != null && description!.isNotEmpty)
         'description': description,
     };
@@ -90,6 +154,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   final Map<int, double> _safeLedgerCashBalance = {};
   final Set<int> _safeLedgerCashBalanceLoading = {};
+  final Map<int, int> _safeUsageCounts = {};
+  static const String _safeUsagePrefsKey = 'yasargold_safe_usage_counts_v1';
   List<EmployeeModel> _employees = [];
 
   int? _selectedCustomerId;
@@ -118,6 +184,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   @override
   void initState() {
     super.initState();
+    _loadSafeUsageCounts();
     if (widget.voucherType == 'payment') {
       _partyType = 'supplier';
     }
@@ -195,6 +262,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       amountType: (jsonLine['amount_type'] ?? 'cash').toString(),
       amount: toDouble(jsonLine['amount']) ?? 0,
       karat: toDouble(jsonLine['karat']),
+      goldEntries: (jsonLine['gold_entries'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((e) => GoldLineEntryModel.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
       description: jsonLine['description']?.toString(),
     );
   }
@@ -499,8 +570,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     final Map<double, double> totals = {};
     for (final line in _accountLines) {
       if (line.amountType != 'gold') continue;
-      final karat = line.karat ?? _mainKarat.toDouble();
-      totals[karat] = (totals[karat] ?? 0) + line.amount;
+      final entries = _effectiveGoldEntries(line);
+      for (final entry in entries) {
+        final karat = entry.karat ?? _mainKarat.toDouble();
+        totals[karat] = (totals[karat] ?? 0) + entry.amount;
+      }
     }
     return totals;
   }
@@ -527,11 +601,17 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   double _normalizeLineAmount(AccountLineModel line) {
     if (line.amountType == 'gold') {
-      final karat = line.karat ?? _mainKarat.toDouble();
       if (_mainKarat <= 0) {
         return line.amount;
       }
-      return line.amount * (karat / _mainKarat);
+
+      final entries = _effectiveGoldEntries(line);
+      double total = 0;
+      for (final entry in entries) {
+        final karat = entry.karat ?? _mainKarat.toDouble();
+        total += entry.amount * (karat / _mainKarat);
+      }
+      return total;
     }
     return line.amount;
   }
@@ -973,6 +1053,93 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         safe.safeType == 'check';
   }
 
+  List<GoldLineEntryModel> _effectiveGoldEntries(AccountLineModel line) {
+    if (line.amountType != 'gold') return const <GoldLineEntryModel>[];
+    line.ensureGoldEntries(_mainKarat.toDouble());
+    return line.goldEntries;
+  }
+
+  void _syncGoldSummary(AccountLineModel line) {
+    line.syncFromGoldEntries(defaultKarat: _mainKarat.toDouble());
+  }
+
+  void _addGoldEntryField(AccountLineModel line) {
+    line.ensureGoldEntries(_mainKarat.toDouble());
+    final used = line.goldEntries
+        .map((e) => e.karat)
+        .whereType<double>()
+        .toSet();
+    final nextKarat = _availableKarats.firstWhere(
+      (k) => !used.contains(k),
+      orElse: () => _mainKarat.toDouble(),
+    );
+    line.goldEntries.add(GoldLineEntryModel(amount: 0, karat: nextKarat));
+    _syncGoldSummary(line);
+  }
+
+  void _removeGoldEntryField(AccountLineModel line, int entryIndex) {
+    if (entryIndex < 0 || entryIndex >= line.goldEntries.length) return;
+    line.goldEntries.removeAt(entryIndex);
+    if (line.goldEntries.isEmpty) {
+      line.goldEntries.add(
+        GoldLineEntryModel(amount: 0, karat: _mainKarat.toDouble()),
+      );
+    }
+    _syncGoldSummary(line);
+  }
+
+  Future<void> _loadSafeUsageCounts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_safeUsagePrefsKey);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+
+      final Map<int, int> parsed = {};
+      decoded.forEach((k, v) {
+        final key = int.tryParse(k.toString());
+        if (key == null) return;
+        int count;
+        if (v is int) {
+          count = v;
+        } else if (v is num) {
+          count = v.toInt();
+        } else {
+          count = int.tryParse(v.toString()) ?? 0;
+        }
+        if (count > 0) {
+          parsed[key] = count;
+        }
+      });
+
+      _safeUsageCounts
+        ..clear()
+        ..addAll(parsed);
+    } catch (_) {
+      // Ignore malformed local stats.
+    }
+  }
+
+  Future<void> _recordSafeUsage(int? accountId) async {
+    final safe = _findSafeByAccountId(accountId);
+    if (safe == null) return;
+
+    final id = safe.accountId;
+    _safeUsageCounts[id] = (_safeUsageCounts[id] ?? 0) + 1;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = <String, int>{
+        for (final e in _safeUsageCounts.entries) e.key.toString(): e.value,
+      };
+      await prefs.setString(_safeUsagePrefsKey, jsonEncode(encoded));
+    } catch (_) {
+      // Non-blocking UX enhancement only.
+    }
+  }
+
   SafeBoxModel? _defaultSafeForAmountType({
     required String? lineType,
     required String amountType,
@@ -983,11 +1150,25 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         .toList();
     if (candidates.isEmpty) return null;
 
-    final def = candidates.firstWhere(
-      (sb) => sb.isDefault == true,
-      orElse: () => candidates.first,
-    );
-    return def;
+    candidates.sort((a, b) {
+      final aUsage = _safeUsageCounts[a.accountId] ?? 0;
+      final bUsage = _safeUsageCounts[b.accountId] ?? 0;
+      if (aUsage != bUsage) {
+        return bUsage.compareTo(aUsage);
+      }
+
+      final aDefault = a.isDefault == true ? 1 : 0;
+      final bDefault = b.isDefault == true ? 1 : 0;
+      if (aDefault != bDefault) {
+        return bDefault.compareTo(aDefault);
+      }
+
+      final aNum = (a.account?.accountNumber ?? '').toString();
+      final bNum = (b.account?.accountNumber ?? '').toString();
+      return aNum.compareTo(bNum);
+    });
+
+    return candidates.first;
   }
 
   void _ensureFirstLineConfiguration({
@@ -1003,12 +1184,34 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     firstLine.amountType = amountType;
     if (amountType == 'gold') {
       firstLine.karat = karat ?? _mainKarat.toDouble();
+      firstLine.ensureGoldEntries(_mainKarat.toDouble());
+      if (firstLine.goldEntries.length == 1) {
+        firstLine.goldEntries.first.karat = firstLine.karat;
+      }
+      _syncGoldSummary(firstLine);
     } else {
+      firstLine.goldEntries.clear();
       firstLine.karat = null;
     }
     if (description != null &&
         (firstLine.description == null || firstLine.description!.isEmpty)) {
       firstLine.description = description;
+    }
+
+    if (_shouldShowSafeBoxesForLineType(firstLine.lineType)) {
+      final currentSafe = _findSafeByAccountId(firstLine.accountId);
+      final needsSafe =
+          currentSafe == null ||
+          !_safeMatchesAmountType(currentSafe, amountType);
+      if (needsSafe) {
+        final def = _defaultSafeForAmountType(
+          lineType: firstLine.lineType,
+          amountType: amountType,
+        );
+        if (def?.accountId != null) {
+          firstLine.accountId = def!.accountId;
+        }
+      }
     }
   }
 
@@ -2461,44 +2664,57 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         return const SizedBox.shrink();
       }
 
-      final int karat = (line.karat ?? _mainKarat.toDouble()).toInt();
-      double availableWeight;
-      switch (karat) {
-        case 24:
-          availableWeight = weightInfo.karat24;
-          break;
-        case 22:
-          availableWeight = weightInfo.karat22;
-          break;
-        case 21:
-          availableWeight = weightInfo.karat21;
-          break;
-        case 18:
-          availableWeight = weightInfo.karat18;
-          break;
-        default:
-          availableWeight = weightInfo.total;
+      final requestedByKarat = <int, double>{};
+      for (final entry in _effectiveGoldEntries(line)) {
+        final karat = (entry.karat ?? _mainKarat.toDouble()).toInt();
+        requestedByKarat[karat] = (requestedByKarat[karat] ?? 0) + entry.amount;
       }
 
-      exceedsBalance = isPayment && line.amount > availableWeight + 0.0001;
+      double availableForKarat(int karat) {
+        switch (karat) {
+          case 24:
+            return weightInfo.karat24;
+          case 22:
+            return weightInfo.karat22;
+          case 21:
+            return weightInfo.karat21;
+          case 18:
+            return weightInfo.karat18;
+          default:
+            return weightInfo.total;
+        }
+      }
+
+      final exceededEntry = requestedByKarat.entries.where((e) {
+        final available = availableForKarat(e.key);
+        return isPayment && e.value > available + 0.0001;
+      }).toList();
+
+      exceedsBalance = exceededEntry.isNotEmpty;
       bgColor = exceedsBalance ? Colors.red.shade50 : Colors.green.shade50;
       borderColor = exceedsBalance
           ? Colors.red.shade200
           : Colors.green.shade200;
       textColor = exceedsBalance ? Colors.red.shade700 : Colors.green.shade700;
 
-      final String karatLabel = 'عيار ${karat.toString()}';
-      final String formattedAvailable = _formatWeight(
-        availableWeight,
-        includeUnit: true,
-      );
-      final String formattedRequested = _formatWeight(
-        line.amount,
-        includeUnit: true,
-      );
-      message = exceedsBalance
-          ? 'تحذير: الوزن المدخل ($formattedRequested) يتجاوز المخزون المتاح $formattedAvailable ${safe.karat != null ? '(عيار ${safe.karat})' : ''} في "${safe.name}".'
-          : 'المخزون المتاح في "${safe.name}": $formattedAvailable ($karatLabel).';
+      if (exceedsBalance) {
+        final first = exceededEntry.first;
+        final available = availableForKarat(first.key);
+        message =
+            'تحذير: الوزن المدخل (${_formatWeight(first.value, includeUnit: true)}) '
+            'يتجاوز المخزون المتاح ${_formatWeight(available, includeUnit: true)} '
+            'لعيار ${first.key} في "${safe.name}".';
+      } else {
+        final details = requestedByKarat.entries
+            .map(
+              (e) =>
+                  '${_formatWeight(e.value, includeUnit: true)} عيار ${e.key}',
+            )
+            .join(' • ');
+        message = details.isEmpty
+            ? 'المخزون المتاح في "${safe.name}" جاهز.'
+            : 'الأوزان المدخلة في "${safe.name}": $details';
+      }
     } else {
       final available = _getAvailableSafeCash(safe);
       final bool isOutflow = _isCashOutflowFromSafe(line);
@@ -2559,10 +2775,18 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     // - سند القبض: السطور مدينة (debit) - الخزائن التي نستقبل فيها
     // - سند الصرف: السطور دائنة (credit) - الخزائن التي نصرف منها
     final lineType = widget.voucherType == 'receipt' ? 'debit' : 'credit';
+    final defaultSafe = _defaultSafeForAmountType(
+      lineType: lineType,
+      amountType: 'cash',
+    );
 
     setState(() {
       _accountLines.add(
-        AccountLineModel(lineType: lineType, amountType: 'cash'),
+        AccountLineModel(
+          accountId: defaultSafe?.accountId,
+          lineType: lineType,
+          amountType: 'cash',
+        ),
       );
     });
   }
@@ -2728,16 +2952,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       // سند قبض: الخزائن مدينة (نستقبل فيها)
       // سند صرف: الخزائن دائنة (نصرف منها)
       for (var line in _accountLines) {
-        if (line.amount <= 0) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('يجب إدخال مبلغ أكبر من صفر لجميع السطور'),
-            ),
-          );
-          setState(() => _isSaving = false);
-          return;
-        }
-
         if (line.accountId == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('يجب اختيار حساب لجميع السطور')),
@@ -2746,24 +2960,60 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           return;
         }
 
-        if (line.amountType == 'gold' && line.karat == null) {
+        if (line.amountType == 'cash') {
+          if (line.amount <= 0) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('يجب إدخال مبلغ أكبر من صفر لجميع السطور'),
+              ),
+            );
+            setState(() => _isSaving = false);
+            return;
+          }
+
+          allAccountLines.add({
+            'account_id': line.accountId,
+            'line_type': line.lineType,
+            'amount_type': line.amountType,
+            'amount': line.amount,
+            'description': line.description ?? 'نقد',
+          });
+          continue;
+        }
+
+        final entries = _effectiveGoldEntries(
+          line,
+        ).where((entry) => entry.amount > 0).toList();
+
+        if (entries.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('يجب اختيار العيار لسطور الذهب')),
+            const SnackBar(
+              content: Text('يجب إدخال وزن أكبر من صفر في سطور الذهب'),
+            ),
           );
           setState(() => _isSaving = false);
           return;
         }
 
-        allAccountLines.add({
-          'account_id': line.accountId,
-          'line_type': line
-              .lineType, // يستخدم lineType من السطر (debit للقبض، credit للصرف)
-          'amount_type': line.amountType,
-          'amount': line.amount,
-          if (line.karat != null) 'karat': line.karat,
-          'description':
-              line.description ?? (line.amountType == 'cash' ? 'نقد' : 'ذهب'),
-        });
+        final hasMissingKarat = entries.any((entry) => entry.karat == null);
+        if (hasMissingKarat) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('يجب اختيار العيار لكل حقل ذهب')),
+          );
+          setState(() => _isSaving = false);
+          return;
+        }
+
+        for (final entry in entries) {
+          allAccountLines.add({
+            'account_id': line.accountId,
+            'line_type': line.lineType,
+            'amount_type': 'gold',
+            'amount': entry.amount,
+            'karat': entry.karat,
+            'description': line.description ?? 'ذهب',
+          });
+        }
       }
 
       // Calculate totals for party account lines
@@ -2774,8 +3024,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         if (line.amountType == 'cash') {
           totalCash += line.amount;
         } else if (line.amountType == 'gold') {
-          totalGoldByKarat[line.karat!] =
-              (totalGoldByKarat[line.karat!] ?? 0) + line.amount;
+          for (final entry in _effectiveGoldEntries(line)) {
+            if (entry.amount <= 0 || entry.karat == null) continue;
+            totalGoldByKarat[entry.karat!] =
+                (totalGoldByKarat[entry.karat!] ?? 0) + entry.amount;
+          }
         }
       }
 
@@ -2932,12 +3185,24 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   Widget _buildAccountLineCard(int index) {
     final line = _accountLines[index];
-    final Map<String, dynamic>? selectedAccount = line.accountId != null
-        ? _accounts.firstWhere(
-            (a) => a['id'] == line.accountId,
-            orElse: () => {'account_number': '', 'name': ''},
-          )
-        : null;
+
+    final filteredAccounts = _getFilteredAccounts(
+      lineType: line.lineType,
+      amountType: line.amountType,
+    ).whereType<Map>().map((a) => Map<String, dynamic>.from(a)).toList();
+
+    final selectedId = line.accountId;
+    if (selectedId != null &&
+        !filteredAccounts.any((a) => _coerceAccountId(a['id']) == selectedId)) {
+      try {
+        final existing = _accounts.firstWhere(
+          (a) => _coerceAccountId(a['id']) == selectedId,
+        );
+        filteredAccounts.add(Map<String, dynamic>.from(existing));
+      } catch (_) {
+        // Keep current selection even if account is unavailable.
+      }
+    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2984,105 +3249,39 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
               ],
             ),
             const Divider(height: 24),
-            // Account selection with Autocomplete
-            Autocomplete<Map<String, dynamic>>(
+            AccountPickerFormField(
+              context: context,
               key: ValueKey(
-                'voucher_line_autocomplete_${index}_${line.lineType}_${line.amountType}_${line.accountId ?? 'none'}',
+                'voucher_line_picker_${index}_${line.lineType}_${line.amountType}_${line.accountId ?? 'none'}',
               ),
-              optionsBuilder: (TextEditingValue textEditingValue) {
-                final List<Map<String, dynamic>> accounts =
-                    List<Map<String, dynamic>>.from(
-                      _getFilteredAccounts(
-                        lineType: line.lineType,
-                        amountType: line.amountType,
-                      ),
-                    );
-                if (textEditingValue.text == '') {
-                  return accounts;
+              accounts: filteredAccounts,
+              value: line.accountId,
+              labelText: 'الحساب *',
+              hintText: filteredAccounts.isEmpty
+                  ? 'لا توجد حسابات متاحة'
+                  : 'اختر حساب/خزينة',
+              title: 'اختيار حساب',
+              isArabic: true,
+              enabled: filteredAccounts.isNotEmpty,
+              helperText: _shouldShowSafeBoxesForLineType(line.lineType)
+                  ? 'تم تعبئة الخزنة الأكثر استخداماً تلقائياً. اضغط لعرض كل الخزنات.'
+                  : 'اضغط داخل الحقل لعرض كل الحسابات ثم ابحث بالاسم أو الرقم.',
+              showTransactionTypeFilter: false,
+              showTracksWeightFilter: false,
+              validator: (value) {
+                if (value == null) {
+                  return 'يجب اختيار حساب';
                 }
-                final search = textEditingValue.text.toLowerCase();
-                return accounts.where(
-                  (acc) =>
-                      acc['account_number'].toString().contains(search) ||
-                      acc['name'].toString().toLowerCase().contains(search) ||
-                      (acc['bank_name'] != null &&
-                          acc['bank_name'].toString().toLowerCase().contains(
-                            search,
-                          )),
-                );
+                return null;
               },
-              displayStringForOption: (acc) {
-                // عرض معلومات الخزينة إذا كانت خزينة
-                if (acc['safe_type'] != null) {
-                  final safeTypeLabel = acc['safe_type'] == 'cash'
-                      ? 'نقدية'
-                      : acc['safe_type'] == 'bank'
-                      ? 'بنك'
-                      : acc['safe_type'] == 'gold'
-                      ? 'ذهب'
-                      : 'شيكات';
-                  final bankInfo = acc['bank_name'] != null
-                      ? ' - ${acc['bank_name']}'
-                      : '';
-                  final karatInfo =
-                      acc['safe_type'] == 'gold' && acc['safe_karat'] != null
-                      ? ' - عيار ${acc['safe_karat']}'
-                      : '';
-                  return '${acc['account_number']} - ${acc['name']} ($safeTypeLabel$bankInfo$karatInfo)';
-                }
-                return '${acc['account_number']} - ${acc['name']}';
-              },
-              initialValue: selectedAccount != null
-                  ? TextEditingValue(
-                      text:
-                          '${selectedAccount['account_number']} - ${selectedAccount['name']}',
-                    )
-                  : const TextEditingValue(),
-              fieldViewBuilder:
-                  (context, controller, focusNode, onFieldSubmitted) {
-                    return TextFormField(
-                      controller: controller,
-                      focusNode: focusNode,
-                      decoration: InputDecoration(
-                        labelText: 'الحساب *',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(
-                            color: AppColors.mediumGold.withValues(alpha: 0.3),
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(
-                            color: AppColors.primaryGold,
-                            width: 2,
-                          ),
-                        ),
-                        prefixIcon: Icon(
-                          Icons.search,
-                          color: AppColors.primaryGold,
-                        ),
-                      ),
-                      validator: (value) {
-                        if (line.accountId == null) {
-                          return 'يجب اختيار حساب';
-                        }
-                        return null;
-                      },
-                    );
-                  },
-              onSelected: (acc) {
+              onChanged: (value) {
                 setState(() {
-                  line.accountId = acc['id'];
+                  line.accountId = value;
                 });
+                _recordSafeUsage(value);
 
                 // If selected account is a SafeBox-backed account, load ledger balance.
-                final safe = (acc['safe_model'] is SafeBoxModel)
-                    ? acc['safe_model'] as SafeBoxModel
-                    : _findSafeByAccountId(_coerceAccountId(acc['id']));
+                final safe = _findSafeByAccountId(value);
                 if (safe != null &&
                     (safe.safeType == 'cash' ||
                         safe.safeType == 'bank' ||
@@ -3167,8 +3366,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   line.amountType = value;
 
                   if (value == 'gold') {
-                    line.karat ??= _mainKarat.toDouble();
+                    line.ensureGoldEntries(_mainKarat.toDouble());
+                    _syncGoldSummary(line);
                   } else {
+                    line.goldEntries.clear();
                     line.karat = null;
                   }
 
@@ -3206,7 +3407,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                         safe.safeType == 'gold' &&
                         fixed != null &&
                         fixed > 0) {
-                      line.karat = fixed.toDouble();
+                      line.ensureGoldEntries(_mainKarat.toDouble());
+                      if (line.goldEntries.length == 1) {
+                        line.goldEntries.first.karat = fixed.toDouble();
+                      }
+                      _syncGoldSummary(line);
                     }
                   }
                 });
@@ -3230,56 +3435,17 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             ),
             const SizedBox(height: 12),
 
-            // Amount and Karat
-            Row(
-              children: [
-                Expanded(
-                  flex: 2,
-                  child: TextFormField(
-                    initialValue: line.amount > 0 ? line.amount.toString() : '',
-                    decoration: InputDecoration(
-                      labelText: line.amountType == 'cash'
-                          ? 'المبلغ (ريال) *'
-                          : 'الوزن (جرام) *',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: AppColors.mediumGold.withValues(alpha: 0.3),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: AppColors.primaryGold,
-                          width: 2,
-                        ),
-                      ),
-                      prefixIcon: Icon(
-                        line.amountType == 'cash'
-                            ? Icons.attach_money
-                            : Icons.scale,
-                        color: AppColors.primaryGold,
-                      ),
-                    ),
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [NormalizeNumberFormatter()],
-                    onChanged: (value) {
-                      setState(() {
-                        line.amount = double.tryParse(value) ?? 0;
-                      });
-                    },
-                  ),
-                ),
-                if (line.amountType == 'gold') ...[
-                  const SizedBox(width: 12),
+            if (line.amountType == 'cash')
+              Row(
+                children: [
                   Expanded(
-                    child: DropdownButtonFormField<double>(
-                      initialValue: line.karat,
+                    flex: 2,
+                    child: TextFormField(
+                      initialValue: line.amount > 0
+                          ? line.amount.toString()
+                          : '',
                       decoration: InputDecoration(
-                        labelText: 'العيار *',
+                        labelText: 'المبلغ (ريال) *',
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
@@ -3297,28 +3463,220 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                           ),
                         ),
                         prefixIcon: Icon(
-                          Icons.diamond,
+                          Icons.attach_money,
                           color: AppColors.primaryGold,
                         ),
                       ),
-                      items: _availableKarats.map<DropdownMenuItem<double>>((
-                        karat,
-                      ) {
-                        return DropdownMenuItem<double>(
-                          value: karat,
-                          child: Text(karat.toString()),
-                        );
-                      }).toList(),
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [NormalizeNumberFormatter()],
                       onChanged: (value) {
                         setState(() {
-                          line.karat = value;
+                          line.amount = double.tryParse(value) ?? 0;
                         });
                       },
                     ),
                   ),
                 ],
-              ],
-            ),
+              )
+            else
+              Builder(
+                builder: (context) {
+                  final entries = _effectiveGoldEntries(line);
+                  return Column(
+                    children: [
+                      ...entries.asMap().entries.map((entryMap) {
+                        final entryIndex = entryMap.key;
+                        final entry = entryMap.value;
+                        final karatLabel =
+                            (entry.karat ?? _mainKarat.toDouble()).toInt();
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            bottom: entryIndex == entries.length - 1 ? 0 : 10,
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.lightGold.withValues(
+                                alpha: 0.14,
+                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: AppColors.mediumGold.withValues(
+                                  alpha: 0.28,
+                                ),
+                              ),
+                            ),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.diamond_outlined,
+                                      size: 16,
+                                      color: AppColors.darkGold,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'حقل ذهب ${entryIndex + 1} - عيار $karatLabel',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.deepGold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      flex: 2,
+                                      child: TextFormField(
+                                        key: ValueKey(
+                                          'gold_amount_${index}_$entryIndex',
+                                        ),
+                                        initialValue: entry.amount > 0
+                                            ? entry.amount.toString()
+                                            : '',
+                                        decoration: InputDecoration(
+                                          labelText: 'الوزن (جرام) *',
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: AppColors.mediumGold
+                                                  .withValues(alpha: 0.3),
+                                            ),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: AppColors.primaryGold,
+                                              width: 2,
+                                            ),
+                                          ),
+                                          prefixIcon: Icon(
+                                            Icons.scale,
+                                            color: AppColors.primaryGold,
+                                          ),
+                                        ),
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          NormalizeNumberFormatter(),
+                                        ],
+                                        onChanged: (value) {
+                                          setState(() {
+                                            entry.amount =
+                                                double.tryParse(value) ?? 0;
+                                            _syncGoldSummary(line);
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: DropdownButtonFormField<double>(
+                                        key: ValueKey(
+                                          'gold_karat_${index}_$entryIndex',
+                                        ),
+                                        initialValue: entry.karat,
+                                        decoration: InputDecoration(
+                                          labelText: 'العيار *',
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: AppColors.mediumGold
+                                                  .withValues(alpha: 0.3),
+                                            ),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: AppColors.primaryGold,
+                                              width: 2,
+                                            ),
+                                          ),
+                                          prefixIcon: Icon(
+                                            Icons.diamond,
+                                            color: AppColors.primaryGold,
+                                          ),
+                                        ),
+                                        items: _availableKarats
+                                            .map<DropdownMenuItem<double>>((
+                                              karat,
+                                            ) {
+                                              return DropdownMenuItem<double>(
+                                                value: karat,
+                                                child: Text(karat.toString()),
+                                              );
+                                            })
+                                            .toList(),
+                                        onChanged: (value) {
+                                          setState(() {
+                                            entry.karat = value;
+                                            _syncGoldSummary(line);
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                    if (entries.length > 1) ...[
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        onPressed: () {
+                                          setState(() {
+                                            _removeGoldEntryField(
+                                              line,
+                                              entryIndex,
+                                            );
+                                          });
+                                        },
+                                        icon: const Icon(
+                                          Icons.remove_circle_outline,
+                                        ),
+                                        color: Colors.red.shade400,
+                                        tooltip: 'حذف هذا الحقل',
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _addGoldEntryField(line);
+                            });
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('إضافة وزن/عيار'),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
             const SizedBox(height: 12),
 
             // Description (optional)

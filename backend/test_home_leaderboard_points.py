@@ -86,3 +86,47 @@ def test_home_leaderboard_points_uses_main_karat_equivalent(auth_headers):
     assert first.get('count') == 2
     assert first.get('score') == 20.0
     assert first.get('share') == 1.0
+
+
+def test_home_leaderboard_points_rounds_after_employee_total(auth_headers):
+    emp_id = None
+    with app.app_context():
+        emp = Employee(
+            employee_code='EMP-PTS-ROUND',
+            name='موظف تقريبي',
+            salary=0.0,
+            is_active=True,
+        )
+        db.session.add(emp)
+        db.session.flush()
+        emp_id = emp.id
+
+        _create_posted_sale(
+            emp.id,
+            invoice_type_id=201,
+            earned_main_karat_g=0.04,
+        )
+        _create_posted_sale(
+            emp.id,
+            invoice_type_id=202,
+            earned_main_karat_g=0.04,
+        )
+
+        db.session.commit()
+
+    with app.test_client() as client:
+        resp = client.get(
+            '/api/home/leaderboard',
+            query_string={'period': 'today', 'metric': 'points'},
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+
+    ranking = payload.get('ranking') or []
+    assert len(ranking) >= 1
+    employee_row = next((row for row in ranking if row.get('id') == emp_id), None)
+    assert employee_row is not None
+    assert employee_row.get('score') == 1.0
+

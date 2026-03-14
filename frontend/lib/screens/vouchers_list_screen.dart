@@ -51,7 +51,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   final NumberFormat _goldFormat = NumberFormat('#,##0.000', 'ar');
 
   late TabController _tabController;
-  Map<String, dynamic>? _stats;
 
   @override
   void initState() {
@@ -73,7 +72,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
         return;
       }
       _loadVouchers();
-      _loadStats();
     });
   }
 
@@ -174,31 +172,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     }
   }
 
-  Future<void> _loadStats() async {
-    try {
-      final stats = await _apiService.getVouchersStats();
-      if (!mounted) return;
-      setState(() {
-        _stats = stats;
-        _error = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
   Future<void> _refresh() async {
     await _loadVouchers();
-    await _loadStats();
   }
 
   Future<void> _cancelVoucher(int id) async {
@@ -440,18 +415,20 @@ class _VouchersListScreenState extends State<VouchersListScreen>
         ),
         child: _buildBodyContent(themeData),
       ),
-      floatingActionButton: _buildFloatingActions(),
+      bottomNavigationBar: _buildBottomQuickActions(themeData),
     );
   }
 
   PreferredSizeWidget _buildAppBar(ThemeData themeData) {
-    final isLight = themeData.brightness == Brightness.light;
+    final Color appBarForeground = Colors.black87;
 
     return AppBar(
       elevation: 0,
       titleSpacing: 0,
       backgroundColor: Colors.transparent,
-      foregroundColor: isLight ? Colors.black : Colors.white,
+      foregroundColor: appBarForeground,
+      iconTheme: IconThemeData(color: appBarForeground),
+      actionsIconTheme: IconThemeData(color: appBarForeground),
       flexibleSpace: DecoratedBox(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -464,7 +441,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       leading: IconButton(
         icon: Icon(
           Icons.arrow_back,
-          color: isLight ? Colors.black : Colors.white,
+          color: appBarForeground,
         ),
         onPressed: () => Navigator.of(context).pop(),
       ),
@@ -478,7 +455,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
               Text(
                 'السندات',
                 style: themeData.textTheme.headlineSmall?.copyWith(
-                  color: isLight ? Colors.black87 : Colors.white,
+                  color: appBarForeground,
                   fontWeight: FontWeight.w700,
                 ),
                 maxLines: 1,
@@ -488,9 +465,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
               Text(
                 'تحكم كامل بسندات القبض والصرف',
                 style: themeData.textTheme.bodyMedium?.copyWith(
-                  color: isLight
-                      ? _withAlpha(Colors.black, 0.6)
-                      : _withAlpha(Colors.white, 0.8),
+                  color: _withAlpha(Colors.black, 0.65),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -501,36 +476,27 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       ),
       bottom: PreferredSize(
         preferredSize: Size.fromHeight(
-          100 + MediaQuery.of(context).padding.top,
+          72 + MediaQuery.of(context).padding.top,
         ),
         child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 14),
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 10),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: isLight
-                  ? _withAlpha(Colors.black, 0.06)
-                  : _withAlpha(Colors.white, 0.2),
-              borderRadius: BorderRadius.circular(28),
+              color: _withAlpha(Colors.white, 0.22),
+              borderRadius: BorderRadius.circular(22),
             ),
             child: Padding(
-              padding: const EdgeInsets.all(4),
+              padding: const EdgeInsets.all(3),
               child: TabBar(
                 controller: _tabController,
-                // Polished visuals: gold gradient pill indicator, bold labels,
-                // and material icons instead of emoji. Colors adapt to light/dark.
-                labelColor: themeData.brightness == Brightness.light
-                    ? theme.AppColors.darkGold
-                    : Colors.white,
-                unselectedLabelColor: themeData.brightness == Brightness.light
-                    ? Colors.black54
-                    : _withAlpha(Colors.white, 0.85),
-                labelStyle: themeData.textTheme.titleMedium?.copyWith(
+                labelColor: theme.AppColors.darkGold,
+                unselectedLabelColor: _withAlpha(Colors.black, 0.68),
+                labelStyle: themeData.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
-                unselectedLabelStyle: themeData.textTheme.titleMedium?.copyWith(
+                unselectedLabelStyle: themeData.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
-                // Gradient pill indicator
                 indicator: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
@@ -544,21 +510,22 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                   boxShadow: [
                     BoxShadow(
                       color: _withAlpha(Colors.black, 0.08),
-                      blurRadius: 10,
-                      offset: const Offset(0, 6),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
                     ),
                   ],
                 ),
                 indicatorPadding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 6,
+                  horizontal: 4,
+                  vertical: 4,
                 ),
-                // Make indicator cover the full tab (pill)
                 indicatorSize: TabBarIndicatorSize.tab,
+                dividerColor: Colors.transparent,
+                tabAlignment: TabAlignment.fill,
                 tabs: [
-                  Tab(icon: Icon(Icons.list_alt), text: 'الكل'),
-                  Tab(icon: Icon(Icons.call_received), text: 'قبض'),
-                  Tab(icon: Icon(Icons.call_made), text: 'صرف'),
+                  Tab(icon: Icon(Icons.list_alt, size: 18), height: 48, text: 'الكل'),
+                  Tab(icon: Icon(Icons.call_received, size: 18), height: 48, text: 'قبض'),
+                  Tab(icon: Icon(Icons.call_made, size: 18), height: 48, text: 'صرف'),
                 ],
               ),
             ),
@@ -694,7 +661,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   Widget _buildHeaderSection(ThemeData themeData) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [theme.AppColors.primaryGold, theme.AppColors.mediumGold],
@@ -702,147 +669,17 @@ class _VouchersListScreenState extends State<VouchersListScreen>
           end: _gradientEnd(),
         ),
         borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(28),
-          bottomRight: Radius.circular(28),
+          bottomLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // adapt header text color based on sampled background luminance
-          Builder(
-            builder: (context) {
-              final headerSample = _sampleColor(
-                theme.AppColors.primaryGold,
-                theme.AppColors.mediumGold,
-                0.5,
-              );
-              final headerTextColor = _contrastOn(headerSample);
-              return Text(
-                'نظرة سريعة',
-                style: themeData.textTheme.titleLarge?.copyWith(
-                  color: headerTextColor,
-                  fontWeight: FontWeight.w700,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          if (_stats != null) ...[
-            _buildStatsOverview(themeData),
-            const SizedBox(height: 16),
-          ],
           _buildSearchCard(themeData),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           _buildStatusFilters(themeData),
         ],
-      ),
-    );
-  }
-
-  Widget _buildStatsOverview(ThemeData themeData) {
-    // Backend returns keys like: total_receipt, total_payment, total_adjustment
-    // Map those into the frontend's stats tiles so we don't show zeros when keys differ.
-    final int totalReceipt = (_stats?['total_receipt'] is int)
-        ? _stats!['total_receipt'] as int
-        : (_stats?['total_receipt'] is double)
-        ? (_stats!['total_receipt'] as double).round()
-        : 0;
-    final int totalPayment = (_stats?['total_payment'] is int)
-        ? _stats!['total_payment'] as int
-        : (_stats?['total_payment'] is double)
-        ? (_stats!['total_payment'] as double).round()
-        : 0;
-    final int totalAdjustment = (_stats?['total_adjustment'] is int)
-        ? _stats!['total_adjustment'] as int
-        : (_stats?['total_adjustment'] is double)
-        ? (_stats!['total_adjustment'] as double).round()
-        : 0;
-
-    final int totalCount = totalReceipt + totalPayment + totalAdjustment;
-
-    final List<Map<String, dynamic>> statsData = [
-      {
-        'label': 'الإجمالي',
-        'value': totalCount,
-        'icon': Icons.receipt_long,
-        'color': Colors.white,
-      },
-      {
-        'label': 'قبض',
-        'value': totalReceipt,
-        'icon': Icons.south,
-        'color': theme.AppColors.success,
-      },
-      {
-        'label': 'صرف',
-        'value': totalPayment,
-        'icon': Icons.north,
-        'color': theme.AppColors.error,
-      },
-      {
-        'label': 'تعديلات',
-        'value': totalAdjustment,
-        'icon': Icons.adjust,
-        'color': theme.AppColors.info,
-      },
-    ];
-
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: statsData.map((stat) {
-        final String value = '${stat['value']}';
-        return _buildStatTile(
-          themeData: themeData,
-          label: stat['label'] as String,
-          value: value,
-          icon: stat['icon'] as IconData,
-          color: stat['color'] as Color,
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildStatTile({
-    required ThemeData themeData,
-    required String label,
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOutCirc,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      decoration: BoxDecoration(
-        color: _withAlpha(Colors.white, 0.12),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _withAlpha(Colors.white, 0.18)),
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 120),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 12),
-            Text(
-              value,
-              style: themeData.textTheme.headlineSmall?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: themeData.textTheme.bodySmall?.copyWith(
-                color: _withAlpha(Colors.white, 0.85),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -967,7 +804,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     final String voucherNumber = (voucher['voucher_number'] ?? '—').toString();
     final String dateText = _formatDate(voucher['date']);
     final String? cashAmount = _formatCurrency(voucher['amount_cash']);
-    final String? goldAmount = _formatGold(voucher['amount_gold']);
+    final String? goldEquivalent = _formatEquivalentGold(voucher);
+    final String? goldBreakdown = _formatGoldBreakdown(voucher);
 
     final String partyName =
         (voucher['customer']?['name'] ?? voucher['supplier']?['name'] ?? '')
@@ -1145,20 +983,37 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                         children: [
                           if (cashAmount != null)
                             Text(
-                              '$cashAmount ر.س',
-                              style: themeData.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
+                              'نقداً: $cashAmount ر.س',
+                              style: themeData.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w800,
                                 color: visuals.color,
                               ),
                             ),
-                          if (goldAmount != null)
+                          if (goldEquivalent != null)
                             Padding(
                               padding: const EdgeInsets.only(top: 6),
                               child: Text(
-                                '$goldAmount غرام',
+                                goldEquivalent,
                                 style: themeData.textTheme.bodyMedium?.copyWith(
                                   color: theme.AppColors.darkGold,
-                                  fontWeight: FontWeight.w700,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          if (goldBreakdown != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: SizedBox(
+                                width: 220,
+                                child: Text(
+                                  goldBreakdown,
+                                  textAlign: TextAlign.end,
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: themeData.textTheme.bodySmall?.copyWith(
+                                    color: secondaryTextColor,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                             ),
@@ -1397,75 +1252,106 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     );
   }
 
-  Widget _buildPaginationLoader() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 24),
-      child: Center(
-        child: SizedBox(
-          width: 28,
-          height: 28,
-          child: CircularProgressIndicator(
-            strokeWidth: 2.6,
-            color: theme.AppColors.primaryGold,
-          ),
+  Widget _buildBottomQuickActions(ThemeData themeData) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        decoration: BoxDecoration(
+          color: themeData.scaffoldBackgroundColor,
+          boxShadow: [
+            BoxShadow(
+              color: _withAlpha(Colors.black, 0.08),
+              blurRadius: 18,
+              offset: const Offset(0, -6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: _buildQuickActionButton(
+                label: 'تسوية تحصيل',
+                icon: Icons.swap_horiz,
+                backgroundColor: theme.AppColors.warning,
+                onPressed: () async {
+                  final changed = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(
+                      builder: (_) => const ClearingSettlementScreen(),
+                    ),
+                  );
+                  if (changed == true) {
+                    _refresh();
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildQuickActionButton(
+                label: 'سند قبض',
+                icon: Icons.south,
+                backgroundColor: theme.AppColors.success,
+                onPressed: () => _navigateToAddVoucher('receipt'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildQuickActionButton(
+                label: 'سند صرف',
+                icon: Icons.north,
+                backgroundColor: theme.AppColors.error,
+                onPressed: () => _navigateToAddVoucher('payment'),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildFloatingActions() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _buildExtendedFab(
-          heroTag: 'clearing_settlement',
-          label: 'تسوية تحصيل',
-          icon: Icons.swap_horiz,
-          backgroundColor: theme.AppColors.warning,
-          onPressed: () async {
-            final changed = await Navigator.of(context).push<bool>(
-              MaterialPageRoute(builder: (_) => const ClearingSettlementScreen()),
-            );
-            if (changed == true) {
-              _refresh();
-            }
-          },
-        ),
-        const SizedBox(height: 10),
-        _buildExtendedFab(
-          heroTag: 'receipt',
-          label: 'سند قبض',
-          icon: Icons.south,
-          backgroundColor: theme.AppColors.success,
-          onPressed: () => _navigateToAddVoucher('receipt'),
-        ),
-        const SizedBox(height: 10),
-        _buildExtendedFab(
-          heroTag: 'payment',
-          label: 'سند صرف',
-          icon: Icons.north,
-          backgroundColor: theme.AppColors.error,
-          onPressed: () => _navigateToAddVoucher('payment'),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildExtendedFab({
-    required String heroTag,
+  Widget _buildQuickActionButton({
     required String label,
     required IconData icon,
     required Color backgroundColor,
     required VoidCallback onPressed,
   }) {
-    return FloatingActionButton.extended(
-      heroTag: heroTag,
-      onPressed: onPressed,
-      backgroundColor: backgroundColor,
-      foregroundColor: Colors.white,
-      icon: Icon(icon),
-      label: Text(label),
-      elevation: 4,
+    return SizedBox(
+      height: 46,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: backgroundColor,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          textStyle: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        icon: Icon(icon, size: 18),
+        label: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(label, maxLines: 1),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaginationLoader() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 20),
+      child: Center(
+        child: SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2.4),
+        ),
+      ),
     );
   }
 
@@ -1580,6 +1466,38 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       return null;
     }
     return _goldFormat.format(amount);
+  }
+
+  String? _formatEquivalentGold(Map<String, dynamic> voucher) {
+    final double? amount = _toDouble(voucher['amount_gold_main_karat']);
+    if (amount == null || amount == 0) {
+      return null;
+    }
+
+    final int mainKarat = (_toDouble(voucher['main_karat']) ?? 21).round();
+    return 'مكافئ عيار $mainKarat: ${_goldFormat.format(amount)} غ';
+  }
+
+  String? _formatGoldBreakdown(Map<String, dynamic> voucher) {
+    final raw = voucher['gold_breakdown'];
+    if (raw is List && raw.isNotEmpty) {
+      return raw.whereType<Map>().map((entry) {
+        final weight = _formatGold(entry['weight']) ?? '0.000';
+        final karat = _toDouble(entry['karat'])?.round() ?? entry['karat'];
+        return '• عيار $karat: $weight غ';
+      }).join('\n');
+    }
+
+    final rawGold = _formatGold(voucher['amount_gold']);
+    if (rawGold == null) {
+      return null;
+    }
+
+    final karat = voucher['gold_karat'];
+    if (karat == null || karat.toString().isEmpty || karat == 'متعدد') {
+      return '• إجمالي الذهب: $rawGold غ';
+    }
+    return '• عيار ${_toDouble(karat)?.round() ?? karat}: $rawGold غ';
   }
 
   double? _toDouble(dynamic value) {
@@ -1768,12 +1686,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   }
 
   void _navigateToVoucherDetails(int id) async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VoucherDetailsScreen(voucherId: id),
-      ),
-    );
+    final result = await showVoucherDetailsSheet(context, voucherId: id);
     if (result == true) {
       _refresh();
     }
