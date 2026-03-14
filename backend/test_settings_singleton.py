@@ -59,3 +59,112 @@ def test_settings_singleton_dedupes_multiple_rows_deterministically():
         remaining = Settings.query.first()
         assert remaining is not None
         assert remaining.main_karat == 22
+
+
+def test_sales_race_full_round_trip():
+    """Simulate exactly what Flutter does: PUT all settings → GET → verify."""
+    with app.app_context():
+        _clear_settings_rows()
+
+    # Mimic _saveSettings() payload from Flutter
+    save_payload = {
+        'main_karat': 21,
+        'currency_symbol': 'ر.س',
+        'decimal_places': 2,
+        'date_format': 'DD/MM/YYYY',
+        'tax_enabled': True,
+        'tax_rate': 0.15,
+        'allow_discount': True,
+        'default_discount_rate': 0.0,
+        'voucher_auto_post': False,
+        'weekly_sales_target_weight': 100.0,
+        'sales_race_settings': {
+            'enabled': False,
+            'default_period': 'week',
+            'points_per_gram': 5.0,
+            'allow_fallback_to_latest_period': False,
+            'show_invoice_count': False,
+            'show_sales_amount_per_employee': True,
+            'show_champion': False,
+            'show_total_cash_to_all_users': False,
+            'show_total_profit_to_all_users': True,
+        },
+    }
+
+    with app.test_client() as client:
+        # PUT (save)
+        put_resp = client.put('/api/settings', json=save_payload)
+        assert put_resp.status_code == 200
+        put_data = put_resp.get_json()
+
+        # Verify PUT response contains what we saved
+        assert put_data['weekly_sales_target_weight'] == 100.0
+        race = put_data['sales_race_settings']
+        assert race['enabled'] is False
+        assert race['default_period'] == 'week'
+        assert race['points_per_gram'] == 5.0
+        assert race['show_sales_amount_per_employee'] is True
+        assert race['show_champion'] is False
+        assert race['show_total_profit_to_all_users'] is True
+
+        # GET (reload — simulates reopening settings screen)
+        get_resp = client.get('/api/settings')
+        assert get_resp.status_code == 200
+        get_data = get_resp.get_json()
+
+        # Verify GET returns same values (NOT defaults)
+        assert get_data['weekly_sales_target_weight'] == 100.0
+        race2 = get_data['sales_race_settings']
+        assert race2['enabled'] is False, \
+            f"Expected enabled=False, got {race2['enabled']}"
+        assert race2['default_period'] == 'week', \
+            f"Expected default_period='week', got {race2['default_period']}"
+        assert race2['points_per_gram'] == 5.0, \
+            f"Expected points_per_gram=5.0, got {race2['points_per_gram']}"
+        assert race2['allow_fallback_to_latest_period'] is False
+        assert race2['show_invoice_count'] is False
+        assert race2['show_sales_amount_per_employee'] is True
+        assert race2['show_champion'] is False
+        assert race2['show_total_cash_to_all_users'] is False
+        assert race2['show_total_profit_to_all_users'] is True
+
+    # Also verify the DB directly
+    with app.app_context():
+        row = Settings.query.first()
+        assert row is not None
+        assert row.weekly_sales_target_weight == 100.0
+        raw = json.loads(row.sales_race_settings)
+        assert raw['enabled'] is False
+        assert raw['show_sales_amount_per_employee'] is True
+
+
+def test_sales_race_partial_update_preserves_other_fields():
+    """Updating one setting must NOT reset sales_race_settings."""
+    with app.app_context():
+        _clear_settings_rows()
+
+    with app.test_client() as client:
+        # First: set sales race
+        client.put('/api/settings', json={
+            'sales_race_settings': {
+                'enabled': False,
+                'points_per_gram': 7.0,
+            },
+            'weekly_sales_target_weight': 500.0,
+        })
+
+        # Second: update unrelated setting (like from posting_management_screen)
+        client.put('/api/settings', json={
+            'auto_post_invoices': True,
+        })
+
+        # Third: GET and verify race settings still intact
+        get_resp = client.get('/api/settings')
+        data = get_resp.get_json()
+        race = data['sales_race_settings']
+        assert race['enabled'] is False, \
+            f"Race enabled was reset! Got {race['enabled']}"
+        assert race['points_per_gram'] == 7.0, \
+            f"points_per_gram was reset! Got {race['points_per_gram']}"
+        assert data['weekly_sales_target_weight'] == 500.0, \
+            f"weekly target was reset! Got {data['weekly_sales_target_weight']}"

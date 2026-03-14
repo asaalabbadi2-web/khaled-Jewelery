@@ -222,6 +222,22 @@ def ensure_settings_columns(engine: Engine) -> None:
 
                     # Startup bootstrap guard
                     ("disable_startup_bootstrap", "BOOLEAN", "0"),
+
+                    # Voucher auto-post
+                    ("voucher_auto_post", "BOOLEAN", "0"),
+
+                    # Gamification / sales race
+                    ("weekly_sales_target_weight", "REAL", "2000.0"),
+                    ("sales_race_settings", "TEXT", "NULL"),
+
+                    # Posting preferences
+                    ("auto_post_invoices", "BOOLEAN", "1"),
+                    ("auto_post_entries", "BOOLEAN", "1"),
+                    ("require_approval_before_post", "BOOLEAN", "0"),
+                    ("allow_unposting", "BOOLEAN", "0"),
+
+                    # Manufacturing wage mode
+                    ("manufacturing_wage_mode", "VARCHAR(20)", "'expense'"),
                 ],
             )
         )
