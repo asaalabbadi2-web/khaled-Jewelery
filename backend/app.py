@@ -103,6 +103,7 @@ from schema_guard import (
 	ensure_profit_weight_columns,
 	ensure_invoice_item_scrap_columns,
 	ensure_settings_columns,
+	ensure_voucher_print_columns,
 	ensure_journal_entry_columns,
 	ensure_app_user_security_columns,
 	ensure_auth_security_columns,
@@ -300,6 +301,7 @@ with app.app_context():
 	ensure_profit_weight_columns(db.engine)
 	ensure_invoice_item_scrap_columns(db.engine)
 	ensure_settings_columns(db.engine)
+	ensure_voucher_print_columns(db.engine)
 	ensure_journal_entry_columns(db.engine)
 	ensure_app_user_security_columns(db.engine)
 	ensure_auth_security_columns(db.engine)
@@ -360,6 +362,7 @@ def create_tables():
 		ensure_profit_weight_columns(db.engine)
 		ensure_invoice_item_scrap_columns(db.engine)
 		ensure_settings_columns(db.engine)
+		ensure_voucher_print_columns(db.engine)
 		ensure_journal_entry_columns(db.engine)
 		ensure_app_user_security_columns(db.engine)
 		ensure_auth_security_columns(db.engine)

@@ -55,14 +55,14 @@ class SettingsProvider with ChangeNotifier {
 
   String get goldPriceAutoUpdateMode =>
       (_settings['gold_price_auto_update_mode']?.toString().trim().isNotEmpty ??
-              false)
-          ? _settings['gold_price_auto_update_mode'].toString().trim()
-          : 'interval';
+          false)
+      ? _settings['gold_price_auto_update_mode'].toString().trim()
+      : 'interval';
 
   int get goldPriceAutoUpdateIntervalMinutes => _safeInt(
-        _settings['gold_price_auto_update_interval_minutes'],
-        fallback: 60,
-      );
+    _settings['gold_price_auto_update_interval_minutes'],
+    fallback: 60,
+  );
 
   /// How often the UI ticker should poll the backend.
   /// - If auto-update is disabled: no polling (still loads once on mount).
@@ -355,13 +355,15 @@ class SettingsProvider with ChangeNotifier {
       // Send to server and use the server response as source of truth.
       var effectiveSettings = await ApiService().updateSettings(newSettings);
 
-      // Critical consistency check for sales race settings in production:
-      // verify read-after-write to avoid false-success saves.
+      // For sales race settings, trust the normalized PUT response first.
+      // Only fall back to read-after-write retries if the save response itself
+      // does not reflect the requested values.
       final bool shouldVerifySalesRace =
           newSettings.containsKey('sales_race_settings') ||
           newSettings.containsKey('weekly_sales_target_weight');
 
-      if (shouldVerifySalesRace) {
+      if (shouldVerifySalesRace &&
+          !_salesRaceSettingsMatchExpected(effectiveSettings, newSettings)) {
         Map<String, dynamic>? verifiedReadback;
         bool matched = false;
 
@@ -455,7 +457,8 @@ class SettingsProvider with ChangeNotifier {
         continue;
       }
 
-      if ((expectedValue?.toString() ?? '') != (actualValue?.toString() ?? '')) {
+      if ((expectedValue?.toString() ?? '') !=
+          (actualValue?.toString() ?? '')) {
         return false;
       }
     }
@@ -466,9 +469,7 @@ class SettingsProvider with ChangeNotifier {
   Map<String, dynamic> _normalizeDynamicMap(dynamic value) {
     if (value is Map<String, dynamic>) return value;
     if (value is Map) {
-      return value.map(
-        (key, mapValue) => MapEntry(key.toString(), mapValue),
-      );
+      return value.map((key, mapValue) => MapEntry(key.toString(), mapValue));
     }
     if (value is String && value.trim().isNotEmpty) {
       try {

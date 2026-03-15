@@ -648,171 +648,173 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
       }
     }
 
+    final baseFont = await PdfGoogleFonts.cairoRegular();
+    final boldFont = await PdfGoogleFonts.cairoBold();
+
     pdf.addPage(
-      pw.Page(
+      pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         textDirection: pw.TextDirection.rtl,
+        theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
+        margin: const pw.EdgeInsets.all(24),
         build: (context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              // Header
-              pw.Container(
-                padding: const pw.EdgeInsets.all(16),
-                decoration: pw.BoxDecoration(
-                  border: pw.Border.all(width: 2),
-                  borderRadius: pw.BorderRadius.circular(8),
-                ),
-                child: pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Text(
-                          _voucherTitle,
-                          style: pw.TextStyle(
-                            fontSize: 24,
-                            fontWeight: pw.FontWeight.bold,
-                          ),
-                        ),
-                        pw.Text(
-                          'نظام مجوهرات خالد',
-                          style: const pw.TextStyle(fontSize: 12),
-                        ),
-                      ],
-                    ),
-                    pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.end,
-                      children: [
-                        pw.Text(
-                          'رقم السند',
-                          style: const pw.TextStyle(fontSize: 10),
-                        ),
-                        pw.Text(
-                          widget.voucherData['id']?.toString() ?? '---',
-                          style: pw.TextStyle(
-                            fontSize: 18,
-                            fontWeight: pw.FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              pw.SizedBox(height: 16),
+          final partyLabel = partyType == 'customer'
+              ? 'عميل'
+              : partyType == 'supplier'
+              ? 'مورد'
+              : partyType == 'employee'
+              ? 'موظف'
+              : 'آخر';
 
-              // Info
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
+          return [
+            // Header
+            pw.Container(
+              padding: const pw.EdgeInsets.all(16),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(width: 2),
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
-                      pw.Text('التاريخ: $date'),
                       pw.Text(
-                        'الطرف: ${partyType == 'customer'
-                            ? 'عميل'
-                            : partyType == 'supplier'
-                            ? 'مورد'
-                            : partyType == 'employee'
-                            ? 'موظف'
-                            : 'آخر'}',
+                        _voucherTitle,
+                        style: pw.TextStyle(
+                          fontSize: 24,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                      pw.Text(
+                        'نظام مجوهرات خالد',
+                        style: const pw.TextStyle(fontSize: 12),
                       ),
                     ],
                   ),
-                  if (receiverName.isNotEmpty) ...[
-                    pw.SizedBox(height: 8),
-                    pw.Text(
-                      'المستلم/المسلم: $receiverName',
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                    ),
-                  ],
-                ],
-              ),
-              pw.SizedBox(height: 16),
-
-              // Description
-              if (description.isNotEmpty) ...[
-                pw.Text(
-                  'البيان:',
-                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                ),
-                pw.Text(description),
-                pw.SizedBox(height: 16),
-              ],
-
-              // Account Lines Table
-              pw.TableHelper.fromTextArray(
-                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                headers: ['#', 'الحساب', 'المبلغ/الوزن', 'النوع'],
-                data: accountLines.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final line = entry.value;
-                  return [
-                    '${index + 1}',
-                    line['account_name'] ?? '---',
-                    line['amount_type'] == 'cash'
-                        ? _formatCash((line['amount'] as num).toDouble())
-                        : '${_formatWeight((line['amount'] as num).toDouble())} ع ${(line['karat'] as num).toInt()}',
-                    line['amount_type'] == 'cash' ? 'نقد' : 'ذهب',
-                  ];
-                }).toList(),
-              ),
-              pw.SizedBox(height: 16),
-
-              // Totals
-              pw.Container(
-                padding: const pw.EdgeInsets.all(12),
-                decoration: pw.BoxDecoration(
-                  border: pw.Border.all(),
-                  borderRadius: pw.BorderRadius.circular(8),
-                ),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    pw.Text(
-                      'المجاميع:',
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                    ),
-                    if (totalCash > 0)
-                      pw.Text('إجمالي النقد: ${_formatCash(totalCash)}'),
-                    if (totalGoldByKarat.isNotEmpty) ...[
-                      pw.Text('إجمالي الذهب:'),
-                      ...totalGoldByKarat.entries.map(
-                        (e) => pw.Text(
-                          '  عيار ${e.key.toInt()}: ${_formatWeight(e.value)}',
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    children: [
+                      pw.Text(
+                        'رقم السند',
+                        style: const pw.TextStyle(fontSize: 10),
+                      ),
+                      pw.Text(
+                        widget.voucherData['id']?.toString() ?? '---',
+                        style: pw.TextStyle(
+                          fontSize: 18,
+                          fontWeight: pw.FontWeight.bold,
                         ),
                       ),
                     ],
-                  ],
-                ),
-              ),
-
-              // Notes
-              if (notes.isNotEmpty) ...[
-                pw.SizedBox(height: 16),
-                pw.Text(
-                  'ملاحظات:',
-                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                ),
-                pw.Text(notes),
-              ],
-
-              pw.Spacer(),
-
-              // Signatures
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
-                children: [
-                  _buildPdfSignature('المحاسب'),
-                  _buildPdfSignature('المستلم'),
-                  _buildPdfSignature('المدير'),
+                  ),
                 ],
               ),
+            ),
+            pw.SizedBox(height: 16),
+
+            // Info
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text('التاريخ: $date'),
+                    pw.Text('الطرف: $partyLabel'),
+                  ],
+                ),
+                if (receiverName.isNotEmpty) ...[
+                  pw.SizedBox(height: 8),
+                  pw.Text(
+                    'المستلم/المسلم: $receiverName',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  ),
+                ],
+              ],
+            ),
+            pw.SizedBox(height: 16),
+
+            // Description
+            if (description.isNotEmpty) ...[
+              pw.Text(
+                'البيان:',
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              ),
+              pw.Text(description),
+              pw.SizedBox(height: 16),
             ],
-          );
+
+            // Account Lines Table
+            pw.TableHelper.fromTextArray(
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              headers: ['#', 'الحساب', 'المبلغ/الوزن', 'النوع'],
+              data: accountLines.asMap().entries.map((entry) {
+                final index = entry.key;
+                final line = entry.value;
+                return [
+                  '${index + 1}',
+                  line['account_name'] ?? '---',
+                  line['amount_type'] == 'cash'
+                      ? _formatCash((line['amount'] as num).toDouble())
+                      : '${_formatWeight((line['amount'] as num).toDouble())} ع ${(line['karat'] as num).toInt()}',
+                  line['amount_type'] == 'cash' ? 'نقد' : 'ذهب',
+                ];
+              }).toList(),
+            ),
+            pw.SizedBox(height: 16),
+
+            // Totals
+            pw.Container(
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(),
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'المجاميع:',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  ),
+                  if (totalCash > 0)
+                    pw.Text('إجمالي النقد: ${_formatCash(totalCash)}'),
+                  if (totalGoldByKarat.isNotEmpty) ...[
+                    pw.Text('إجمالي الذهب:'),
+                    ...totalGoldByKarat.entries.map(
+                      (e) => pw.Text(
+                        '  عيار ${e.key.toInt()}: ${_formatWeight(e.value)}',
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+
+            // Notes
+            if (notes.isNotEmpty) ...[
+              pw.SizedBox(height: 16),
+              pw.Text(
+                'ملاحظات:',
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              ),
+              pw.Text(notes),
+            ],
+
+            pw.SizedBox(height: 24),
+
+            // Signatures
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
+              children: [
+                _buildPdfSignature('المحاسب'),
+                _buildPdfSignature('المستلم'),
+                _buildPdfSignature('المدير'),
+              ],
+            ),
+          ];
         },
       ),
     );

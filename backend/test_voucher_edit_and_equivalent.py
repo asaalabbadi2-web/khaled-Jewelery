@@ -195,3 +195,138 @@ def test_update_voucher_replaces_lines_and_recomputes_totals():
         assert response_payload['gold_breakdown'] == [
             {'karat': 24.0, 'weight': 2.0, 'weight_main_karat': 2.285714},
         ]
+
+
+def test_update_voucher_persists_receiver_and_weight_details():
+    with app.app_context():
+        gold_credit = _ensure_account('1320', 'ذهب طباعة', transaction_type='gold', tracks_weight=True)
+        gold_debit = _ensure_account('1321', 'مقابل ذهب طباعة', transaction_type='gold', tracks_weight=True)
+
+        voucher = Voucher(
+            voucher_number=generate_voucher_number('payment'),
+            voucher_type='payment',
+            date=datetime.now(),
+            party_type='other',
+            party_name='طرف طباعة',
+            amount_cash=0.0,
+            amount_gold=1.0,
+            description='قبل حفظ التفاصيل',
+            created_by='pytest',
+            status='pending',
+        )
+        db.session.add(voucher)
+        db.session.flush()
+
+        payload = {
+            'voucher_type': 'payment',
+            'date': datetime.now().date().isoformat(),
+            'party_type': 'other',
+            'party_name': 'طرف طباعة',
+            'description': 'سند صرف مع تفاصيل وزن',
+            'receiver_name': 'أحمد محمد',
+            'account_lines': [
+                {
+                    'account_id': gold_credit.id,
+                    'line_type': 'credit',
+                    'amount_type': 'gold',
+                    'amount': 9.5,
+                    'karat': 21,
+                    'gross_weight': 10.2,
+                    'net_weight': 9.5,
+                    'stones_weight': 0.7,
+                    'description': 'ذهب منصرف',
+                },
+                {
+                    'account_id': gold_debit.id,
+                    'line_type': 'debit',
+                    'amount_type': 'gold',
+                    'amount': 9.5,
+                    'karat': 21,
+                    'gross_weight': 10.2,
+                    'net_weight': 9.5,
+                    'stones_weight': 0.7,
+                    'description': 'مقابل ذهب منصرف',
+                },
+            ],
+        }
+
+        with app.test_request_context(json=payload):
+            response = update_voucher(voucher.id)
+
+        if isinstance(response, tuple):
+            flask_response, status_code = response
+        else:
+            flask_response, status_code = response, response.status_code
+
+        assert status_code == 200
+
+        db.session.refresh(voucher)
+        lines = voucher.account_lines.order_by(VoucherAccountLine.id.asc()).all()
+        assert voucher.receiver_name == 'أحمد محمد'
+        assert len(lines) == 2
+        assert lines[0].gross_weight == 10.2
+        assert lines[0].net_weight == 9.5
+        assert lines[0].stones_weight == 0.7
+
+        response_payload = flask_response.get_json()
+        assert response_payload['receiver_name'] == 'أحمد محمد'
+        assert response_payload['gross_weight'] == 20.4
+        assert response_payload['net_weight'] == 19.0
+        assert response_payload['stones_weight'] == 1.4
+        assert response_payload['account_lines'][0]['gross_weight'] == 10.2
+        assert response_payload['account_lines'][0]['net_weight'] == 9.5
+        assert response_payload['account_lines'][0]['stones_weight'] == 0.7
+
+
+def test_update_voucher_rejects_unknown_top_level_keys():
+    with app.app_context():
+        cash_debit = _ensure_account('1520', 'صندوق تحقق مفاتيح')
+        cash_credit = _ensure_account('1521', 'مقابل تحقق مفاتيح')
+
+        voucher = Voucher(
+            voucher_number=generate_voucher_number('payment'),
+            voucher_type='payment',
+            date=datetime.now(),
+            party_type='other',
+            party_name='طرف تحقق',
+            amount_cash=50.0,
+            amount_gold=0.0,
+            description='اختبار مفاتيح غير معروفة',
+            created_by='pytest',
+            status='pending',
+        )
+        db.session.add(voucher)
+        db.session.flush()
+
+        payload = {
+            'voucher_type': 'payment',
+            'date': datetime.now().date().isoformat(),
+            'party_type': 'other',
+            'party_name': 'طرف تحقق',
+            'unexpected_flag': True,
+            'account_lines': [
+                {
+                    'account_id': cash_debit.id,
+                    'line_type': 'debit',
+                    'amount_type': 'cash',
+                    'amount': 50.0,
+                },
+                {
+                    'account_id': cash_credit.id,
+                    'line_type': 'credit',
+                    'amount_type': 'cash',
+                    'amount': 50.0,
+                },
+            ],
+        }
+
+        with app.test_request_context(json=payload):
+            response = update_voucher(voucher.id)
+
+        if isinstance(response, tuple):
+            flask_response, status_code = response
+        else:
+            flask_response, status_code = response, response.status_code
+
+        assert status_code == 400
+        assert flask_response.get_json()['error'] == 'unknown_voucher_keys'

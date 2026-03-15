@@ -2021,6 +2021,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
       final isLeader = index == 0;
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
+      final progressColor = switch (index) {
+        1 => const Color(0xFF98A2B3),
+        2 => const Color(0xFFCD7F32),
+        _ => valueColor,
+      };
 
       final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
       final metricText = (metric == 'count')
@@ -2127,7 +2132,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         backgroundColor: colorScheme.onSurface.withValues(
                           alpha: 0.08,
                         ),
-                        valueColor: AlwaysStoppedAnimation<Color>(valueColor),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          progressColor,
+                        ),
                       ),
                     ),
                   ],

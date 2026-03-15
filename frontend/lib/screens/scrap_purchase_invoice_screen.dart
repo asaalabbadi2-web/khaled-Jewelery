@@ -4280,6 +4280,11 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
   final _wageController = TextEditingController(text: '0');
   final _countController = TextEditingController(text: '1');
   final _amountController = TextEditingController();
+  final _searchFocusNode = FocusNode();
+  final _weightFocusNode = FocusNode();
+  final _wageFocusNode = FocusNode();
+  final _countFocusNode = FocusNode();
+  final _amountFocusNode = FocusNode();
 
   Map<String, dynamic>? _selected;
   String _query = '';
@@ -4302,6 +4307,11 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
     _wageController.dispose();
     _countController.dispose();
     _amountController.dispose();
+    _searchFocusNode.dispose();
+    _weightFocusNode.dispose();
+    _wageFocusNode.dispose();
+    _countFocusNode.dispose();
+    _amountFocusNode.dispose();
     super.dispose();
   }
 
@@ -4316,6 +4326,26 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
     if (parsed == null) return null;
     if (const [18, 21, 22, 24].contains(parsed)) return parsed;
     return null;
+  }
+
+  void _focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+    focusNode.requestFocus();
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+  }
+
+  void _selectFirstMatchingCategory(List<Map<String, dynamic>> options) {
+    if (options.isEmpty) return;
+    final first = options.first;
+    final karat = _tryParseCategoryKarat(first);
+    setState(() {
+      _selected = first;
+      if (karat != null) {
+        _selectedKarat = karat;
+      }
+    });
   }
 
   void _submit() {
@@ -4408,6 +4438,8 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                       TextFormField(
                         controller: _searchController,
                         autofocus: true,
+                        focusNode: _searchFocusNode,
+                        textInputAction: TextInputAction.next,
                         decoration: const InputDecoration(
                           labelText: 'ابحث عن التصنيف',
                           border: OutlineInputBorder(),
@@ -4416,6 +4448,17 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         onChanged: (v) => setState(() {
                           _query = v.trim().toLowerCase();
                         }),
+                        onFieldSubmitted: (_) {
+                          if (_selected == null) {
+                            _selectFirstMatchingCategory(limited);
+                          }
+                          if (_selected != null) {
+                            _focusAndSelect(
+                              _weightFocusNode,
+                              _weightController,
+                            );
+                          }
+                        },
                       ),
                       const SizedBox(height: 12),
                       FormField<int>(
@@ -4561,9 +4604,11 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _weightController,
+                        focusNode: _weightFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
                         decoration: const InputDecoration(
                           labelText: 'الوزن',
@@ -4580,14 +4625,17 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                           }
                           return null;
                         },
-                        onFieldSubmitted: (_) => _submit(),
+                        onFieldSubmitted: (_) =>
+                            _focusAndSelect(_wageFocusNode, _wageController),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _wageController,
+                        focusNode: _wageFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
                         decoration: const InputDecoration(
                           labelText: 'المصنعية/جم',
@@ -4599,14 +4647,17 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                           if (value < 0) return 'قيمة غير صحيحة';
                           return null;
                         },
-                        onFieldSubmitted: (_) => _submit(),
+                        onFieldSubmitted: (_) =>
+                            _focusAndSelect(_countFocusNode, _countController),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _countController,
+                        focusNode: _countFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: false,
                         ),
+                        textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
                         decoration: const InputDecoration(
                           labelText: 'العدد',
@@ -4620,14 +4671,19 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                           if (count < 1) return 'العدد يجب أن يكون 1 أو أكثر';
                           return null;
                         },
-                        onFieldSubmitted: (_) => _submit(),
+                        onFieldSubmitted: (_) => _focusAndSelect(
+                          _amountFocusNode,
+                          _amountController,
+                        ),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _amountController,
+                        focusNode: _amountFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        textInputAction: TextInputAction.done,
                         inputFormatters: [NormalizeNumberFormatter()],
                         decoration: InputDecoration(
                           labelText: 'المبلغ (اختياري)',

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';  // 🆕 للـ FilteringTextInputFormatter
+import 'package:flutter/services.dart'; // 🆕 للـ FilteringTextInputFormatter
 import 'dart:convert';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api_service.dart';
@@ -83,7 +83,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   bool _uiAutoOpenPrintAfterSave = false;
   String _uiPaperSize = 'A4';
 
-  double get _effectiveVatRate => _uiDisableVat ? 0.0 : _settingsProvider.taxRate;
+  double get _effectiveVatRate =>
+      _uiDisableVat ? 0.0 : _settingsProvider.taxRate;
 
   // Payment - 🆕 وسائل دفع متعددة
   List<Map<String, dynamic>> _paymentMethods = [];
@@ -251,8 +252,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('فاتورة محفوظة'),
-        content:
-            const Text('يوجد نموذج فاتورة محفوظ لإكماله لاحقاً. هل تريد استعادته؟'),
+        content: const Text(
+          'يوجد نموذج فاتورة محفوظ لإكماله لاحقاً. هل تريد استعادته؟',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -287,7 +289,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
 
     try {
-      final items = (decoded['items'] as List?)?.whereType<Map>().toList() ?? [];
+      final items =
+          (decoded['items'] as List?)?.whereType<Map>().toList() ?? [];
       final payments =
           (decoded['payments'] as List?)?.whereType<Map>().toList() ?? [];
       final barterLines =
@@ -352,7 +355,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         final l = _BarterLine(karat: k);
         l.standingController.text = (map['standing'] ?? '').toString();
         l.stonesController.text = (map['stones'] ?? '').toString();
-        l.pricePerGramController.text = (map['price_per_gram'] ?? '').toString();
+        l.pricePerGramController.text = (map['price_per_gram'] ?? '')
+            .toString();
         l.totalAmountController.text = (map['total_amount'] ?? '').toString();
         restoredBarter.add(l);
       }
@@ -360,12 +364,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       setState(() {
         _selectedCustomerId = toInt(decoded?['customer_id']);
         _selectedBranchId = toInt(decoded?['branch_id']);
-        _customAmountController.text = (decoded?['custom_amount'] ?? '').toString();
+        _customAmountController.text = (decoded?['custom_amount'] ?? '')
+            .toString();
         _uiLockPriceEdits = decoded?['ui_lock_price_edits'] == true;
         _uiDisableVat = decoded?['ui_disable_vat'] == true;
         _uiAutoOpenPrintAfterSave = decoded?['ui_auto_print'] == true;
         _uiPaperSize = (decoded?['ui_paper_size'] ?? _uiPaperSize).toString();
-        _selectedPaymentMethodId = toInt(decoded?['selected_payment_method_id']);
+        _selectedPaymentMethodId = toInt(
+          decoded?['selected_payment_method_id'],
+        );
         _selectedSafeBoxId = toInt(decoded?['selected_safe_box_id']);
         _showAdvancedPaymentOptions =
             decoded?['show_advanced_payment_options'] == true;
@@ -378,8 +385,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           ..addAll(restoredPayments);
 
         _enableBarter = decoded?['enable_barter'] == true;
-        _selectedBarterGoldDepositSafeBoxId =
-            toInt(decoded?['barter_gold_deposit_safe_box_id']);
+        _selectedBarterGoldDepositSafeBoxId = toInt(
+          decoded?['barter_gold_deposit_safe_box_id'],
+        );
         _barterLines
           ..clear()
           ..addAll(restoredBarter);
@@ -538,18 +546,20 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         for (final rawPay in rawPayments) {
           if (rawPay is! Map) continue;
           final m = Map<String, dynamic>.from(rawPay);
-          _payments.add(PaymentEntry(
-            paymentMethodId: _parseInt(m['payment_method_id']) ?? 0,
-            paymentMethodName: (m['payment_method_name'] ?? '').toString(),
-            amount: _parseDouble(m['amount']),
-            commissionRate: _parseDouble(m['commission_rate']),
-            commissionAmount: _parseDouble(m['commission_amount']),
-            commissionVat: _parseDouble(m['commission_vat']),
-            netAmount: _parseDouble(m['net_amount']),
-            settlementDays: _parseInt(m['settlement_days']) ?? 0,
-            notes: m['notes']?.toString(),
-            safeBoxId: _parseInt(m['safe_box_id']),
-          ));
+          _payments.add(
+            PaymentEntry(
+              paymentMethodId: _parseInt(m['payment_method_id']) ?? 0,
+              paymentMethodName: (m['payment_method_name'] ?? '').toString(),
+              amount: _parseDouble(m['amount']),
+              commissionRate: _parseDouble(m['commission_rate']),
+              commissionAmount: _parseDouble(m['commission_amount']),
+              commissionVat: _parseDouble(m['commission_vat']),
+              netAmount: _parseDouble(m['net_amount']),
+              settlementDays: _parseInt(m['settlement_days']) ?? 0,
+              notes: m['notes']?.toString(),
+              safeBoxId: _parseInt(m['safe_box_id']),
+            ),
+          );
         }
       }
     });
@@ -876,10 +886,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             try {
               final employeeCashSafesEnabled =
                   _settingsProvider.settings['employee_cash_safes_enabled'] ==
-                      true;
+                  true;
               if (employeeCashSafesEnabled) {
-                final authProvider =
-                    Provider.of<AuthProvider>(context, listen: false);
+                final authProvider = Provider.of<AuthProvider>(
+                  context,
+                  listen: false,
+                );
                 final employeeCashSafeId =
                     authProvider.currentUser?.employee?.cashSafeBoxId;
                 if (employeeCashSafeId != null) {
@@ -914,10 +926,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 orElse: () => clearingBoxes.first,
               );
             } else {
-            picked = _safeBoxes.firstWhere(
-              (box) => box.isDefault == true,
-              orElse: () => _safeBoxes.first,
-            );
+              picked = _safeBoxes.firstWhere(
+                (box) => box.isDefault == true,
+                orElse: () => _safeBoxes.first,
+              );
             }
           }
 
@@ -1626,10 +1638,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final formKey = GlobalKey<FormState>();
     final nameController = TextEditingController();
     final barcodeController = TextEditingController();
-    final countController = TextEditingController(text: '1');  // 🆕 عدد القطع
+    final countController = TextEditingController(text: '1'); // 🆕 عدد القطع
     final weightController = TextEditingController(text: '1.0');
     final wageController = TextEditingController(text: '0');
     final totalController = TextEditingController();
+    final barcodeFocusNode = FocusNode();
+    final countFocusNode = FocusNode();
+    final weightFocusNode = FocusNode();
+    final wageFocusNode = FocusNode();
+    final totalFocusNode = FocusNode();
 
     weightController.selection = TextSelection(
       baseOffset: 0,
@@ -1645,6 +1662,14 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       final normalized = value.trim().replaceAll(',', '.');
       if (normalized.isEmpty) return null;
       return double.tryParse(normalized);
+    }
+
+    void focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+      focusNode.requestFocus();
+      controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: controller.text.length,
+      );
     }
 
     Map<String, dynamic>? manualData;
@@ -1668,13 +1693,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 return;
               }
 
-              final weight =
-                  tryParseOptionalDouble(weightController.text) ?? 0;
+              final weight = tryParseOptionalDouble(weightController.text) ?? 0;
               final wage = tryParseOptionalDouble(wageController.text) ?? 0;
               final count = int.tryParse(countController.text) ?? 1;
-              final manualTotal = tryParseOptionalDouble(
-                totalController.text,
-              );
+              final manualTotal = tryParseOptionalDouble(totalController.text);
 
               Navigator.pop(dialogContext, {
                 'name': nameController.text.trim(),
@@ -1698,6 +1720,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       TextFormField(
                         controller: nameController,
                         textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(barcodeFocusNode, barcodeController),
                         decoration: const InputDecoration(
                           labelText: 'اسم الصنف',
                           prefixIcon: Icon(Icons.label_outline),
@@ -1712,7 +1736,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: barcodeController,
+                        focusNode: barcodeFocusNode,
                         textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(countFocusNode, countController),
                         decoration: const InputDecoration(
                           labelText: 'الباركود / رقم الصنف (اختياري)',
                           prefixIcon: Icon(Icons.qr_code_2),
@@ -1721,10 +1748,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: countController,
+                        focusNode: countFocusNode,
                         keyboardType: TextInputType.number,
                         textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(weightFocusNode, weightController),
                         onTap: () => countController.selection = TextSelection(
-                          baseOffset: 0, extentOffset: countController.text.length),
+                          baseOffset: 0,
+                          extentOffset: countController.text.length,
+                        ),
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                         ],
@@ -1764,12 +1796,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: weightController,
+                        focusNode: weightFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
                         textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(wageFocusNode, wageController),
                         onTap: () => weightController.selection = TextSelection(
-                          baseOffset: 0, extentOffset: weightController.text.length),
+                          baseOffset: 0,
+                          extentOffset: weightController.text.length,
+                        ),
                         inputFormatters: [
                           ArabicNumberTextInputFormatter(
                             allowDecimal: true,
@@ -1791,12 +1828,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: wageController,
+                        focusNode: wageFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
                         textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(totalFocusNode, totalController),
                         onTap: () => wageController.selection = TextSelection(
-                          baseOffset: 0, extentOffset: wageController.text.length),
+                          baseOffset: 0,
+                          extentOffset: wageController.text.length,
+                        ),
                         inputFormatters: [
                           ArabicNumberTextInputFormatter(
                             allowDecimal: true,
@@ -1811,12 +1853,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: totalController,
+                        focusNode: totalFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
                         textInputAction: TextInputAction.done,
                         onTap: () => totalController.selection = TextSelection(
-                          baseOffset: 0, extentOffset: totalController.text.length),
+                          baseOffset: 0,
+                          extentOffset: totalController.text.length,
+                        ),
                         inputFormatters: [
                           ArabicNumberTextInputFormatter(
                             allowDecimal: true,
@@ -1855,6 +1900,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     // نتجنب التخلص المباشر من المتحكمات لأن عناصر الحوار قد تستدعي إطاراً إضافياً
     // بعد الإغلاق. تركها لجمع القمامة آمن للاستخدام المؤقت هنا.
+    barcodeFocusNode.dispose();
+    countFocusNode.dispose();
+    weightFocusNode.dispose();
+    wageFocusNode.dispose();
+    totalFocusNode.dispose();
 
     if (manualData == null) return;
 
@@ -1865,7 +1915,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       karat: _parseDouble(manualData['karat']),
       weight: _parseDouble(manualData['weight']),
       wage: _parseDouble(manualData['wage']),
-      count: manualData['count'] as int? ?? 1,  // 🆕
+      count: manualData['count'] as int? ?? 1, // 🆕
       goldPrice24k: _goldPrice24k,
       mainKarat: _settingsProvider.mainKarat,
       taxRate: _uiDisableVat
@@ -1969,23 +2019,23 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     setState(() {
       final item = InvoiceItem(
-          id: null,
-          name: categoryName.isNotEmpty ? categoryName : 'تصنيف',
-          barcode: '',
-          karat: selectedKarat.toDouble(),
-          weight: weight,
-          wage: wage,
-          count: count,
-          goldPrice24k: _goldPrice24k,
-          mainKarat: _settingsProvider.mainKarat,
-            taxRate: _uiDisableVat
-              ? 0.0
-              : _settingsProvider.taxRateForKarat(selectedKarat.toDouble()),
-          avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
-          avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
-          categoryId: categoryId,
-          categoryName: categoryName,
-        );
+        id: null,
+        name: categoryName.isNotEmpty ? categoryName : 'تصنيف',
+        barcode: '',
+        karat: selectedKarat.toDouble(),
+        weight: weight,
+        wage: wage,
+        count: count,
+        goldPrice24k: _goldPrice24k,
+        mainKarat: _settingsProvider.mainKarat,
+        taxRate: _uiDisableVat
+            ? 0.0
+            : _settingsProvider.taxRateForKarat(selectedKarat.toDouble()),
+        avgGoldCostPerMainGram: _avgGoldCostPerMainGram,
+        avgManufacturingCostPerMainGram: _avgManufacturingCostPerMainGram,
+        categoryId: categoryId,
+        categoryName: categoryName,
+      );
 
       if (amount > 0) {
         item.setManualTotal(amount);
@@ -2067,7 +2117,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       switch (field) {
         case 'karat':
           item.karat = value;
-          item.taxRate = _uiDisableVat ? 0.0 : _settingsProvider.taxRateForKarat(value);
+          item.taxRate = _uiDisableVat
+              ? 0.0
+              : _settingsProvider.taxRateForKarat(value);
           requiresManualTargetRecalculation = true;
           break;
         case 'weight':
@@ -2179,8 +2231,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     final totalCosts = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
 
     // الخطوة 2: حساب المبلغ بدون ضريبة
-    final amountWithoutTax =
-      _effectiveVatRate <= 0 ? targetTotal : targetTotal / (1 + _effectiveVatRate);
+    final amountWithoutTax = _effectiveVatRate <= 0
+        ? targetTotal
+        : targetTotal / (1 + _effectiveVatRate);
 
     // الخطوة 3: حساب الربح المتاح للتوزيع
     final profitPool = amountWithoutTax - totalCosts;
@@ -2292,7 +2345,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: AppColors.primaryGold.withValues(alpha: 0.10),
+                            color: AppColors.primaryGold.withValues(
+                              alpha: 0.10,
+                            ),
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: const Icon(Icons.receipt_long),
@@ -2369,16 +2424,14 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       children: [
                         Expanded(
                           child: OutlinedButton(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, false),
+                            onPressed: () => Navigator.pop(sheetContext, false),
                             child: const Text('رجوع'),
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, true),
+                            onPressed: () => Navigator.pop(sheetContext, true),
                             icon: const Icon(Icons.save),
                             label: const Text('حفظ الفاتورة'),
                           ),
@@ -2454,7 +2507,10 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       }
     }
 
-    final totalWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
+    final totalWeight = _items.fold<double>(
+      0.0,
+      (sum, item) => sum + item.weight,
+    );
     final totalTax = _items.fold<double>(0.0, (sum, item) => sum + item.tax);
 
     final proceed = await _showPreSaveInvoiceSummary(
@@ -2500,8 +2556,14 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       // حساب الإجماليات
       final totalAmount = _calculateGrandTotal();
-      final totalWeight = _items.fold<double>(0.0, (sum, item) => sum + item.weight);
-      final totalCost = _items.fold<double>(0.0, (sum, item) => sum + item.cost);
+      final totalWeight = _items.fold<double>(
+        0.0,
+        (sum, item) => sum + item.weight,
+      );
+      final totalCost = _items.fold<double>(
+        0.0,
+        (sum, item) => sum + item.cost,
+      );
       final totalTax = _items.fold<double>(0.0, (sum, item) => sum + item.tax);
 
       if (!mounted) return;
@@ -2522,15 +2584,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         'total_weight': totalWeight,
         'total_cost': totalCost,
         'total_tax': totalTax,
-        if (_enableBarter && barterTotal > 0.01)
-          'barter_total': barterTotal,
+        if (_enableBarter && barterTotal > 0.01) 'barter_total': barterTotal,
         'payments': _payments.map((p) => p.toJson()).toList(),
         'amount_paid': _totalPayments,
         'items': _items.map((item) => item.toJson()).toList(),
       };
 
       final response = _isEditMode
-          ? await apiService.updateUnpostedInvoice(widget.editInvoiceId!, invoiceData)
+          ? await apiService.updateUnpostedInvoice(
+              widget.editInvoiceId!,
+              invoiceData,
+            )
           : await apiService.addInvoice(invoiceData);
 
       if (mounted) {
@@ -2633,7 +2697,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
         // الحصول على خزينة الذهب للموظف الحالي
         final employeeGoldSafeId =
-          authProvider.currentUser?.employee?.goldSafeBoxId;
+            authProvider.currentUser?.employee?.goldSafeBoxId;
 
         final scrapInvoiceData = {
           'customer_id': customerId,
@@ -2700,12 +2764,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       if (shouldPrint == true) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) =>
-                InvoicePrintScreen(
-                  invoice: invoiceForPrint,
-                  isArabic: true,
-                  printSettings: {'paperSize': _uiPaperSize},
-                ),
+            builder: (_) => InvoicePrintScreen(
+              invoice: invoiceForPrint,
+              isArabic: true,
+              printSettings: {'paperSize': _uiPaperSize},
+            ),
           ),
         );
       }
@@ -2956,8 +3019,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     const SizedBox(height: 10),
                     if (invoiceId.isNotEmpty)
                       line('رقم الفاتورة', '#$invoiceId'),
-                    if (customerName.isNotEmpty)
-                      line('العميل', customerName),
+                    if (customerName.isNotEmpty) line('العميل', customerName),
                     const Divider(height: 18),
                     line(
                       'الإجمالي',
@@ -3005,16 +3067,14 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       children: [
                         Expanded(
                           child: TextButton(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, false),
+                            onPressed: () => Navigator.pop(sheetContext, false),
                             child: const Text('تم'),
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: () =>
-                                Navigator.pop(sheetContext, true),
+                            onPressed: () => Navigator.pop(sheetContext, true),
                             icon: const Icon(Icons.print),
                             label: const Text('طباعة'),
                           ),
@@ -4777,7 +4837,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onTap: () => controller.selection = TextSelection(
-            baseOffset: 0, extentOffset: controller.text.length),
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          ),
           decoration: InputDecoration(
             labelText: label,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -4985,15 +5047,16 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final employeeGoldSafesEnabled =
-      _settingsProvider.settings['employee_gold_safes_enabled'] == true;
+        _settingsProvider.settings['employee_gold_safes_enabled'] == true;
     final employeeGoldSafeId =
-      authProvider.currentUser?.employee?.goldSafeBoxId;
+        authProvider.currentUser?.employee?.goldSafeBoxId;
     final hideBarterGoldDepositSafe =
-      employeeGoldSafesEnabled && employeeGoldSafeId != null;
+        employeeGoldSafesEnabled && employeeGoldSafeId != null;
     final showBarterGoldDepositSafeDropdown =
-      employeeGoldSafesEnabled && employeeGoldSafeId == null;
+        employeeGoldSafesEnabled && employeeGoldSafeId == null;
 
-    final mainScrapIdRaw = _settingsProvider.settings['main_scrap_gold_safe_box_id'];
+    final mainScrapIdRaw =
+        _settingsProvider.settings['main_scrap_gold_safe_box_id'];
     final mainScrapGoldSafeBoxId = mainScrapIdRaw is int
         ? mainScrapIdRaw
         : int.tryParse(mainScrapIdRaw?.toString() ?? '');
@@ -5006,8 +5069,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       return null;
     }
 
-    final selectedDepositSafeName =
-        safeNameById(_selectedBarterGoldDepositSafeBoxId);
+    final selectedDepositSafeName = safeNameById(
+      _selectedBarterGoldDepositSafeBoxId,
+    );
     final mainScrapSafeName = safeNameById(mainScrapGoldSafeBoxId);
     final resolvedDepositSafeName =
         selectedDepositSafeName ?? mainScrapSafeName ?? 'الخزنة الرئيسية للكسر';
@@ -5383,12 +5447,14 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer
-                              .withValues(alpha: isDark ? 0.25 : 0.35),
+                          color: theme.colorScheme.primaryContainer.withValues(
+                            alpha: isDark ? 0.25 : 0.35,
+                          ),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
-                            color: theme.colorScheme.primary
-                                .withValues(alpha: 0.35),
+                            color: theme.colorScheme.primary.withValues(
+                              alpha: 0.35,
+                            ),
                           ),
                         ),
                         child: Row(
@@ -6462,7 +6528,7 @@ class InvoiceItem {
   final double goldPrice24k;
   final int mainKarat;
   double taxRate;
-  int count;  // 🆕 عدد القطع لهذا الصنف
+  int count; // 🆕 عدد القطع لهذا الصنف
   double _avgGoldCostPerMainGram;
   double _avgManufacturingCostPerMainGram;
 
@@ -6485,7 +6551,7 @@ class InvoiceItem {
     required this.wage,
     this.categoryId,
     this.categoryName,
-    this.count = 1,  // 🆕 افتراضي عدد 1
+    this.count = 1, // 🆕 افتراضي عدد 1
     required this.goldPrice24k,
     required this.mainKarat,
     required this.taxRate,
@@ -6577,7 +6643,7 @@ class InvoiceItem {
       'net': net,
       'tax': tax,
       'price': totalWithTax, // الـ backend يتوقع 'price' بدلاً من 'total'
-      'quantity': count,  // 🆕 عدد فعلي
+      'quantity': count, // 🆕 عدد فعلي
       'calculated_selling_price_per_gram': calculateSellingPricePerGram(),
     };
   }
@@ -6607,7 +6673,11 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   final _countController = TextEditingController(text: '1');
   final _amountController = TextEditingController();
 
+  final _categorySearchFocusNode = FocusNode();
+  final _weightFocusNode = FocusNode();
+  final _wageFocusNode = FocusNode();
   final _countFocusNode = FocusNode();
+  final _amountFocusNode = FocusNode();
 
   Map<String, dynamic>? _selectedCategory;
   late int _selectedKarat;
@@ -6630,13 +6700,37 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     _wageController.dispose();
     _countController.dispose();
     _amountController.dispose();
+    _categorySearchFocusNode.dispose();
+    _weightFocusNode.dispose();
+    _wageFocusNode.dispose();
     _countFocusNode.dispose();
+    _amountFocusNode.dispose();
     super.dispose();
   }
 
   double _tryParseDouble(String value, double fallback) {
     final normalized = value.trim().replaceAll(',', '.');
     return double.tryParse(normalized) ?? fallback;
+  }
+
+  void _focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+    focusNode.requestFocus();
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+  }
+
+  void _selectFirstMatchingCategory(List<Map<String, dynamic>> options) {
+    if (options.isEmpty) return;
+    final first = options.first;
+    final categoryKarat = _tryParseCategoryKarat(first);
+    setState(() {
+      _selectedCategory = first;
+      if (categoryKarat != null) {
+        _selectedKarat = categoryKarat;
+      }
+    });
   }
 
   void _submit() {
@@ -6654,7 +6748,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     if (count < 1) {
       _countFocusNode.requestFocus();
       _countController.selection = TextSelection(
-        baseOffset: 0, extentOffset: _countController.text.length);
+        baseOffset: 0,
+        extentOffset: _countController.text.length,
+      );
       return;
     }
 
@@ -6726,7 +6822,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(0xFFD4AF37).withValues(alpha: 0.3),
+                            color: const Color(
+                              0xFFD4AF37,
+                            ).withValues(alpha: 0.3),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           ),
@@ -6752,10 +6850,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                         SizedBox(height: 2),
                         Text(
                           'اختر تصنيفاً وحدد التفاصيل',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.black54,
-                          ),
+                          style: TextStyle(fontSize: 13, color: Colors.black54),
                         ),
                       ],
                     ),
@@ -6774,6 +6869,8 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                       TextFormField(
                         controller: _categorySearchController,
                         autofocus: true,
+                        focusNode: _categorySearchFocusNode,
+                        textInputAction: TextInputAction.next,
                         decoration: InputDecoration(
                           labelText: 'ابحث عن التصنيف',
                           hintText: 'اكتب لتصفية النتائج...',
@@ -6793,12 +6890,24 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                             _searchQuery = v.trim().toLowerCase();
                           });
                         },
+                        onFieldSubmitted: (_) {
+                          if (_selectedCategory == null) {
+                            _selectFirstMatchingCategory(limited);
+                          }
+                          if (_selectedCategory != null) {
+                            _focusAndSelect(
+                              _weightFocusNode,
+                              _weightController,
+                            );
+                          }
+                        },
                       ),
                       const SizedBox(height: 16),
                       // Categories list
                       FormField<int>(
-                        validator: (_) =>
-                            _selectedCategory == null ? 'الرجاء اختيار تصنيف' : null,
+                        validator: (_) => _selectedCategory == null
+                            ? 'الرجاء اختيار تصنيف'
+                            : null,
                         builder: (state) {
                           return Column(
                             mainAxisSize: MainAxisSize.min,
@@ -6819,7 +6928,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                   border: Border.all(
                                     color: state.hasError
                                         ? theme.colorScheme.error
-                                        : theme.dividerColor.withValues(alpha: 0.3),
+                                        : theme.dividerColor.withValues(
+                                            alpha: 0.3,
+                                          ),
                                     width: 1.5,
                                   ),
                                   borderRadius: BorderRadius.circular(12),
@@ -6839,17 +6950,17 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                               'لا توجد نتائج',
                                               style: theme.textTheme.titleMedium
                                                   ?.copyWith(
-                                                color: theme.disabledColor,
-                                                fontWeight: FontWeight.w600,
-                                              ),
+                                                    color: theme.disabledColor,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
                                             ),
                                             const SizedBox(height: 4),
                                             Text(
                                               'جرب البحث بكلمة أخرى',
                                               style: theme.textTheme.bodySmall
                                                   ?.copyWith(
-                                                color: theme.disabledColor,
-                                              ),
+                                                    color: theme.disabledColor,
+                                                  ),
                                             ),
                                           ],
                                         ),
@@ -6862,25 +6973,26 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                           final id = (opt['id'] is num)
                                               ? (opt['id'] as num).toInt()
                                               : int.tryParse('${opt['id']}');
-                                          final name =
-                                              (opt['name'] ?? '').toString();
+                                          final name = (opt['name'] ?? '')
+                                              .toString();
 
                                           final isSelected =
                                               _selectedCategory != null &&
-                                                  id != null &&
-                                                  ((_selectedCategory?['id']
-                                                          is num)
-                                                      ? (_selectedCategory?['id']
-                                                                  as num)
-                                                              .toInt() ==
-                                                          id
-                                                      : int.tryParse(
-                                                              '${_selectedCategory?['id']}') ==
-                                                          id);
+                                              id != null &&
+                                              ((_selectedCategory?['id'] is num)
+                                                  ? (_selectedCategory?['id']
+                                                                as num)
+                                                            .toInt() ==
+                                                        id
+                                                  : int.tryParse(
+                                                          '${_selectedCategory?['id']}',
+                                                        ) ==
+                                                        id);
 
                                           return Padding(
                                             padding: const EdgeInsets.only(
-                                                bottom: 6),
+                                              bottom: 6,
+                                            ),
                                             child: Material(
                                               color: Colors.transparent,
                                               child: InkWell(
@@ -6888,9 +7000,12 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                   setState(() {
                                                     _selectedCategory = opt;
                                                     final categoryKarat =
-                                                        _tryParseCategoryKarat(opt);
+                                                        _tryParseCategoryKarat(
+                                                          opt,
+                                                        );
                                                     if (categoryKarat != null) {
-                                                      _selectedKarat = categoryKarat;
+                                                      _selectedKarat =
+                                                          categoryKarat;
                                                     }
                                                   });
                                                   state.didChange(id);
@@ -6899,59 +7014,71 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                     BorderRadius.circular(10),
                                                 child: AnimatedContainer(
                                                   duration: const Duration(
-                                                      milliseconds: 200),
+                                                    milliseconds: 200,
+                                                  ),
                                                   padding:
                                                       const EdgeInsets.symmetric(
-                                                    horizontal: 14,
-                                                    vertical: 14,
-                                                  ),
+                                                        horizontal: 14,
+                                                        vertical: 14,
+                                                      ),
                                                   decoration: BoxDecoration(
                                                     color: isSelected
-                                                        ? const Color(0xFFD4AF37)
-                                                            .withValues(
-                                                                alpha: 0.2)
-                                                        : theme.colorScheme
-                                                            .surfaceContainerHighest
-                                                            .withValues(
-                                                                alpha: 0.3),
+                                                        ? const Color(
+                                                            0xFFD4AF37,
+                                                          ).withValues(
+                                                            alpha: 0.2,
+                                                          )
+                                                        : theme
+                                                              .colorScheme
+                                                              .surfaceContainerHighest
+                                                              .withValues(
+                                                                alpha: 0.3,
+                                                              ),
                                                     border: Border.all(
                                                       color: isSelected
                                                           ? const Color(
-                                                              0xFFD4AF37)
+                                                              0xFFD4AF37,
+                                                            )
                                                           : Colors.transparent,
                                                       width: 2,
                                                     ),
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                            10),
+                                                          10,
+                                                        ),
                                                   ),
                                                   child: Row(
                                                     children: [
                                                       Container(
                                                         padding:
                                                             const EdgeInsets.all(
-                                                                6),
-                                                        decoration:
-                                                            BoxDecoration(
+                                                              6,
+                                                            ),
+                                                        decoration: BoxDecoration(
                                                           color: isSelected
                                                               ? const Color(
-                                                                      0xFFD4AF37)
-                                                                  .withValues(
-                                                                      alpha: 0.3)
-                                                              : theme.colorScheme
-                                                                  .surface,
+                                                                  0xFFD4AF37,
+                                                                ).withValues(
+                                                                  alpha: 0.3,
+                                                                )
+                                                              : theme
+                                                                    .colorScheme
+                                                                    .surface,
                                                           borderRadius:
-                                                              BorderRadius
-                                                                  .circular(6),
+                                                              BorderRadius.circular(
+                                                                6,
+                                                              ),
                                                         ),
                                                         child: Icon(
                                                           Icons.label,
                                                           size: 18,
                                                           color: isSelected
                                                               ? const Color(
-                                                                  0xFFD4AF37)
-                                                              : theme.iconTheme
-                                                                  .color,
+                                                                  0xFFD4AF37,
+                                                                )
+                                                              : theme
+                                                                    .iconTheme
+                                                                    .color,
                                                         ),
                                                       ),
                                                       const SizedBox(width: 12),
@@ -6962,14 +7089,14 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                             fontSize: 15,
                                                             fontWeight:
                                                                 isSelected
-                                                                    ? FontWeight
-                                                                        .bold
-                                                                    : FontWeight
-                                                                        .w500,
+                                                                ? FontWeight
+                                                                      .bold
+                                                                : FontWeight
+                                                                      .w500,
                                                             color: isSelected
                                                                 ? theme
-                                                                    .colorScheme
-                                                                    .onSurface
+                                                                      .colorScheme
+                                                                      .onSurface
                                                                 : null,
                                                           ),
                                                         ),
@@ -6977,15 +7104,17 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                       if (isSelected)
                                                         Container(
                                                           padding:
-                                                              const EdgeInsets
-                                                                  .all(2),
+                                                              const EdgeInsets.all(
+                                                                2,
+                                                              ),
                                                           decoration:
                                                               const BoxDecoration(
-                                                            color: Color(
-                                                                0xFFD4AF37),
-                                                            shape:
-                                                                BoxShape.circle,
-                                                          ),
+                                                                color: Color(
+                                                                  0xFFD4AF37,
+                                                                ),
+                                                                shape: BoxShape
+                                                                    .circle,
+                                                              ),
                                                           child: const Icon(
                                                             Icons.check,
                                                             color: Colors.white,
@@ -7000,20 +7129,20 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                           );
                                         },
                                       ),
-                            ),
-                            if (state.hasError) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                state.errorText!,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.error,
-                                ),
                               ),
+                              if (state.hasError) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  state.errorText!,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.error,
+                                  ),
+                                ),
+                              ],
                             ],
-                          ],
-                        );
-                      },
-                    ),
+                          );
+                        },
+                      ),
                       const SizedBox(height: 20),
                       // Karat, Weight, Wage in a grid
                       Text(
@@ -7053,13 +7182,21 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                           Expanded(
                             child: TextFormField(
                               controller: _weightController,
+                              focusNode: _weightFocusNode,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                decimal: true,
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              onFieldSubmitted: (_) => _focusAndSelect(
+                                _wageFocusNode,
+                                _wageController,
                               ),
-                              onTap: () => _weightController.selection =
-                                  TextSelection(baseOffset: 0,
-                                    extentOffset: _weightController.text.length),
+                              onTap: () =>
+                                  _weightController.selection = TextSelection(
+                                    baseOffset: 0,
+                                    extentOffset: _weightController.text.length,
+                                  ),
                               decoration: InputDecoration(
                                 labelText: 'الوزن (جم)',
                                 border: OutlineInputBorder(
@@ -7080,13 +7217,21 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                           Expanded(
                             child: TextFormField(
                               controller: _wageController,
+                              focusNode: _wageFocusNode,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                decimal: true,
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              onFieldSubmitted: (_) => _focusAndSelect(
+                                _countFocusNode,
+                                _countController,
                               ),
-                              onTap: () => _wageController.selection =
-                                  TextSelection(baseOffset: 0,
-                                    extentOffset: _wageController.text.length),
+                              onTap: () =>
+                                  _wageController.selection = TextSelection(
+                                    baseOffset: 0,
+                                    extentOffset: _wageController.text.length,
+                                  ),
                               decoration: InputDecoration(
                                 labelText: 'المصنعية/جم',
                                 hintText: '0',
@@ -7105,9 +7250,16 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                               controller: _countController,
                               focusNode: _countFocusNode,
                               keyboardType: TextInputType.number,
-                              onTap: () => _countController.selection =
-                                  TextSelection(baseOffset: 0,
-                                    extentOffset: _countController.text.length),
+                              textInputAction: TextInputAction.next,
+                              onFieldSubmitted: (_) => _focusAndSelect(
+                                _amountFocusNode,
+                                _amountController,
+                              ),
+                              onTap: () =>
+                                  _countController.selection = TextSelection(
+                                    baseOffset: 0,
+                                    extentOffset: _countController.text.length,
+                                  ),
                               decoration: InputDecoration(
                                 labelText: 'العدد',
                                 hintText: '1',
@@ -7130,14 +7282,17 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _amountController,
+                        focusNode: _amountFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        textInputAction: TextInputAction.done,
                         inputFormatters: const [
                           ArabicNumberTextInputFormatter(allowDecimal: true),
                         ],
-                        onTap: () => _amountController.selection =
-                            TextSelection(
+                        onFieldSubmitted: (_) => _submit(),
+                        onTap: () =>
+                            _amountController.selection = TextSelection(
                               baseOffset: 0,
                               extentOffset: _amountController.text.length,
                             ),
@@ -7160,10 +7315,14 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFD4AF37).withValues(alpha: 0.08),
+                          color: const Color(
+                            0xFFD4AF37,
+                          ).withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+                            color: const Color(
+                              0xFFD4AF37,
+                            ).withValues(alpha: 0.2),
                           ),
                         ),
                         child: Row(
@@ -7171,7 +7330,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                             Container(
                               padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+                                color: const Color(
+                                  0xFFD4AF37,
+                                ).withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: const Icon(
@@ -7238,8 +7399,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                           vertical: 14,
                         ),
                         elevation: 2,
-                        shadowColor:
-                            const Color(0xFFD4AF37).withValues(alpha: 0.4),
+                        shadowColor: const Color(
+                          0xFFD4AF37,
+                        ).withValues(alpha: 0.4),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),

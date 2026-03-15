@@ -248,6 +248,38 @@ def ensure_settings_columns(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_voucher_print_columns(engine: Engine) -> None:
+    """Ensure voucher print/detail columns exist for legacy databases."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "voucher",
+                [
+                    ("employee_id", "INTEGER", "NULL"),
+                    ("receiver_name", "VARCHAR(200)", "NULL"),
+                ],
+            )
+        )
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "voucher_account_line",
+                [
+                    ("gross_weight", "FLOAT", "NULL"),
+                    ("net_weight", "FLOAT", "NULL"),
+                    ("stones_weight", "FLOAT", "0"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
 def ensure_journal_entry_columns(engine: Engine) -> None:
     """Ensure JournalEntry draft/posting/soft-delete columns exist.
 

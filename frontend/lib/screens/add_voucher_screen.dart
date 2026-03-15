@@ -19,12 +19,24 @@ import '../widgets/searchable_picker_field.dart';
 class GoldLineEntryModel {
   double amount;
   double? karat;
+  double? grossWeight;
+  double? netWeight;
+  double? stonesWeight;
 
-  GoldLineEntryModel({this.amount = 0, this.karat});
+  GoldLineEntryModel({
+    this.amount = 0,
+    this.karat,
+    this.grossWeight,
+    this.netWeight,
+    this.stonesWeight,
+  });
 
   Map<String, dynamic> toJson() => {
     'amount': amount,
     if (karat != null) 'karat': karat,
+    if (grossWeight != null) 'gross_weight': grossWeight,
+    if (netWeight != null) 'net_weight': netWeight,
+    if (stonesWeight != null) 'stones_weight': stonesWeight,
   };
 
   factory GoldLineEntryModel.fromJson(Map<String, dynamic> map) {
@@ -39,6 +51,9 @@ class GoldLineEntryModel {
     return GoldLineEntryModel(
       amount: toDouble(map['amount']) ?? 0,
       karat: toDouble(map['karat']),
+      grossWeight: toDouble(map['gross_weight']),
+      netWeight: toDouble(map['net_weight']),
+      stonesWeight: toDouble(map['stones_weight']),
     );
   }
 }
@@ -435,6 +450,14 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     if (_incomingAccountLinesRaw == null) return;
 
     try {
+      double? toDouble(dynamic v) {
+        if (v == null) return null;
+        if (v is double) return v;
+        if (v is int) return v.toDouble();
+        if (v is num) return v.toDouble();
+        return double.tryParse(v.toString());
+      }
+
       int? partyAccountId;
       if (_partyType == 'customer' && _selectedCustomerId != null) {
         final customer = _findById(_customers, _selectedCustomerId);
@@ -509,6 +532,17 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             amountType: amountType,
             amount: amount,
             karat: karat,
+            goldEntries: amountType == 'gold'
+                ? [
+                    GoldLineEntryModel(
+                      amount: amount,
+                      karat: karat,
+                      grossWeight: toDouble(map['gross_weight']),
+                      netWeight: toDouble(map['net_weight']),
+                      stonesWeight: toDouble(map['stones_weight']),
+                    ),
+                  ]
+                : [],
             description: map['description'] as String?,
           ),
         );
@@ -3005,12 +3039,52 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         }
 
         for (final entry in entries) {
+          final netWeight = entry.netWeight ?? entry.amount;
+          final stonesWeight = entry.stonesWeight ?? 0.0;
+          final grossWeight = entry.grossWeight ?? (netWeight + stonesWeight);
+
+          if (netWeight <= 0) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('الوزن الصافي يجب أن يكون أكبر من صفر'),
+              ),
+            );
+            setState(() => _isSaving = false);
+            return;
+          }
+
+          if (entry.netWeight != null &&
+              (netWeight - entry.amount).abs() > 0.001) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('وزن السطر المحاسبي يجب أن يساوي الوزن الصافي'),
+              ),
+            );
+            setState(() => _isSaving = false);
+            return;
+          }
+
+          if (stonesWeight < 0 || grossWeight + 0.001 < netWeight) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'الوزن القائم يجب أن يكون أكبر من أو يساوي الصافي، ووزن الأحجار غير سالب',
+                ),
+              ),
+            );
+            setState(() => _isSaving = false);
+            return;
+          }
+
           allAccountLines.add({
             'account_id': line.accountId,
             'line_type': line.lineType,
             'amount_type': 'gold',
             'amount': entry.amount,
             'karat': entry.karat,
+            'gross_weight': grossWeight,
+            'net_weight': netWeight,
+            'stones_weight': stonesWeight,
             'description': line.description ?? 'ذهب',
           });
         }
@@ -3019,6 +3093,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       // Calculate totals for party account lines
       double totalCash = 0;
       Map<double, double> totalGoldByKarat = {};
+      Map<double, double> totalGrossGoldByKarat = {};
+      Map<double, double> totalNetGoldByKarat = {};
+      Map<double, double> totalStonesGoldByKarat = {};
 
       for (var line in _accountLines) {
         if (line.amountType == 'cash') {
@@ -3026,8 +3103,17 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         } else if (line.amountType == 'gold') {
           for (final entry in _effectiveGoldEntries(line)) {
             if (entry.amount <= 0 || entry.karat == null) continue;
+            final netWeight = entry.netWeight ?? entry.amount;
+            final stonesWeight = entry.stonesWeight ?? 0.0;
+            final grossWeight = entry.grossWeight ?? (netWeight + stonesWeight);
             totalGoldByKarat[entry.karat!] =
                 (totalGoldByKarat[entry.karat!] ?? 0) + entry.amount;
+            totalGrossGoldByKarat[entry.karat!] =
+                (totalGrossGoldByKarat[entry.karat!] ?? 0) + grossWeight;
+            totalNetGoldByKarat[entry.karat!] =
+                (totalNetGoldByKarat[entry.karat!] ?? 0) + netWeight;
+            totalStonesGoldByKarat[entry.karat!] =
+                (totalStonesGoldByKarat[entry.karat!] ?? 0) + stonesWeight;
           }
         }
       }
@@ -3054,6 +3140,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
           'amount_type': 'gold',
           'amount': entry.value,
           'karat': entry.key,
+          'gross_weight': totalGrossGoldByKarat[entry.key] ?? entry.value,
+          'net_weight': totalNetGoldByKarat[entry.key] ?? entry.value,
+          'stones_weight': totalStonesGoldByKarat[entry.key] ?? 0.0,
           'description': 'ذهب عيار ${entry.key.toInt()}',
         });
       }
@@ -3653,6 +3742,99 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                                         tooltip: 'حذف هذا الحقل',
                                       ),
                                     ],
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextFormField(
+                                        key: ValueKey(
+                                          'gold_gross_${index}_$entryIndex',
+                                        ),
+                                        initialValue: entry.grossWeight != null
+                                            ? entry.grossWeight.toString()
+                                            : '',
+                                        decoration: InputDecoration(
+                                          labelText: 'الوزن القائم',
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                        ),
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          NormalizeNumberFormatter(),
+                                        ],
+                                        onChanged: (value) {
+                                          setState(() {
+                                            entry.grossWeight = double.tryParse(
+                                              value,
+                                            );
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: TextFormField(
+                                        key: ValueKey(
+                                          'gold_net_${index}_$entryIndex',
+                                        ),
+                                        initialValue: entry.netWeight != null
+                                            ? entry.netWeight.toString()
+                                            : '',
+                                        decoration: InputDecoration(
+                                          labelText: 'الوزن الصافي',
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                        ),
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          NormalizeNumberFormatter(),
+                                        ],
+                                        onChanged: (value) {
+                                          setState(() {
+                                            entry.netWeight = double.tryParse(
+                                              value,
+                                            );
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: TextFormField(
+                                        key: ValueKey(
+                                          'gold_stones_${index}_$entryIndex',
+                                        ),
+                                        initialValue: entry.stonesWeight != null
+                                            ? entry.stonesWeight.toString()
+                                            : '',
+                                        decoration: InputDecoration(
+                                          labelText: 'وزن الأحجار',
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                        ),
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          NormalizeNumberFormatter(),
+                                        ],
+                                        onChanged: (value) {
+                                          setState(() {
+                                            entry.stonesWeight =
+                                                double.tryParse(value);
+                                          });
+                                        },
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ],

@@ -4245,6 +4245,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           ? existing.stonesValue.toStringAsFixed(2)
           : '',
     );
+    final weightFocusNode = FocusNode();
+    final wageFocusNode = FocusNode();
+    final descriptionFocusNode = FocusNode();
+    final itemCodeFocusNode = FocusNode();
+    final barcodeFocusNode = FocusNode();
+    final stonesWeightFocusNode = FocusNode();
+    final stonesValueFocusNode = FocusNode();
 
     nameController.selection = TextSelection(
       baseOffset: 0,
@@ -4297,6 +4304,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     String? selectedCategoryName = (existing?.category?.isNotEmpty ?? false)
         ? existing!.category
         : null;
+
+    void focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+      focusNode.requestFocus();
+      controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: controller.text.length,
+      );
+    }
 
     final result = await showDialog<PurchaseInlineItem>(
       context: context,
@@ -4508,6 +4523,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     const SizedBox(height: 10),
                                     TextField(
                                       controller: nameController,
+                                      textInputAction: TextInputAction.next,
+                                      onSubmitted: (_) => focusAndSelect(
+                                        weightFocusNode,
+                                        weightController,
+                                      ),
                                       decoration: InputDecoration(
                                         labelText: isCategoryOnly
                                             ? 'اسم/وصف (اختياري)'
@@ -4543,6 +4563,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     const SizedBox(height: 12),
                                     TextField(
                                       controller: weightController,
+                                      focusNode: weightFocusNode,
                                       keyboardType:
                                           const TextInputType.numberWithOptions(
                                             decimal: true,
@@ -4558,6 +4579,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                         labelText: 'الوزن (جرام)',
                                         border: OutlineInputBorder(),
                                         prefixIcon: Icon(Icons.scale),
+                                      ),
+                                      onSubmitted: (_) => focusAndSelect(
+                                        wageFocusNode,
+                                        wageInputIsTotal
+                                            ? wageTotalController
+                                            : wageController,
                                       ),
                                       onChanged: (_) => setDialogState(() {}),
                                     ),
@@ -4606,18 +4633,22 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                       controller: wageInputIsTotal
                                           ? wageTotalController
                                           : wageController,
+                                      focusNode: wageFocusNode,
                                       keyboardType:
                                           const TextInputType.numberWithOptions(
                                             decimal: true,
                                           ),
-                                      textInputAction: TextInputAction.done,
+                                      textInputAction: TextInputAction.next,
                                       inputFormatters: [
                                         NormalizeNumberFormatter(),
                                         FilteringTextInputFormatter.allow(
                                           RegExp(r'^[0-9]*\.?[0-9]*$'),
                                         ),
                                       ],
-                                      onSubmitted: (_) => submit(),
+                                      onSubmitted: (_) => focusAndSelect(
+                                        descriptionFocusNode,
+                                        descriptionController,
+                                      ),
                                       decoration: InputDecoration(
                                         labelText: wageInputIsTotal
                                             ? 'إجمالي أجور المصنعية (ريال)'
@@ -4632,7 +4663,21 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     const SizedBox(height: 12),
                                     TextField(
                                       controller: descriptionController,
+                                      focusNode: descriptionFocusNode,
                                       maxLines: 2,
+                                      textInputAction: isCategoryOnly
+                                          ? TextInputAction.done
+                                          : TextInputAction.next,
+                                      onSubmitted: (_) {
+                                        if (isCategoryOnly) {
+                                          submit();
+                                          return;
+                                        }
+                                        focusAndSelect(
+                                          itemCodeFocusNode,
+                                          itemCodeController,
+                                        );
+                                      },
                                       decoration: const InputDecoration(
                                         labelText: 'ملاحظات (اختياري)',
                                         border: OutlineInputBorder(),
@@ -4645,6 +4690,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     if (!isCategoryOnly) ...[
                                       TextField(
                                         controller: itemCodeController,
+                                        focusNode: itemCodeFocusNode,
+                                        textInputAction: TextInputAction.next,
+                                        onSubmitted: (_) => focusAndSelect(
+                                          barcodeFocusNode,
+                                          barcodeController,
+                                        ),
                                         decoration: const InputDecoration(
                                           labelText: 'كود الصنف (اختياري)',
                                           border: OutlineInputBorder(),
@@ -4672,6 +4723,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     if (!isCategoryOnly)
                                       TextField(
                                         controller: barcodeController,
+                                        focusNode: barcodeFocusNode,
+                                        textInputAction: TextInputAction.done,
+                                        onSubmitted: (_) => submit(),
                                         decoration: const InputDecoration(
                                           labelText: 'الباركود (اختياري)',
                                           border: OutlineInputBorder(),
@@ -4696,16 +4750,22 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     if (hasStones) ...[
                                       TextField(
                                         controller: stonesWeightController,
+                                        focusNode: stonesWeightFocusNode,
                                         keyboardType:
                                             const TextInputType.numberWithOptions(
                                               decimal: true,
                                             ),
+                                        textInputAction: TextInputAction.next,
                                         inputFormatters: [
                                           NormalizeNumberFormatter(),
                                           FilteringTextInputFormatter.allow(
                                             RegExp(r'^[0-9]*\.?[0-9]*$'),
                                           ),
                                         ],
+                                        onSubmitted: (_) => focusAndSelect(
+                                          stonesValueFocusNode,
+                                          stonesValueController,
+                                        ),
                                         decoration: const InputDecoration(
                                           labelText: 'وزن الأحجار (جم)',
                                           border: OutlineInputBorder(),
@@ -4716,6 +4776,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                       const SizedBox(height: 12),
                                       TextField(
                                         controller: stonesValueController,
+                                        focusNode: stonesValueFocusNode,
                                         keyboardType:
                                             const TextInputType.numberWithOptions(
                                               decimal: true,
@@ -4816,6 +4877,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     barcodeController.dispose();
     stonesWeightController.dispose();
     stonesValueController.dispose();
+    weightFocusNode.dispose();
+    wageFocusNode.dispose();
+    descriptionFocusNode.dispose();
+    itemCodeFocusNode.dispose();
+    barcodeFocusNode.dispose();
+    stonesWeightFocusNode.dispose();
+    stonesValueFocusNode.dispose();
 
     return result;
   }
@@ -5601,6 +5669,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final notesController = TextEditingController(
       text: existing?.description ?? '',
     );
+    final weightFocusNode = FocusNode();
+    final wageFocusNode = FocusNode();
+    final goldValueFocusNode = FocusNode();
+    final wageCashFocusNode = FocusNode();
+    final goldTaxFocusNode = FocusNode();
+    final wageTaxFocusNode = FocusNode();
+    final notesFocusNode = FocusNode();
 
     final allowedKarats = _allowedGoldKaratsForSelectedSafe();
     final defaultKarat = allowedKarats.isNotEmpty
@@ -5609,6 +5684,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     double karat = existing?.karat ?? defaultKarat;
     if (allowedKarats.isNotEmpty && !allowedKarats.contains(karat.round())) {
       karat = defaultKarat;
+    }
+
+    void focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+      focusNode.requestFocus();
+      controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: controller.text.length,
+      );
     }
 
     final result = await showDialog<PurchaseKaratLine>(
@@ -5690,6 +5773,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: weightController,
+                      focusNode: weightFocusNode,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
@@ -5705,17 +5789,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.scale),
                       ),
+                      onSubmitted: (_) =>
+                          focusAndSelect(wageFocusNode, wagePerGramController),
                       onChanged: (_) => setDialogState(() {}),
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: wagePerGramController,
+                      focusNode: wageFocusNode,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
                       textInputAction: _manualPricing
                           ? TextInputAction.next
-                          : TextInputAction.done,
+                          : TextInputAction.next,
                       inputFormatters: [
                         NormalizeNumberFormatter(),
                         FilteringTextInputFormatter.allow(
@@ -5728,71 +5815,36 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         prefixIcon: Icon(Icons.build),
                       ),
                       onChanged: (_) => setDialogState(() {}),
-                      onSubmitted: _manualPricing
-                          ? null
-                          : (_) {
-                              final weightValue =
-                                  double.tryParse(weightController.text) ?? 0;
-                              final wageValue =
-                                  double.tryParse(wagePerGramController.text) ??
-                                  0;
-                              if (weightValue <= 0) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('يرجى إدخال وزن صحيح'),
-                                  ),
-                                );
-                                return;
-                              }
-                              if (wageValue < 0) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'لا يمكن أن تكون أجرة المصنعية سالبة',
-                                    ),
-                                  ),
-                                );
-                                return;
-                              }
-
-                              Navigator.of(dialogContext).pop(
-                                PurchaseKaratLine(
-                                  karat: karat,
-                                  weightGrams: weightValue,
-                                  wagePerGram: wageValue,
-                                  goldValueOverride: _manualPricing
-                                      ? manualGoldValue
-                                      : null,
-                                  wageCashOverride: _manualPricing
-                                      ? manualWageCash
-                                      : null,
-                                  goldTaxOverride: _manualPricing
-                                      ? manualGoldTax
-                                      : null,
-                                  wageTaxOverride: _manualPricing
-                                      ? manualWageTax
-                                      : null,
-                                  description:
-                                      notesController.text.trim().isEmpty
-                                      ? null
-                                      : notesController.text.trim(),
-                                ),
-                              );
-                            },
+                      onSubmitted: (_) {
+                        if (_manualPricing) {
+                          focusAndSelect(
+                            goldValueFocusNode,
+                            goldValueController,
+                          );
+                          return;
+                        }
+                        focusAndSelect(notesFocusNode, notesController);
+                      },
                     ),
                     if (_manualPricing) ...[
                       const SizedBox(height: 12),
                       TextField(
                         controller: goldValueController,
+                        focusNode: goldValueFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        textInputAction: TextInputAction.next,
                         inputFormatters: [
                           NormalizeNumberFormatter(),
                           FilteringTextInputFormatter.allow(
                             RegExp(r'^[0-9]*\.?[0-9]*$'),
                           ),
                         ],
+                        onSubmitted: (_) => focusAndSelect(
+                          wageCashFocusNode,
+                          wageCashController,
+                        ),
                         decoration: const InputDecoration(
                           labelText: 'قيمة الذهب (ريال)',
                           border: OutlineInputBorder(),
@@ -5803,15 +5855,19 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                       const SizedBox(height: 12),
                       TextField(
                         controller: wageCashController,
+                        focusNode: wageCashFocusNode,
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        textInputAction: TextInputAction.next,
                         inputFormatters: [
                           NormalizeNumberFormatter(),
                           FilteringTextInputFormatter.allow(
                             RegExp(r'^[0-9]*\.?[0-9]*$'),
                           ),
                         ],
+                        onSubmitted: (_) =>
+                            focusAndSelect(goldTaxFocusNode, goldTaxController),
                         decoration: const InputDecoration(
                           labelText: 'أجور المصنعية (ريال)',
                           border: OutlineInputBorder(),
@@ -5825,16 +5881,22 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           Expanded(
                             child: TextField(
                               controller: goldTaxController,
+                              focusNode: goldTaxFocusNode,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
                                     decimal: true,
                                   ),
+                              textInputAction: TextInputAction.next,
                               inputFormatters: [
                                 NormalizeNumberFormatter(),
                                 FilteringTextInputFormatter.allow(
                                   RegExp(r'^[0-9]*\.?[0-9]*$'),
                                 ),
                               ],
+                              onSubmitted: (_) => focusAndSelect(
+                                wageTaxFocusNode,
+                                wageTaxController,
+                              ),
                               decoration: const InputDecoration(
                                 labelText: 'ضريبة الذهب',
                                 border: OutlineInputBorder(),
@@ -5846,11 +5908,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                           Expanded(
                             child: TextField(
                               controller: wageTaxController,
+                              focusNode: wageTaxFocusNode,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
                                     decimal: true,
                                   ),
-                              textInputAction: TextInputAction.done,
+                              textInputAction: TextInputAction.next,
                               inputFormatters: [
                                 NormalizeNumberFormatter(),
                                 FilteringTextInputFormatter.allow(
@@ -5862,57 +5925,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                 border: OutlineInputBorder(),
                               ),
                               onChanged: (_) => setDialogState(() {}),
-                              onSubmitted: (_) {
-                                final weightValue =
-                                    double.tryParse(weightController.text) ?? 0;
-                                final wageValue =
-                                    double.tryParse(
-                                      wagePerGramController.text,
-                                    ) ??
-                                    0;
-                                if (weightValue <= 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('يرجى إدخال وزن صحيح'),
-                                    ),
-                                  );
-                                  return;
-                                }
-                                if (wageValue < 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'لا يمكن أن تكون أجرة المصنعية سالبة',
-                                      ),
-                                    ),
-                                  );
-                                  return;
-                                }
-
-                                Navigator.of(dialogContext).pop(
-                                  PurchaseKaratLine(
-                                    karat: karat,
-                                    weightGrams: weightValue,
-                                    wagePerGram: wageValue,
-                                    goldValueOverride: _manualPricing
-                                        ? manualGoldValue
-                                        : null,
-                                    wageCashOverride: _manualPricing
-                                        ? manualWageCash
-                                        : null,
-                                    goldTaxOverride: _manualPricing
-                                        ? manualGoldTax
-                                        : null,
-                                    wageTaxOverride: _manualPricing
-                                        ? manualWageTax
-                                        : null,
-                                    description:
-                                        notesController.text.trim().isEmpty
-                                        ? null
-                                        : notesController.text.trim(),
-                                  ),
-                                );
-                              },
+                              onSubmitted: (_) => focusAndSelect(
+                                notesFocusNode,
+                                notesController,
+                              ),
                             ),
                           ),
                         ],
@@ -5921,6 +5937,55 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: notesController,
+                      focusNode: notesFocusNode,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) {
+                        final weightValue =
+                            double.tryParse(weightController.text) ?? 0;
+                        final wageValue =
+                            double.tryParse(wagePerGramController.text) ?? 0;
+                        if (weightValue <= 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('يرجى إدخال وزن صحيح'),
+                            ),
+                          );
+                          return;
+                        }
+                        if (wageValue < 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'لا يمكن أن تكون أجرة المصنعية سالبة',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+
+                        Navigator.of(dialogContext).pop(
+                          PurchaseKaratLine(
+                            karat: karat,
+                            weightGrams: weightValue,
+                            wagePerGram: wageValue,
+                            goldValueOverride: _manualPricing
+                                ? manualGoldValue
+                                : null,
+                            wageCashOverride: _manualPricing
+                                ? manualWageCash
+                                : null,
+                            goldTaxOverride: _manualPricing
+                                ? manualGoldTax
+                                : null,
+                            wageTaxOverride: _manualPricing
+                                ? manualWageTax
+                                : null,
+                            description: notesController.text.trim().isEmpty
+                                ? null
+                                : notesController.text.trim(),
+                          ),
+                        );
+                      },
                       decoration: const InputDecoration(
                         labelText: 'ملاحظات (اختياري)',
                         border: OutlineInputBorder(),
@@ -6032,6 +6097,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     goldTaxController.dispose();
     wageTaxController.dispose();
     notesController.dispose();
+    weightFocusNode.dispose();
+    wageFocusNode.dispose();
+    goldValueFocusNode.dispose();
+    wageCashFocusNode.dispose();
+    goldTaxFocusNode.dispose();
+    wageTaxFocusNode.dispose();
+    notesFocusNode.dispose();
 
     return result;
   }

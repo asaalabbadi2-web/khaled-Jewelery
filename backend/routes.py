@@ -21848,9 +21848,29 @@ def _validate_and_summarize_voucher_account_lines(account_lines_data):
     total_debit_gold_main = 0.0
     total_credit_gold_main = 0.0
 
+    allowed_line_keys = {
+        'account_id',
+        'line_type',
+        'amount_type',
+        'amount',
+        'karat',
+        'description',
+        'gross_weight',
+        'net_weight',
+        'stones_weight',
+    }
+    normalized_lines = []
+
     for line in account_lines_data:
         if not isinstance(line, dict):
             return None, jsonify({'error': 'Each account line must be an object'}), 400
+
+        unknown_keys = sorted(set(line.keys()) - allowed_line_keys)
+        if unknown_keys:
+            return None, jsonify({
+                'error': 'unknown_voucher_account_line_keys',
+                'unknown_keys': unknown_keys,
+            }), 400
 
         if 'account_id' not in line or 'line_type' not in line or 'amount_type' not in line or 'amount' not in line:
             return None, jsonify({'error': 'Each account line must have account_id, line_type, amount_type, and amount'}), 400
@@ -21871,11 +21891,38 @@ def _validate_and_summarize_voucher_account_lines(account_lines_data):
                 total_debit_cash += amount
             else:
                 total_credit_cash += amount
+            normalized_lines.append({
+                'account_id': line['account_id'],
+                'line_type': line_type,
+                'amount_type': amount_type,
+                'amount': amount,
+                'karat': None,
+                'gross_weight': None,
+                'net_weight': None,
+                'stones_weight': 0.0,
+                'description': line.get('description'),
+            })
             continue
 
         karat = _coerce_float(line.get('karat'), None)
         if karat is None or karat <= 0:
             return None, jsonify({'error': 'karat is required when amount_type is gold'}), 400
+
+        net_weight = _coerce_float(line.get('net_weight'), amount)
+        if net_weight is None or net_weight <= 0:
+            return None, jsonify({'error': 'net_weight must be greater than zero for gold lines'}), 400
+        if abs(net_weight - amount) > 0.001:
+            return None, jsonify({'error': 'amount must match net_weight for gold lines'}), 400
+
+        stones_weight = _coerce_float(line.get('stones_weight'), 0.0)
+        if stones_weight < 0:
+            return None, jsonify({'error': 'stones_weight cannot be negative'}), 400
+
+        gross_weight = _coerce_float(line.get('gross_weight'), net_weight + stones_weight)
+        if gross_weight is None or gross_weight <= 0:
+            return None, jsonify({'error': 'gross_weight must be greater than zero for gold lines'}), 400
+        if gross_weight + 0.001 < net_weight:
+            return None, jsonify({'error': 'gross_weight cannot be less than net_weight'}), 400
 
         amount_main = (amount * karat) / main_karat
         if line_type == 'debit':
@@ -21884,6 +21931,18 @@ def _validate_and_summarize_voucher_account_lines(account_lines_data):
         else:
             total_credit_gold_raw += amount
             total_credit_gold_main += amount_main
+
+        normalized_lines.append({
+            'account_id': line['account_id'],
+            'line_type': line_type,
+            'amount_type': amount_type,
+            'amount': amount,
+            'karat': karat,
+            'gross_weight': round(gross_weight, 6),
+            'net_weight': round(net_weight, 6),
+            'stones_weight': round(stones_weight, 6),
+            'description': line.get('description'),
+        })
 
     if abs(total_debit_cash - total_credit_cash) > 0.01:
         return None, jsonify({'error': f'Cash amounts not balanced: Debit={total_debit_cash}, Credit={total_credit_cash}'}), 400
@@ -21901,12 +21960,42 @@ def _validate_and_summarize_voucher_account_lines(account_lines_data):
     return {
         'amount_cash': round(total_debit_cash, 6),
         'amount_gold': round(total_debit_gold_raw or total_credit_gold_raw, 6),
+        'gross_weight': round(sum(float(line['gross_weight'] or 0.0) for line in normalized_lines if line['amount_type'] == 'gold'), 6),
+        'net_weight': round(sum(float(line['net_weight'] or 0.0) for line in normalized_lines if line['amount_type'] == 'gold'), 6),
+        'stones_weight': round(sum(float(line['stones_weight'] or 0.0) for line in normalized_lines if line['amount_type'] == 'gold'), 6),
+        'account_lines': normalized_lines,
     }, None, None
 
 
 def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
     if not isinstance(data, dict):
         return jsonify({'error': 'Invalid request body'}), 400
+
+    allowed_keys = {
+        'id',
+        'voucher_type',
+        'date',
+        'party_type',
+        'customer_id',
+        'supplier_id',
+        'employee_id',
+        'party_name',
+        'description',
+        'reference_type',
+        'reference_id',
+        'reference_number',
+        'attachments',
+        'notes',
+        'receiver_name',
+        'created_by',
+        'account_lines',
+    }
+    unknown_keys = sorted(set(data.keys()) - allowed_keys)
+    if unknown_keys:
+        return jsonify({
+            'error': 'unknown_voucher_keys',
+            'unknown_keys': unknown_keys,
+        }), 400
 
     voucher_type = str(data.get('voucher_type') or voucher.voucher_type or '').strip().lower()
     if voucher_type not in ['receipt', 'payment', 'adjustment']:
@@ -21921,6 +22010,9 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
                 'amount_type': line.amount_type,
                 'amount': float(line.amount or 0.0),
                 'karat': line.karat,
+                'gross_weight': line.gross_weight,
+                'net_weight': line.net_weight,
+                'stones_weight': line.stones_weight,
                 'description': line.description,
             }
             for line in voucher.account_lines.all()
@@ -21945,7 +22037,12 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
     voucher.party_type = data.get('party_type')
     voucher.customer_id = data.get('customer_id') if voucher.party_type == 'customer' else None
     voucher.supplier_id = data.get('supplier_id') if voucher.party_type == 'supplier' else None
-    voucher.party_name = data.get('party_name') if voucher.party_type not in ('customer', 'supplier') else None
+    voucher.employee_id = data.get('employee_id') if voucher.party_type == 'employee' else None
+    if voucher.party_type == 'employee' and voucher.employee_id:
+        employee = Employee.query.get(voucher.employee_id)
+        voucher.party_name = data.get('party_name') or (employee.name if employee else None)
+    else:
+        voucher.party_name = data.get('party_name') if voucher.party_type not in ('customer', 'supplier') else None
     voucher.amount_cash = summary['amount_cash']
     voucher.amount_gold = summary['amount_gold']
     voucher.gold_karat = None
@@ -21953,12 +22050,14 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
     voucher.reference_type = data.get('reference_type', voucher.reference_type)
     voucher.reference_id = data.get('reference_id', voucher.reference_id)
     voucher.reference_number = data.get('reference_number', voucher.reference_number)
+    voucher.attachments = data.get('attachments', voucher.attachments)
     voucher.notes = data.get('notes')
+    voucher.receiver_name = data.get('receiver_name')
 
     for existing_line in voucher.account_lines.all():
         db.session.delete(existing_line)
 
-    for line_data in account_lines_data:
+    for line_data in summary['account_lines']:
         db.session.add(VoucherAccountLine(
             voucher_id=voucher.id,
             account_id=line_data['account_id'],
@@ -21966,6 +22065,9 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
             amount_type=str(line_data['amount_type']).strip().lower(),
             amount=float(line_data['amount']),
             karat=_coerce_float(line_data.get('karat'), None),
+            gross_weight=_coerce_float(line_data.get('gross_weight'), None),
+            net_weight=_coerce_float(line_data.get('net_weight'), None),
+            stones_weight=_coerce_float(line_data.get('stones_weight'), 0.0),
             description=line_data.get('description'),
         ))
 

@@ -2267,6 +2267,10 @@ class Voucher(db.Model):
     
     # اسم الطرف (إذا كان غير مسجل في النظام)
     party_name = db.Column(db.String(200), nullable=True)
+
+    # معرف الموظف (إذا كان الطرف موظفاً)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=True)
+    employee = db.relationship('Employee', backref='vouchers')
     
     # المبلغ النقدي
     amount_cash = db.Column(db.Float, default=0.0, nullable=False)
@@ -2312,6 +2316,9 @@ class Voucher(db.Model):
     
     # ملاحظات إضافية
     notes = db.Column(db.Text, nullable=True)
+
+    # اسم المستلم المطبوع على السند
+    receiver_name = db.Column(db.String(200), nullable=True)
     
     # معلومات المستخدم الذي أنشأ السند
     created_by = db.Column(db.String(100), nullable=True)
@@ -2390,6 +2397,7 @@ class Voucher(db.Model):
             'party_type': self.party_type,
             'customer_id': self.customer_id,
             'supplier_id': self.supplier_id,
+            'employee_id': self.employee_id,
             'party_name': self.party_name,
             'amount_cash': self.amount_cash,
             'amount_gold': gold_summary['amount_gold_display'],
@@ -2397,6 +2405,9 @@ class Voucher(db.Model):
             'main_karat': gold_summary['main_karat'],
             'gold_karat': gold_summary['display_karat'],
             'gold_breakdown': gold_summary['gold_breakdown'],
+            'gross_weight': round(sum(float(line.gross_weight or 0.0) for line in self.account_lines.all() if line.amount_type == 'gold'), 6),
+            'net_weight': round(sum(float(line.net_weight or line.amount or 0.0) for line in self.account_lines.all() if line.amount_type == 'gold'), 6),
+            'stones_weight': round(sum(float(line.stones_weight or 0.0) for line in self.account_lines.all() if line.amount_type == 'gold'), 6),
             'description': self.description,
             'reference_type': self.reference_type,
             'reference_id': self.reference_id,
@@ -2407,6 +2418,7 @@ class Voucher(db.Model):
             'cancelled_at': self.cancelled_at.isoformat() if self.cancelled_at else None,
             'attachments': self.attachments,
             'notes': self.notes,
+            'receiver_name': self.receiver_name,
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -2430,6 +2442,12 @@ class Voucher(db.Model):
                 'id': self.supplier.id,
                 'name': self.supplier.name,
                 'supplier_code': self.supplier.supplier_code
+            }
+
+        if self.employee:
+            result['employee'] = {
+                'id': self.employee.id,
+                'name': self.employee.name,
             }
         
         # إضافة سطور الحسابات
@@ -2481,6 +2499,15 @@ class VoucherAccountLine(db.Model):
     
     # العيار (في حالة الذهب فقط)
     karat = db.Column(db.Float, nullable=True)
+
+    # الوزن القائم/الإجمالي قبل خصم الأحجار أو الشوائب
+    gross_weight = db.Column(db.Float, nullable=True)
+
+    # الوزن الصافي القابل للترحيل محاسبياً
+    net_weight = db.Column(db.Float, nullable=True)
+
+    # وزن الأحجار أو الإضافات غير الذهبية
+    stones_weight = db.Column(db.Float, nullable=True)
     
     # البيان
     description = db.Column(db.Text, nullable=True)
@@ -2498,6 +2525,9 @@ class VoucherAccountLine(db.Model):
             'amount_type': self.amount_type,
             'amount': self.amount,
             'karat': self.karat,
+            'gross_weight': self.gross_weight,
+            'net_weight': self.net_weight,
+            'stones_weight': self.stones_weight,
             'description': self.description,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
