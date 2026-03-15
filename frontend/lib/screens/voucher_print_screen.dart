@@ -429,6 +429,10 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     final pdf = pw.Document();
     final voucher = widget.voucher;
     final meta = _voucherMeta();
+    final bool isA5Format =
+      (format.width <= PdfPageFormat.a5.width + 1 &&
+        format.height <= PdfPageFormat.a5.height + 1) ||
+      _paperSize == 'A5';
 
     final currencyFormat = NumberFormat('#,##0.00', 'ar');
     final goldFormat = NumberFormat('#,##0.000', 'ar');
@@ -451,8 +455,13 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
         ? accountLinesRaw.whereType<Map<String, dynamic>>().toList()
         : <Map<String, dynamic>>[];
 
+    final int maxTableRows = isA5Format ? 7 : 14;
+    final visibleAccountLines = accountLines.take(maxTableRows).toList();
+    final int hiddenLinesCount =
+        accountLines.length > maxTableRows ? accountLines.length - maxTableRows : 0;
+
     pdf.addPage(
-      pw.MultiPage(
+      pw.Page(
         pageFormat: format,
         textDirection: widget.isArabic
             ? pw.TextDirection.rtl
@@ -461,18 +470,16 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
           base: await PdfGoogleFonts.cairoRegular(),
           bold: await PdfGoogleFonts.cairoBold(),
         ),
-        footer: (context) => pw.Center(
-          child: pw.Text(
-            '${widget.isArabic ? 'تاريخ الطباعة' : 'Printed on'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
-            style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
-          ),
-        ),
         build: (context) {
           final title = widget.isArabic ? meta.titleAr : meta.titleEn;
+          final double titleSize = isA5Format ? 18 : 22;
+          final double bodyFontSize = isA5Format ? 10 : 11;
+          final double sectionTitleSize = isA5Format ? 12 : 14;
+          final double sigWidth = isA5Format ? 95 : 140;
 
           pw.Widget header() {
             return pw.Container(
-              padding: const pw.EdgeInsets.all(18),
+              padding: pw.EdgeInsets.all(isA5Format ? 12 : 18),
               decoration: pw.BoxDecoration(
                 color: meta.headerBg,
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
@@ -486,7 +493,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
                       pw.Text(
                         title,
                         style: pw.TextStyle(
-                          fontSize: 22,
+                          fontSize: titleSize,
                           fontWeight: pw.FontWeight.bold,
                           color: meta.accent,
                         ),
@@ -494,7 +501,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
                       pw.SizedBox(height: 4),
                       pw.Text(
                         voucherNumber,
-                        style: const pw.TextStyle(fontSize: 12),
+                        style: pw.TextStyle(fontSize: isA5Format ? 10 : 12),
                       ),
                     ],
                   ),
@@ -647,7 +654,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
               ];
             }
 
-            final data = accountLines.map(rowFor).toList();
+            final data = visibleAccountLines.map(rowFor).toList();
 
             return pw.TableHelper.fromTextArray(
               headers: headers,
@@ -655,18 +662,21 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
               headerDecoration: pw.BoxDecoration(color: PdfColor.fromHex('#F3F4F6')),
               headerStyle: pw.TextStyle(
                 fontWeight: pw.FontWeight.bold,
-                fontSize: 9,
+                fontSize: isA5Format ? 7.8 : 9,
               ),
-              cellStyle: const pw.TextStyle(fontSize: 9),
-              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+              cellStyle: pw.TextStyle(fontSize: isA5Format ? 7.4 : 9),
+              cellPadding: pw.EdgeInsets.symmetric(
+                horizontal: isA5Format ? 2 : 4,
+                vertical: isA5Format ? 2 : 3,
+              ),
               border: pw.TableBorder.all(color: PdfColors.grey300),
               columnWidths: {
-                0: const pw.FlexColumnWidth(3.2),
-                1: const pw.FixedColumnWidth(55),
-                2: const pw.FixedColumnWidth(55),
-                3: const pw.FixedColumnWidth(55),
-                4: const pw.FixedColumnWidth(55),
-                5: const pw.FixedColumnWidth(40),
+                0: const pw.FlexColumnWidth(3),
+                1: pw.FixedColumnWidth(isA5Format ? 36 : 55),
+                2: pw.FixedColumnWidth(isA5Format ? 36 : 55),
+                3: pw.FixedColumnWidth(isA5Format ? 36 : 55),
+                4: pw.FixedColumnWidth(isA5Format ? 36 : 55),
+                5: pw.FixedColumnWidth(isA5Format ? 26 : 40),
               },
               cellAlignments: {
                 0: pw.Alignment.centerRight,
@@ -683,36 +693,71 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
 
           final out = <pw.Widget>[
             header(),
-            pw.SizedBox(height: 18),
+            pw.SizedBox(height: isA5Format ? 10 : 18),
             _buildPdfSection(
               widget.isArabic ? 'تفاصيل السند' : 'Voucher Details',
               details,
+              titleSize: sectionTitleSize,
+              bodySize: bodyFontSize,
             ),
-            pw.SizedBox(height: 14),
+            pw.SizedBox(height: isA5Format ? 8 : 14),
             if (amountWidgets.isNotEmpty)
-              _buildPdfSection(widget.isArabic ? 'المبالغ' : 'Amounts', amountWidgets),
-            if (accountLines.isNotEmpty) ...[
-              pw.SizedBox(height: 14),
+              _buildPdfSection(
+                widget.isArabic ? 'المبالغ' : 'Amounts',
+                amountWidgets,
+                titleSize: sectionTitleSize,
+                bodySize: bodyFontSize,
+              ),
+            if (visibleAccountLines.isNotEmpty) ...[
+              pw.SizedBox(height: isA5Format ? 8 : 14),
               _buildPdfSection(
                 widget.isArabic ? 'سطور الحسابات' : 'Account Lines',
-                [accountLinesTable()],
+                [
+                  accountLinesTable(),
+                  if (hiddenLinesCount > 0)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(top: 6),
+                      child: pw.Text(
+                        widget.isArabic
+                            ? '... تم إخفاء $hiddenLinesCount سطر لضمان الطباعة في صفحة واحدة'
+                            : '... $hiddenLinesCount lines hidden to keep single-page layout',
+                        style: pw.TextStyle(
+                          fontSize: isA5Format ? 7.5 : 9,
+                          color: PdfColors.grey700,
+                        ),
+                      ),
+                    ),
+                ],
+                titleSize: sectionTitleSize,
+                bodySize: bodyFontSize,
               ),
             ],
             if (notes != null && notes.isNotEmpty) ...[
-              pw.SizedBox(height: 14),
-              _buildPdfSection(widget.isArabic ? 'ملاحظات' : 'Notes', [
-                pw.Text(notes, style: const pw.TextStyle(fontSize: 11)),
-              ]),
+              pw.SizedBox(height: isA5Format ? 8 : 14),
+              _buildPdfSection(
+                widget.isArabic ? 'ملاحظات' : 'Notes',
+                [pw.Text(notes, style: pw.TextStyle(fontSize: bodyFontSize))],
+                titleSize: sectionTitleSize,
+                bodySize: bodyFontSize,
+              ),
             ],
             if (rejectionReason != null && rejectionReason.isNotEmpty) ...[
-              pw.SizedBox(height: 14),
-              _buildPdfSection(widget.isArabic ? 'سبب الرفض' : 'Rejection Reason', [
-                pw.Text(rejectionReason, style: const pw.TextStyle(fontSize: 11)),
-              ]),
+              pw.SizedBox(height: isA5Format ? 8 : 14),
+              _buildPdfSection(
+                widget.isArabic ? 'سبب الرفض' : 'Rejection Reason',
+                [
+                  pw.Text(
+                    rejectionReason,
+                    style: pw.TextStyle(fontSize: bodyFontSize),
+                  ),
+                ],
+                titleSize: sectionTitleSize,
+                bodySize: bodyFontSize,
+              ),
             ],
-            pw.SizedBox(height: 18),
+            pw.SizedBox(height: isA5Format ? 10 : 18),
             pw.Container(
-              padding: const pw.EdgeInsets.all(16),
+              padding: pw.EdgeInsets.all(isA5Format ? 10 : 16),
               decoration: pw.BoxDecoration(
                 border: pw.Border.all(color: PdfColors.grey300),
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
@@ -720,15 +765,35 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
               child: pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildSignatureBox(widget.isArabic ? 'المستلم' : 'Received By'),
-                  _buildSignatureBox(widget.isArabic ? 'المحاسب' : 'Accountant'),
-                  _buildSignatureBox(widget.isArabic ? 'المدير' : 'Manager'),
+                  _buildSignatureBox(
+                    widget.isArabic ? 'المستلم' : 'Received By',
+                    width: sigWidth,
+                  ),
+                  _buildSignatureBox(
+                    widget.isArabic ? 'المحاسب' : 'Accountant',
+                    width: sigWidth,
+                  ),
+                  _buildSignatureBox(
+                    widget.isArabic ? 'المدير' : 'Manager',
+                    width: sigWidth,
+                  ),
                 ],
+              ),
+            ),
+            pw.SizedBox(height: isA5Format ? 6 : 10),
+            pw.Align(
+              alignment: pw.Alignment.center,
+              child: pw.Text(
+                '${widget.isArabic ? 'تاريخ الطباعة' : 'Printed on'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
+                style: pw.TextStyle(fontSize: isA5Format ? 7.5 : 9, color: PdfColors.grey600),
               ),
             ),
           ];
 
-          return out;
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: out,
+          );
         },
       ),
     );
@@ -736,7 +801,12 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     return pdf.save();
   }
 
-  pw.Widget _buildPdfSection(String title, List<pw.Widget> children) {
+  pw.Widget _buildPdfSection(
+    String title,
+    List<pw.Widget> children, {
+    double titleSize = 14,
+    double bodySize = 11,
+  }) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(15),
       decoration: pw.BoxDecoration(
@@ -749,7 +819,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
           pw.Text(
             title,
             style: pw.TextStyle(
-              fontSize: 14,
+              fontSize: titleSize,
               fontWeight: pw.FontWeight.bold,
               color: PdfColor.fromHex('#D4AF37'),
             ),
@@ -757,7 +827,12 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
           pw.SizedBox(height: 10),
           pw.Divider(color: PdfColors.grey300),
           pw.SizedBox(height: 10),
-          ...children,
+          ...children.map(
+            (w) => pw.DefaultTextStyle(
+              style: pw.TextStyle(fontSize: bodySize),
+              child: w,
+            ),
+          ),
         ],
       ),
     );
@@ -782,9 +857,9 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     );
   }
 
-  pw.Widget _buildSignatureBox(String label) {
+  pw.Widget _buildSignatureBox(String label, {double width = 140}) {
     return pw.Container(
-      width: 140,
+      width: width,
       child: pw.Column(
         children: [
           pw.Container(

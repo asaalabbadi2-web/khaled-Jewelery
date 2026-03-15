@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
+import 'voucher_print_screen.dart';
 
 /// شاشة معاينة وطباعة السند
 class VoucherPreviewScreen extends StatefulWidget {
@@ -577,10 +579,23 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
 
   Future<void> _printVoucher() async {
     try {
-      final pdf = await _generatePdf();
-      await Printing.layoutPdf(
-        onLayout: (format) async => pdf.save(),
-        name: '$_voucherTitle-${widget.voucherData['id'] ?? 'جديد'}.pdf',
+      final prefs = await SharedPreferences.getInstance();
+      final storedPaper = prefs.getString('printer_paper_size_v1') ?? 'A4';
+      final normalizedPaper = storedPaper.contains('A5') ? 'A5' : 'A4';
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => VoucherPrintScreen(
+            voucher: widget.voucherData,
+            isArabic: true,
+            printSettings: {
+              'showLogo': true,
+              'paperSize': normalizedPaper,
+              'orientation': 'portrait',
+            },
+          ),
+        ),
       );
     } catch (e) {
       if (mounted) {

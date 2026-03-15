@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_service.dart';
+import 'voucher_print_screen.dart';
 import '../theme/app_theme.dart' as theme;
 
 Future<bool?> showVoucherDetailsSheet(
@@ -197,6 +199,33 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     }
   }
 
+  Future<void> _printVoucher() async {
+    if (_voucher == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final storedPaper = prefs.getString('printer_paper_size_v1') ?? 'A4';
+      final normalizedPaper = storedPaper.contains('A5') ? 'A5' : 'A4';
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => VoucherPrintScreen(
+            voucher: _voucher!,
+            isArabic: true,
+            printSettings: {
+              'showLogo': true,
+              'paperSize': normalizedPaper,
+              'orientation': 'portrait',
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('تعذر فتح شاشة الطباعة: $e', error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -291,11 +320,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
         ),
       IconButton(
         icon: const Icon(Icons.print),
-        onPressed: () {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('الطباعة قريباً...')));
-        },
+        onPressed: _printVoucher,
         tooltip: 'طباعة',
       ),
     ];
