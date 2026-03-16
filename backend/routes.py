@@ -15279,6 +15279,151 @@ def _weight_kwargs_from_map(gold_map, side='debit'):
         kwargs.update(_weight_kwargs_for_karat(karat, weight, side))
     return kwargs
 
+
+def _is_manual_like_journal_entry(entry: 'JournalEntry') -> bool:
+    """Return True when a JournalEntry is manually created/edited.
+
+    We only sync SafeBoxTransaction for manual-like journal entries to avoid
+    double-counting when entries are generated from invoices/vouchers.
+    """
+    try:
+        rt = (getattr(entry, 'reference_type', None) or '').strip().lower()
+    except Exception:
+        rt = ''
+    return rt in ('', 'manual', 'journal_entry')
+
+
+def _rebuild_safe_box_transactions_for_journal_entry(entry: 'JournalEntry', lines: list['JournalEntryLine'], created_by: str = None) -> None:
+    """Rebuild SafeBoxTransaction rows for a manual JournalEntry.
+
+    - Idempotent: deletes existing ref_type='journal_entry' rows for this entry.
+    - Only creates movements for SafeBox-linked accounts.
+    - Mirrors journal semantics: debit => in, credit => out.
+    - Creates up to 2 tx per safe box per entry per asset (cash/gold): one for 'in' and one for 'out' when mixed.
+    """
+    if not entry or not getattr(entry, 'id', None):
+        return
+
+    # Always remove previously-derived rows (avoid bulk delete to keep the session identity-map sane).
+    try:
+        existing = SafeBoxTransaction.query.filter_by(ref_type='journal_entry', ref_id=int(entry.id)).all()
+        for tx in existing:
+            db.session.delete(tx)
+        db.session.flush()
+    except Exception:
+        pass
+
+    # Only rebuild for posted, non-draft entries.
+    try:
+        if bool(getattr(entry, 'is_draft', False)):
+            return
+    except Exception:
+        pass
+
+    try:
+        if hasattr(entry, 'is_posted') and (bool(getattr(entry, 'is_posted', False)) is not True):
+            return
+    except Exception:
+        # If schema doesn't have is_posted, proceed.
+        pass
+
+    if not _is_manual_like_journal_entry(entry):
+        return
+
+    j_lines = [l for l in (lines or []) if getattr(l, 'account_id', None) is not None]
+    if not j_lines:
+        return
+
+    account_ids = list({int(l.account_id) for l in j_lines if l.account_id is not None})
+    if not account_ids:
+        return
+
+    safe_by_account_id = {}
+    for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
+        if getattr(sb, 'account_id', None) is not None:
+            safe_by_account_id[int(sb.account_id)] = sb
+
+    if not safe_by_account_id:
+        return
+
+    notes = None
+    try:
+        notes = f"Journal entry {getattr(entry, 'entry_number', None) or entry.id}"
+    except Exception:
+        notes = None
+
+    eps_cash = 0.005  # 0.5 halalah-ish, avoid float noise
+    eps_w = 0.0005
+
+    def _add_tx(*, sb_id: int, direction: str, amount_cash: float = 0.0, w18: float = 0.0, w21: float = 0.0, w22: float = 0.0, w24: float = 0.0):
+        tx = SafeBoxTransaction(
+            safe_box_id=int(sb_id),
+            ref_type='journal_entry',
+            ref_id=int(entry.id),
+            direction=direction,
+            amount_cash=float(amount_cash or 0.0),
+            weight_18k=float(w18 or 0.0),
+            weight_21k=float(w21 or 0.0),
+            weight_22k=float(w22 or 0.0),
+            weight_24k=float(w24 or 0.0),
+            notes=notes,
+            created_by=created_by,
+        )
+        db.session.add(tx)
+
+    for line in j_lines:
+        sb = safe_by_account_id.get(int(line.account_id))
+        if not sb:
+            continue
+
+        # Cash
+        try:
+            cash_net = float(getattr(line, 'cash_debit', 0.0) or 0.0) - float(getattr(line, 'cash_credit', 0.0) or 0.0)
+        except Exception:
+            cash_net = 0.0
+
+        if abs(cash_net) > eps_cash:
+            _add_tx(
+                sb_id=sb.id,
+                direction='in' if cash_net > 0 else 'out',
+                amount_cash=abs(float(cash_net)),
+            )
+
+        # Gold by karat (net per karat)
+        def _net(field_debit: str, field_credit: str) -> float:
+            try:
+                return float(getattr(line, field_debit, 0.0) or 0.0) - float(getattr(line, field_credit, 0.0) or 0.0)
+            except Exception:
+                return 0.0
+
+        nets = {
+            '18k': _net('debit_18k', 'credit_18k'),
+            '21k': _net('debit_21k', 'credit_21k'),
+            '22k': _net('debit_22k', 'credit_22k'),
+            '24k': _net('debit_24k', 'credit_24k'),
+        }
+        pos = {k: v for k, v in nets.items() if v > eps_w}
+        neg = {k: v for k, v in nets.items() if v < -eps_w}
+
+        if pos:
+            _add_tx(
+                sb_id=sb.id,
+                direction='in',
+                w18=float(pos.get('18k') or 0.0),
+                w21=float(pos.get('21k') or 0.0),
+                w22=float(pos.get('22k') or 0.0),
+                w24=float(pos.get('24k') or 0.0),
+            )
+        if neg:
+            _add_tx(
+                sb_id=sb.id,
+                direction='out',
+                w18=abs(float(neg.get('18k') or 0.0)),
+                w21=abs(float(neg.get('21k') or 0.0)),
+                w22=abs(float(neg.get('22k') or 0.0)),
+                w24=abs(float(neg.get('24k') or 0.0)),
+            )
+
 @api.route('/journal_entries', methods=['POST'])
 @require_permission('journal.create')
 def add_journal_entry():
@@ -15480,6 +15625,18 @@ def add_journal_entry():
                 new_entry.posted_at = datetime.now()
                 new_entry.posted_by = getattr(g, 'current_user', None) and getattr(g.current_user, 'username', 'system') or 'system'
 
+        # Keep SafeBoxTransaction ledger in sync for manual-like posted journal entries.
+        try:
+            posted_by = getattr(g, 'current_user', None) and getattr(g.current_user, 'username', None)
+        except Exception:
+            posted_by = None
+        posted_by = posted_by or 'system'
+        try:
+            _rebuild_safe_box_transactions_for_journal_entry(new_entry, created_lines, created_by=posted_by)
+        except Exception:
+            # best-effort: never block journal creation
+            pass
+
         db.session.commit()
         return jsonify(new_entry.to_dict()), 201
     except Exception as e:
@@ -15626,6 +15783,17 @@ def update_journal_entry(id):
         affected_accounts = old_account_ids | {line.account_id for line in new_lines if line.account_id}
         _recalculate_account_balances_for_accounts(affected_accounts)
 
+        # Rebuild SafeBoxTransaction ledger rows for manual-like journal entries.
+        try:
+            posted_by = getattr(g, 'current_user', None) and getattr(g.current_user, 'username', None)
+        except Exception:
+            posted_by = None
+        posted_by = posted_by or 'system'
+        try:
+            _rebuild_safe_box_transactions_for_journal_entry(entry, new_lines, created_by=posted_by)
+        except Exception:
+            pass
+
         db.session.commit()
         return jsonify({'result': 'success'})
     except Exception as e:
@@ -15662,6 +15830,12 @@ def soft_delete_journal_entry(id):
 
         # إعادة حساب أرصدة الحسابات المتأثرة
         _recalculate_account_balances_for_accounts(affected_account_ids)
+
+        # Remove derived safebox ledger rows for manual journal entries.
+        try:
+            SafeBoxTransaction.query.filter_by(ref_type='journal_entry', ref_id=int(entry.id)).delete(synchronize_session=False)
+        except Exception:
+            pass
         
         db.session.commit()
         
@@ -15699,6 +15873,16 @@ def restore_journal_entry(id):
 
         # إعادة حساب أرصدة الحسابات المتأثرة
         _recalculate_account_balances_for_accounts(affected_account_ids)
+
+        # Rebuild derived safebox ledger rows for manual journal entries.
+        try:
+            posted_by = restored_by or 'system'
+        except Exception:
+            posted_by = 'system'
+        try:
+            _rebuild_safe_box_transactions_for_journal_entry(entry, [l for l in entry.lines if not getattr(l, 'is_deleted', False)], created_by=posted_by)
+        except Exception:
+            pass
         
         db.session.commit()
         
