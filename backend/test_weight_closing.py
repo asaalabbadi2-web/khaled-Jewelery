@@ -581,12 +581,22 @@ class WeightClosingFlowTestCase(unittest.TestCase):
         self.assertAlmostEqual(inventory_line.cash_debit or 0.0, expected_total)
         self.assertAlmostEqual(inventory_line.credit_21k or 0.0, payload['weight'])
 
-        office_line = next(
+        office_cash_line = next(
             line for line in lines
             if line.account_id == office.account_category_id and (line.cash_credit or 0.0) > 0
         )
-        self.assertAlmostEqual(office_line.cash_credit or 0.0, expected_total)
-        self.assertAlmostEqual(office_line.debit_21k or 0.0, payload['weight'])
+        self.assertAlmostEqual(office_cash_line.cash_credit or 0.0, expected_total)
+
+        office_account = Account.query.get(int(office.account_category_id))
+        self.assertIsNotNone(office_account)
+        self.assertIsNotNone(getattr(office_account, 'memo_account_id', None))
+        office_memo_id = int(getattr(office_account, 'memo_account_id'))
+
+        office_weight_line = next(
+            line for line in lines
+            if line.account_id == office_memo_id and (line.debit_21k or 0.0) > 0
+        )
+        self.assertAlmostEqual(office_weight_line.debit_21k or 0.0, payload['weight'])
 
     def test_reservation_partial_payment_creates_partial_invoice(self):
         """Partial payment creates a payment voucher at booking, and a partially_paid invoice on settlement."""

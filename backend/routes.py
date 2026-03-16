@@ -21769,6 +21769,168 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
         return []
     # ───────────────────────────────────────────────────────────────────────
 
+    # Prefer deriving SafeBox movements from the linked JournalEntry when available.
+    # This prevents mismatches when VoucherAccountLine mappings drift from posting logic.
+    je = None
+    try:
+        je_id = getattr(voucher, 'journal_entry_id', None)
+        if je_id not in (None, '', False, 0):
+            je = JournalEntry.query.get(int(je_id))
+    except Exception:
+        je = None
+
+    if je is not None:
+        je_lines = [l for l in (getattr(je, 'lines', None) or []) if not getattr(l, 'is_deleted', False)]
+        if not je_lines:
+            return []
+
+        account_ids = list({int(l.account_id) for l in je_lines if getattr(l, 'account_id', None) is not None})
+        safe_by_account_id = {}
+        if account_ids:
+            for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
+                safe_by_account_id[int(sb.account_id)] = sb
+
+        if not safe_by_account_id:
+            return []
+
+        pm_by_safe_id = {}
+        safe_ids = list({sb.id for sb in safe_by_account_id.values()})
+        if safe_ids:
+            for pm in PaymentMethod.query.filter(PaymentMethod.default_safe_box_id.in_(safe_ids)).all():
+                if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe_id:
+                    pm_by_safe_id[pm.default_safe_box_id] = pm.id
+
+        linked_invoice_id = None
+        linked_invoice_payment_id = None
+        linked_payment_method_id = None
+
+        try:
+            if (getattr(voucher, 'reference_type', None) == 'invoice') and getattr(voucher, 'reference_id', None):
+                linked_invoice_id = int(voucher.reference_id)
+        except Exception:
+            linked_invoice_id = None
+
+        try:
+            raw_notes = getattr(voucher, 'notes', None)
+            if raw_notes:
+                parsed = json.loads(raw_notes)
+                if isinstance(parsed, dict):
+                    if parsed.get('invoice_payment_id') not in (None, '', False):
+                        linked_invoice_payment_id = int(parsed.get('invoice_payment_id'))
+                    if parsed.get('payment_method_id') not in (None, '', False):
+                        linked_payment_method_id = int(parsed.get('payment_method_id'))
+        except Exception:
+            linked_invoice_payment_id = None
+            linked_payment_method_id = None
+
+        effective_ref_type = 'invoice_payment' if linked_invoice_payment_id else 'voucher'
+        eps_cash = 0.005
+        eps_w = 0.0005
+
+        created = []
+
+        def _add_tx(*, sb: SafeBox, direction: str, amount_cash: float = 0.0, w18: float = 0.0, w21: float = 0.0, w22: float = 0.0, w24: float = 0.0):
+            tx = SafeBoxTransaction(
+                safe_box_id=sb.id,
+                ref_type=effective_ref_type,
+                ref_id=voucher.id,
+                invoice_id=linked_invoice_id,
+                invoice_payment_id=linked_invoice_payment_id,
+                payment_method_id=linked_payment_method_id or pm_by_safe_id.get(sb.id),
+                direction=direction,
+                amount_cash=float(amount_cash or 0.0),
+                weight_18k=float(w18 or 0.0),
+                weight_21k=float(w21 or 0.0),
+                weight_22k=float(w22 or 0.0),
+                weight_24k=float(w24 or 0.0),
+                notes=f"Voucher {voucher.voucher_number} - {voucher.voucher_type}",
+                created_by=created_by or voucher.created_by,
+            )
+            db.session.add(tx)
+            created.append(tx)
+
+        for line in je_lines:
+            sb = safe_by_account_id.get(int(line.account_id))
+            if not sb:
+                continue
+
+            # Cash
+            try:
+                cash_debit = float(getattr(line, 'cash_debit', 0.0) or 0.0)
+            except Exception:
+                cash_debit = 0.0
+            try:
+                cash_credit = float(getattr(line, 'cash_credit', 0.0) or 0.0)
+            except Exception:
+                cash_credit = 0.0
+
+            if cash_debit > eps_cash:
+                _add_tx(sb=sb, direction='in', amount_cash=cash_debit)
+            if cash_credit > eps_cash:
+                _add_tx(sb=sb, direction='out', amount_cash=cash_credit)
+
+            # Gold by karat
+            def _w(field: str) -> float:
+                try:
+                    return float(getattr(line, field, 0.0) or 0.0)
+                except Exception:
+                    return 0.0
+
+            w_deb = {
+                '18k': _w('debit_18k'),
+                '21k': _w('debit_21k'),
+                '22k': _w('debit_22k'),
+                '24k': _w('debit_24k'),
+            }
+            w_cred = {
+                '18k': _w('credit_18k'),
+                '21k': _w('credit_21k'),
+                '22k': _w('credit_22k'),
+                '24k': _w('credit_24k'),
+            }
+
+            # Enforce fixed-karat safes.
+            safe_karat = None
+            try:
+                if (getattr(sb, 'safe_type', None) == 'gold') and getattr(sb, 'karat', None):
+                    safe_karat = int(getattr(sb, 'karat'))
+            except Exception:
+                safe_karat = None
+
+            if safe_karat:
+                allowed_key = f"{safe_karat}k"
+                if allowed_key not in ('18k', '21k', '22k', '24k'):
+                    allowed_key = None
+                if allowed_key:
+                    # If any other karat is non-zero, reject.
+                    other_keys = [k for k in ('18k', '21k', '22k', '24k') if k != allowed_key]
+                    if any(abs(w_deb.get(k, 0.0)) > eps_w or abs(w_cred.get(k, 0.0)) > eps_w for k in other_keys):
+                        raise ValueError(
+                            f"karat_mismatch_for_safe_box: safe_box_id={sb.id}, allowed={safe_karat}"
+                        )
+
+            if w_deb['18k'] > eps_w or w_deb['21k'] > eps_w or w_deb['22k'] > eps_w or w_deb['24k'] > eps_w:
+                _add_tx(
+                    sb=sb,
+                    direction='in',
+                    w18=w_deb['18k'],
+                    w21=w_deb['21k'],
+                    w22=w_deb['22k'],
+                    w24=w_deb['24k'],
+                )
+            if w_cred['18k'] > eps_w or w_cred['21k'] > eps_w or w_cred['22k'] > eps_w or w_cred['24k'] > eps_w:
+                _add_tx(
+                    sb=sb,
+                    direction='out',
+                    w18=w_cred['18k'],
+                    w21=w_cred['21k'],
+                    w22=w_cred['22k'],
+                    w24=w_cred['24k'],
+                )
+
+        return created
+
+    # Fallback: derive from voucher account lines.
     lines = VoucherAccountLine.query.filter_by(voucher_id=voucher.id).all()
     if not lines:
         return []
@@ -26637,12 +26799,35 @@ def settle_office_reservation(reservation_id: int):
             description=f'تسليم ذهب للتسكير عيار {karat} - إخراج وزن من المخزون',
             **{karat_credit: weight_grams},
         )
+
+        # IMPORTANT: office bridge account is used for cash-equivalent tracking.
+        # Weight must be posted to the memo (7xxxx) account so it maps cleanly
+        # to the office gold SafeBox (which is linked to the memo account).
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=office.account_category_id,
             cash_credit=total_amount,
             supplier_id=supplier.id,
-            description=f'ذهب لدى مكتب التسكير (أمانة/ذمة على المكتب) - عيار {karat}',
+            description=f'ذهب لدى مكتب التسكير (قيمة نقدية مكافئة) - عيار {karat}',
+        )
+
+        office_account = Account.query.get(int(office.account_category_id))
+        office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
+        if not office_memo_id:
+            # Ensure memo exists for legacy offices.
+            ensure_office_account(office)
+            db.session.flush()
+            office_account = Account.query.get(int(office.account_category_id))
+            office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
+        if not office_memo_id:
+            db.session.rollback()
+            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمكتب التسكير'}), 500
+
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=int(office_memo_id),
+            supplier_id=supplier.id,
+            description=f'ذهب لدى مكتب التسكير (وزن) - عيار {karat}',
             **{karat_debit: weight_grams},
         )
         verify_dual_balance(gold_entry.id)

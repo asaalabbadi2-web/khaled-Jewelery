@@ -85,20 +85,51 @@ def _ensure_office_gold_safe(office: Office, *, created_by: str = 'system') -> S
         db.session.flush()
 
     office_account_id = int(office.account_category_id)
+    office_account = Account.query.get(office_account_id)
+    if not office_account:
+        raise ValueError('office account not found')
+
+    # ✅ Office gold safe must be linked to the memo (weight) account,
+    # not the office bridge/cash-equivalent account.
+    memo_account_id = getattr(office_account, 'memo_account_id', None)
+    if not memo_account_id:
+        # ensure_office_account() best-effort creates the memo, but guard anyway.
+        ensure_office_account(office)
+        db.session.flush()
+        office_account = Account.query.get(office_account_id)
+        memo_account_id = getattr(office_account, 'memo_account_id', None)
+    if not memo_account_id:
+        raise ValueError('office memo account missing; cannot link gold safe')
+
+    memo_account_id = int(memo_account_id)
+
+    # First: if a correct gold safe already exists on memo, reuse it.
     existing = SafeBox.query.filter_by(
+        safe_type='gold',
+        karat=None,
+        account_id=memo_account_id,
+    ).first()
+    if existing:
+        return existing
+
+    # Legacy: office gold safe mistakenly linked to office_account_id.
+    legacy = SafeBox.query.filter_by(
         safe_type='gold',
         karat=None,
         account_id=office_account_id,
     ).first()
-    if existing:
-        return existing
+    if legacy:
+        legacy.account_id = memo_account_id
+        db.session.add(legacy)
+        db.session.flush()
+        return legacy
 
     name = f'خزنة مكتب {office.name} - ذهب'
     safe = SafeBox(
         name=name,
         name_en=None,
         safe_type='gold',
-        account_id=office_account_id,
+        account_id=memo_account_id,
         karat=None,
         is_active=True,
         is_default=False,

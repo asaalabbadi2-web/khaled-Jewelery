@@ -5,6 +5,7 @@ from typing import Optional
 
 from models import db, Office, Supplier
 from code_generator import generate_supplier_code
+from office_account_service import ensure_office_parent_account
 
 
 def ensure_office_supplier(office: Office, *, auto_commit: bool = False) -> Supplier:
@@ -15,12 +16,19 @@ def ensure_office_supplier(office: Office, *, auto_commit: bool = False) -> Supp
     if office.supplier:
         return office.supplier
 
+    # Supplier.account_category_id is a category/root (e.g. 2200/2100), not the office posting account.
+    try:
+        supplier_category = ensure_office_parent_account()
+        supplier_category_id = int(getattr(supplier_category, 'id', None)) if supplier_category else None
+    except Exception:
+        supplier_category_id = None
+
     supplier = Supplier(
         supplier_code=generate_supplier_code(),
         name=office.name,
         phone=office.phone,
         email=office.email,
-        account_category_id=office.account_category_id,
+        account_category_id=supplier_category_id,
         notes=f'مورد مرتبط بالمكتب {office.office_code}',
         active=office.active,
         balance_cash=0.0,

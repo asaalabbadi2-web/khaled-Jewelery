@@ -121,6 +121,86 @@ def ensure_office_parent_account(parent_account_number: str = DEFAULT_PARENT_ACC
     return category_2100
 
 
+def _ensure_memo_account_for_office_account(financial_or_bridge: Account) -> Account:
+    """Ensure a memo (weight) account exists for the office posting account.
+
+    Office accounts historically used transaction_type='both'. The standard Account
+    helper `create_parallel_account()` intentionally skips 'both' accounts, so we
+    implement a lightweight memo-number rule here:
+
+      memo_number = '7' + digits(financial.account_number)
+
+    We also mirror the parent relationship when possible.
+    """
+
+    if not financial_or_bridge:
+        raise ValueError('account is required')
+
+    # If already linked and valid, reuse.
+    try:
+        existing = Account.query.get(int(financial_or_bridge.memo_account_id)) if financial_or_bridge.memo_account_id else None
+    except Exception:
+        existing = None
+    if existing and existing.transaction_type == 'gold' and bool(getattr(existing, 'tracks_weight', False)):
+        return existing
+
+    def _digits_only_local(value: str) -> str:
+        return ''.join(ch for ch in str(value or '').strip() if ch.isdigit())
+
+    fin_no = _digits_only_local(getattr(financial_or_bridge, 'account_number', None) or '')
+    if not fin_no:
+        raise ValueError('office account_number must contain digits to create memo account')
+
+    memo_no = f"7{fin_no}"
+
+    memo = Account.query.filter_by(account_number=memo_no).first()
+
+    # Determine desired parent memo id by mirroring the financial parent.
+    desired_parent_id = None
+    try:
+        if getattr(financial_or_bridge, 'parent_id', None):
+            parent = Account.query.get(int(financial_or_bridge.parent_id))
+            if parent:
+                if getattr(parent, 'memo_account_id', None):
+                    desired_parent_id = int(parent.memo_account_id)
+                else:
+                    # Try to create a memo for the parent when possible.
+                    try:
+                        parent_parallel = parent.create_parallel_account()
+                        if parent_parallel:
+                            desired_parent_id = int(parent_parallel.id)
+                    except Exception:
+                        desired_parent_id = None
+    except Exception:
+        desired_parent_id = None
+
+    if memo:
+        memo.transaction_type = 'gold'
+        memo.tracks_weight = True
+        if desired_parent_id and memo.parent_id != desired_parent_id:
+            memo.parent_id = desired_parent_id
+    else:
+        memo = Account(
+            account_number=memo_no,
+            name=f"{financial_or_bridge.name} وزني",
+            type=financial_or_bridge.type,
+            transaction_type='gold',
+            tracks_weight=True,
+            parent_id=desired_parent_id,
+        )
+        db.session.add(memo)
+        db.session.flush()
+
+    # Link both ways.
+    financial_or_bridge.memo_account_id = memo.id
+    memo.memo_account_id = financial_or_bridge.id
+    db.session.add(financial_or_bridge)
+    db.session.add(memo)
+    db.session.flush()
+
+    return memo
+
+
 def ensure_office_account(
     office: Office,
     *,
@@ -150,6 +230,12 @@ def ensure_office_account(
             if changed or (parent and existing.parent_id == parent.id):
                 db.session.add(existing)
                 db.session.flush()
+
+            # Ensure memo account exists even for legacy 'both' office accounts.
+            try:
+                _ensure_memo_account_for_office_account(existing)
+            except Exception:
+                pass
             return existing
 
     parent = ensure_office_parent_account(parent_account_number)
@@ -178,6 +264,12 @@ def ensure_office_account(
         )
         db.session.add(account)
         db.session.flush()
+
+    # Ensure memo account exists for the newly created office account.
+    try:
+        _ensure_memo_account_for_office_account(account)
+    except Exception:
+        pass
 
     office.account_category_id = account.id
     db.session.add(office)

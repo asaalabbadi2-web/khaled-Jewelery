@@ -34,11 +34,12 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime
 
-from app import app
-from models import db, JournalEntry, SafeBoxTransaction
-from routes import _is_manual_like_journal_entry, _rebuild_safe_box_transactions_for_journal_entry
+from flask import Flask
+
+from models import db, JournalEntry, SafeBox, SafeBoxTransaction
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import selectinload
@@ -63,9 +64,190 @@ def _entry_is_candidate(entry: JournalEntry) -> bool:
         return False
     if hasattr(entry, 'is_posted') and (bool(getattr(entry, 'is_posted', False)) is not True):
         return False
+    # reference_type filtering may be handled at the SQL level; keep manual-like
+    # as a safe default unless the caller opts in.
     if not _is_manual_like_journal_entry(entry):
         return False
     return True
+
+
+def _is_manual_like_journal_entry(entry: JournalEntry) -> bool:
+    """Return True when a JournalEntry is manually created/edited.
+
+    Keep identical semantics to the server-side helper.
+    """
+    try:
+        rt = (getattr(entry, 'reference_type', None) or '').strip().lower()
+    except Exception:
+        rt = ''
+    return rt in ('', 'manual', 'journal_entry')
+
+
+def _rebuild_safe_box_transactions_for_journal_entry(
+    entry: JournalEntry,
+    lines,
+    *,
+    created_by: str | None = None,
+) -> None:
+    """Rebuild derived SafeBoxTransaction rows for a manual JournalEntry.
+
+    - Idempotent: deletes existing ref_type='journal_entry' rows for this entry.
+    - Only creates movements for SafeBox-linked accounts.
+    - Mirrors journal semantics: debit => in, credit => out.
+    - Creates up to 2 tx per safe box per entry (per asset): one for 'in' and one for 'out' when mixed.
+    """
+    if not entry or not getattr(entry, 'id', None):
+        return
+
+    # Always remove previously-derived rows.
+    try:
+        existing = (
+            SafeBoxTransaction.query
+            .filter_by(ref_type='journal_entry', ref_id=int(entry.id))
+            .all()
+        )
+        for tx in existing:
+            db.session.delete(tx)
+        db.session.flush()
+    except Exception:
+        pass
+
+    # Only rebuild for posted, non-draft entries.
+    try:
+        if bool(getattr(entry, 'is_draft', False)):
+            return
+    except Exception:
+        pass
+
+    try:
+        if hasattr(entry, 'is_posted') and (bool(getattr(entry, 'is_posted', False)) is not True):
+            return
+    except Exception:
+        # If schema doesn't have is_posted, proceed.
+        pass
+
+    if not _is_manual_like_journal_entry(entry):
+        return
+
+    j_lines = [l for l in (lines or []) if getattr(l, 'account_id', None) is not None]
+    if not j_lines:
+        return
+
+    account_ids = list({int(l.account_id) for l in j_lines if l.account_id is not None})
+    if not account_ids:
+        return
+
+    safe_by_account_id: dict[int, SafeBox] = {}
+    for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
+        if getattr(sb, 'account_id', None) is not None:
+            safe_by_account_id[int(sb.account_id)] = sb
+
+    if not safe_by_account_id:
+        return
+
+    notes = None
+    try:
+        notes = f"Journal entry {getattr(entry, 'entry_number', None) or entry.id}"
+    except Exception:
+        notes = None
+
+    eps_cash = 0.005
+    eps_w = 0.0005
+
+    def _add_tx(*, sb_id: int, direction: str, amount_cash: float = 0.0, w18: float = 0.0, w21: float = 0.0, w22: float = 0.0, w24: float = 0.0):
+        tx = SafeBoxTransaction(
+            safe_box_id=int(sb_id),
+            ref_type='journal_entry',
+            ref_id=int(entry.id),
+            direction=direction,
+            amount_cash=float(amount_cash or 0.0),
+            weight_18k=float(w18 or 0.0),
+            weight_21k=float(w21 or 0.0),
+            weight_22k=float(w22 or 0.0),
+            weight_24k=float(w24 or 0.0),
+            notes=notes,
+            created_by=created_by,
+        )
+        db.session.add(tx)
+
+    for line in j_lines:
+        sb = safe_by_account_id.get(int(line.account_id))
+        if not sb:
+            continue
+
+        # Cash
+        try:
+            cash_net = float(getattr(line, 'cash_debit', 0.0) or 0.0) - float(getattr(line, 'cash_credit', 0.0) or 0.0)
+        except Exception:
+            cash_net = 0.0
+
+        if abs(cash_net) > eps_cash:
+            _add_tx(
+                sb_id=sb.id,
+                direction='in' if cash_net > 0 else 'out',
+                amount_cash=abs(float(cash_net)),
+            )
+
+        # Gold by karat (net per karat)
+        def _net(field_debit: str, field_credit: str) -> float:
+            try:
+                return float(getattr(line, field_debit, 0.0) or 0.0) - float(getattr(line, field_credit, 0.0) or 0.0)
+            except Exception:
+                return 0.0
+
+        nets = {
+            '18k': _net('debit_18k', 'credit_18k'),
+            '21k': _net('debit_21k', 'credit_21k'),
+            '22k': _net('debit_22k', 'credit_22k'),
+            '24k': _net('debit_24k', 'credit_24k'),
+        }
+        pos = {k: v for k, v in nets.items() if v > eps_w}
+        neg = {k: v for k, v in nets.items() if v < -eps_w}
+
+        if pos:
+            _add_tx(
+                sb_id=sb.id,
+                direction='in',
+                w18=float(pos.get('18k') or 0.0),
+                w21=float(pos.get('21k') or 0.0),
+                w22=float(pos.get('22k') or 0.0),
+                w24=float(pos.get('24k') or 0.0),
+            )
+        if neg:
+            _add_tx(
+                sb_id=sb.id,
+                direction='out',
+                w18=abs(float(neg.get('18k') or 0.0)),
+                w21=abs(float(neg.get('21k') or 0.0)),
+                w22=abs(float(neg.get('22k') or 0.0)),
+                w24=abs(float(neg.get('24k') or 0.0)),
+            )
+
+
+def _normalize_database_url(raw: str) -> str:
+    """Mirror backend/app.py behavior for relative sqlite URLs.
+
+    In production Postgres, this is a no-op.
+    """
+    value = (raw or '').strip()
+    if not value:
+        return value
+    if value.startswith('sqlite:///') and not value.startswith('sqlite:////'):
+        sqlite_path = value[len('sqlite:///'):]
+        if sqlite_path and not sqlite_path.startswith('/') and '/' not in sqlite_path and '\\' not in sqlite_path:
+            backend_dir = os.path.dirname(os.path.abspath(__file__))
+            abs_path = os.path.abspath(os.path.join(backend_dir, sqlite_path))
+            return f"sqlite:///{abs_path}"
+    return value
+
+
+def _create_app() -> Flask:
+    app = Flask(__name__)
+    default_sqlite = f"sqlite:///{os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app.db')}"
+    app.config['SQLALCHEMY_DATABASE_URI'] = _normalize_database_url(os.getenv('DATABASE_URL', default_sqlite))
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    db.init_app(app)
+    return app
 
 
 def _count_derived(entry_id: int) -> int:
@@ -90,6 +272,24 @@ def main() -> int:
     parser.add_argument('--newest-first', action='store_true', help='Process newest entries first (useful with --limit).')
     parser.add_argument('--created-by', type=str, default='system-backfill', help='Value to store in SafeBoxTransaction.created_by')
     parser.add_argument('--verbose', action='store_true', help='Print per-entry details (default: summary only).')
+    parser.add_argument(
+        '--all-reference-types',
+        action='store_true',
+        help=(
+            'Include ALL posted journal entries regardless of reference_type. '
+            'Default behavior is to process only manual-like entries (safer; avoids double counting).'
+        ),
+    )
+    parser.add_argument(
+        '--reference-types',
+        type=str,
+        default=None,
+        help=(
+            'Comma-separated list of reference_type values to include (case-insensitive). '
+            "Use '' for empty. Example: \"manual,journal_entry,voucher\". "
+            'Ignored if --all-reference-types is set.'
+        ),
+    )
     args = parser.parse_args()
 
     dry_run = not bool(args.apply)
@@ -108,6 +308,7 @@ def main() -> int:
     if args.only_missing:
         only_missing = True
 
+    app = _create_app()
     with app.app_context():
         q = (
             JournalEntry.query
@@ -127,15 +328,34 @@ def main() -> int:
         q = q.filter(JournalEntry.is_draft.is_(False))
         q = q.filter(JournalEntry.is_posted.is_(True))
 
-        # Manual-like reference_type filter (same semantics as _is_manual_like_journal_entry).
-        # Keep it DB-side for performance.
-        q = q.filter(
-            or_(
-                JournalEntry.reference_type.is_(None),
-                JournalEntry.reference_type == '',
-                func.lower(JournalEntry.reference_type).in_(['manual', 'journal_entry']),
-            )
-        )
+        # reference_type filter:
+        # - default: manual-like only (safer)
+        # - --all-reference-types: no filter
+        # - --reference-types: explicit allow-list
+        if not args.all_reference_types:
+            if args.reference_types is not None:
+                raw = [p.strip() for p in str(args.reference_types).split(',')]
+                norm = [p.lower() for p in raw if p is not None]
+                allow_empty = any(p in ('', "''") for p in norm)
+                allowed = [p for p in norm if p not in ('', "''")]
+
+                conditions = []
+                if allow_empty:
+                    conditions.append(JournalEntry.reference_type.is_(None))
+                    conditions.append(JournalEntry.reference_type == '')
+                if allowed:
+                    conditions.append(func.lower(JournalEntry.reference_type).in_(allowed))
+                if conditions:
+                    q = q.filter(or_(*conditions))
+            else:
+                # Manual-like reference_type filter (same semantics as _is_manual_like_journal_entry).
+                q = q.filter(
+                    or_(
+                        JournalEntry.reference_type.is_(None),
+                        JournalEntry.reference_type == '',
+                        func.lower(JournalEntry.reference_type).in_(['manual', 'journal_entry']),
+                    )
+                )
 
         # If only_missing, use a LEFT JOIN to select only entries with no derived rows.
         if only_missing:
@@ -176,7 +396,12 @@ def main() -> int:
 
             # Safety check: keep Python-side guard too.
             if not _entry_is_candidate(entry):
-                continue
+                if args.all_reference_types or args.reference_types is not None:
+                    # When the user explicitly opts into broader scopes, only enforce
+                    # the non-draft/posted/not-deleted checks (already applied in SQL).
+                    pass
+                else:
+                    continue
 
             before = _count_derived(entry_id)
             total_before += before
