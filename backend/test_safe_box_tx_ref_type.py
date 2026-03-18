@@ -163,7 +163,7 @@ def test_idempotency_guard_prevents_double_posting(app):
         db.session.flush()
 
         v = Voucher(
-            voucher_number='V-TEST-003',
+            voucher_number='V-TEST-IDEMPOTENT-001',
             voucher_type='receipt',
             reference_type='invoice',
             reference_id=str(1),
@@ -175,8 +175,11 @@ def test_idempotency_guard_prevents_double_posting(app):
         db.session.flush()
 
         db.session.add(VoucherAccountLine(
-            voucher_id=v.id, account_id=acc.id,
-            line_type='debit', amount_type='cash', amount=300.0,
+            voucher_id=v.id,
+            account_id=acc.id,
+            line_type='debit',
+            amount_type='cash',
+            amount=300.0,
         ))
         db.session.flush()
 
@@ -191,6 +194,46 @@ def test_idempotency_guard_prevents_double_posting(app):
         # Only 1 row in DB
         count = SafeBoxTransaction.query.filter_by(ref_id=v.id).count()
         assert count == 1
+
+
+def test_invoice_payment_safe_box_tx_rejects_mismatched_voucher_notes(app):
+    """Guard: invoice_payment tx pointing at a voucher must match voucher.notes invoice_payment_id."""
+    with app.app_context():
+        acc = _make_account('Clearing', '2100', 'asset')
+        sb = SafeBox(name='Test Clearing', safe_type='clearing', account_id=acc.id, is_active=True)
+        db.session.add(sb)
+        db.session.flush()
+
+        # Voucher says invoice_payment_id=42
+        v = Voucher(
+            voucher_number='V-TEST-MISMATCH-001',
+            voucher_type='receipt',
+            reference_type='invoice',
+            reference_id=str(1),
+            notes=json.dumps({'invoice_payment_id': 42, 'payment_method_id': 1}),
+            status='approved',
+            created_by='test',
+        )
+        db.session.add(v)
+        db.session.flush()
+
+        # Try to create a SafeBoxTransaction that claims invoice_payment_id=99 but ref_id points to voucher v.id.
+        bad = SafeBoxTransaction(
+            safe_box_id=sb.id,
+            ref_type='invoice_payment',
+            ref_id=v.id,
+            invoice_payment_id=99,
+            direction='in',
+            amount_cash=100.0,
+            created_by='test',
+        )
+        db.session.add(bad)
+
+        with pytest.raises(Exception):
+            db.session.flush()
+
+        # Expected: flush failed, so session needs rollback before any further DB work.
+        db.session.rollback()
 
 
 def test_reversal_finds_invoice_payment_originals(app):

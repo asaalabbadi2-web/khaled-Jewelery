@@ -41,9 +41,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime
+import sys
+from datetime import date as _date, datetime
 
 from flask import Flask
+
+# Ensure backend/ is importable when running from other working directories (e.g. Docker).
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
 
 from sqlalchemy import bindparam, text
 
@@ -63,6 +69,9 @@ def _normalize_database_url(raw: str) -> str:
     value = (raw or '').strip()
     if not value:
         return value
+    # SQLAlchemy expects postgresql:// (some deployments still provide postgres://)
+    if value.startswith('postgres://'):
+        value = 'postgresql://' + value[len('postgres://'):]
     if value.startswith('sqlite:///') and not value.startswith('sqlite:////'):
         sqlite_path = value[len('sqlite:///'):]
         if sqlite_path and not sqlite_path.startswith('/') and '/' not in sqlite_path and '\\' not in sqlite_path:
@@ -101,6 +110,27 @@ def _tx_sig_row(row: dict) -> tuple:
     )
 
 
+def _coerce_created_at(value) -> datetime:
+    """Coerce various DB-returned representations into a datetime.
+
+    In PostgreSQL, voucher.date is typically a datetime; in some datasets it may
+    be a date or even a string.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, _date):
+        return datetime.combine(value, datetime.min.time())
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw:
+            try:
+                # Accept ISO-8601; handle trailing 'Z' defensively.
+                return datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            except Exception:
+                pass
+    return datetime.utcnow()
+
+
 def _expected_rows_for_voucher(v: dict, *, created_by: str | None) -> list[dict]:
     voucher_id = int(v['id'])
     voucher_number = str(v.get('voucher_number') or '')
@@ -134,11 +164,20 @@ def _expected_rows_for_voucher(v: dict, *, created_by: str | None) -> list[dict]
 
     effective_ref_type = 'invoice_payment' if linked_invoice_payment_id else 'voucher'
 
+    tx_created_at = _coerce_created_at(v.get('date'))
+
     # Load JE lines
+    dialect = getattr(getattr(db, 'engine', None), 'dialect', None)
+    dialect_name = getattr(dialect, 'name', '') if dialect is not None else ''
+    # In PostgreSQL `is_deleted` is BOOLEAN (coalescing with integer 0 errors).
+    is_deleted_expr = 'COALESCE(is_deleted, 0)'
+    if dialect_name in ('postgresql', 'postgres'):
+        is_deleted_expr = 'COALESCE(is_deleted, FALSE)'
+
     je_lines = db.session.execute(
         text(
             "SELECT account_id, "
-            "COALESCE(is_deleted, 0) AS is_deleted, "
+            f"{is_deleted_expr} AS is_deleted, "
             "COALESCE(cash_debit, 0) AS cash_debit, COALESCE(cash_credit, 0) AS cash_credit, "
             "COALESCE(debit_18k, 0) AS debit_18k, COALESCE(credit_18k, 0) AS credit_18k, "
             "COALESCE(debit_21k, 0) AS debit_21k, COALESCE(credit_21k, 0) AS credit_21k, "
@@ -213,6 +252,7 @@ def _expected_rows_for_voucher(v: dict, *, created_by: str | None) -> list[dict]
                 'weight_24k': 0.0,
                 'notes': f"Voucher {voucher_number} - {voucher_type}",
                 'created_by': created_by or v.get('created_by'),
+                'created_at': tx_created_at,
             })
         if cash_credit > eps_cash:
             expected.append({
@@ -230,6 +270,7 @@ def _expected_rows_for_voucher(v: dict, *, created_by: str | None) -> list[dict]
                 'weight_24k': 0.0,
                 'notes': f"Voucher {voucher_number} - {voucher_type}",
                 'created_by': created_by or v.get('created_by'),
+                'created_at': tx_created_at,
             })
 
         w_deb = {
@@ -268,6 +309,7 @@ def _expected_rows_for_voucher(v: dict, *, created_by: str | None) -> list[dict]
                 'weight_24k': w_deb['24k'],
                 'notes': f"Voucher {voucher_number} - {voucher_type}",
                 'created_by': created_by or v.get('created_by'),
+                'created_at': tx_created_at,
             })
         if any(w_cred[k] > eps_w for k in ('18k', '21k', '22k', '24k')):
             expected.append({
@@ -285,6 +327,7 @@ def _expected_rows_for_voucher(v: dict, *, created_by: str | None) -> list[dict]
                 'weight_24k': w_cred['24k'],
                 'notes': f"Voucher {voucher_number} - {voucher_type}",
                 'created_by': created_by or v.get('created_by'),
+                'created_at': tx_created_at,
             })
 
     return expected
@@ -405,6 +448,7 @@ def main() -> int:
                 'weight_24k',
                 'notes',
                 'created_by',
+                'created_at',
             ]
             optional_cols = ['invoice_id', 'invoice_payment_id', 'payment_method_id']
             insert_cols = [c for c in (base_insert_cols + optional_cols) if c in sbt_cols]

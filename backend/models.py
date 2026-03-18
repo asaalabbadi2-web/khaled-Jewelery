@@ -5,6 +5,7 @@ except ImportError:  # Local scripts running from backend/ directory
     from config import MAIN_KARAT
 # SQLAlchemy models for Customer, Item, Invoice, InvoiceItem
 from datetime import datetime, date, time
+import json
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import event, text
@@ -2689,6 +2690,11 @@ class SafeBoxTransaction(db.Model):
 
 def _validate_safe_box_transaction_or_raise(tx: 'SafeBoxTransaction') -> None:
     ref_type = (getattr(tx, 'ref_type', None) or '').strip()
+    if ref_type == 'settlement':
+        raise ValueError(
+            "Invalid SafeBoxTransaction(ref_type='settlement'): manual settlements must be posted via JournalEntry/Voucher flows; "
+            "use shift_closing_settlement for shift drawer clearing or create a posted JournalEntry." 
+        )
     if ref_type != 'invoice_payment':
         return
 
@@ -2703,6 +2709,46 @@ def _validate_safe_box_transaction_or_raise(tx: 'SafeBoxTransaction') -> None:
 
     # NOTE: ref_id may be either invoice_payment_id OR an originating voucher.id.
     # We only require that both references exist.
+
+    # Stronger guard: if ref_id is not the invoice_payment_id, it must point to a Voucher
+    # whose notes declare the same invoice_payment_id. This prevents mis-keyed rows
+    # (e.g. invoice_payment_id points to a different payment than the referenced voucher).
+    try:
+        ip_id = int(invoice_payment_id)
+    except Exception:
+        ip_id = None
+    try:
+        rid_int = int(ref_id)
+    except Exception:
+        rid_int = None
+
+    if ip_id and rid_int and rid_int != ip_id:
+        try:
+            voucher = Voucher.query.get(rid_int)
+        except Exception:
+            voucher = None
+        if voucher is None:
+            raise ValueError(
+                "Invalid SafeBoxTransaction(invoice_payment): ref_id does not equal invoice_payment_id and does not reference an existing Voucher."
+            )
+
+        try:
+            raw_notes = getattr(voucher, 'notes', None)
+            parsed = json.loads(raw_notes) if raw_notes else None
+        except Exception:
+            parsed = None
+
+        v_ip = None
+        try:
+            if isinstance(parsed, dict) and parsed.get('invoice_payment_id') not in (None, '', False, 0, '0'):
+                v_ip = int(parsed.get('invoice_payment_id'))
+        except Exception:
+            v_ip = None
+
+        if v_ip != ip_id:
+            raise ValueError(
+                "Invalid SafeBoxTransaction(invoice_payment): voucher.notes invoice_payment_id does not match invoice_payment_id."
+            )
 
 
 @event.listens_for(SafeBoxTransaction, 'before_insert')

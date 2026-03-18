@@ -68,6 +68,9 @@ def _normalize_database_url(raw: str) -> str:
     value = (raw or '').strip()
     if not value:
         return value
+    # SQLAlchemy expects postgresql:// (some deployments still provide postgres://)
+    if value.startswith('postgres://'):
+        value = 'postgresql://' + value[len('postgres://'):]
     if value.startswith('sqlite:///') and not value.startswith('sqlite:////'):
         sqlite_path = value[len('sqlite:///'):]
         if sqlite_path and not sqlite_path.startswith('/') and '/' not in sqlite_path and '\\' not in sqlite_path:

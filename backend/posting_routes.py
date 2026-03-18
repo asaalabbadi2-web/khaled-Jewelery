@@ -242,7 +242,11 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             .filter(
                 or_(
                     SafeBoxTransaction.invoice_payment_id == pay_id,
-                    and_(SafeBoxTransaction.ref_type == 'invoice_payment', SafeBoxTransaction.ref_id == pay_id),
+                    and_(
+                        SafeBoxTransaction.ref_type == 'invoice_payment',
+                        SafeBoxTransaction.invoice_payment_id.is_(None),
+                        SafeBoxTransaction.ref_id == pay_id,
+                    ),
                 )
             )
             .first()
