@@ -97,6 +97,36 @@ def _journal_entry_gold_totals_main_karat(entry: JournalEntry) -> tuple[float, f
     return main_karat, debit_main, credit_main, diff_main
 
 
+def _journal_entry_posting_summary(entry: JournalEntry) -> dict:
+    """Compute compact summary for posting screen lists."""
+    cash_debit = 0.0
+    cash_credit = 0.0
+    line_count = 0
+
+    for line in (getattr(entry, 'lines', None) or []):
+        if getattr(line, 'is_deleted', False):
+            continue
+        line_count += 1
+        cash_debit += _to_float(getattr(line, 'cash_debit', 0.0), 0.0)
+        cash_credit += _to_float(getattr(line, 'cash_credit', 0.0), 0.0)
+
+    main_karat, debit_main, credit_main, diff_main = _journal_entry_gold_totals_main_karat(entry)
+    cash_diff = cash_debit - cash_credit
+
+    return {
+        'lines_count': int(line_count),
+        'cash_debit_total': round(float(cash_debit), 6),
+        'cash_credit_total': round(float(cash_credit), 6),
+        'cash_diff': round(float(cash_diff), 6),
+        'cash_balanced': abs(cash_diff) <= 0.01,
+        'main_karat': int(round(float(main_karat))),
+        'gold_debit_main_karat': round(float(debit_main), 6),
+        'gold_credit_main_karat': round(float(credit_main), 6),
+        'gold_diff_main_karat': round(float(diff_main), 6),
+        'gold_balanced_main_karat': abs(diff_main) <= 0.01,
+    }
+
+
 # ==========================================
 # 🧾 إغلاق اليومية (Shift Closing)
 # ==========================================
@@ -1584,10 +1614,16 @@ def get_unposted_entries():
             ),
         ).order_by(JournalEntry.date.desc()).all()
         
+        payload_entries = []
+        for entry in entries:
+            d = entry.to_dict()
+            d['posting_summary'] = _journal_entry_posting_summary(entry)
+            payload_entries.append(d)
+
         return jsonify({
             'success': True,
             'count': len(entries),
-            'entries': [entry.to_dict() for entry in entries]
+            'entries': payload_entries,
         }), 200
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -1603,12 +1639,115 @@ def get_posted_entries():
             is_deleted=False
         ).order_by(JournalEntry.posted_at.desc()).all()
         
+        payload_entries = []
+        for entry in entries:
+            d = entry.to_dict()
+            d['posting_summary'] = _journal_entry_posting_summary(entry)
+            payload_entries.append(d)
+
         return jsonify({
             'success': True,
             'count': len(entries),
-            'entries': [entry.to_dict() for entry in entries]
+            'entries': payload_entries,
         }), 200
     except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/journal-entries/<int:entry_id>', methods=['DELETE'])
+@require_permission('journal.delete')
+def delete_unposted_journal_entry(entry_id: int):
+    """Delete (soft-delete) an UNPOSTED journal entry from the posting screen."""
+    try:
+        deleted_by = None
+        try:
+            user = getattr(g, 'current_user', None)
+            deleted_by = (
+                getattr(user, 'username', None)
+                or getattr(user, 'full_name', None)
+                or getattr(user, 'name', None)
+            )
+        except Exception:
+            deleted_by = None
+
+        try:
+            deleted_by = str(deleted_by or '').strip()
+        except Exception:
+            deleted_by = ''
+        if not deleted_by:
+            deleted_by = 'system'
+
+        entry = JournalEntry.query.get(entry_id)
+        if not entry:
+            return jsonify({'success': False, 'message': 'القيد غير موجود'}), 404
+
+        if getattr(entry, 'is_deleted', False):
+            return jsonify({'success': False, 'message': 'القيد محذوف'}), 400
+
+        if getattr(entry, 'is_posted', False):
+            return jsonify({'success': False, 'message': 'لا يمكن حذف قيد مرحل. استخدم إلغاء الترحيل أولاً.'}), 400
+
+        if getattr(entry, 'reference_type', None) == 'invoice':
+            return jsonify({
+                'success': False,
+                'message': 'لا يمكن حذف قيد مرتبط بفاتورة من هنا. يرجى التعامل معه عبر الفاتورة.',
+            }), 400
+
+        # Soft delete entry + lines to keep historical trace without hard-deleting rows.
+        reason = None
+        try:
+            reason = (request.args.get('reason') or '').strip() or None
+        except Exception:
+            reason = None
+
+        entry.soft_delete(deleted_by, reason)
+
+        now = datetime.now()
+        for line in (entry.lines or []):
+            line.is_deleted = True
+            line.deleted_at = now
+
+        # Remove any derived SafeBox ledger rows tied to this entry.
+        try:
+            SafeBoxTransaction.query.filter_by(ref_type='journal_entry', ref_id=int(entry.id)).delete(
+                synchronize_session=False
+            )
+        except Exception:
+            pass
+
+        try:
+            AuditLog.log_action(
+                user_name=deleted_by,
+                action='delete_unposted',
+                entity_type='journal_entry',
+                entity_id=int(entry.id),
+                entity_number=getattr(entry, 'entry_number', None),
+                details=json.dumps({'reason': reason}, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+        except Exception:
+            pass
+
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'تم حذف القيد غير المرحل بنجاح'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        try:
+            AuditLog.log_action(
+                user_name=getattr(getattr(g, 'current_user', None), 'username', None) or 'system',
+                action='delete_unposted',
+                entity_type='journal_entry',
+                entity_id=int(entry_id),
+                success=False,
+                error_message=str(e),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+            )
+        except Exception:
+            pass
         return jsonify({'success': False, 'message': str(e)}), 500
 
 

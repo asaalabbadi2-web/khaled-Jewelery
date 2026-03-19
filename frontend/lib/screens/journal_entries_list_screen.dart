@@ -325,6 +325,16 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   }
 
   Future<void> _deleteEntry(int id, String description) async {
+    final entry = _allEntries.whereType<Map>().cast<Map>().firstWhere(
+      (e) => e['id'] == id,
+      orElse: () => <dynamic, dynamic>{},
+    );
+    final bool isPosted = entry.isNotEmpty && entry['is_posted'] == true;
+    if (isPosted) {
+      _showSnackBar('لا يمكن حذف قيد مُرحّل', isError: true);
+      return;
+    }
+
     // خطوة 1: طلب سبب الحذف
     final reason = await _showDeleteReasonDialog();
     if (reason == null || reason.trim().isEmpty) return;
@@ -334,11 +344,9 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     if (!confirmed) return;
 
     try {
-      // استخدام الحذف الآمن
-      final result = await _apiService.softDeleteJournalEntry(
+      final result = await _apiService.deleteUnpostedJournalEntry(
         id,
-        'المستخدم الحالي',
-        reason,
+        reason: reason,
       );
       _showSnackBar(
         result['message'] ?? 'تم حذف القيد بنجاح (يمكن الاسترجاع)',
@@ -1004,10 +1012,16 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     final date = DateTime.parse(entry['date']);
     final dateStr = DateFormat('yyyy-MM-dd').format(date);
 
+    final bool isPosted = entry['is_posted'] == true;
+
     return Dismissible(
       key: ValueKey(entry['id']),
-      direction: DismissDirection.endToStart,
+      direction: isPosted ? DismissDirection.none : DismissDirection.endToStart,
       confirmDismiss: (direction) async {
+        if (isPosted) {
+          _showSnackBar('لا يمكن حذف قيد مُرحّل', isError: true);
+          return false;
+        }
         return await showDialog<bool>(
           context: context,
           builder: (dialogContext) {

@@ -5146,6 +5146,43 @@ class ApiService {
     }
   }
 
+  /// Delete an unposted journal entry (soft delete on backend)
+  Future<Map<String, dynamic>> deleteUnpostedJournalEntry(
+    int entryId, {
+    String? reason,
+  }) async {
+    final base = Uri.parse('$_baseUrl/journal-entries/$entryId');
+    final uri = (reason == null || reason.trim().isEmpty)
+        ? base
+        : base.replace(queryParameters: {'reason': reason.trim()});
+
+    final response = await _authedDelete(uri);
+
+    if (response.statusCode == 401) {
+      throw Exception('انتهت صلاحية الجلسة. الرجاء تسجيل الدخول مرة أخرى');
+    }
+    if (response.statusCode == 403) {
+      throw Exception('ليس لديك صلاحية حذف القيود');
+    }
+
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'success': true};
+    }
+
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) parsed = decoded;
+    } catch (_) {
+      parsed = null;
+    }
+
+    final msg = parsed?['message']?.toString() ?? 'فشل حذف القيد';
+    throw Exception('$msg (status: ${response.statusCode})');
+  }
+
   // ==========================================
   // 📋 Audit Log APIs
   // ==========================================

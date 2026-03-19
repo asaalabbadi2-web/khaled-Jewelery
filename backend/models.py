@@ -2174,6 +2174,27 @@ class Settings(db.Model):
         except Exception:
             weekly_target = 0.0
 
+        # Decode JSON fields defensively (legacy DBs may contain invalid JSON strings).
+        payment_methods = []
+        try:
+            raw_pm = getattr(self, 'payment_methods', None)
+            if raw_pm:
+                decoded_pm = json.loads(raw_pm) if isinstance(raw_pm, str) else raw_pm
+                if isinstance(decoded_pm, (list, tuple)):
+                    payment_methods = list(decoded_pm)
+        except Exception:
+            payment_methods = []
+
+        weight_closing_settings = None
+        try:
+            raw_wc = getattr(self, 'weight_closing_settings', None)
+            if raw_wc:
+                decoded_wc = json.loads(raw_wc) if isinstance(raw_wc, str) else raw_wc
+                if isinstance(decoded_wc, dict):
+                    weight_closing_settings = decoded_wc
+        except Exception:
+            weight_closing_settings = None
+
         return {
             'id': self.id,
             'main_karat': self.main_karat,
@@ -2183,7 +2204,7 @@ class Settings(db.Model):
             'tax_rate': self.tax_rate,
             'tax_enabled': self.tax_enabled,
             'vat_exempt_karats': exempt_karats,
-            'payment_methods': json.loads(self.payment_methods) if self.payment_methods else [],
+            'payment_methods': payment_methods,
             'invoice_prefix': self.invoice_prefix,
             'show_company_logo': self.show_company_logo,
             'company_name': self.company_name,
@@ -2219,7 +2240,7 @@ class Settings(db.Model):
             'require_approval_before_post': bool(getattr(self, 'require_approval_before_post', False)),
             'allow_unposting': bool(getattr(self, 'allow_unposting', False)),
 
-            'weight_closing_settings': json.loads(self.weight_closing_settings) if self.weight_closing_settings else None,
+            'weight_closing_settings': weight_closing_settings,
             'gold_price_auto_update_enabled': bool(self.gold_price_auto_update_enabled),
             'gold_price_auto_update_time': self.gold_price_auto_update_time or '09:00',
             'gold_price_auto_update_mode': (self.gold_price_auto_update_mode or 'interval'),
