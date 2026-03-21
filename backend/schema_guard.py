@@ -198,6 +198,7 @@ def ensure_settings_columns(engine: Engine) -> None:
                     ("allow_partial_invoice_payments", "BOOLEAN", "0"),
                     ("password_policy", "TEXT", "NULL"),
                     ("company_logo_base64", "TEXT", "NULL"),
+                    ("company_cr_number", "VARCHAR(50)", "NULL"),
                     ("print_template_by_invoice_type", "TEXT", "NULL"),
                     ("gold_price_auto_update_enabled", "BOOLEAN", "0"),
                     ("gold_price_auto_update_time", "VARCHAR(5)", "'09:00'"),

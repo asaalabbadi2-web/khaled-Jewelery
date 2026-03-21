@@ -94,6 +94,8 @@ class StatementPdfExporter {
   }
 
   pw.Widget _buildSummaryTable() {
+    final mainKarat = statement.mainKarat;
+    final goldUnitLabel = 'جم مكافئ (${mainKarat}k)';
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey300),
       columnWidths: {
@@ -104,28 +106,28 @@ class StatementPdfExporter {
       children: [
         _buildSummaryRow(
           'البيان',
-          'الرصيد (ذهب)',
+          'الرصيد (ذهب $goldUnitLabel)',
           'الرصيد (نقد)',
           isHeader: true,
         ),
         _buildSummaryRow(
           'الرصيد الافتتاحي',
-          '${statement.openingBalanceGold.toStringAsFixed(3)} جم',
+          '${statement.openingBalanceGold.toStringAsFixed(3)} $goldUnitLabel',
           '${statement.openingBalanceCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
         ),
         _buildSummaryRow(
           'مجموع المدين',
-          '${statement.totalDebitGold.toStringAsFixed(3)} جم',
+          '${statement.totalDebitGold.toStringAsFixed(3)} $goldUnitLabel',
           '${statement.totalDebitCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
         ),
         _buildSummaryRow(
           'مجموع الدائن',
-          '${statement.totalCreditGold.toStringAsFixed(3)} جم',
+          '${statement.totalCreditGold.toStringAsFixed(3)} $goldUnitLabel',
           '${statement.totalCreditCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
         ),
         _buildSummaryRow(
           'الرصيد الختامي',
-          '${statement.closingBalanceGoldNormalized.toStringAsFixed(3)} جم',
+          '${statement.closingBalanceGoldNormalized.toStringAsFixed(3)} $goldUnitLabel',
           '${statement.closingBalanceCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
           isFooter: true,
         ),
@@ -178,11 +180,14 @@ class StatementPdfExporter {
   }
 
   pw.Widget _buildTransactionsTable() {
+    final mainKarat = statement.mainKarat;
+    final goldLabel = 'ذهب (${mainKarat}k)';
+    final goldBalanceLabel = 'الرصيد (ذهب ${mainKarat}k)';
     final headers = [
       'الرصيد (نقد)',
-      'الرصيد (ذهب)',
+      goldBalanceLabel,
       'النقد',
-      'الذهب',
+      goldLabel,
       'البيان',
       'التاريخ',
     ].map((e) => pw.Text(e, textDirection: pw.TextDirection.rtl)).toList();

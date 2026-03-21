@@ -73,6 +73,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   final TextEditingController _companyPhoneController = TextEditingController();
   final TextEditingController _companyTaxNumberController =
       TextEditingController();
+    final TextEditingController _companyCrNumberController =
+      TextEditingController();
   final TextEditingController _invoicePrefixController =
       TextEditingController();
   final TextEditingController _weeklySalesTargetWeightController =
@@ -190,6 +192,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     _companyAddressController.dispose();
     _companyPhoneController.dispose();
     _companyTaxNumberController.dispose();
+    _companyCrNumberController.dispose();
     _invoicePrefixController.dispose();
     _weeklySalesTargetWeightController.dispose();
     _salesRacePointsPerGramController.dispose();
@@ -265,6 +268,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           settings['company_phone']?.toString() ?? '';
       _companyTaxNumberController.text =
           settings['company_tax_number']?.toString() ?? '';
+        _companyCrNumberController.text =
+          settings['company_cr_number']?.toString() ?? '';
       _invoicePrefixController.text =
           settings['invoice_prefix']?.toString() ?? 'INV';
 
@@ -475,6 +480,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       'company_address': _companyAddressController.text.trim(),
       'company_phone': _companyPhoneController.text.trim(),
       'company_tax_number': _companyTaxNumberController.text.trim(),
+      'company_cr_number': _companyCrNumberController.text.trim(),
       'voucher_auto_post': _voucherAutoPost,
       'require_auth_for_invoice_create': _requireAuthForInvoiceCreate,
       'idle_timeout_enabled': _idleTimeoutEnabled,
@@ -844,6 +850,17 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           iconColor: _colors.tertiary,
           title: 'إعدادات الضريبة والفواتير',
           children: [
+            TextFormField(
+              controller: _companyCrNumberController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [NormalizeNumberFormatter()],
+              decoration: _inputDecoration(
+                icon: Icons.account_balance_outlined,
+                label: 'السجل التجاري (CR)',
+                accentColor: _colors.tertiary,
+              ),
+            ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _companyTaxNumberController,
               keyboardType: TextInputType.number,

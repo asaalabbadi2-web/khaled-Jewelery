@@ -9,18 +9,19 @@ import 'package:intl/intl.dart';
 
 // ── PDF colour palette (matches Flutter preview design) ──────────────────────
 class VColors {
-  static const amberDark   = PdfColor.fromInt(0xFF412402);
-  static const amberMid    = PdfColor.fromInt(0xFFBA7517);
-  static const amberLight  = PdfColor.fromInt(0xFFFAEEDA);
-  static const amberBorder = PdfColor.fromInt(0xFFD3B87A);
-  static const amberBadge  = PdfColor.fromInt(0xFFFAC775);
-  static const orangeTitle = PdfColor.fromInt(0xFFD85A30);
-  static const greenStatus = PdfColor.fromInt(0xFF3B6D11);
-  static const greenBg     = PdfColor.fromInt(0xFFEAF3DE);
-  static const greenText   = PdfColor.fromInt(0xFF27500A);
-  static const greenBorder = PdfColor.fromInt(0xFF97C459);
-  static const greenTagBg  = PdfColor.fromInt(0xFFF4FAF0);
-  static const greenTagBdr = PdfColor.fromInt(0xFFC0DD97);
+  // Gold brand identity — aligned with account statement PDF design system
+  static const amberDark   = PdfColor.fromInt(0xFF8B6914); // gold
+  static const amberMid    = PdfColor.fromInt(0xFFA07820); // goldMid
+  static const amberLight  = PdfColor.fromInt(0xFFFBF7EE); // goldBg
+  static const amberBorder = PdfColor.fromInt(0xFFE8D899); // borderLight
+  static const amberBadge  = PdfColor.fromInt(0xFFC9A84C); // goldLight
+  static const orangeTitle = PdfColor.fromInt(0xFF8B1A1A); // negative — payment
+  static const greenStatus = PdfColor.fromInt(0xFF1A5C35); // positive — receipt
+  static const greenBg     = PdfColor.fromInt(0xFFE8F5EE);
+  static const greenText   = PdfColor.fromInt(0xFF1A5C35); // positive green
+  static const greenBorder = PdfColor.fromInt(0xFF5A9E72);
+  static const greenTagBg  = PdfColor.fromInt(0xFFEAF5EF); // cash tag bg
+  static const greenTagBdr = PdfColor.fromInt(0xFF8EC9A5); // cash tag border
   static const grayBg      = PdfColor.fromInt(0xFFF7F6F2);
   static const grayBorder  = PdfColor.fromInt(0xFFEBEBEB);
   static const grayText    = PdfColor.fromInt(0xFF999999);
@@ -29,10 +30,10 @@ class VColors {
   static const cellBorder  = PdfColor.fromInt(0xFFEDEBE4);
   static const black       = PdfColor.fromInt(0xFF1A1A1A);
   static const white       = PdfColors.white;
-  static const goldTagBg   = PdfColor.fromInt(0xFFFFF8EC);
-  static const goldTagBdr  = PdfColor.fromInt(0xFFFAC775);
-  static const grpHdrBg    = PdfColor.fromInt(0xFFFAEEDA);
-  static const grpHdrBdr   = PdfColor.fromInt(0xFFE8DCC8);
+  static const goldTagBg   = PdfColor.fromInt(0xFFFBF7EE); // goldBg
+  static const goldTagBdr  = PdfColor.fromInt(0xFFE8D899); // borderLight
+  static const grpHdrBg    = PdfColor.fromInt(0xFFFBF7EE); // goldBg
+  static const grpHdrBdr   = PdfColor.fromInt(0xFFE8D899); // borderLight
 }
 
 /// شاشة معاينة وطباعة السندات (قبض/صرف)
@@ -527,9 +528,9 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     })
     meta,
   ) {
-    if (meta.isReceipt) return const Color(0xFF2E7D32);
-    if (meta.isPayment) return const Color(0xFFD85A30);
-    return const Color(0xFF7A4BA0);
+    if (meta.isReceipt) return const Color(0xFF1A5C35);
+    if (meta.isPayment) return const Color(0xFF8B1A1A);
+    return const Color(0xFF8B6914);
   }
 
   ({Color background, Color foreground, Color dot, String label})
@@ -1645,7 +1646,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
       final PdfColor titleColor = meta.isPayment
           ? VColors.orangeTitle
           : meta.isReceipt
-          ? const PdfColor.fromInt(0xFF2E7D32)
+          ? VColors.greenStatus
           : VColors.amberMid;
 
       final titleBlock = pw.Expanded(
@@ -1941,7 +1942,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
               bold: true,
               color: isCash
                   ? VColors.greenText
-                  : const PdfColor.fromInt(0xFF854F0B),
+                  : VColors.amberDark,
             ),
           ),
         );
@@ -1995,7 +1996,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
                     '${widget.isArabic ? '\u0639\u064a\u0627\u0631' : 'Karat'} $karatKey'
                     ' \u2014 ${widget.isArabic ? '\u0630\u0647\u0628' : 'Gold'}',
                     size: isA5 ? 8 : 9,
-                    color: const PdfColor.fromInt(0xFF854F0B),
+                    color: VColors.amberDark,
                   ),
                   pw.SizedBox(width: 6),
                   pw.Container(

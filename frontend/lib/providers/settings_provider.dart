@@ -168,6 +168,7 @@ class SettingsProvider with ChangeNotifier {
   String get companyPhone => _settings['company_phone']?.toString() ?? '';
   String get companyTaxNumber =>
       _settings['company_tax_number']?.toString() ?? '';
+  String get companyCrNumber => _settings['company_cr_number']?.toString() ?? '';
 
   // Workflow: whether vouchers should be auto-posted on save
   bool get voucherAutoPost =>

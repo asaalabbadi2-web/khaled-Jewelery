@@ -1,19 +1,23 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:csv/csv.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart' as pdf;
-import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
 
 import '../api_service.dart';
 import '../models/account_statement_model.dart';
+import '../pdf/account_statement_pdf_builder.dart';
+import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as app_theme;
 
 class AccountStatementScreen extends StatefulWidget {
@@ -54,6 +58,50 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _useMergedView = false; // Toggle for merged statement
   bool _resolvedMergedDefault = false;
   bool _resolvedViewModeDefault = false;
+
+  bool _pdfIncludeValuation = true;
+  int? _pdfViewModeOverride;
+  bool _pdfLandscape = false;
+
+  Future<AccountStatementPdfBranding> _resolvePdfBranding({
+    required bool fetchIfEmpty,
+  }) async {
+    SettingsProvider? settingsProvider;
+    try {
+      settingsProvider = context.read<SettingsProvider>();
+    } catch (_) {
+      settingsProvider = null;
+    }
+
+    if (fetchIfEmpty && settingsProvider != null && settingsProvider.settings.isEmpty) {
+      try {
+        await settingsProvider.fetchSettings().timeout(
+          const Duration(milliseconds: 800),
+        );
+      } catch (_) {
+        // Non-blocking.
+      }
+    }
+
+    final companyName = (settingsProvider?.companyName ?? '').trim();
+    final companyAddress = (settingsProvider?.companyAddress ?? '').trim();
+    final companyPhone = (settingsProvider?.companyPhone ?? '').trim();
+    final companyVat = (settingsProvider?.companyTaxNumber ?? '').trim();
+    final companyCr = (settingsProvider?.companyCrNumber ?? '').trim();
+    final showCompanyLogo = settingsProvider?.showCompanyLogo ?? true;
+    final companyLogoBase64 =
+        (settingsProvider?.settings['company_logo_base64'] ?? '').toString();
+
+    return AccountStatementPdfBranding(
+      companyName: companyName,
+      companyAddress: companyAddress,
+      companyPhone: companyPhone,
+      companyVat: companyVat,
+      companyCr: companyCr,
+      showCompanyLogo: showCompanyLogo,
+      companyLogoBase64: companyLogoBase64,
+    );
+  }
 
   bool _truthy(dynamic v) {
     if (v is bool) return v;
@@ -705,12 +753,18 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   Future<void> _exportToCsv() async {
     if (_statement == null) return;
 
+    final cashLabel = (_statement?.isMerged ?? false) ? 'قيمة' : 'نقد';
+
     final headers = <String>['التاريخ', 'الوصف'];
     if (_viewMode != 2) {
       headers.addAll(['ذهب مدين', 'ذهب دائن', 'رصيد الذهب']);
     }
     if (_viewMode != 1) {
-      headers.addAll(['نقد مدين', 'نقد دائن', 'رصيد النقد']);
+      headers.addAll([
+        '$cashLabel مدين',
+        '$cashLabel دائن',
+        'رصيد $cashLabel',
+      ]);
     }
 
     final rows = <List<String>>[headers];
@@ -721,20 +775,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       ];
 
       if (_viewMode != 2) {
-        final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
-        final debitMain = _convertToMainKarat(
-          line.debit18k + line.debit21k + line.debit22k + line.debit24k,
-          21,
-          mainKarat,
-        );
-        final creditMain = _convertToMainKarat(
-          line.credit18k + line.credit21k + line.credit22k + line.credit24k,
-          21,
-          mainKarat,
-        );
         row
-          ..add(debitMain.toStringAsFixed(3))
-          ..add(creditMain.toStringAsFixed(3))
+          ..add(line.goldDebit.toStringAsFixed(3))
+          ..add(line.goldCredit.toStringAsFixed(3))
           ..add((line.runningGoldBalance ?? 0).toStringAsFixed(3));
       }
 
@@ -760,340 +803,279 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   Future<void> _exportToPdf() async {
     if (_statement == null) return;
 
-    final bytes = await _buildStatementPdfBytes(pdf.PdfPageFormat.a4);
-    await Printing.sharePdf(
-      bytes: bytes,
-      filename:
-          'account_statement_${widget.accountId}_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.pdf',
-    );
+    final options = await _askPdfOptions();
+    if (options == null) return;
+
+    final branding = await _resolvePdfBranding(fetchIfEmpty: true);
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (_) => const AlertDialog(
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 16),
+              Text('جارٍ تجهيز الملف...'),
+            ],
+          ),
+        ),
+      );
+    }
+    try {
+      final bytes = await _buildStatementPdfBytes(
+        options.landscape ? pdf.PdfPageFormat.a4.landscape : pdf.PdfPageFormat.a4,
+        viewModeOverride: options.viewModeOverride,
+        includeValuation: options.includeValuation,
+        branding: branding,
+      );
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename:
+            'account_statement_${widget.accountId}_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.pdf',
+      );
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
   }
 
   Future<void> _printPdf() async {
     if (_statement == null) return;
+
+    final options = await _askPdfOptions();
+    if (options == null) return;
+
+    // IMPORTANT (Web): keep onLayout free of network/context/provider work.
+    // Resolve branding once (best-effort, cached only).
+    final branding = await _resolvePdfBranding(fetchIfEmpty: false);
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (_) => const AlertDialog(
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 16),
+              Text('جارٍ تجهيز الكشف للطباعة...'),
+            ],
+          ),
+        ),
+      );
+    }
     final filename =
         'account_statement_${widget.accountId}_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.pdf';
-    await Printing.layoutPdf(
-      name: filename,
-      onLayout: (format) async => _buildStatementPdfBytes(format),
-    );
+    try {
+      await Printing.layoutPdf(
+        name: filename,
+        onLayout: (format) async {
+          final effectiveFormat = options.landscape ? format.landscape : format;
+          return _buildStatementPdfBytes(
+            effectiveFormat,
+            viewModeOverride: options.viewModeOverride,
+            includeValuation: options.includeValuation,
+            branding: branding,
+          );
+        },
+      );
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
   }
 
-  Future<Uint8List> _buildStatementPdfBytes(
-    pdf.PdfPageFormat pageFormat,
-  ) async {
-    if (_statement == null) return Uint8List(0);
+  Future<({bool includeValuation, int? viewModeOverride, bool landscape})?>
+  _askPdfOptions()
+  async {
+    final currentViewMode = _viewMode;
+    var includeValuation = _pdfIncludeValuation;
+    var viewModeOverride = _pdfViewModeOverride;
+    var landscape = _pdfLandscape;
 
-    // Ensure Arabic renders correctly and RTL layout is respected.
-    final fontData = await rootBundle.load('assets/fonts/Cairo-Regular.ttf');
-    final boldFontData = await rootBundle.load('assets/fonts/Cairo-Bold.ttf');
-    final baseFont = pw.Font.ttf(fontData);
-    final boldFont = pw.Font.ttf(boldFontData);
-    final theme = pw.ThemeData.withFont(base: baseFont, bold: boldFont);
+    final cashLabel = (_statement?.isMerged ?? false) ? 'قيمة' : 'نقد';
 
-    // We want the printed table to read naturally in Arabic:
-    // rightmost: التاريخ, then البيان, then القيم to the left.
-    // Some table layouts still behave as LTR, so we build a physical
-    // column order that guarantees the desired visual ordering.
-    const dateKey = 'date';
-    const descKey = 'desc';
-    const goldDebitKey = 'gold_debit';
-    const goldCreditKey = 'gold_credit';
-    const goldBalKey = 'gold_balance';
-    const cashDebitKey = 'cash_debit';
-    const cashCreditKey = 'cash_credit';
-    const cashBalKey = 'cash_balance';
-
-    final valueColumns = <({String key, String header})>[];
-    if (_viewMode != 2) {
-      valueColumns.addAll([
-        (key: goldDebitKey, header: 'ذهب مدين'),
-        (key: goldCreditKey, header: 'ذهب دائن'),
-        (key: goldBalKey, header: 'رصيد الذهب'),
-      ]);
-    }
-    if (_viewMode != 1) {
-      valueColumns.addAll([
-        (key: cashDebitKey, header: 'نقد مدين'),
-        (key: cashCreditKey, header: 'نقد دائن'),
-        (key: cashBalKey, header: 'رصيد النقد'),
-      ]);
-    }
-
-    // Physical order (left -> right) to achieve (right -> left): date, desc, values.
-    final columns = <({String key, String header})>[
-      ...valueColumns,
-      (key: descKey, header: 'البيان'),
-      (key: dateKey, header: 'التاريخ'),
-    ];
-
-    pw.Widget dataCellFor({
-      required String key,
-      required String text,
-      pw.Font? font,
-      double fontSize = 9,
-      pw.Alignment alignment = pw.Alignment.center,
-    }) {
-      final isRtlText = key == descKey;
-      return pw.Align(
-        alignment: alignment,
-        child: pw.Text(
-          text,
-          textDirection: isRtlText
-              ? pw.TextDirection.rtl
-              : pw.TextDirection.ltr,
-          style: pw.TextStyle(font: font ?? baseFont, fontSize: fontSize),
-        ),
-      );
-    }
-
-    pw.Widget headerCellFor({
-      required String text,
-      required pw.Alignment alignment,
-    }) {
-      return pw.Align(
-        alignment: alignment,
-        child: pw.Text(
-          text,
-          textDirection: pw.TextDirection.rtl,
-          style: pw.TextStyle(font: boldFont, fontSize: 10),
-        ),
-      );
-    }
-
-    final headerWidgets = columns
-        .map(
-          (c) => headerCellFor(
-            text: c.header,
-            alignment: c.key == descKey
-                ? pw.Alignment.centerRight
-                : pw.Alignment.center,
-          ),
-        )
-        .toList();
-
-    final rowWidgets = _filteredLines.map((line) {
-      final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
-
-      final goldDebitMain = _convertToMainKarat(
-        line.debit18k + line.debit21k + line.debit22k + line.debit24k,
-        21,
-        mainKarat,
-      );
-      final goldCreditMain = _convertToMainKarat(
-        line.credit18k + line.credit21k + line.credit22k + line.credit24k,
-        21,
-        mainKarat,
-      );
-
-      final values = <String, String>{
-        dateKey: DateFormat('yyyy-MM-dd').format(line.date),
-        descKey: line.description,
-        goldDebitKey: goldDebitMain.toStringAsFixed(3),
-        goldCreditKey: goldCreditMain.toStringAsFixed(3),
-        goldBalKey: (line.runningGoldBalance ?? 0).toStringAsFixed(3),
-        cashDebitKey: line.cashDebit.toStringAsFixed(2),
-        cashCreditKey: line.cashCredit.toStringAsFixed(2),
-        cashBalKey: (line.runningCashBalance ?? 0).toStringAsFixed(2),
-      };
-
-      return columns.map((c) {
-        final alignment = c.key == descKey
-            ? pw.Alignment.centerRight
-            : pw.Alignment.center;
-        return dataCellFor(
-          key: c.key,
-          text: values[c.key] ?? '',
-          alignment: alignment,
-        );
-      }).toList();
-    }).toList();
-
-    final doc = pw.Document();
-
-    pw.Widget infoChip({required String label, required String value}) {
-      return pw.Container(
-        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        decoration: pw.BoxDecoration(
-          color: pdf.PdfColor.fromHex('#FFF9E6'),
-          border: pw.Border.all(color: pdf.PdfColor.fromHex('#D4AF37')),
-          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
-        ),
-        child: pw.Row(
-          mainAxisSize: pw.MainAxisSize.min,
-          children: [
-            pw.Text(label, style: const pw.TextStyle(fontSize: 9)),
-            pw.SizedBox(width: 6),
-            pw.Text(value, style: pw.TextStyle(font: boldFont, fontSize: 9)),
-          ],
-        ),
-      );
-    }
-
-    pw.Widget metricCard({
-      required String title,
-      required String goldValue,
-      required String cashValue,
-    }) {
-      return pw.Container(
-        padding: const pw.EdgeInsets.all(10),
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: pdf.PdfColors.grey300),
-          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10)),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.end,
-          children: [
-            pw.Text(title, style: pw.TextStyle(font: boldFont, fontSize: 11)),
-            pw.SizedBox(height: 6),
-            pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-              children: [
-                pw.Text(cashValue, style: const pw.TextStyle(fontSize: 10)),
-                pw.Text(goldValue, style: const pw.TextStyle(fontSize: 10)),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
-
-    final statement = _statement!;
-    final period = _periodSummary();
-    final totals = _periodDebitCreditTotals();
-    final goldUnit = 'جم';
-    final cashUnit = 'ر.س';
-    final viewModeLabel = switch (_viewMode) {
-      1 => 'ذهب فقط',
-      2 => 'نقد فقط',
-      _ => 'ذهب + نقد',
-    };
-    final filterLabel = switch (_filterType) {
-      'credit' => 'دائن',
-      'debit' => 'مدين',
-      _ => 'الكل',
-    };
-
-    final dateRangeText = (_dateRange == null)
-        ? '—'
-        : '${DateFormat('yyyy-MM-dd').format(_dateRange!.start)} → ${DateFormat('yyyy-MM-dd').format(_dateRange!.end)}';
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: pageFormat,
-        theme: theme,
-        build: (context) {
-          return [
-            pw.Directionality(
-              textDirection: pw.TextDirection.rtl,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
+    final result = await showDialog<({
+      bool includeValuation,
+      int? viewModeOverride,
+      bool landscape,
+    })>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            final effectiveViewMode = viewModeOverride ?? currentViewMode;
+            return AlertDialog(
+              title: const Text('خيارات الطباعة'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  pw.Text(
-                    'كشف حساب ${widget.accountName}',
-                    style: pw.TextStyle(font: boldFont, fontSize: 18),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'تاريخ التوليد: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
-                    style: const pw.TextStyle(fontSize: 10),
-                  ),
-                  pw.SizedBox(height: 10),
-                  pw.Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    alignment: pw.WrapAlignment.end,
-                    children: [
-                      infoChip(label: 'العرض', value: viewModeLabel),
-                      infoChip(label: 'الفلتر', value: filterLabel),
-                      infoChip(
-                        label: 'حركة فقط',
-                        value: _showOnlyMovement ? 'نعم' : 'لا',
-                      ),
-                      infoChip(label: 'الفترة', value: dateRangeText),
-                      infoChip(
-                        label: 'العيار الأساسي',
-                        value: '${statement.mainKarat}',
-                      ),
-                    ],
-                  ),
-                  pw.SizedBox(height: 12),
-                  pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      metricCard(
-                        title: 'رصيد افتتاحي',
-                        goldValue: _viewMode == 2
-                            ? ''
-                            : '${period.openingGold.toStringAsFixed(3)} $goldUnit',
-                        cashValue: _viewMode == 1
-                            ? ''
-                            : '${period.openingCash.toStringAsFixed(2)} $cashUnit',
-                      ),
-                      metricCard(
-                        title: 'إجمالي مدين',
-                        goldValue: _viewMode == 2
-                            ? ''
-                            : '${totals.goldDebit.toStringAsFixed(3)} $goldUnit',
-                        cashValue: _viewMode == 1
-                            ? ''
-                            : '${totals.cashDebit.toStringAsFixed(2)} $cashUnit',
-                      ),
-                      metricCard(
-                        title: 'إجمالي دائن',
-                        goldValue: _viewMode == 2
-                            ? ''
-                            : '${totals.goldCredit.toStringAsFixed(3)} $goldUnit',
-                        cashValue: _viewMode == 1
-                            ? ''
-                            : '${totals.cashCredit.toStringAsFixed(2)} $cashUnit',
-                      ),
-                      metricCard(
-                        title: 'رصيد ختامي',
-                        goldValue: _viewMode == 2
-                            ? ''
-                            : '${(_dateRange == null ? statement.effectiveClosingGold : period.closingGold).toStringAsFixed(3)} $goldUnit',
-                        cashValue: _viewMode == 1
-                            ? ''
-                            : '${(_dateRange == null ? statement.effectiveClosingCash : period.closingCash).toStringAsFixed(2)} $cashUnit',
-                      ),
-                    ],
-                  ),
-                  pw.SizedBox(height: 12),
-                  pw.TableHelper.fromTextArray(
-                    headers: headerWidgets,
-                    data: rowWidgets,
-                    border: pw.TableBorder.all(color: pdf.PdfColors.grey300),
-                    headerDecoration: pw.BoxDecoration(
-                      color: pdf.PdfColors.grey200,
-                    ),
-                    cellPadding: const pw.EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 3,
-                    ),
-                    cellAlignment: pw.Alignment.center,
-                    cellAlignments: {
-                      for (var i = 0; i < columns.length; i++)
-                        i: columns[i].key == descKey
-                            ? pw.Alignment.centerRight
-                            : pw.Alignment.center,
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: includeValuation,
+                    onChanged: (value) {
+                      setStateDialog(() {
+                        includeValuation = value ?? true;
+                      });
                     },
-                    columnWidths: {
-                      for (var i = 0; i < columns.length; i++)
-                        i: columns[i].key == descKey
-                            ? const pw.FlexColumnWidth(3.2)
-                            : (columns[i].key == dateKey
-                                  ? const pw.FixedColumnWidth(72)
-                                  : const pw.FixedColumnWidth(56)),
+                    title: const Text('إظهار التقييم المالي للذهب (السعر اللحظي)'),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: landscape,
+                    onChanged: (value) {
+                      setStateDialog(() {
+                        landscape = value;
+                      });
+                    },
+                    title: const Text('طباعة بالعرض (Landscape)'),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('نمط الطباعة:'),
+                  const SizedBox(height: 6),
+                  DropdownButton<int>(
+                    value: effectiveViewMode,
+                    isDense: true,
+                    items: [
+                      DropdownMenuItem(
+                        value: 0,
+                        child: Text('ذهب + $cashLabel'),
+                      ),
+                      const DropdownMenuItem(
+                        value: 1,
+                        child: Text('ذهب فقط'),
+                      ),
+                      DropdownMenuItem(
+                        value: 2,
+                        child: Text('$cashLabel فقط'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setStateDialog(() {
+                        viewModeOverride =
+                            (value == currentViewMode) ? null : value;
+                      });
                     },
                   ),
                 ],
               ),
-            ),
-          ];
-        },
-      ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(null),
+                  child: const Text('إلغاء'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pop((
+                      includeValuation: includeValuation,
+                      viewModeOverride: viewModeOverride,
+                      landscape: landscape,
+                    ));
+                  },
+                  child: const Text('متابعة'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
 
-    return doc.save();
+    if (!mounted) return null;
+    if (result == null) return null;
+
+    setState(() {
+      _pdfIncludeValuation = result.includeValuation;
+      _pdfViewModeOverride = result.viewModeOverride;
+      _pdfLandscape = result.landscape;
+    });
+
+    return result;
+  }
+
+  Future<Uint8List> _buildStatementPdfBytes(
+    pdf.PdfPageFormat pageFormat, {
+    int? viewModeOverride,
+    bool includeValuation = true,
+    required AccountStatementPdfBranding branding,
+  }) async {
+    if (_statement == null) return Uint8List(0);
+
+    final statement = _statement!;
+    final effectiveViewMode = viewModeOverride ?? _viewMode;
+
+    // Pre-load assets on the main isolate; rootBundle is not available in
+    // spawned isolates, so we pass the raw bytes to the builder instead.
+    final fontBytes =
+        (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
+            .buffer
+            .asUint8List();
+    final boldFontBytes =
+        (await rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+            .buffer
+            .asUint8List();
+    Uint8List? fallbackLogoBytes;
+    try {
+      fallbackLogoBytes =
+          (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+    } catch (_) {}
+
+    // Capture primitives so the closure only sends isolate-safe values.
+    final fmtW = pageFormat.width;
+    final fmtH = pageFormat.height;
+    final fmtML = pageFormat.marginLeft;
+    final fmtMR = pageFormat.marginRight;
+    final fmtMT = pageFormat.marginTop;
+    final fmtMB = pageFormat.marginBottom;
+
+    final lines = List<StatementLine>.of(_filteredLines);
+    final accountName = widget.accountName;
+    final accountId = widget.accountId;
+    final rangeStart = _dateRange?.start;
+    final rangeEnd = _dateRange?.end;
+    final filterType = _filterType;
+    final showOnlyMovement = _showOnlyMovement;
+
+    final fmt = pdf.PdfPageFormat(
+      fmtW,
+      fmtH,
+      marginLeft: fmtML,
+      marginRight: fmtMR,
+      marginTop: fmtMT,
+      marginBottom: fmtMB,
+    );
+    final dateRange = rangeStart != null
+        ? DateTimeRange(start: rangeStart, end: rangeEnd!)
+        : null;
+
+    Future<Uint8List> buildPdf() => AccountStatementPdfBuilder.build(
+          fmt,
+          statement: statement,
+          tableLines: lines,
+          accountName: accountName,
+          accountId: accountId,
+          viewMode: effectiveViewMode,
+          includeValuation: includeValuation,
+          dateRange: dateRange,
+          filterType: filterType,
+          showOnlyMovement: showOnlyMovement,
+          branding: branding,
+          preloadedRegularFont: fontBytes,
+          preloadedBoldFont: boldFontBytes,
+          preloadedFallbackLogo: fallbackLogoBytes,
+        );
+
+    // dart:isolate is not supported on Flutter Web — run directly there.
+    if (kIsWeb) return buildPdf();
+
+    // On native: offload to a background isolate so the spinner animates freely.
+    return Isolate.run(buildPdf);
   }
 
   Future<void> _copySummaryToClipboard() async {
@@ -1340,8 +1322,27 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       ),
     ];
 
+    final hasLivePrice =
+        (statement.goldPricePerGramMainKarat ?? 0) > 0 ||
+        (statement.valuationTotalValueEstimate ?? 0) != 0;
+
+    if (hasLivePrice) {
+      cards.add(
+        _ValuationCard(
+          mainKarat: statement.mainKarat,
+          pricePerGramMainKarat: statement.goldPricePerGramMainKarat,
+          priceSource: statement.goldPriceSource,
+          priceUpdatedAt: statement.goldPriceUpdatedAt,
+          totalValueEstimate: statement.valuationTotalValueEstimate,
+          goldValueEstimate: statement.valuationGoldValueEstimate,
+        ),
+      );
+    }
+
     final isCompact = maxWidth < 720;
-    final cardWidth = isCompact ? maxWidth : (maxWidth - 24) / 3;
+    final cardsPerRow = isCompact ? 1 : (cards.length == 4 ? 2 : 3);
+    final cardWidth =
+        isCompact ? maxWidth : (maxWidth - (12 * (cardsPerRow - 1))) / cardsPerRow;
 
     return Wrap(
       spacing: 12,
@@ -1525,6 +1526,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   Widget _buildStatementTable() {
     final theme = Theme.of(context);
     final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
+    final cashLabel = (_statement?.isMerged ?? false) ? 'القيمة' : 'النقد';
 
     final positiveColor = theme.colorScheme.primary;
     final negativeColor = theme.colorScheme.error;
@@ -1548,8 +1550,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     if (_viewMode != 1) {
       columns.addAll([
-        DataColumn(label: heading('حركة النقد (+/-)')),
-        DataColumn(label: heading('رصيد النقد')),
+        DataColumn(label: heading('حركة $cashLabel (+/-)')),
+        DataColumn(label: heading('رصيد $cashLabel')),
       ]);
     }
 
@@ -2264,6 +2266,133 @@ class _SummaryCard extends StatelessWidget {
                     value: cashValue.toStringAsFixed(2),
                     color: cashColor,
                     icon: Icons.payments,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ValuationCard extends StatelessWidget {
+  final int mainKarat;
+  final double? pricePerGramMainKarat;
+  final String? priceSource;
+  final DateTime? priceUpdatedAt;
+  final double? totalValueEstimate;
+  final double? goldValueEstimate;
+
+  const _ValuationCard({
+    required this.mainKarat,
+    required this.pricePerGramMainKarat,
+    required this.priceSource,
+    required this.priceUpdatedAt,
+    required this.totalValueEstimate,
+    required this.goldValueEstimate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final textTheme = theme.textTheme;
+    final borderColor = theme.colorScheme.outlineVariant;
+    final goldColor = app_theme.AppColors.primaryGold;
+    final cashColor = app_theme.AppColors.success;
+
+    String updatedLabel() {
+      final local = priceUpdatedAt?.toLocal();
+      if (local == null) return '';
+      try {
+        return DateFormat('yyyy-MM-dd HH:mm').format(local);
+      } catch (_) {
+        return '';
+      }
+    }
+
+    final priceText = (pricePerGramMainKarat ?? 0) > 0
+        ? pricePerGramMainKarat!.toStringAsFixed(2)
+        : '—';
+    final totalText = totalValueEstimate?.toStringAsFixed(2) ?? '—';
+    final goldValueText = goldValueEstimate?.toStringAsFixed(2);
+
+    final source = (priceSource ?? '').trim();
+    final updatedAt = updatedLabel();
+    final subtitleParts = <String>['عيار $mainKarat'];
+    if (source.isNotEmpty) subtitleParts.add(source);
+    if (updatedAt.isNotEmpty) subtitleParts.add(updatedAt);
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: borderColor),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.price_check, color: theme.colorScheme.primary),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'السعر اللحظي والتقييم',
+                        style: textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitleParts.join(' • '),
+                        style: textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _SummaryMetric(
+                    label: 'سعر الجرام (ر.س)',
+                    value: priceText,
+                    subtitle: 'مكافئ عيار $mainKarat',
+                    color: goldColor,
+                    icon: Icons.attach_money,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _SummaryMetric(
+                    label: 'قيمة تقديرية (ر.س)',
+                    value: totalText,
+                    subtitle: goldValueText == null ? null : 'ذهب: $goldValueText',
+                    color: cashColor,
+                    icon: Icons.assessment,
                   ),
                 ),
               ],

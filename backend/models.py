@@ -2006,6 +2006,7 @@ class Settings(db.Model):
     company_address = db.Column(db.Text)
     company_phone = db.Column(db.String(50))
     company_tax_number = db.Column(db.String(50))
+    company_cr_number = db.Column(db.String(50))
 
     # 🆕 افتراضي قالب الطباعة حسب نوع الفاتورة (JSON)
     # مثال: {"بيع":"a4_portrait","شراء من عميل":"a5_portrait"}
@@ -2133,7 +2134,7 @@ class Settings(db.Model):
             try:
                 decoded = json.loads(raw_exempt) if isinstance(raw_exempt, str) else raw_exempt
                 if isinstance(decoded, (list, tuple, set)):
-                    normalized: list[str] = []
+                    normalized = []
                     for v in decoded:
                         try:
                             k = int(str(v).strip())
@@ -2212,6 +2213,7 @@ class Settings(db.Model):
             'company_address': self.company_address,
             'company_phone': self.company_phone,
             'company_tax_number': self.company_tax_number,
+            'company_cr_number': getattr(self, 'company_cr_number', None),
             'print_template_by_invoice_type': template_by_type,
             'decimal_places': self.decimal_places,
             'date_format': self.date_format,

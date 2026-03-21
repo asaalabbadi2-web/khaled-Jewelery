@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -250,7 +251,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.isArabic ? 'طباعة قيد يومي' : 'Print Journal Entry'),
-        backgroundColor: const Color(0xFFD4AF37),
+        backgroundColor: const Color(0xFF8B6914),
         actions: [
           IconButton(
             icon: const Icon(Icons.download),
@@ -288,7 +289,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.receipt_long, size: 80, color: Color(0xFFD4AF37)),
+            const Icon(Icons.receipt_long, size: 80, color: Color(0xFF8B6914)),
             const SizedBox(height: 24),
             Text(
               widget.isArabic
@@ -313,7 +314,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                 style: const TextStyle(fontSize: 18),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFD4AF37),
+                backgroundColor: const Color(0xFF8B6914),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 32,
@@ -368,7 +369,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
           children: [
             Row(
               children: [
-                const Icon(Icons.receipt_long, color: Color(0xFFD4AF37)),
+                const Icon(Icons.receipt_long, color: Color(0xFF8B6914)),
                 const SizedBox(width: 12),
                 Text(
                   widget.isArabic
@@ -587,6 +588,16 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
   }
 
   Future<Uint8List> _generatePdf(PdfPageFormat format) async {
+    // ── Fonts: local assets → fallback to Google Fonts ─────────────────
+    pw.Font fontReg, fontBold;
+    try {
+      fontReg  = pw.Font.ttf(await rootBundle.load('assets/fonts/Cairo-Regular.ttf'));
+      fontBold = pw.Font.ttf(await rootBundle.load('assets/fonts/Cairo-Bold.ttf'));
+    } catch (_) {
+      fontReg  = await PdfGoogleFonts.cairoRegular();
+      fontBold = await PdfGoogleFonts.cairoBold();
+    }
+
     final pdf = pw.Document();
     final entry = widget.journalEntry;
     final lines = (entry['lines'] as List<dynamic>?) ?? [];
@@ -627,63 +638,108 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
         textDirection: widget.isArabic
             ? pw.TextDirection.rtl
             : pw.TextDirection.ltr,
-        theme: pw.ThemeData.withFont(
-          base: await PdfGoogleFonts.cairoRegular(),
-          bold: await PdfGoogleFonts.cairoBold(),
-        ),
-        footer: (context) => pw.Center(
-          child: pw.Text(
-            '${widget.isArabic ? 'تاريخ الطباعة' : 'Printed on'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
-            style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+        theme: pw.ThemeData.withFont(base: fontReg, bold: fontBold),
+        footer: (context) => pw.Container(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: const pw.BoxDecoration(
+            border: pw.Border(
+              top: pw.BorderSide(color: PdfColor.fromInt(0xFFE8D899), width: 0.8),
+            ),
+          ),
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(
+                widget.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry',
+                style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColor.fromInt(0xFFA07820)),
+                textDirection: pw.TextDirection.rtl,
+              ),
+              pw.Text(
+                '${widget.isArabic ? 'طُبع بتاريخ' : 'Printed'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
+                style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFF666666)),
+              ),
+              pw.Text(
+                '${widget.isArabic ? 'صفحة' : 'Page'} ${context.pageNumber} / ${context.pagesCount}',
+                style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFFA07820)),
+                textDirection: pw.TextDirection.rtl,
+              ),
+            ],
           ),
         ),
         build: (context) {
           pw.Widget header() {
-            return pw.Container(
-              padding: const pw.EdgeInsets.all(18),
-              decoration: pw.BoxDecoration(
-                color: PdfColor.fromHex('#FFF9E6'),
-                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
-              ),
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text(
-                        widget.isArabic ? 'قيد يومي' : 'Journal Entry',
-                        style: pw.TextStyle(
-                          fontSize: 22,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColor.fromHex('#D4AF37'),
-                        ),
-                      ),
-                      pw.SizedBox(height: 4),
-                      pw.Text(entryNumber, style: const pw.TextStyle(fontSize: 12)),
-                    ],
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                // Top gold rule
+                pw.Container(height: 5, color: PdfColor.fromHex('#8B6914')),
+                pw.Container(
+                  padding: const pw.EdgeInsets.fromLTRB(18, 14, 18, 14),
+                  decoration: const pw.BoxDecoration(
+                    color: PdfColor.fromInt(0xFFFBF7EE),
+                    border: pw.Border(
+                      bottom: pw.BorderSide(color: PdfColor.fromInt(0xFFE8D899), width: 1.5),
+                    ),
                   ),
-                  if (_showLogo)
-                    pw.Container(
-                      width: 56,
-                      height: 56,
-                      decoration: pw.BoxDecoration(
-                        color: PdfColor.fromHex('#D4AF37'),
-                        shape: pw.BoxShape.circle,
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text(
+                            widget.isArabic ? 'قيد يومي' : 'Journal Entry',
+                            style: pw.TextStyle(
+                              fontSize: 22,
+                              fontWeight: pw.FontWeight.bold,
+                              color: PdfColor.fromHex('#8B6914'),
+                            ),
+                            textDirection: pw.TextDirection.rtl,
+                          ),
+                          pw.SizedBox(height: 5),
+                          pw.Container(
+                            padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                            decoration: pw.BoxDecoration(
+                              color: PdfColor.fromHex('#C9A84C'),
+                              borderRadius: pw.BorderRadius.circular(20),
+                            ),
+                            child: pw.Text(
+                              entryNumber,
+                              style: pw.TextStyle(
+                                fontSize: 11,
+                                color: PdfColors.white,
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                              textDirection: pw.TextDirection.rtl,
+                            ),
+                          ),
+                        ],
                       ),
-                      child: pw.Center(
-                        child: pw.Text(
-                          widget.isArabic ? 'خالد' : 'KHALED',
-                          style: pw.TextStyle(
-                            color: PdfColors.white,
-                            fontWeight: pw.FontWeight.bold,
-                            fontSize: 14,
+                      if (_showLogo)
+                        pw.Container(
+                          width: 56,
+                          height: 56,
+                          decoration: pw.BoxDecoration(
+                            color: PdfColor.fromHex('#A07820'),
+                            shape: pw.BoxShape.circle,
+                            border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 1.5),
+                          ),
+                          child: pw.Center(
+                            child: pw.Text(
+                              widget.isArabic ? 'خالد' : 'K',
+                              style: pw.TextStyle(
+                                color: PdfColors.white,
+                                fontWeight: pw.FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                              textDirection: pw.TextDirection.rtl,
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                ],
-              ),
+                    ],
+                  ),
+                ),
+              ],
             );
           }
 
@@ -749,7 +805,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
           }
 
           pw.Widget linesTable() {
-            final headerBg = PdfColor.fromHex('#D4AF37');
+            final headerBg = PdfColor.fromHex('#8B6914');
 
             final normalized = lines.map(_normalizeLine).toList();
 
@@ -785,7 +841,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
 
             return pw.Container(
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: PdfColors.grey300),
+                border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 0.8),
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
               ),
               child: pw.Column(
@@ -869,9 +925,9 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                   pw.Container(
                     padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                     decoration: pw.BoxDecoration(
-                      color: PdfColor.fromHex('#FFF9E6'),
+                      color: PdfColor.fromHex('#FBF7EE'),
                       border: pw.Border(
-                        top: pw.BorderSide(color: PdfColors.grey400, width: 2),
+                        top: pw.BorderSide(color: PdfColor.fromHex('#C9A84C'), width: 1.5),
                       ),
                     ),
                     child: pw.Row(
@@ -945,7 +1001,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             pw.Container(
               padding: const pw.EdgeInsets.all(16),
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: PdfColors.grey300),
+                border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 0.8),
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
               ),
               child: pw.Row(
@@ -969,7 +1025,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     return pw.Container(
       padding: const pw.EdgeInsets.all(15),
       decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: PdfColors.grey300),
+        border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 0.8),
         borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
       ),
       child: pw.Column(
@@ -980,11 +1036,12 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             style: pw.TextStyle(
               fontSize: 14,
               fontWeight: pw.FontWeight.bold,
-              color: PdfColor.fromHex('#D4AF37'),
+              color: PdfColor.fromHex('#8B6914'),
             ),
+            textDirection: pw.TextDirection.rtl,
           ),
-          pw.SizedBox(height: 10),
-          pw.Divider(color: PdfColors.grey300),
+          pw.SizedBox(height: 8),
+          pw.Divider(color: PdfColor.fromHex('#E8D899')),
           pw.SizedBox(height: 10),
           ...children,
         ],
@@ -1014,7 +1071,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             height: 60,
             decoration: pw.BoxDecoration(
               border: pw.Border(
-                bottom: pw.BorderSide(color: PdfColors.grey400),
+                bottom: pw.BorderSide(color: PdfColor.fromHex('#C9A84C')),
               ),
             ),
           ),

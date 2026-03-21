@@ -17,6 +17,24 @@ class AccountStatement {
   final double totalCreditCash;
   final List<StatementLine> lines;
 
+  // When true, the backend combined a financial account with its linked memo
+  // account (cash/value from the financial side + weight from the memo side).
+  final bool isMerged;
+  final String? memoAccountName;
+
+  // Optional signed QR fields (server-side HMAC seal).
+  // When present, these allow embedding a tamper-evident payload in the PDF QR.
+  final DateTime? qrIssuedAt;
+  final Map<String, dynamic>? qrSignedPayload;
+  final String? qrSignature;
+
+  // Optional live price + valuation (may be omitted by some endpoints/versions).
+  final double? goldPricePerGramMainKarat;
+  final String? goldPriceSource;
+  final DateTime? goldPriceUpdatedAt;
+  final double? valuationGoldValueEstimate;
+  final double? valuationTotalValueEstimate;
+
   AccountStatement({
     required this.openingBalanceGold,
     required this.openingBalanceCash,
@@ -33,6 +51,16 @@ class AccountStatement {
     required this.totalDebitCash,
     required this.totalCreditCash,
     required this.lines,
+    this.isMerged = false,
+    this.memoAccountName,
+    this.qrIssuedAt,
+    this.qrSignedPayload,
+    this.qrSignature,
+    this.goldPricePerGramMainKarat,
+    this.goldPriceSource,
+    this.goldPriceUpdatedAt,
+    this.valuationGoldValueEstimate,
+    this.valuationTotalValueEstimate,
   });
 
   factory AccountStatement.fromJson(Map<String, dynamic> json) {
@@ -64,6 +92,45 @@ class AccountStatement {
         ),
       );
     }
+
+    final priceSnapshot = json['gold_price_snapshot'] as Map<String, dynamic>?;
+    final valuation = json['valuation'] as Map<String, dynamic>?;
+    final rawUpdatedAt = priceSnapshot?['updated_at']?.toString();
+    DateTime? parsedUpdatedAt;
+    if (rawUpdatedAt != null && rawUpdatedAt.isNotEmpty) {
+      try {
+        parsedUpdatedAt = DateTime.parse(rawUpdatedAt);
+      } catch (_) {
+        parsedUpdatedAt = null;
+      }
+    }
+
+    double? asDouble(dynamic value) {
+      if (value == null) return null;
+      if (value is num) return value.toDouble();
+      return double.tryParse(value.toString());
+    }
+
+    final rawQrIssuedAt = json['qr_issued_at']?.toString();
+    DateTime? parsedQrIssuedAt;
+    if (rawQrIssuedAt != null && rawQrIssuedAt.trim().isNotEmpty) {
+      try {
+        parsedQrIssuedAt = DateTime.parse(rawQrIssuedAt.trim());
+      } catch (_) {
+        parsedQrIssuedAt = null;
+      }
+    }
+
+    Map<String, dynamic>? qrSignedPayload;
+    final rawSigned = json['qr_signed_payload'];
+    if (rawSigned is Map) {
+      qrSignedPayload = rawSigned.map(
+        (key, value) => MapEntry(key.toString(), value),
+      );
+    }
+
+    final rawSig = (json['qr_signature'] ?? '').toString().trim();
+    final qrSignature = rawSig.isEmpty ? null : rawSig;
 
     return AccountStatement(
       openingBalanceGold:
@@ -99,6 +166,23 @@ class AccountStatement {
       totalDebitCash: json['totals']?['cash_debit']?.toDouble() ?? 0.0,
       totalCreditCash: json['totals']?['cash_credit']?.toDouble() ?? 0.0,
       lines: linesWithBalances,
+
+      isMerged: (json['is_merged'] == true) || (json['is_merged'] == 1),
+      memoAccountName: (json['memo_account_name'] ?? '').toString().trim().isEmpty
+          ? null
+          : (json['memo_account_name'] ?? '').toString().trim(),
+
+      qrIssuedAt: parsedQrIssuedAt,
+      qrSignedPayload: qrSignedPayload,
+      qrSignature: qrSignature,
+
+      goldPricePerGramMainKarat:
+          asDouble(priceSnapshot?['price_per_gram_main_karat']) ??
+          asDouble(valuation?['price_per_gram_main_karat']),
+      goldPriceSource: priceSnapshot?['source']?.toString(),
+      goldPriceUpdatedAt: parsedUpdatedAt,
+      valuationGoldValueEstimate: asDouble(valuation?['gold_value_estimate']),
+      valuationTotalValueEstimate: asDouble(valuation?['total_value_estimate']),
     );
   }
 }

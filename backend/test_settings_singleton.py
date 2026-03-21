@@ -183,3 +183,45 @@ def test_settings_rejects_unknown_keys_instead_of_silent_drop():
         body = resp.get_json()
         assert body['error'] == 'unknown_settings_keys'
         assert 'unknown_new_toggle' in body.get('unknown_keys', [])
+
+
+def test_settings_get_serializes_vat_exempt_karats_defensively():
+    with app.app_context():
+        _clear_settings_rows()
+        row = Settings(main_karat=21)
+        row.vat_exempt_karats = json.dumps([24, '21', 'bad', 18], ensure_ascii=False)
+        db.session.add(row)
+        db.session.commit()
+
+    with app.test_client() as client:
+        resp = client.get('/api/settings')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['vat_exempt_karats'] == ['18', '21', '24']
+
+
+    def test_settings_put_persists_company_cr_number():
+        from app import create_app, db
+        from models import Settings
+
+        app = create_app(testing=True)
+        with app.app_context():
+            db.create_all()
+            row = Settings(main_karat=21)
+            db.session.add(row)
+            db.session.commit()
+
+        client = app.test_client()
+
+        payload = {
+            'company_cr_number': '7003475030',
+        }
+        put_resp = client.put('/api/settings', json=payload)
+        assert put_resp.status_code == 200
+        put_data = put_resp.get_json()
+        assert put_data['company_cr_number'] == '7003475030'
+
+        get_resp = client.get('/api/settings')
+        assert get_resp.status_code == 200
+        get_data = get_resp.get_json()
+        assert get_data['company_cr_number'] == '7003475030'

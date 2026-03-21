@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import hashlib
+import hmac
+import base64
 import socket
 from functools import wraps
 from flask import Blueprint, request, jsonify, g, current_app, send_file
@@ -1899,6 +1901,7 @@ def _get_settings_singleton(create_if_missing: bool = True) -> Settings | None:
                 'company_address',
                 'company_phone',
                 'company_tax_number',
+                'company_cr_number',
                 'print_template_by_invoice_type',
                 'decimal_places',
                 'date_format',
@@ -1992,6 +1995,7 @@ def update_settings():
         'company_address',
         'company_phone',
         'company_tax_number',
+        'company_cr_number',
         'print_template_by_invoice_type',
         'decimal_places',
         'date_format',
@@ -2105,6 +2109,8 @@ def update_settings():
         settings.company_phone = data['company_phone']
     if 'company_tax_number' in data:
         settings.company_tax_number = data['company_tax_number']
+    if 'company_cr_number' in data:
+        settings.company_cr_number = data['company_cr_number']
 
     # 🆕 افتراضي قالب الطباعة حسب نوع الفاتورة
     if 'print_template_by_invoice_type' in data:
@@ -3744,6 +3750,88 @@ def system_backup_restore():
     })
 
 
+def _qr_hmac_secret() -> str | None:
+    """Return secret used to sign statement QR payloads.
+
+    Keep this server-side only. If missing, signatures are disabled.
+    """
+    try:
+        secret = (os.environ.get('QR_HMAC_SECRET') or '').strip()
+        if secret:
+            return secret
+    except Exception:
+        return None
+    return None
+
+
+def _qr_canonical_json(payload: dict) -> str:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+
+
+def _sign_qr_payload(payload: dict) -> str | None:
+    secret = _qr_hmac_secret()
+    if not secret:
+        return None
+
+    msg = _qr_canonical_json(payload).encode('utf-8')
+    digest = hmac.new(secret.encode('utf-8'), msg, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
+
+
+def _build_statement_qr_signed_payload(*, account: Account, main_karat: int, closing_gold_g: float, closing_cash: float, issued_at: str, is_merged: bool) -> dict:
+    settings = None
+    try:
+        settings = _get_settings_singleton(create_if_missing=False)
+    except Exception:
+        settings = None
+
+    company_name = (getattr(settings, 'company_name', None) or '').strip() if settings else ''
+    vat = (getattr(settings, 'company_tax_number', None) or '').strip() if settings else ''
+    cr = (getattr(settings, 'company_cr_number', None) or '').strip() if settings else ''
+
+    return {
+        'org': company_name,
+        'vat': vat,
+        'cr': cr,
+        'issued_at': issued_at,
+        'account_id': int(getattr(account, 'id', 0) or 0),
+        'account_number': str(getattr(account, 'account_number', '') or ''),
+        'account_name': str(getattr(account, 'name', '') or ''),
+        'main_karat': int(main_karat or 21),
+        'closing_gold_g': float(round(float(closing_gold_g or 0.0), 3)),
+        'closing_cash': float(round(float(closing_cash or 0.0), 2)),
+        'is_merged': bool(is_merged),
+    }
+
+
+@api.route('/statements/qr-sign', methods=['POST'])
+@_wrap_api_exceptions('statement_qr_sign_failed', 'Failed to sign statement QR payload')
+def sign_statement_qr_payload():
+    """Sign a provided QR payload using the server-side secret.
+
+    Request:
+      {"signed": { ... }}
+
+    Response:
+      {"algo":"HS256","signature":"..."}
+    """
+    data = request.get_json(silent=True) or {}
+    signed = data.get('signed')
+    if not isinstance(signed, dict) or not signed:
+        return jsonify({'error': 'invalid_payload'}), 400
+
+    sig = _sign_qr_payload(signed)
+    if not sig:
+        return jsonify({'error': 'qr_signature_disabled'}), 400
+
+    return jsonify({'algo': 'HS256', 'signature': sig})
+
+
 @api.route('/accounts/<int:account_id>/statement', methods=['GET'])
 @_wrap_api_exceptions('account_statement_failed', 'Failed to load account statement')
 def get_account_statement(account_id):
@@ -3946,11 +4034,38 @@ def get_account_statement(account_id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
+    price_snapshot = get_current_gold_price()
+    price_main = float(price_snapshot.get('price_per_gram_main_karat', 0.0) or 0.0)
+    closing_cash_value = float(running_balance_cash or 0.0)
+    closing_gold_value = float(closing_balance_gold_normalized or 0.0)
+    estimated_gold_value = closing_gold_value * price_main
+    estimated_total_value = estimated_gold_value + closing_cash_value
+
+    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_signed_payload = _build_statement_qr_signed_payload(
+        account=account,
+        main_karat=main_karat,
+        closing_gold_g=closing_gold_value,
+        closing_cash=closing_cash_value,
+        issued_at=qr_issued_at,
+        is_merged=False,
+    )
+    qr_signature = _sign_qr_payload(qr_signed_payload)
+
     return jsonify({
         'account_id': account.id,
         'account_number': account.account_number,
         'account_name': account.name,
         'main_karat': main_karat,
+        'qr_issued_at': qr_issued_at,
+        'qr_signed_payload': qr_signed_payload,
+        'qr_signature': qr_signature,
+        'gold_price_snapshot': price_snapshot,
+        'valuation': {
+            'price_per_gram_main_karat': round(price_main, 4),
+            'gold_value_estimate': round(estimated_gold_value, 2),
+            'total_value_estimate': round(estimated_total_value, 2),
+        },
         'opening_balance_cash': opening_balance_cash,
         'opening_balance_gold_normalized': opening_balance_gold_normalized,
         'opening_balance_gold_details': opening_balances_gold,
@@ -4218,6 +4333,24 @@ def get_account_statement_merged(account_id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
+    price_snapshot = get_current_gold_price()
+    price_main = float(price_snapshot.get('price_per_gram_main_karat', 0.0) or 0.0)
+    closing_cash_value = float(running_balance_cash or 0.0)
+    closing_gold_value = float(closing_balance_gold_normalized or 0.0)
+    estimated_gold_value = closing_gold_value * price_main
+    estimated_total_value = estimated_gold_value + closing_cash_value
+
+    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_signed_payload = _build_statement_qr_signed_payload(
+        account=account,
+        main_karat=main_karat,
+        closing_gold_g=closing_gold_value,
+        closing_cash=closing_cash_value,
+        issued_at=qr_issued_at,
+        is_merged=bool(memo_account is not None),
+    )
+    qr_signature = _sign_qr_payload(qr_signed_payload)
+
     return jsonify({
         'account_id': account.id,
         'account_number': account.account_number,
@@ -4225,6 +4358,15 @@ def get_account_statement_merged(account_id):
         'memo_account_name': memo_account.name if memo_account else None,
         'main_karat': main_karat,
         'is_merged': memo_account is not None,
+        'qr_issued_at': qr_issued_at,
+        'qr_signed_payload': qr_signed_payload,
+        'qr_signature': qr_signature,
+        'gold_price_snapshot': price_snapshot,
+        'valuation': {
+            'price_per_gram_main_karat': round(price_main, 4),
+            'gold_value_estimate': round(estimated_gold_value, 2),
+            'total_value_estimate': round(estimated_total_value, 2),
+        },
         'opening_balance_cash': opening_balance_cash,
         'opening_balance_gold_normalized': opening_balance_gold_normalized,
         'opening_balance_gold_details': opening_balances_gold,
@@ -4485,9 +4627,47 @@ def get_customer_statement(id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
+    price_snapshot = get_current_gold_price()
+    price_main = float(price_snapshot.get('price_per_gram_main_karat', 0.0) or 0.0)
+    closing_cash_value = float(running_balance_cash or 0.0)
+    closing_gold_value = float(closing_balance_gold_normalized or 0.0)
+    estimated_gold_value = closing_gold_value * price_main
+    estimated_total_value = estimated_gold_value + closing_cash_value
+
+    qr_account = None
+    try:
+        raw_acc_id = getattr(customer, 'account_id', None)
+        if raw_acc_id not in (None, '', 0, '0', False):
+            qr_account = Account.query.get(int(raw_acc_id))
+    except Exception:
+        qr_account = None
+
+    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_signed_payload = None
+    qr_signature = None
+    if qr_account is not None:
+        qr_signed_payload = _build_statement_qr_signed_payload(
+            account=qr_account,
+            main_karat=main_karat,
+            closing_gold_g=closing_gold_value,
+            closing_cash=closing_cash_value,
+            issued_at=qr_issued_at,
+            is_merged=False,
+        )
+        qr_signature = _sign_qr_payload(qr_signed_payload)
+
     return jsonify({
         'account_name': customer.name,
         'main_karat': main_karat,
+        'qr_issued_at': qr_issued_at,
+        'qr_signed_payload': qr_signed_payload,
+        'qr_signature': qr_signature,
+        'gold_price_snapshot': price_snapshot,
+        'valuation': {
+            'price_per_gram_main_karat': round(price_main, 4),
+            'gold_value_estimate': round(estimated_gold_value, 2),
+            'total_value_estimate': round(estimated_total_value, 2),
+        },
         'opening_balance_cash': float(opening_balance_cash or 0.0),
         'opening_balance_gold_normalized': float(opening_balance_gold_normalized or 0.0),
         'opening_balance_gold_details': opening_balances_gold,
@@ -5518,6 +5698,9 @@ def get_supplier_weight_statement(supplier_id):
     running_balance_cash = 0.0
     running_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
 
+    opening_balance_cash = 0.0
+    opening_balances_gold = {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
     # IMPORTANT:
     # The DB may tag `supplier_id` on multiple lines within the same journal entry
     # (inventory/tax/etc). For a supplier statement we only want the line(s)
@@ -5638,8 +5821,33 @@ def get_supplier_weight_statement(supplier_id):
     except Exception:
         pass
 
+    opening_lines = (
+        base_query
+        .filter(JournalEntry.entry_type == 'افتتاحي')
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .all()
+    )
+
+    for line in opening_lines:
+        opening_balance_cash += float(line.cash_debit or 0.0) - float(line.cash_credit or 0.0)
+        opening_balances_gold['18k'] += float(line.debit_18k or 0.0) - float(line.credit_18k or 0.0)
+        opening_balances_gold['21k'] += float(line.debit_21k or 0.0) - float(line.credit_21k or 0.0)
+        opening_balances_gold['22k'] += float(line.debit_22k or 0.0) - float(line.credit_22k or 0.0)
+        opening_balances_gold['24k'] += float(line.debit_24k or 0.0) - float(line.credit_24k or 0.0)
+
+    opening_balance_gold_normalized = (
+        convert_to_main_karat(opening_balances_gold['18k'], 18) +
+        convert_to_main_karat(opening_balances_gold['21k'], 21) +
+        convert_to_main_karat(opening_balances_gold['22k'], 22) +
+        convert_to_main_karat(opening_balances_gold['24k'], 24)
+    )
+
+    running_balance_cash = float(opening_balance_cash or 0.0)
+    running_balances_gold = opening_balances_gold.copy()
+
     journal_lines = (
         base_query
+        .filter(JournalEntry.entry_type != 'افتتاحي')
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
@@ -5718,11 +5926,50 @@ def get_supplier_weight_statement(supplier_id):
         convert_to_main_karat(running_balances_gold['24k'], 24)
     )
 
+    price_snapshot = get_current_gold_price()
+    price_main = float(price_snapshot.get('price_per_gram_main_karat', 0.0) or 0.0)
+    closing_cash_value = float(running_balance_cash or 0.0)
+    closing_gold_value = float(closing_balance_gold_normalized or 0.0)
+    estimated_gold_value = closing_gold_value * price_main
+    estimated_total_value = estimated_gold_value + closing_cash_value
+
+    qr_account = None
+    try:
+        raw_acc_id = getattr(supplier, 'account_id', None)
+        if raw_acc_id not in (None, '', 0, '0', False):
+            qr_account = Account.query.get(int(raw_acc_id))
+    except Exception:
+        qr_account = None
+
+    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_signed_payload = None
+    qr_signature = None
+    if qr_account is not None:
+        qr_signed_payload = _build_statement_qr_signed_payload(
+            account=qr_account,
+            main_karat=main_karat,
+            closing_gold_g=closing_gold_value,
+            closing_cash=closing_cash_value,
+            issued_at=qr_issued_at,
+            is_merged=bool(supplier_memo_account_id),
+        )
+        qr_signature = _sign_qr_payload(qr_signed_payload)
+
     return jsonify({
         'account_name': supplier.name,
         'main_karat': main_karat,
-        'opening_balance_cash': 0.0,
-        'opening_balance_gold_normalized': 0.0,
+        'qr_issued_at': qr_issued_at,
+        'qr_signed_payload': qr_signed_payload,
+        'qr_signature': qr_signature,
+        'gold_price_snapshot': price_snapshot,
+        'valuation': {
+            'price_per_gram_main_karat': round(price_main, 4),
+            'gold_value_estimate': round(estimated_gold_value, 2),
+            'total_value_estimate': round(estimated_total_value, 2),
+        },
+        'opening_balance_cash': float(opening_balance_cash or 0.0),
+        'opening_balance_gold_normalized': float(opening_balance_gold_normalized or 0.0),
+        'opening_balance_gold_details': opening_balances_gold,
         'lines': statement_lines,
         'totals': {
             'cash_debit': total_cash_debit,
