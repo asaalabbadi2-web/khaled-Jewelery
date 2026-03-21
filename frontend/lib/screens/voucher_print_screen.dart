@@ -1,11 +1,15 @@
+import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../providers/settings_provider.dart';
 
 // ── PDF colour palette (matches Flutter preview design) ──────────────────────
 class VColors {
@@ -54,22 +58,70 @@ class VoucherPrintScreen extends StatefulWidget {
 }
 
 class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
-  bool _isGenerating = false;
+  final bool _isGenerating = false;
   bool _includeAccountLines = false;
 
   late String _paperSize;
   late String _orientation;
 
+  // ── Cached assets (loaded once, reused across PDF generations) ──────────
+  Uint8List? _cachedFontRegBytes;
+  Uint8List? _cachedFontBoldBytes;
+  Uint8List? _cachedLogoBytes;
+  bool _assetsPreloaded = false;
+
   @override
   void initState() {
     super.initState();
     _loadPrintSettings();
+    _preloadAssets();
   }
 
   void _loadPrintSettings() {
     final settings = widget.printSettings ?? {};
     _paperSize = settings['paperSize'] ?? 'A4';
     _orientation = settings['orientation'] ?? 'portrait';
+  }
+
+  /// Pre-load fonts and logo once so subsequent PDF generations are instant.
+  Future<void> _preloadAssets() async {
+    if (_assetsPreloaded) return;
+    try {
+      _cachedFontRegBytes =
+          (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
+              .buffer
+              .asUint8List();
+      _cachedFontBoldBytes =
+          (await rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+              .buffer
+              .asUint8List();
+    } catch (_) {}
+    try {
+      final raw =
+          (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+      // Resize to 128×128 — logo is rendered at ~36pt in PDF; 128px is ample
+      // for print quality and avoids embedding the full 47 KB bitmap.
+      _cachedLogoBytes = await _resizeImageBytes(raw, 128);
+    } catch (_) {}
+    _assetsPreloaded = true;
+  }
+
+  /// Resize [bytes] (PNG/JPEG/WebP) to a square of [targetSize] pixels.
+  /// Returns the original bytes if decoding fails.
+  Future<Uint8List> _resizeImageBytes(Uint8List bytes, int targetSize) async {
+    try {
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: targetSize,
+        targetHeight: targetSize,
+      );
+      final frame = await codec.getNextFrame();
+      final byteData =
+          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      frame.image.dispose();
+      if (byteData != null) return byteData.buffer.asUint8List();
+    } catch (_) {}
+    return bytes; // fallback: original bytes
   }
 
   ({
@@ -924,36 +976,39 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
       ),
     ];
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final availableWidth = constraints.maxWidth;
-        final columns = availableWidth < 560
-            ? 1
-            : availableWidth < 760
-            ? 2
-            : 3;
-        final spacing = 8.0;
-        final itemWidth = columns == 1
-            ? availableWidth
-            : (availableWidth - ((columns - 1) * spacing)) / columns;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableWidth = constraints.maxWidth;
+          final columns = availableWidth < 560
+              ? 1
+              : availableWidth < 760
+              ? 2
+              : 3;
+          final spacing = 8.0;
+          final itemWidth = columns == 1
+              ? availableWidth
+              : (availableWidth - ((columns - 1) * spacing)) / columns;
 
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: entries
-              .map(
-                (entry) => SizedBox(
-                  width: itemWidth,
-                  child: _buildWebDetailCell(
-                    label: entry.label,
-                    value: entry.value,
-                    valueColor: entry.valueColor,
+          return Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: entries
+                .map(
+                  (entry) => SizedBox(
+                    width: itemWidth,
+                    child: _buildWebDetailCell(
+                      label: entry.label,
+                      value: entry.value,
+                      valueColor: entry.valueColor,
+                    ),
                   ),
-                ),
-              )
-              .toList(),
-        );
-      },
+                )
+                .toList(),
+          );
+        },
+      ),
     );
   }
 
@@ -1146,63 +1201,66 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
       ),
     ];
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final stacked = constraints.maxWidth < 680;
-        return Column(
-          children: [
-            stacked
-                ? Column(
-                    children: signatures
-                        .map(
-                          (signature) => Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: _buildWebSignatureCell(
-                              title: signature.title,
-                              name: signature.name,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stacked = constraints.maxWidth < 680;
+          return Column(
+            children: [
+              stacked
+                  ? Column(
+                      children: signatures
+                          .map(
+                            (signature) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _buildWebSignatureCell(
+                                title: signature.title,
+                                name: signature.name,
+                              ),
                             ),
-                          ),
-                        )
-                        .toList(),
-                  )
-                : Row(
-                    children: [
-                      for (
-                        var index = 0;
-                        index < signatures.length;
-                        index++
-                      ) ...[
+                          )
+                          .toList(),
+                    )
+                  : Row(
+                      children: [
+                        for (
+                          var index = 0;
+                          index < signatures.length;
+                          index++
+                        ) ...[
                         Expanded(
                           child: _buildWebSignatureCell(
                             title: signatures[index].title,
                             name: signatures[index].name,
                           ),
                         ),
-                        if (index < signatures.length - 1)
-                          const SizedBox(width: 12),
+                          if (index < signatures.length - 1)
+                            const SizedBox(width: 12),
+                        ],
                       ],
-                    ],
-                  ),
-            const SizedBox(height: 12),
-            Container(
-              height: 52,
-              decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFFCCCCCC)),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Center(
-                child: Text(
-                  widget.isArabic ? 'ختم المؤسسة' : 'Company Stamp',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFFAAAAAA),
+                    ),
+              const SizedBox(height: 12),
+              Container(
+                height: 52,
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFCCCCCC)),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Center(
+                  child: Text(
+                    widget.isArabic ? 'ختم المؤسسة' : 'Company Stamp',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFFAAAAAA),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
-        );
-      },
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -1211,27 +1269,30 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     final goldFormat = NumberFormat('#,##0.000', 'ar');
     final currencyFormat = NumberFormat('#,##0.00', 'ar');
 
-    return Column(
-      children: [
-        _buildWebTableHeader([
-          widget.isArabic ? 'البيان' : 'Description',
-          widget.isArabic ? 'العيار' : 'Karat',
-          widget.isArabic ? 'الصافي' : 'Net',
-          widget.isArabic ? 'تقديري' : 'Est.',
-        ]),
-        ...rows
-            .take(6)
-            .map(
-              (row) => _buildWebTableRow([
-                row['description']?.toString() ?? '—',
-                row['karat']?.toString() ?? '—',
-                '${goldFormat.format(_toDouble(row['netWeight']))} ${widget.isArabic ? 'جم' : 'g'}',
-                _toDouble(row['estimatedCash']) > 0
-                    ? '${currencyFormat.format(_toDouble(row['estimatedCash']))} ${widget.isArabic ? 'ر.س' : 'SAR'}'
-                    : '—',
-              ]),
-            ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          _buildWebTableHeader([
+            widget.isArabic ? 'البيان' : 'Description',
+            widget.isArabic ? 'العيار' : 'Karat',
+            widget.isArabic ? 'الصافي' : 'Net',
+            widget.isArabic ? 'تقديري' : 'Est.',
+          ]),
+          ...rows
+              .take(6)
+              .map(
+                (row) => _buildWebTableRow([
+                  row['description']?.toString() ?? '—',
+                  row['karat']?.toString() ?? '—',
+                  '${goldFormat.format(_toDouble(row['netWeight']))} ${widget.isArabic ? 'جم' : 'g'}',
+                  _toDouble(row['estimatedCash']) > 0
+                      ? '${currencyFormat.format(_toDouble(row['estimatedCash']))} ${widget.isArabic ? 'ر.س' : 'SAR'}'
+                      : '—',
+                ]),
+              ),
+        ],
+      ),
     );
   }
 
@@ -1243,34 +1304,37 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     final currencyFormat = NumberFormat('#,##0.00', 'ar');
     final goldFormat = NumberFormat('#,##0.000', 'ar');
 
-    return Column(
-      children: [
-        _buildWebTableHeader([
-          widget.isArabic ? 'الحساب' : 'Account',
-          widget.isArabic ? 'النوع' : 'Type',
-          widget.isArabic ? 'القيمة' : 'Amount',
-          widget.isArabic ? 'العيار' : 'Karat',
-        ]),
-        ...lines.take(6).map((line) {
-          final account = line['account'] is Map
-              ? (line['account'] as Map).cast<dynamic, dynamic>()
-              : const <dynamic, dynamic>{};
-          final amountType = (line['amount_type']?.toString() ?? '')
-              .toLowerCase();
-          final amount = _toDouble(line['amount']);
-          final amountText = amountType == 'gold'
-              ? '${goldFormat.format(amount)} ${widget.isArabic ? 'جم' : 'g'}'
-              : '${currencyFormat.format(amount)} ${widget.isArabic ? 'ر.س' : 'SAR'}';
-          final typeText =
-              '${line['line_type'] ?? '—'} / ${line['amount_type'] ?? '—'}';
-          return _buildWebTableRow([
-            account['name']?.toString() ?? '—',
-            typeText,
-            amountText,
-            line['karat']?.toString() ?? '—',
-          ]);
-        }),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          _buildWebTableHeader([
+            widget.isArabic ? 'الحساب' : 'Account',
+            widget.isArabic ? 'النوع' : 'Type',
+            widget.isArabic ? 'القيمة' : 'Amount',
+            widget.isArabic ? 'العيار' : 'Karat',
+          ]),
+          ...lines.take(6).map((line) {
+            final account = line['account'] is Map
+                ? (line['account'] as Map).cast<dynamic, dynamic>()
+                : const <dynamic, dynamic>{};
+            final amountType = (line['amount_type']?.toString() ?? '')
+                .toLowerCase();
+            final amount = _toDouble(line['amount']);
+            final amountText = amountType == 'gold'
+                ? '${goldFormat.format(amount)} ${widget.isArabic ? 'جم' : 'g'}'
+                : '${currencyFormat.format(amount)} ${widget.isArabic ? 'ر.س' : 'SAR'}';
+            final typeText =
+                '${line['line_type'] ?? '—'} / ${line['amount_type'] ?? '—'}';
+            return _buildWebTableRow([
+              account['name']?.toString() ?? '—',
+              typeText,
+              amountText,
+              line['karat']?.toString() ?? '—',
+            ]);
+          }),
+        ],
+      ),
     );
   }
 
@@ -1403,7 +1467,6 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
 
   Widget _buildWebSection(String title, Widget child) {
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(
         border: Border(
           bottom: BorderSide(color: Color(0xFFE0E0E0), width: 0.5),
@@ -1412,26 +1475,60 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFFBA7517),
-              letterSpacing: 0.07,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFFBA7517),
+                letterSpacing: 0.07,
+              ),
             ),
           ),
-          const SizedBox(height: 10),
           child,
+          const SizedBox(height: 14),
         ],
       ),
     );
   }
 
+  /// Show a non-dismissible loading dialog and return its navigator for
+  /// popping later.
+  NavigatorState _showLoadingDialog() {
+    final rootNav = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (_) => AlertDialog(
+        content: Row(
+          children: [
+            const SizedBox(
+              width: 22, height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                widget.isArabic
+                    ? 'جارٍ تجهيز السند...'
+                    : 'Preparing voucher...',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return rootNav;
+  }
+
   Future<void> _downloadPdf() async {
+    final rootNav = _showLoadingDialog();
     try {
-      setState(() => _isGenerating = true);
       final pdf = await _generatePdf(_getPdfPageFormat());
+      if (mounted) rootNav.pop();
 
       await Printing.sharePdf(
         bytes: pdf,
@@ -1451,6 +1548,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
         );
       }
     } catch (e) {
+      if (mounted) rootNav.pop();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1459,19 +1557,18 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
           ),
         );
       }
-    } finally {
-      if (mounted) {
-        setState(() => _isGenerating = false);
-      }
     }
   }
 
   Future<void> _printPdf() async {
+    final rootNav = _showLoadingDialog();
     try {
-      setState(() => _isGenerating = true);
+      // Pre-generate the PDF bytes under the loading dialog, then hand off.
+      final pdfBytes = await _generatePdf(_getPdfPageFormat());
+      if (mounted) rootNav.pop();
 
       await Printing.layoutPdf(
-        onLayout: (format) => _generatePdf(format),
+        onLayout: (_) async => pdfBytes,
         name: 'voucher_${widget.voucher['id']}.pdf',
       );
 
@@ -1488,6 +1585,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
         );
       }
     } catch (e) {
+      if (mounted) rootNav.pop();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1495,10 +1593,6 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
             backgroundColor: Colors.red,
           ),
         );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isGenerating = false);
       }
     }
   }
@@ -1524,12 +1618,13 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
   }
 
   Future<Uint8List> _generatePdf(PdfPageFormat format) async {
-    // ── 1. Fonts: local assets → fallback to Google Fonts ─────────────────
+    // ── 1. Fonts: use pre-cached bytes (no async I/O on rebuild) ──────────
+    await _preloadAssets();
     pw.Font fontReg, fontBold;
-    try {
-      fontReg  = pw.Font.ttf(await rootBundle.load('assets/fonts/Cairo-Regular.ttf'));
-      fontBold = pw.Font.ttf(await rootBundle.load('assets/fonts/Cairo-Bold.ttf'));
-    } catch (_) {
+    if (_cachedFontRegBytes != null && _cachedFontBoldBytes != null) {
+      fontReg  = pw.Font.ttf(_cachedFontRegBytes!.buffer.asByteData());
+      fontBold = pw.Font.ttf(_cachedFontBoldBytes!.buffer.asByteData());
+    } else {
       fontReg  = await PdfGoogleFonts.cairoRegular();
       fontBold = await PdfGoogleFonts.cairoBold();
     }
@@ -1568,7 +1663,36 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     final hasCash     = cashAmt.abs() > 0.000001;
     final hasGold     = goldAmt.abs() > 0.000001;
 
-    final company     = widget.isArabic ? '\u062e\u0627\u0644\u062f \u0644\u0644\u0645\u062c\u0648\u0647\u0631\u0627\u062a' : 'Khaled Jewelry';
+    // ── Company branding from SettingsProvider ────────────────────────────
+    SettingsProvider? sp;
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
+    final spName     = (sp?.companyName.trim() ?? '');
+    final company    = spName.isNotEmpty
+        ? spName
+        : (widget.isArabic ? '\u062e\u0627\u0644\u062f \u0644\u0644\u0645\u062c\u0648\u0647\u0631\u0627\u062a' : 'Khaled Jewelry');
+    final companyCr      = (sp?.companyCrNumber.trim() ?? '');
+    final companyVat     = (sp?.companyTaxNumber.trim() ?? '');
+    final companyPhone   = (sp?.companyPhone.trim() ?? '');
+    final companyAddr    = (sp?.companyAddress.trim() ?? '');
+    final showLogo       = sp?.showCompanyLogo ?? true;
+    final logoBase64     = (sp?.settings['company_logo_base64'] ?? '').toString().trim();
+    pw.MemoryImage? logoImage;
+    if (showLogo && logoBase64.isNotEmpty) {
+      try {
+        var logoPayload = logoBase64;
+        final commaIdx = logoPayload.indexOf(',');
+        if (logoPayload.startsWith('data:') && commaIdx >= 0) logoPayload = logoPayload.substring(commaIdx + 1);
+        final rawLogoBytes = base64Decode(logoPayload);
+        if (rawLogoBytes.isNotEmpty) {
+          final resized = await _resizeImageBytes(rawLogoBytes, 128);
+          logoImage = pw.MemoryImage(resized);
+        }
+      } catch (_) {}
+    }
+    // Fallback: use pre-cached bundled logo (already resized to 128×128)
+    if (logoImage == null && showLogo && _cachedLogoBytes != null) {
+      logoImage = pw.MemoryImage(_cachedLogoBytes!);
+    }
 
     // Account lines (archive toggle)
     final accountLinesRaw = voucher['account_lines'];
@@ -1629,94 +1753,276 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
           child: child,
         );
 
-    // \u2500\u2500 5. HEADER \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── 5. HEADER (exact account-statement identity) ──────────────────────────────────
     pw.Widget buildHeader() {
-      final badgeLabel = widget.isArabic
-          ? (meta.isPayment
-                ? '\u25c6 \u0646\u0645\u0648\u0630\u062c \u0635\u0631\u0641 \u0631\u0633\u0645\u064a'
-                : meta.isReceipt
-                ? '\u25c6 \u0646\u0645\u0648\u0630\u062c \u0642\u0628\u0636 \u0631\u0633\u0645\u064a'
-                : '\u25c6 \u0646\u0645\u0648\u0630\u062c \u0633\u0646\u062f \u0631\u0633\u0645\u064a')
-          : (meta.isPayment
-                ? '\u25c6 Official Payment'
-                : meta.isReceipt
-                ? '\u25c6 Official Receipt'
-                : '\u25c6 Official Voucher');
+      // Local helpers matching AccountStatementPdfBuilder
+      pw.Widget goldRule({double height = 4}) => pw.Container(
+        height: height,
+        decoration: const pw.BoxDecoration(
+          gradient: pw.LinearGradient(
+            colors: [
+              PdfColor.fromInt(0xFF8B6914),
+              PdfColor.fromInt(0xFFC9A84C),
+              PdfColor.fromInt(0xFFE8C97A),
+              PdfColor.fromInt(0xFFC9A84C),
+              PdfColor.fromInt(0xFF8B6914),
+            ],
+          ),
+        ),
+      );
 
-      final PdfColor titleColor = meta.isPayment
-          ? VColors.orangeTitle
-          : meta.isReceipt
-          ? VColors.greenStatus
-          : VColors.amberMid;
+      pw.Widget thinRule() => pw.Container(
+        height: 0.8,
+        color: VColors.amberBorder,
+      );
 
-      final titleBlock = pw.Expanded(
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.end,
+      // infoLine — matches AccountStatementPdfBuilder._infoLine exactly:
+      // plain Row (no Directionality wrapper), value on LEFT, label on RIGHT,
+      // both with textDirection:rtl so Arabic shaping applies correctly.
+      pw.Widget infoLine(String label, String value) => pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 3),
+        child: pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
           children: [
-            pw.Container(
-              padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: pw.BoxDecoration(
-                color: VColors.amberMid,
-                borderRadius: pw.BorderRadius.circular(20),
-              ),
-              child: txt(badgeLabel,
-                  size: isA5 ? 6.5 : 7.5, bold: true, color: VColors.amberLight),
+            pw.Text(
+              '$label:',
+              textDirection: pw.TextDirection.rtl,
+              style: pw.TextStyle(
+                  font: fontReg, fontSize: 8,
+                  color: PdfColor.fromInt(0xFF444444)),
             ),
-            pw.SizedBox(height: 5),
-            txt(company, size: isA5 ? 15 : 18, bold: true, color: VColors.amberDark),
-            pw.SizedBox(height: 2),
-            txt(title, size: isA5 ? 11 : 13, bold: true, color: titleColor),
-            pw.SizedBox(height: 4),
-            pw.Container(
-              padding: const pw.EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-              decoration: pw.BoxDecoration(
-                color: VColors.amberBadge,
-                borderRadius: pw.BorderRadius.circular(20),
-              ),
-              child: txt(voucherNum, size: isA5 ? 8 : 9, color: VColors.amberMid),
+            pw.SizedBox(width: 6),
+            pw.Text(
+              value,
+              textDirection: pw.TextDirection.rtl,
+              style: pw.TextStyle(
+                  font: fontReg, fontSize: 8,
+                  color: PdfColor.fromInt(0xFF666666)),
             ),
           ],
         ),
       );
 
-      final qrBlock = pw.Column(
+      final subtitleEn = meta.isPayment
+          ? 'Payment Voucher'
+          : meta.isReceipt
+              ? 'Receipt Voucher'
+              : 'Adjustment Voucher';
+
+      return pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
         children: [
-          pw.Container(
-            width:  isA5 ? 52 : 64,
-            height: isA5 ? 52 : 64,
-            decoration: pw.BoxDecoration(
-              color: VColors.white,
-              border: pw.Border.all(color: VColors.amberBorder, width: 1.5),
-              borderRadius: pw.BorderRadius.circular(6),
-            ),
-            child: pw.BarcodeWidget(
-              barcode: pw.Barcode.qrCode(),
-              data: _voucherQrPayload(),
-              color: VColors.amberDark,
+          goldRule(height: 4),
+          pw.SizedBox(height: 8),
+
+          // 3-zone Stack — no background container, sits on white page
+          pw.SizedBox(
+            height: isA5 ? 108 : 128,
+            child: pw.Stack(
+              children: [
+
+                // ── LEFT ZONE (w:148) — رقم السند / التاريخ / الطرف ──
+                pw.Positioned(
+                  top: 0,
+                  left: 0,
+                  child: pw.SizedBox(
+                    width: isA5 ? 120 : 148,
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Align(
+                          alignment: pw.Alignment.centerLeft,
+                          child: pw.Text('رقم السند',
+                            textDirection: pw.TextDirection.rtl,
+                            style: pw.TextStyle(font: fontReg, fontSize: 7,
+                                color: PdfColor.fromInt(0xFF666666))),
+                        ),
+                        pw.SizedBox(height: 1),
+                        pw.Align(
+                          alignment: pw.Alignment.centerLeft,
+                          child: pw.Text(voucherNum,
+                            style: pw.TextStyle(font: fontBold, fontSize: 8.5,
+                                color: PdfColor.fromInt(0xFF222222))),
+                        ),
+                        pw.SizedBox(height: 6),
+                        pw.Align(
+                          alignment: pw.Alignment.centerLeft,
+                          child: pw.Text('التاريخ',
+                            textDirection: pw.TextDirection.rtl,
+                            style: pw.TextStyle(font: fontReg, fontSize: 7,
+                                color: PdfColor.fromInt(0xFF666666))),
+                        ),
+                        pw.SizedBox(height: 1),
+                        pw.Align(
+                          alignment: pw.Alignment.centerLeft,
+                          child: pw.Text(dateText.isEmpty ? '—' : dateText,
+                            textDirection: pw.TextDirection.rtl,
+                            style: pw.TextStyle(font: fontBold, fontSize: 8.5,
+                                color: PdfColor.fromInt(0xFF222222))),
+                        ),
+                        if (party.isNotEmpty) ...[
+                          pw.SizedBox(height: 6),
+                          pw.Container(height: 0.6, color: VColors.amberBorder),
+                          pw.SizedBox(height: 6),
+                          pw.Align(
+                            alignment: pw.Alignment.centerLeft,
+                            child: pw.Text('الطرف',
+                              textDirection: pw.TextDirection.rtl,
+                              style: pw.TextStyle(font: fontReg, fontSize: 7,
+                                  color: PdfColor.fromInt(0xFF666666))),
+                          ),
+                          pw.SizedBox(height: 1),
+                          pw.Align(
+                            alignment: pw.Alignment.centerLeft,
+                            child: pw.Text(party,
+                              textDirection: pw.TextDirection.rtl,
+                              style: pw.TextStyle(font: fontBold, fontSize: 8.5,
+                                  color: PdfColor.fromInt(0xFF222222))),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+
+                // ── CENTER ZONE — title + subtitle + QR ──
+                pw.Positioned(
+                  top: 8,
+                  left: isA5 ? 124.0 : 152.0,
+                  right: isA5 ? 124.0 : 164.0,
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.center,
+                    children: [
+                      pw.Text(
+                        title,
+                        textDirection: pw.TextDirection.rtl,
+                        style: pw.TextStyle(
+                            font: fontBold,
+                            fontSize: isA5 ? 18 : 22,
+                            color: PdfColor.fromInt(0xFF111111)),
+                      ),
+                      pw.SizedBox(height: 3),
+                      pw.Text(
+                        subtitleEn,
+                        style: pw.TextStyle(
+                          font: fontReg,
+                          fontSize: 8.5,
+                          color: PdfColor.fromInt(0xFF666666),
+                          letterSpacing: 1.8,
+                        ),
+                      ),
+                      pw.SizedBox(height: 8),
+                      pw.Align(
+                        alignment: pw.Alignment.center,
+                        child: pw.Column(
+                          children: [
+                            pw.Container(
+                              width: 50,
+                              height: 50,
+                              padding: const pw.EdgeInsets.all(2),
+                              decoration: pw.BoxDecoration(
+                                border: pw.Border.all(
+                                    color: VColors.amberDark, width: 0.8),
+                              ),
+                              child: pw.BarcodeWidget(
+                                barcode: pw.Barcode.qrCode(),
+                                data: _voucherQrPayload(),
+                                color: VColors.amberDark,
+                              ),
+                            ),
+                            pw.SizedBox(height: 3),
+                            pw.Text(
+                              widget.isArabic ? 'تحقق من السند' : 'Verify Voucher',
+                              textDirection: pw.TextDirection.rtl,
+                              style: pw.TextStyle(font: fontReg, fontSize: 6,
+                                  color: PdfColor.fromInt(0xFF666666)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ── RIGHT ZONE (w:160) — company logo+name + separator + branding details ──
+                pw.Positioned(
+                  top: 0,
+                  right: 0,
+                  child: pw.SizedBox(
+                    width: isA5 ? 120 : 160,
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.end,
+                      children: [
+                        // Logo + company name — aligned to right edge
+                        pw.Align(
+                          alignment: pw.Alignment.centerRight,
+                          child: pw.Directionality(
+                            textDirection: pw.TextDirection.rtl,
+                            child: pw.Row(
+                              mainAxisSize: pw.MainAxisSize.min,
+                              crossAxisAlignment: pw.CrossAxisAlignment.center,
+                              children: [
+                                if (logoImage != null)
+                                  pw.Image(logoImage,
+                                      width: 38, height: 38,
+                                      fit: pw.BoxFit.contain),
+                                if (logoImage != null) pw.SizedBox(width: 6),
+                                if (company.trim().isNotEmpty)
+                                  pw.Text(
+                                    company.trim(),
+                                    style: pw.TextStyle(font: fontBold,
+                                        fontSize: 14,
+                                        color: PdfColor.fromInt(0xFF111111)),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        pw.SizedBox(height: 5),
+                        pw.Container(height: 0.6, color: VColors.amberBorder),
+                        pw.SizedBox(height: 5),
+                        // Company details (CR / VAT / phone / address)
+                        if (companyCr.isNotEmpty)
+                          pw.Align(
+                            alignment: pw.Alignment.centerRight,
+                            child: infoLine('سجل تجاري ', companyCr),
+                          ),
+                        if (companyVat.isNotEmpty)
+                          pw.Align(
+                            alignment: pw.Alignment.centerRight,
+                            child: infoLine('الرقم الضريبي', companyVat),
+                          ),
+                        if (companyPhone.isNotEmpty)
+                          pw.Align(
+                            alignment: pw.Alignment.centerRight,
+                            child: infoLine('الجوال', companyPhone),
+                          ),
+                        if (companyAddr.isNotEmpty)
+                          pw.Align(
+                            alignment: pw.Alignment.centerRight,
+                            child: infoLine('العنوان', companyAddr),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              ],
             ),
           ),
-          pw.SizedBox(height: 3),
-          txt(widget.isArabic ? '\u0631\u0645\u0632 \u0627\u0644\u062a\u062d\u0642\u0642' : 'Verify QR',
-              size: isA5 ? 6 : 7, color: VColors.amberMid),
-        ],
-      );
 
-      return pw.Container(
-        padding: pw.EdgeInsets.fromLTRB(
-            isA5 ? 12 : 16, isA5 ? 12 : 14, isA5 ? 12 : 16, isA5 ? 10 : 12),
-        decoration: const pw.BoxDecoration(
-          color: VColors.amberLight,
-          border: pw.Border(
-              bottom: pw.BorderSide(color: VColors.amberBorder, width: 2)),
-        ),
-        child: pw.Row(
-          crossAxisAlignment: pw.CrossAxisAlignment.center,
-          children: [qrBlock, pw.SizedBox(width: isA5 ? 8 : 12), titleBlock],
-        ),
+          // Post-header separators (exact account-statement sequence)
+          pw.SizedBox(height: 6),
+          pw.Container(height: 0.8, color: VColors.amberBorder),
+          pw.SizedBox(height: 10),
+          goldRule(height: 3),
+          pw.SizedBox(height: 1),
+          thinRule(),
+          pw.SizedBox(height: 10),
+        ],
       );
     }
 
-    // \u2500\u2500 6. STATUS STRIP \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     pw.Widget buildStatusStrip() {
       final raw = voucher['status']?.toString().trim() ?? '';
       if (raw.isEmpty) return pw.SizedBox.shrink();
@@ -1759,7 +2065,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
               borderRadius: pw.BorderRadius.circular(5),
             ),
             child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 txt(label, size: isA5 ? 6.5 : 7.5, color: VColors.grayText),
                 pw.SizedBox(height: 2),
@@ -1861,19 +2167,29 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
             (voucher['gold_karat']?.toString().trim().isNotEmpty ?? false)
                 ? ' (${voucher['gold_karat'].toString().trim()})'
                 : '';
-        String equivSub = '';
+        final mk = mainKarat > 0 ? mainKarat.toStringAsFixed(0) : '';
         if (equivWeight > 0) {
-          final mk = mainKarat > 0 ? mainKarat.toStringAsFixed(0) : '';
-          equivSub = widget.isArabic
-              ? '\u0627\u0644\u0648\u0632\u0646 \u0627\u0644\u0645\u0643\u0627\u0641\u0626 (\u0639\u064a\u0627\u0631 $mk): ${goldFmt.format(equivWeight)} \u062c\u0631\u0627\u0645'
-              : 'Equiv. (karat $mk): ${goldFmt.format(equivWeight)} g';
+          // Primary = equivalent weight in main karat; total weight is secondary
+          final totalSub = widget.isArabic
+              ? '\u0627\u0644\u0648\u0632\u0646 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a: ${goldFmt.format(goldAmt)} \u062c\u0631\u0627\u0645$karatSuffix'
+              : 'Total weight: ${goldFmt.format(goldAmt)} g$karatSuffix';
+          rows.add(amtRow(
+            widget.isArabic
+                ? '\u0627\u0644\u0648\u0632\u0646 \u0627\u0644\u0645\u0643\u0627\u0641\u0626 (\u0639\u064a\u0627\u0631 $mk)'
+                : 'Equiv. Weight (Karat $mk)',
+            '${goldFmt.format(equivWeight)} ${widget.isArabic ? '\u062c\u0631\u0627\u0645' : 'g'}',
+            totalSub,
+            !hasCash,
+          ));
+        } else {
+          // No equiv weight — show total as primary
+          rows.add(amtRow(
+            widget.isArabic ? '\u0648\u0632\u0646 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a' : 'Total Gold Weight',
+            '${goldFmt.format(goldAmt)} ${widget.isArabic ? '\u062c\u0631\u0627\u0645' : 'g'}$karatSuffix',
+            '',
+            !hasCash,
+          ));
         }
-        rows.add(amtRow(
-          widget.isArabic ? '\u0648\u0632\u0646 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a' : 'Total Gold Weight',
-          '${goldFmt.format(goldAmt)} ${widget.isArabic ? '\u062c\u0631\u0627\u0645' : 'g'}$karatSuffix',
-          equivSub,
-          !hasCash,
-        ));
       }
 
       if (hasCash) {
@@ -2358,14 +2674,9 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
       textDirection:
           widget.isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
       theme: pw.ThemeData.withFont(base: fontReg, bold: fontBold),
-      build: (ctx) => pw.Container(
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: VColors.amberBorder, width: 1),
-          borderRadius: pw.BorderRadius.circular(10),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-          children: [
+      build: (ctx) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+        children: [
             buildHeader(),
             buildStatusStrip(),
             buildDetails(),
@@ -2377,7 +2688,6 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
             buildFooter(),
           ],
         ),
-      ),
     ));
 
     return doc.save();

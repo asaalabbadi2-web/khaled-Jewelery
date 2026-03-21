@@ -4,6 +4,8 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 /// شاشة عرض وطباعة التقارير العامة
 class ReportPreviewerScreen extends StatefulWidget {
@@ -33,12 +35,30 @@ class _ReportPreviewerScreenState extends State<ReportPreviewerScreen> {
   bool _isLoading = true;
   late Map<String, dynamic> _settings;
 
+  // Company branding (read from SettingsProvider)
+  String _companyName  = '';
+  String _companyCr    = '';
+  String _companyVat   = '';
+  String _companyPhone = '';
+
   @override
   void initState() {
     super.initState();
     _settings = widget.printSettings ?? {};
     _document = pw.Document();
     _preparePdf();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      final sp = context.read<SettingsProvider>();
+      _companyName  = sp.companyName.trim();
+      _companyCr    = sp.companyCrNumber.trim();
+      _companyVat   = sp.companyTaxNumber.trim();
+      _companyPhone = sp.companyPhone.trim();
+    } catch (_) {}
   }
 
   Future<void> _preparePdf() async {
@@ -126,67 +146,116 @@ class _ReportPreviewerScreenState extends State<ReportPreviewerScreen> {
   }
 
   pw.Widget _buildHeader() {
-    return pw.Container(
-      padding: const pw.EdgeInsets.all(16),
-      decoration: pw.BoxDecoration(
-        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(12)),
-        border: pw.Border.all(color: PdfColors.amber400, width: 1.2),
-      ),
+    // Gold gradient bar + RIGHT company block + LEFT title block.
+    // pw.MultiPage has textDirection:rtl, so Row child[0] = rightmost.
+    // infoLine uses [label:, space, value] so label: appears at the right edge.
+    final displayName = _companyName.isNotEmpty
+        ? _companyName
+        : (widget.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry');
+
+    pw.Widget infoLine(String lbl, String val) => pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 2),
       child: pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        mainAxisSize: pw.MainAxisSize.min,
         children: [
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Text(
-                widget.reportTitle,
-                style: pw.TextStyle(
-                  fontSize: 22,
-                  fontWeight: pw.FontWeight.bold,
-                  color: PdfColors.amber900,
-                ),
-              ),
-              pw.SizedBox(height: 6),
-              pw.Text(
-                widget.isArabic
-                    ? 'نظام نقاط بيع يسر للذهب والمجوهرات'
-                    : 'Khaled Jewelery POS',
-                style: pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
-              ),
-            ],
-          ),
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.end,
-            children: [
-              pw.Text(
-                DateFormat('yyyy/MM/dd').format(DateTime.now()),
-                style: const pw.TextStyle(fontSize: 12),
-              ),
-              pw.SizedBox(height: 4),
-              pw.Container(
-                padding: const pw.EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: pw.BoxDecoration(
-                  color: PdfColors.amber,
-                  borderRadius: const pw.BorderRadius.all(
-                    pw.Radius.circular(8),
-                  ),
-                ),
-                child: pw.Text(
-                  widget.isArabic ? 'نسخة للطباعة' : 'Print copy',
-                  style: pw.TextStyle(
-                    fontSize: 12,
-                    fontWeight: pw.FontWeight.bold,
-                    color: PdfColors.white,
-                  ),
-                ),
-              ),
-            ],
-          ),
+          pw.Text('$lbl:',
+              textDirection: pw.TextDirection.rtl,
+              style: const pw.TextStyle(fontSize: 8,
+                  color: PdfColor.fromInt(0xFF444444))),
+          pw.SizedBox(width: 5),
+          pw.Text(val,
+              textDirection: pw.TextDirection.rtl,
+              style: const pw.TextStyle(fontSize: 8,
+                  color: PdfColor.fromInt(0xFF666666))),
         ],
       ),
+    );
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+      children: [
+        // Gold gradient top rule
+        pw.Container(
+          height: 5,
+          decoration: const pw.BoxDecoration(
+            gradient: pw.LinearGradient(
+              colors: [
+                PdfColor.fromInt(0xFF8B6914),
+                PdfColor.fromInt(0xFFC9A84C),
+                PdfColor.fromInt(0xFFE8C97A),
+                PdfColor.fromInt(0xFFC9A84C),
+                PdfColor.fromInt(0xFF8B6914),
+              ],
+            ),
+          ),
+        ),
+        pw.Container(
+          height: 80,
+          padding: const pw.EdgeInsets.fromLTRB(16, 10, 16, 10),
+          decoration: const pw.BoxDecoration(
+            color: PdfColor.fromInt(0xFFFBF7EE),
+            border: pw.Border(
+              bottom: pw.BorderSide(color: PdfColor.fromInt(0xFFE8D899), width: 1.5),
+            ),
+          ),
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
+            children: [
+              // LEFT: date + print copy label
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                mainAxisAlignment: pw.MainAxisAlignment.center,
+                children: [
+                  pw.Text(
+                    DateFormat('yyyy-MM-dd').format(DateTime.now()),
+                    style: const pw.TextStyle(fontSize: 9,
+                        color: PdfColor.fromInt(0xFF888888)),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    widget.isArabic ? 'نسخة للطباعة' : 'Print Copy',
+                    textDirection: pw.TextDirection.rtl,
+                    style: const pw.TextStyle(fontSize: 9,
+                        color: PdfColor.fromInt(0xFF8B6914)),
+                  ),
+                ],
+              ),
+              // CENTER: report title
+              pw.Expanded(
+                child: pw.Align(
+                  alignment: pw.Alignment.center,
+                  child: pw.Text(
+                    widget.reportTitle,
+                    textDirection: pw.TextDirection.rtl,
+                    style: pw.TextStyle(fontSize: 18,
+                        fontWeight: pw.FontWeight.bold,
+                        color: PdfColors.amber900),
+                  ),
+                ),
+              ),
+              // RIGHT: company name + details
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                mainAxisAlignment: pw.MainAxisAlignment.center,
+                children: [
+                  pw.Text(displayName,
+                      textDirection: pw.TextDirection.rtl,
+                      style: pw.TextStyle(fontSize: 13,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColor.fromInt(0xFF111111))),
+                  pw.SizedBox(height: 3),
+                  pw.Container(height: 0.6, color: PdfColor.fromInt(0xFFE8D899)),
+                  pw.SizedBox(height: 3),
+                  if (_companyCr.isNotEmpty) infoLine('سجل تجاري', _companyCr),
+                  if (_companyVat.isNotEmpty) infoLine('الرقم الضريبي', _companyVat),
+                  if (_companyPhone.isNotEmpty) infoLine('الجوال', _companyPhone),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

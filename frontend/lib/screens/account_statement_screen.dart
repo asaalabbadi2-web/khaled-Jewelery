@@ -103,6 +103,22 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     );
   }
 
+  Future<Uint8List> _resizeImageBytes(Uint8List bytes, int targetSize) async {
+    try {
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: targetSize,
+        targetHeight: targetSize,
+      );
+      final frame = await codec.getNextFrame();
+      final byteData =
+          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      frame.image.dispose();
+      if (byteData != null) return byteData.buffer.asUint8List();
+    } catch (_) {}
+    return bytes;
+  }
+
   bool _truthy(dynamic v) {
     if (v is bool) return v;
     if (v is num) return v != 0;
@@ -1022,9 +1038,23 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
             .asUint8List();
     Uint8List? fallbackLogoBytes;
     try {
-      fallbackLogoBytes =
-          (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+      final raw = (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+      fallbackLogoBytes = await _resizeImageBytes(raw, 128);
     } catch (_) {}
+
+    // Pre-decode and resize the base64 company logo (main isolate only).
+    Uint8List? preloadedLogo;
+    if (branding.showCompanyLogo && branding.companyLogoBase64.trim().isNotEmpty) {
+      try {
+        final b64 = branding.companyLogoBase64.trim();
+        final commaIdx = b64.indexOf(',');
+        final payload = (b64.startsWith('data:') && commaIdx >= 0)
+            ? b64.substring(commaIdx + 1)
+            : b64;
+        final decoded = base64Decode(payload);
+        preloadedLogo = await _resizeImageBytes(decoded, 128);
+      } catch (_) {}
+    }
 
     // Capture primitives so the closure only sends isolate-safe values.
     final fmtW = pageFormat.width;
@@ -1069,6 +1099,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           preloadedRegularFont: fontBytes,
           preloadedBoldFont: boldFontBytes,
           preloadedFallbackLogo: fallbackLogoBytes,
+          preloadedLogo: preloadedLogo,
         );
 
     // dart:isolate is not supported on Flutter Web — run directly there.

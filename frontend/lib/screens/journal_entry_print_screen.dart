@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
@@ -6,6 +6,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 /// شاشة معاينة وطباعة القيود اليومية
 class JournalEntryPrintScreen extends StatefulWidget {
@@ -28,7 +30,6 @@ class JournalEntryPrintScreen extends StatefulWidget {
 class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
   bool _isGenerating = false;
 
-  late bool _showLogo;
   late bool _hideGoldColumnsWhenZero;
   late bool _showKaratBreakdown;
   late String _paperSize;
@@ -42,7 +43,6 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
 
   void _loadPrintSettings() {
     final settings = widget.printSettings ?? {};
-    _showLogo = settings['showLogo'] ?? true;
     _hideGoldColumnsWhenZero = settings['hideGoldColumnsWhenZero'] ?? true;
     _showKaratBreakdown = settings['showKaratBreakdown'] ?? true;
     _paperSize = settings['paperSize'] ?? 'A4';
@@ -598,6 +598,28 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
       fontBold = await PdfGoogleFonts.cairoBold();
     }
 
+    // ── Company branding from SettingsProvider ───────────────────────────────
+    SettingsProvider? sp;
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
+    final company    = (sp?.companyName.trim().isNotEmpty ?? false)
+        ? sp!.companyName.trim()
+        : (widget.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry');
+    final companyCr    = sp?.companyCrNumber.trim() ?? '';
+    final companyVat   = sp?.companyTaxNumber.trim() ?? '';
+    final companyPhone = sp?.companyPhone.trim() ?? '';
+    final showLogo     = sp?.showCompanyLogo ?? true;
+    final logoBase64   = (sp?.settings['company_logo_base64'] ?? '').toString().trim();
+    pw.MemoryImage? logoImage;
+    if (showLogo && logoBase64.isNotEmpty) {
+      try {
+        var payload = logoBase64;
+        final idx = payload.indexOf(',');
+        if (payload.startsWith('data:') && idx >= 0) payload = payload.substring(idx + 1);
+        final raw = base64Decode(payload);
+        if (raw.isNotEmpty) logoImage = pw.MemoryImage(raw);
+      } catch (_) {}
+    }
+
     final pdf = pw.Document();
     final entry = widget.journalEntry;
     final lines = (entry['lines'] as List<dynamic>?) ?? [];
@@ -650,7 +672,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
               pw.Text(
-                widget.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry',
+                company,
                 style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColor.fromInt(0xFFA07820)),
                 textDirection: pw.TextDirection.rtl,
               ),
@@ -668,74 +690,212 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
         ),
         build: (context) {
           pw.Widget header() {
+            // Shared text helper
+            pw.Widget t(String text, {double size = 10, bool bold = false, PdfColor? color}) =>
+              pw.Text(
+                text,
+                textDirection: widget.isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+                style: pw.TextStyle(
+                  fontSize: size,
+                  fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+                  color: color ?? PdfColor.fromInt(0xFF333333),
+                ),
+              );
+
+            pw.Widget metaChip(String label, String value) => pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                t(label, size: 7.5, color: PdfColor.fromInt(0xFF888888)),
+                pw.SizedBox(height: 1),
+                t(value, size: 10, bold: true),
+              ],
+            );
+
+            // infoLine helper for RIGHT ZONE.
+            // RTL page (pw.MultiPage with textDirection:rtl) → Row child[0] = rightmost.
+            // So order is [label:, space, value] to render label at the right edge.
+            pw.Widget infoLine(String lbl, String val) => pw.Padding(
+              padding: const pw.EdgeInsets.only(bottom: 3),
+              child: pw.Row(
+                mainAxisSize: pw.MainAxisSize.min,
+                children: [
+                  pw.Text('$lbl:',
+                      textDirection: pw.TextDirection.rtl,
+                      style: pw.TextStyle(
+                          font: fontReg, fontSize: 8,
+                          color: PdfColor.fromInt(0xFF444444))),
+                  pw.SizedBox(width: 6),
+                  pw.Text(val,
+                      textDirection: pw.TextDirection.rtl,
+                      style: pw.TextStyle(
+                          font: fontReg, fontSize: 8,
+                          color: PdfColor.fromInt(0xFF666666))),
+                ],
+              ),
+            );
+
+            // ── RIGHT ZONE: company logo + name + branding + entry badges ──
+            final rightZone = pw.SizedBox(
+              width: 160.0,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  // Logo + company name — aligned to right edge.
+                  pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Directionality(
+                      textDirection: pw.TextDirection.rtl,
+                      child: pw.Row(
+                        mainAxisSize: pw.MainAxisSize.min,
+                        crossAxisAlignment: pw.CrossAxisAlignment.center,
+                        children: [
+                          if (logoImage != null) ...[  
+                            pw.Image(logoImage,
+                                width: 38, height: 38,
+                                fit: pw.BoxFit.contain),
+                            pw.SizedBox(width: 6),
+                          ],
+                          pw.Text(company,
+                              style: pw.TextStyle(font: fontBold, fontSize: 14,
+                                  color: PdfColor.fromInt(0xFF111111))),
+                        ],
+                      ),
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Container(height: 0.6, color: PdfColor.fromInt(0xFFE8D899)),
+                  pw.SizedBox(height: 5),
+                  if (companyCr.isNotEmpty)
+                    pw.Align(alignment: pw.Alignment.centerRight,
+                        child: infoLine('سجل تجاري', companyCr)),
+                  if (companyVat.isNotEmpty)
+                    pw.Align(alignment: pw.Alignment.centerRight,
+                        child: infoLine('الرقم الضريبي', companyVat)),
+                  if (companyPhone.isNotEmpty)
+                    pw.Align(alignment: pw.Alignment.centerRight,
+                        child: infoLine('الجوال', companyPhone)),
+                  if (companyCr.isNotEmpty || companyVat.isNotEmpty || companyPhone.isNotEmpty)
+                    pw.SizedBox(height: 4),
+                  pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: pw.BoxDecoration(
+                        color: PdfColor.fromInt(0xFFC9A84C),
+                        borderRadius: pw.BorderRadius.circular(10),
+                      ),
+                      child: t(entryNumber, size: 9, bold: true, color: PdfColors.white),
+                    ),
+                  ),
+                  pw.SizedBox(height: 5),
+                  pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: pw.BoxDecoration(
+                        color: isPosted
+                            ? PdfColor.fromInt(0xFF1A5C35)
+                            : PdfColor.fromInt(0xFF8B1A1A),
+                        borderRadius: pw.BorderRadius.circular(10),
+                      ),
+                      child: t(
+                        widget.isArabic
+                            ? (isPosted ? 'مُرحّل' : 'غير مُرحّل')
+                            : (isPosted ? 'Posted' : 'Unposted'),
+                        size: 8, bold: true, color: PdfColors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+
+            // ── CENTER ZONE: title + QR ──
+            final centerZone = pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              children: [
+                t(widget.isArabic ? 'قيد يومي' : 'Journal Entry',
+                    size: 22, bold: true, color: PdfColor.fromInt(0xFF8B6914)),
+                pw.SizedBox(height: 3),
+                t(widget.isArabic ? 'Journal Entry' : 'قيد يومي',
+                    size: 8.5, color: PdfColor.fromInt(0xFF888888)),
+                pw.SizedBox(height: 8),
+                pw.BarcodeWidget(
+                  barcode: pw.Barcode.qrCode(),
+                  data: 'JE:$entryNumber|${entry['date'] ?? ''}|${isPosted ? 'posted' : 'draft'}',
+                  width: 50,
+                  height: 50,
+                  color: PdfColor.fromInt(0xFF8B6914),
+                ),
+                pw.SizedBox(height: 3),
+                t(widget.isArabic ? 'تحقق من القيد' : 'Verify Entry',
+                    size: 6.5, color: PdfColor.fromInt(0xFF888888)),
+              ],
+            );
+
+            // ── LEFT ZONE: date + reference info + created by ──
+            final leftZone = pw.SizedBox(
+              width: 150.0,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  metaChip(widget.isArabic ? 'التاريخ' : 'Date', _fmtDate(entry['date'])),
+                  if (referenceType != null && referenceType.isNotEmpty) ...[
+                    pw.SizedBox(height: 5),
+                    metaChip(widget.isArabic ? 'نوع المرجع' : 'Ref. Type', referenceType),
+                  ],
+                  if (referenceNumber != null && referenceNumber.isNotEmpty) ...[
+                    pw.SizedBox(height: 5),
+                    metaChip(widget.isArabic ? 'رقم المرجع' : 'Ref. No.', referenceNumber),
+                  ],
+                  if (createdBy != null && createdBy.isNotEmpty) ...[
+                    pw.SizedBox(height: 5),
+                    metaChip(widget.isArabic ? 'أنشئ بواسطة' : 'Created By', createdBy),
+                  ],
+                ],
+              ),
+            );
+
             return pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                // Top gold rule
-                pw.Container(height: 5, color: PdfColor.fromHex('#8B6914')),
+                // Top gold gradient rule
                 pw.Container(
-                  padding: const pw.EdgeInsets.fromLTRB(18, 14, 18, 14),
+                  height: 5,
+                  decoration: const pw.BoxDecoration(
+                    gradient: pw.LinearGradient(
+                      colors: [
+                        PdfColor.fromInt(0xFF8B6914),
+                        PdfColor.fromInt(0xFFC9A84C),
+                        PdfColor.fromInt(0xFFE8C97A),
+                        PdfColor.fromInt(0xFFC9A84C),
+                        PdfColor.fromInt(0xFF8B6914),
+                      ],
+                    ),
+                  ),
+                ),
+                pw.Container(
+                  height: 120,
+                  padding: const pw.EdgeInsets.fromLTRB(16, 12, 16, 10),
                   decoration: const pw.BoxDecoration(
                     color: PdfColor.fromInt(0xFFFBF7EE),
                     border: pw.Border(
                       bottom: pw.BorderSide(color: PdfColor.fromInt(0xFFE8D899), width: 1.5),
                     ),
                   ),
-                  child: pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  child: pw.Stack(
                     children: [
-                      pw.Column(
-                        crossAxisAlignment: pw.CrossAxisAlignment.start,
-                        children: [
-                          pw.Text(
-                            widget.isArabic ? 'قيد يومي' : 'Journal Entry',
-                            style: pw.TextStyle(
-                              fontSize: 22,
-                              fontWeight: pw.FontWeight.bold,
-                              color: PdfColor.fromHex('#8B6914'),
-                            ),
-                            textDirection: pw.TextDirection.rtl,
-                          ),
-                          pw.SizedBox(height: 5),
-                          pw.Container(
-                            padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                            decoration: pw.BoxDecoration(
-                              color: PdfColor.fromHex('#C9A84C'),
-                              borderRadius: pw.BorderRadius.circular(20),
-                            ),
-                            child: pw.Text(
-                              entryNumber,
-                              style: pw.TextStyle(
-                                fontSize: 11,
-                                color: PdfColors.white,
-                                fontWeight: pw.FontWeight.bold,
-                              ),
-                              textDirection: pw.TextDirection.rtl,
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (_showLogo)
-                        pw.Container(
-                          width: 56,
-                          height: 56,
-                          decoration: pw.BoxDecoration(
-                            color: PdfColor.fromHex('#A07820'),
-                            shape: pw.BoxShape.circle,
-                            border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 1.5),
-                          ),
-                          child: pw.Center(
-                            child: pw.Text(
-                              widget.isArabic ? 'خالد' : 'K',
-                              style: pw.TextStyle(
-                                color: PdfColors.white,
-                                fontWeight: pw.FontWeight.bold,
-                                fontSize: 15,
-                              ),
-                              textDirection: pw.TextDirection.rtl,
-                            ),
-                          ),
+                      pw.Positioned(top: 0, right: 0, child: rightZone),
+                      pw.Positioned(
+                        top: 0,
+                        left: 154.0,
+                        right: 164.0,
+                        child: pw.Align(
+                          alignment: pw.Alignment.topCenter,
+                          child: centerZone,
                         ),
+                      ),
+                      pw.Positioned(top: 0, left: 0, child: leftZone),
                     ],
                   ),
                 ),

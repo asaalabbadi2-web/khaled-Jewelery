@@ -578,6 +578,22 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
     _printInColor = settings['printInColor'] ?? true;
   }
 
+  Future<Uint8List> _resizeImageBytes(Uint8List bytes, int targetSize) async {
+    try {
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: targetSize,
+        targetHeight: targetSize,
+      );
+      final frame = await codec.getNextFrame();
+      final byteData =
+          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      frame.image.dispose();
+      if (byteData != null) return byteData.buffer.asUint8List();
+    } catch (_) {}
+    return bytes;
+  }
+
   Future<void> _loadCompanySettings() async {
     Map<String, dynamic>? settings;
 
@@ -635,7 +651,8 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
             ? trimmed.substring(commaIndex + 1)
             : trimmed;
         try {
-          logoBytes = base64Decode(raw);
+          final decoded = base64Decode(raw);
+          logoBytes = await _resizeImageBytes(decoded, 128);
         } catch (_) {
           logoBytes = null;
         }
@@ -865,113 +882,241 @@ class _InvoicePrintScreenState extends State<InvoicePrintScreen> {
 
     final shouldShowLogo = _showLogo && _settingsShowCompanyLogo;
 
-    final companyBlock = pw.Column(
-      crossAxisAlignment: _isArabic
-          ? pw.CrossAxisAlignment.end
-          : pw.CrossAxisAlignment.start,
-      children: [
-        if (shouldShowLogo)
-          pw.Row(
-            crossAxisAlignment: pw.CrossAxisAlignment.center,
-            children: [
-              if (_companyLogoBytes != null && !_isArabic)
-                pw.Container(
-                  width: 36,
-                  height: 36,
-                  margin: const pw.EdgeInsets.only(right: 8),
-                  child: pw.Image(
-                    pw.MemoryImage(_companyLogoBytes!),
-                    fit: pw.BoxFit.contain,
-                  ),
-                ),
-              pw.Text(
-                companyName,
-                style: pw.TextStyle(
-                  fontSize: 20,
-                  fontWeight: pw.FontWeight.bold,
-                  color: _printInColor
-                      ? const PdfColor.fromInt(0xFFD4AF37)
-                      : PdfColors.black,
-                ),
-              ),
-              if (_companyLogoBytes != null && _isArabic)
-                pw.Container(
-                  width: 36,
-                  height: 36,
-                  margin: const pw.EdgeInsets.only(left: 8),
-                  child: pw.Image(
-                    pw.MemoryImage(_companyLogoBytes!),
-                    fit: pw.BoxFit.contain,
-                  ),
-                ),
-            ],
-          ),
-        if (_showAddress) ...[
-          pw.SizedBox(height: 5),
-          if (companyAddress.isNotEmpty)
-            pw.Text(
-              '${_isArabic ? 'العنوان' : 'Address'}: $companyAddress',
-              style: const pw.TextStyle(fontSize: 10),
-              textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
-            ),
-          if (companyPhone.isNotEmpty)
-            pw.Text(
-              '${_isArabic ? 'هاتف' : 'Phone'}: $companyPhone',
-              style: const pw.TextStyle(fontSize: 10),
-              textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
-            ),
-          if (_showTaxInfo && companyTaxNumber.isNotEmpty)
-            pw.Text(
-              '${_isArabic ? 'الرقم الضريبي' : 'VAT No'}: $companyTaxNumber',
-              style: const pw.TextStyle(fontSize: 10),
-              textAlign: _isArabic ? pw.TextAlign.right : pw.TextAlign.left,
-            ),
+    final gold = _printInColor
+        ? PdfColor.fromInt(0xFF8B6914)
+        : PdfColors.black;
+    final goldMid = _printInColor
+        ? PdfColor.fromInt(0xFFC9A84C)
+        : PdfColors.grey600;
+    final goldBg = _printInColor
+        ? PdfColor.fromInt(0xFFFBF7EE)
+        : PdfColors.grey100;
+    final borderColor = _printInColor
+        ? PdfColor.fromInt(0xFFE8D899)
+        : PdfColors.grey400;
+
+    final invoiceType = (widget.invoice['invoice_type'] ?? '').toString();
+    final invoiceNum = '#${widget.invoice['invoice_type_id'] ?? ''}';
+    final invoiceDate = DateTime.tryParse(
+            widget.invoice['date']?.toString() ?? '') ??
+        DateTime.now();
+    final dateStr = DateFormat('yyyy-MM-dd').format(invoiceDate);
+
+    // ── RIGHT ZONE: company + logo + info lines ──
+    // NOTE: pw.Page has textDirection:rtl at page level → Row child[0] = rightmost.
+    // So infoLine uses [label:, space, value] so label: renders at the right edge.
+    pw.Widget infoLine(String label, String value) => pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 3),
+      child: pw.Row(
+        mainAxisSize: pw.MainAxisSize.min,
+        children: [
+          pw.Text('$label:',
+              textDirection: pw.TextDirection.rtl,
+              style: pw.TextStyle(
+                  fontSize: 8,
+                  color: PdfColor.fromInt(0xFF444444))),
+          pw.SizedBox(width: 6),
+          pw.Text(value,
+              textDirection: pw.TextDirection.rtl,
+              style: pw.TextStyle(fontSize: 8, color: gold)),
         ],
+      ),
+    );
+
+    final rightZone = pw.SizedBox(
+      width: 150.0,
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.end,
+        children: [
+          // Logo + name row — aligned to right edge.
+          // pw.Directionality(rtl)+[logo, space, name] → logo=rightmost,
+          // pw.Align(centerRight) pushes the min-size row to the right edge.
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Directionality(
+              textDirection: pw.TextDirection.rtl,
+              child: pw.Row(
+                mainAxisSize: pw.MainAxisSize.min,
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                children: [
+                  if (shouldShowLogo && _companyLogoBytes != null) ...[  
+                    pw.Image(pw.MemoryImage(_companyLogoBytes!),
+                        width: 38, height: 38, fit: pw.BoxFit.contain),
+                    pw.SizedBox(width: 6),
+                  ],
+                  pw.Text(companyName,
+                      textDirection: pw.TextDirection.rtl,
+                      style: pw.TextStyle(
+                          fontSize: 14,
+                          fontWeight: pw.FontWeight.bold,
+                          color: gold)),
+                ],
+              ),
+            ),
+          ),
+          pw.SizedBox(height: 5),
+          pw.Container(height: 0.6, color: borderColor),
+          pw.SizedBox(height: 5),
+          if (_showAddress) ...[
+            if (companyAddress.isNotEmpty)
+              infoLine(_isArabic ? 'العنوان' : 'Address', companyAddress),
+            if (companyPhone.isNotEmpty)
+              infoLine(_isArabic ? 'هاتف' : 'Phone', companyPhone),
+            if (_showTaxInfo && companyTaxNumber.isNotEmpty)
+              infoLine(
+                  _isArabic ? 'الرقم الضريبي' : 'VAT No', companyTaxNumber),
+          ],
+        ],
+      ),
+    );
+
+    // ── CENTER ZONE: document title + invoice type badge + QR ──
+    final centerZone = pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.center,
+      children: [
+        pw.Text(
+          _isArabic ? 'فاتورة' : 'Invoice',
+          textDirection: _isArabic
+              ? pw.TextDirection.rtl
+              : pw.TextDirection.ltr,
+          style: pw.TextStyle(
+              fontSize: 22, fontWeight: pw.FontWeight.bold, color: gold),
+        ),
+        pw.SizedBox(height: 3),
+        pw.Container(
+          padding:
+              const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+          decoration: pw.BoxDecoration(
+            color: goldMid,
+            borderRadius: pw.BorderRadius.circular(20),
+          ),
+          child: pw.Text(
+            invoiceType,
+            textDirection: _isArabic
+                ? pw.TextDirection.rtl
+                : pw.TextDirection.ltr,
+            style: pw.TextStyle(
+                fontSize: 8,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.white),
+          ),
+        ),
+        pw.SizedBox(height: 8),
+        pw.BarcodeWidget(
+          barcode: pw.Barcode.qrCode(),
+          data: 'INV:$invoiceNum|$dateStr|$invoiceType',
+          width: 50,
+          height: 50,
+          color: gold,
+        ),
+        pw.SizedBox(height: 3),
+        pw.Text(
+          _isArabic ? 'تحقق من الفاتورة' : 'Verify Invoice',
+          textDirection: _isArabic
+              ? pw.TextDirection.rtl
+              : pw.TextDirection.ltr,
+          style: pw.TextStyle(
+              fontSize: 6.5, color: PdfColor.fromInt(0xFF888888)),
+        ),
       ],
     );
 
-    final invoiceTypeBlock = pw.Container(
-      padding: const pw.EdgeInsets.all(10),
-      decoration: pw.BoxDecoration(
-        color: _printInColor
-            ? const PdfColor.fromInt(0xFFD4AF37)
-            : PdfColors.grey300,
-        borderRadius: pw.BorderRadius.circular(8),
-      ),
+    // ── LEFT ZONE: invoice number + date + party ──
+    final customerName =
+        (widget.invoice['customer_name'] ?? '').toString().trim();
+    final supplierName =
+        (widget.invoice['supplier_name'] ?? '').toString().trim();
+    final partyName =
+        customerName.isNotEmpty ? customerName : supplierName;
+
+    pw.Widget metaItem(String label, String value) => pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(label,
+            textDirection: pw.TextDirection.rtl,
+            style: pw.TextStyle(
+                fontSize: 7.5, color: PdfColor.fromInt(0xFF888888))),
+        pw.SizedBox(height: 1),
+        pw.Text(value,
+            textDirection: _isArabic
+                ? pw.TextDirection.rtl
+                : pw.TextDirection.ltr,
+            style: pw.TextStyle(
+                fontSize: 10, fontWeight: pw.FontWeight.bold)),
+      ],
+    );
+
+    final leftZone = pw.SizedBox(
+      width: 150.0,
       child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Text(
-            _isArabic ? 'فاتورة' : 'Invoice',
-            style: pw.TextStyle(
-              fontSize: 16,
-              fontWeight: pw.FontWeight.bold,
-              color: _printInColor ? PdfColors.white : PdfColors.black,
+          metaItem(_isArabic ? 'رقم الفاتورة' : 'Invoice No.', invoiceNum),
+          pw.SizedBox(height: 5),
+          metaItem(_isArabic ? 'التاريخ' : 'Date', dateStr),
+          if (partyName.isNotEmpty) ...[
+            pw.SizedBox(height: 5),
+            metaItem(
+              customerName.isNotEmpty
+                  ? (_isArabic ? 'العميل' : 'Customer')
+                  : (_isArabic ? 'المورد' : 'Supplier'),
+              partyName,
             ),
-          ),
-          pw.Text(
-            '${widget.invoice['invoice_type'] ?? ''}',
-            style: pw.TextStyle(
-              fontSize: 14,
-              color: _printInColor ? PdfColors.white : PdfColors.black,
-            ),
-          ),
+          ],
         ],
       ),
     );
 
-    return pw.Container(
-      decoration: const pw.BoxDecoration(
-        border: pw.Border(
-          bottom: pw.BorderSide(color: PdfColors.grey400, width: 2),
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+      children: [
+        // Gold gradient top rule
+        pw.Container(
+          height: 5,
+          decoration: pw.BoxDecoration(
+            gradient: pw.LinearGradient(
+              colors: _printInColor
+                  ? [
+                      PdfColor.fromInt(0xFF8B6914),
+                      PdfColor.fromInt(0xFFC9A84C),
+                      PdfColor.fromInt(0xFFE8C97A),
+                      PdfColor.fromInt(0xFFC9A84C),
+                      PdfColor.fromInt(0xFF8B6914),
+                    ]
+                  : [
+                      PdfColors.grey900,
+                      PdfColors.grey600,
+                      PdfColors.grey900,
+                    ],
+            ),
+          ),
         ),
-      ),
-      padding: const pw.EdgeInsets.only(bottom: 10),
-      child: pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-        children: _isArabic
-            ? [invoiceTypeBlock, companyBlock]
-            : [companyBlock, invoiceTypeBlock],
-      ),
+        pw.Container(
+          height: 120,
+          padding: const pw.EdgeInsets.fromLTRB(16, 12, 16, 10),
+          decoration: pw.BoxDecoration(
+            color: goldBg,
+            border: pw.Border(
+              bottom: pw.BorderSide(color: borderColor, width: 1.5),
+            ),
+          ),
+          child: pw.Stack(
+            children: [
+              pw.Positioned(top: 0, right: 0, child: rightZone),
+              pw.Positioned(
+                top: 0,
+                left: 154.0,
+                right: 154.0,
+                child: pw.Align(
+                  alignment: pw.Alignment.topCenter,
+                  child: centerZone,
+                ),
+              ),
+              pw.Positioned(top: 0, left: 0, child: leftZone),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

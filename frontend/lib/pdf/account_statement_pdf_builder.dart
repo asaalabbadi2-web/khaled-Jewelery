@@ -56,7 +56,7 @@ class AccountStatementPdfBuilder {
   static const String defaultLegalFooterText =
       'يعتبر هذا الكشف مصدقاً وصحيحاً ما لم يرد اعتراض خطي خلال 7 أيام من تاريخه. تطبق الشروط والأحكام.';
   static const String digitalDocumentFooterText =
-      'هذا المستند تم إنشاؤه آلياً وموثق رقمياً، ولا يحتاج إلى ختم يدوي   .';
+      'هذا المستند تم إنشاؤه آلياً وموثق رقمياً، ولا يحتاج إلى ختم يدوى   .';
 
   static ({DateTime startInclusive, DateTime endExclusive}) _rangeBounds(
     DateTimeRange range,
@@ -248,6 +248,8 @@ class AccountStatementPdfBuilder {
     Uint8List? preloadedRegularFont,
     Uint8List? preloadedBoldFont,
     Uint8List? preloadedFallbackLogo,
+    // Pre-resized logo bytes (resized on the main isolate before spawning).
+    Uint8List? preloadedLogo,
     void Function({
       required bool valuationBannerRendered,
       required bool goldPriceChipRendered,
@@ -317,7 +319,7 @@ class AccountStatementPdfBuilder {
         'ST-${DateFormat('yyyyMMdd-HHmmss').format(now)}-$accountId';
     final dateRangeText = dateRange == null
         ? '—'
-        : '${DateFormat('yyyy-MM-dd').format(dateRange.start)} ← ${DateFormat('yyyy-MM-dd').format(dateRange.end)}';
+        : '${DateFormat('yyyy-MM-dd').format(dateRange.start)} – ${DateFormat('yyyy-MM-dd').format(dateRange.end)}';
 
     final viewModeLabel = switch (viewMode) {
       1 => 'ذهب فقط',
@@ -355,10 +357,14 @@ class AccountStatementPdfBuilder {
           });
 
     // ── logo ──────────────────────────────────────────────────────
-    final logoImage = _decodeBase64Image(branding.companyLogoBase64) ??
-        (preloadedFallbackLogo != null
-            ? pw.MemoryImage(preloadedFallbackLogo)
-            : await _tryLoadImage('assets/KHGL.png'));
+    // preloadedLogo takes priority — it is pre-decoded and resized on the
+    // main isolate before being handed off to a background isolate.
+    final logoImage = preloadedLogo != null
+        ? pw.MemoryImage(preloadedLogo)
+        : (_decodeBase64Image(branding.companyLogoBase64) ??
+            (preloadedFallbackLogo != null
+                ? pw.MemoryImage(preloadedFallbackLogo)
+                : await _tryLoadImage('assets/KHGL.png')));
 
     // ── column definitions ────────────────────────────────────────
     const dateKey = 'date';
@@ -523,7 +529,7 @@ class AccountStatementPdfBuilder {
             ),
             pw.SizedBox(height: 3),
             pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.end,
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 if (balanceTag != null) ...[
                   pw.Container(
@@ -1180,7 +1186,7 @@ class AccountStatementPdfBuilder {
                     child: balCard(
                       label: 'رصيد الذهب',
                       value: periodClosingGold.toStringAsFixed(3),
-                      unit: 'جرام — عيار ${mainKarat}k',
+                      unit: 'جرام (${mainKarat}k)',
                       valueColor: periodClosingGold < 0
                           ? _PdfColors.negative
                           : _PdfColors.gold,
@@ -1204,7 +1210,7 @@ class AccountStatementPdfBuilder {
                     child: balCard(
                       label: 'مدين نقد',
                       value: commaFmt.format(totals.cashDebit),
-                      unit: 'ريال سعودي',
+                      unit: 'ريال سعودى',
                       valueColor: _PdfColors.positive, // مدين → أخضر
                     ),
                   ),
@@ -1213,7 +1219,7 @@ class AccountStatementPdfBuilder {
                     child: balCard(
                       label: 'دائن نقد',
                       value: commaFmt.format(totals.cashCredit),
-                      unit: 'ريال سعودي',
+                      unit: 'ريال سعودى',
                       valueColor: _PdfColors.negative, // دائن → أحمر
                     ),
                   ),
@@ -1222,7 +1228,7 @@ class AccountStatementPdfBuilder {
                     child: balCard(
                       label: 'رصيد النقد',
                       value: commaFmt.format(periodClosingCash),
-                      unit: 'ريال سعودي',
+                      unit: 'ريال سعودى',
                       valueColor: periodClosingCash < 0
                           ? _PdfColors.negative
                           : _PdfColors.positive,
