@@ -1066,7 +1066,6 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
     final goldAmount = _toDouble(voucher['amount_gold']);
     final equivalentWeight = _toDouble(voucher['amount_gold_main_karat']);
     final mainKaratLabel = _toDouble(voucher['main_karat']);
-    final accentColor = _webAccentColor(meta);
 
     final extraRows = <Widget>[];
     if (goldAmount > 0) {
@@ -1096,23 +1095,24 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
         : '${goldFormat.format(goldAmount)} ${widget.isArabic ? 'جرام' : 'g'}';
     final words = cashAmount > 0 ? _amountInWords(cashAmount) : null;
 
+    // ── Clean Luxury redesign: top-border only, no heavy box ──────────────
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAEEDA),
-        borderRadius: BorderRadius.circular(8),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+      decoration: const BoxDecoration(
+        color: Color(0xFFFAFAF8),
+        border: Border(
+          top: BorderSide(color: Color(0xFFD4B76A), width: 2),
+        ),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Primary amount row — value on the right for RTL
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                primaryLabel,
-                style: const TextStyle(fontSize: 13, color: Color(0xFF854F0B)),
-              ),
-              Flexible(
+              // Value block (right/end side visually)
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -1120,28 +1120,44 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
                       primaryValue,
                       textAlign: TextAlign.end,
                       style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF412402),
+                        fontSize: 26,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.5,
+                        color: Color(0xFF2C1A00),
                       ),
                     ),
                     if (words != null) ...[
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Text(
                         words,
                         textAlign: TextAlign.end,
-                        style: TextStyle(fontSize: 11, color: accentColor),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF8B6914),
+                        ),
                       ),
                     ],
                   ],
                 ),
               ),
+              const SizedBox(width: 14),
+              // Label (left side)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  primaryLabel,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF999999),
+                  ),
+                ),
+              ),
             ],
           ),
           if (extraRows.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            const Divider(height: 1, color: Color(0xFFE6D5AE)),
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
+            Container(height: 0.8, color: const Color(0xFFE2D9C5)),
+            const SizedBox(height: 12),
             ...extraRows,
           ],
         ],
@@ -1157,7 +1173,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
         children: [
           Text(
             label,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF854F0B)),
+            style: const TextStyle(fontSize: 11, color: Color(0xFF999999)),
           ),
           Flexible(
             child: Text(
@@ -1166,7 +1182,7 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF412402),
+                color: Color(0xFF2C1A00),
               ),
             ),
           ),
@@ -2060,9 +2076,10 @@ class _VoucherPrintScreenState extends State<VoucherPrintScreen> {
             padding: pw.EdgeInsets.symmetric(
                 horizontal: isA5 ? 7 : 9, vertical: isA5 ? 5 : 7),
             decoration: pw.BoxDecoration(
-              color: VColors.cellBg,
-              border: pw.Border.all(color: VColors.cellBorder, width: 0.5),
-              borderRadius: pw.BorderRadius.circular(5),
+              color: const PdfColor.fromInt(0xFFFAFAF8),
+              border: pw.Border(
+                top: pw.BorderSide(color: VColors.amberBorder, width: 1.5),
+              ),
             ),
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,

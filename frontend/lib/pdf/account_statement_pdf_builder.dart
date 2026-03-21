@@ -24,8 +24,8 @@ class _PdfColors {
   static final muted  = pdf.PdfColor.fromHex('#666666');
   static final white  = pdf.PdfColors.white;
 
-  static final negative = pdf.PdfColor.fromHex('#8B1A1A');
-  static final positive = pdf.PdfColor.fromHex('#1A5C35');
+  static final negative = pdf.PdfColor.fromHex('#7B2537');   // dark burgundy
+  static final positive = pdf.PdfColor.fromHex('#2A5E42');   // muted forest green
 
   // Row banding colors (match the reference screenshot tone)
   static final rowAlt  = pdf.PdfColor.fromHex('#F5EFE0');
@@ -326,6 +326,8 @@ class AccountStatementPdfBuilder {
       2 => isMerged ? 'قيمة فقط' : 'نقد فقط',
       _ => isMerged ? 'ذهب + قيمة' : 'ذهب + نقد',
     };
+    // filterLabel reserved for future use
+    // ignore: unused_local_variable
     final filterLabel = switch (filterType) {
       'credit' => 'دائن',
       'debit' => 'مدين',
@@ -462,107 +464,56 @@ class AccountStatementPdfBuilder {
           ],
         );
 
-    // Info chip (filter bar)
-    pw.Widget infoChip({required String label, required String value}) =>
+    // Filter strip chip — no border box, just label + value separated by bullet
+    pw.Widget filterChip({required String label, required String value}) =>
+        pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [
+            pw.Text(
+              '$label: ',
+              textDirection: pw.TextDirection.rtl,
+              style: pw.TextStyle(
+                  font: baseFont, fontSize: 7.5, color: _PdfColors.muted),
+            ),
+            pw.Text(
+              value,
+              textDirection: pw.TextDirection.rtl,
+              style: pw.TextStyle(
+                  font: boldFont, fontSize: 7.5, color: _PdfColors.dark),
+            ),
+          ],
+        );
+
+    // ── Balance summary: borderless luxury card ──
+    pw.Widget balCell(String label, String value, pdf.PdfColor valueColor,
+        {bool highlighted = false}) =>
         pw.Container(
-          padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 9),
           decoration: pw.BoxDecoration(
-            color: _PdfColors.goldBg,
-            border: pw.Border.all(color: _PdfColors.borderLight, width: 0.7),
+            color: highlighted
+                ? _PdfColors.goldBg
+                : pdf.PdfColor.fromHex('#FAFAF8'),
+            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
           ),
-          child: pw.Row(
-            mainAxisSize: pw.MainAxisSize.min,
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
             children: [
               pw.Text(
-                '$label: ',
+                label,
                 textDirection: pw.TextDirection.rtl,
                 style: pw.TextStyle(
-                    font: boldFont,
-                    fontSize: 7.5,
-                    color: _PdfColors.muted),
+                    font: boldFont, fontSize: 7.5, color: _PdfColors.goldMid),
               ),
+              pw.SizedBox(height: 5),
               pw.Text(
                 value,
-                textDirection: pw.TextDirection.rtl,
-                style: pw.TextStyle(
-                    font: boldFont,
-                    fontSize: 7.5,
-                    color: _PdfColors.dark),
+                textDirection: pw.TextDirection.ltr,
+                style:
+                    pw.TextStyle(font: boldFont, fontSize: 14, color: valueColor),
               ),
             ],
           ),
         );
-
-    // Balance summary card
-    pw.Widget balCard({
-      required String label,
-      required String value,
-      required String unit,
-      required pdf.PdfColor valueColor,
-      bool featured = false,
-      String? balanceTag, // 'مدين' | 'دائن' | null
-    }) {
-      final tagColor = balanceTag == 'مدين' ? _PdfColors.positive : _PdfColors.negative; // مدين=أخضر, دائن=أحمر
-      return pw.Container(
-        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        decoration: pw.BoxDecoration(
-          color: featured ? _PdfColors.goldBg : _PdfColors.white,
-          border: pw.Border.all(color: _PdfColors.borderLight, width: 1),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Text(
-              label,
-              textDirection: pw.TextDirection.rtl,
-              style: pw.TextStyle(
-                  font: baseFont,
-                  fontSize: 7,
-                  color: _PdfColors.muted),
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              value,
-              textDirection: pw.TextDirection.ltr,
-              style: pw.TextStyle(
-                  font: boldFont, fontSize: 11, color: valueColor),
-            ),
-            pw.SizedBox(height: 3),
-            pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-              children: [
-                if (balanceTag != null) ...[
-                  pw.Container(
-                    padding: const pw.EdgeInsets.symmetric(
-                        horizontal: 4, vertical: 1),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(
-                          color: tagColor, width: 0.8),
-                    ),
-                    child: pw.Text(
-                      balanceTag,
-                      textDirection: pw.TextDirection.rtl,
-                      style: pw.TextStyle(
-                        font: boldFont,
-                        fontSize: 6,
-                        color: tagColor,
-                      ),
-                    ),
-                  ),
-                  pw.SizedBox(width: 3),
-                ],
-                pw.Text(
-                  unit,
-                  textDirection: pw.TextDirection.rtl,
-                  style: pw.TextStyle(
-                      font: baseFont, fontSize: 6.5, color: _PdfColors.muted),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
 
     // Table header cell (two-line: title + unit)
     pw.Widget headerCell(String text, {bool isDesc = false}) {
@@ -778,8 +729,9 @@ class AccountStatementPdfBuilder {
         width: 200,
         padding: const pw.EdgeInsets.all(12),
         decoration: pw.BoxDecoration(
-          color: _PdfColors.goldBg,
-          border: pw.Border.all(color: _PdfColors.goldLight, width: 0.8),
+          border: pw.Border(
+            top: pw.BorderSide(color: _PdfColors.goldLight, width: 2),
+          ),
         ),
         child: pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -843,35 +795,24 @@ class AccountStatementPdfBuilder {
             children: [
               pw.Container(height: 0.8, color: _PdfColors.borderLight),
               pw.SizedBox(height: 5),
-              // Legal note – own full-width row so it wraps naturally
-              pw.Padding(
-                padding: const pw.EdgeInsets.symmetric(horizontal: 4),
-                child: pw.Text(
-                  digitalDocumentFooterText,
-                  textDirection: pw.TextDirection.rtl,
-                  style: pw.TextStyle(
-                      font: baseFont,
-                      fontSize: 7,
-                      color: _PdfColors.muted),
-                ),
-              ),
-              pw.SizedBox(height: 3),
               pw.Container(
                 padding: const pw.EdgeInsets.symmetric(horizontal: 4),
                 child: pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
                   children: [
-                    // Right (visual): brand
+                    // Left (visual in RTL): brand name
                     pw.Text(
                       '${branding.companyName} •',
                       textDirection: pw.TextDirection.rtl,
                       style: pw.TextStyle(
                           font: boldFont,
-                          fontSize: 8,
+                          fontSize: 7.5,
                           color: _PdfColors.gold),
                     ),
-                    // Center: page number
+                    // Center: page number + نهاية الكشف
                     pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.center,
                       children: [
                         pw.RichText(
                           textDirection: pw.TextDirection.rtl,
@@ -881,52 +822,65 @@ class AccountStatementPdfBuilder {
                                 text: 'الصفحة ',
                                 style: pw.TextStyle(
                                     font: baseFont,
-                                    fontSize: 8,
+                                    fontSize: 7,
                                     color: _PdfColors.muted),
                               ),
                               pw.TextSpan(
                                 text: ctx.pageNumber.toString(),
                                 style: pw.TextStyle(
                                     font: boldFont,
-                                    fontSize: 11,
+                                    fontSize: 9.5,
                                     color: _PdfColors.gold),
                               ),
                               pw.TextSpan(
                                 text: ' من ',
                                 style: pw.TextStyle(
                                     font: baseFont,
-                                    fontSize: 8,
+                                    fontSize: 7,
                                     color: _PdfColors.muted),
                               ),
                               pw.TextSpan(
                                 text: ctx.pagesCount.toString(),
                                 style: pw.TextStyle(
                                     font: boldFont,
-                                    fontSize: 11,
+                                    fontSize: 9.5,
                                     color: _PdfColors.dark),
                               ),
                             ],
                           ),
                         ),
-                        if (ctx.pageNumber == ctx.pagesCount) ...[
-                          pw.SizedBox(height: 2),
-                          pw.Container(
-                            padding: const pw.EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 1.5),
-                            decoration: pw.BoxDecoration(
-                              border: pw.Border.all(
-                                  color: _PdfColors.borderLight, width: 0.7),
-                            ),
-                            child: pw.Text(
-                              'نهاية الكشف',
-                              textDirection: pw.TextDirection.rtl,
-                              style: pw.TextStyle(
-                                  font: baseFont,
-                                  fontSize: 6.5,
-                                  color: _PdfColors.muted),
-                            ),
+                        pw.SizedBox(height: 2),
+                        pw.Text(
+                          ctx.pageNumber == ctx.pagesCount ? 'نهاية الكشف' : ' ',
+                          textDirection: pw.TextDirection.rtl,
+                          style: pw.TextStyle(
+                              font: baseFont,
+                              fontSize: 6.5,
+                              color: _PdfColors.muted),
+                        ),
+                      ],
+                    ),
+                    // Right (visual in RTL): QR code
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.center,
+                      children: [
+                        pw.SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: pw.BarcodeWidget(
+                            barcode: pw.Barcode.qrCode(),
+                            data: qrPayload,
+                            color: _PdfColors.gold,
                           ),
-                        ],
+                        ),
+                        pw.SizedBox(height: 2),
+                        pw.Text(
+                          'رمز التحقق',
+                          textDirection: pw.TextDirection.rtl,
+                          style: pw.TextStyle(
+                              font: baseFont, fontSize: 5.5,
+                              color: _PdfColors.muted),
+                        ),
                       ],
                     ),
                   ],
@@ -950,7 +904,7 @@ class AccountStatementPdfBuilder {
 
             // ── HEADER: RIGHT=logo+name+details | CENTER=title+QR | LEFT=meta ──
             pw.SizedBox(
-              height: 128,
+              height: 80,
               child: pw.Stack(
                 children: [
 
@@ -997,7 +951,7 @@ class AccountStatementPdfBuilder {
                     ),
                   ),
 
-                  // ── CENTER ZONE: title + QR ──
+                  // ── CENTER ZONE: title only (QR moved to footer) ──
                   pw.Positioned(
                     top: 8,
                     left: 150,
@@ -1017,34 +971,6 @@ class AccountStatementPdfBuilder {
                           style: pw.TextStyle(
                               font: baseFont, fontSize: 8.5,
                               color: _PdfColors.muted, letterSpacing: 1.8),
-                        ),
-                        pw.SizedBox(height: 8),
-                        // QR centred under the title
-                        pw.Align(
-                          alignment: pw.Alignment.center,
-                          child: pw.Column(
-                            children: [
-                              pw.Container(
-                                width: 50,
-                                height: 50,
-                                padding: const pw.EdgeInsets.all(2),
-                                decoration: pw.BoxDecoration(
-                                  border: pw.Border.all(
-                                      color: _PdfColors.gold, width: 0.8),
-                                ),
-                                child: pw.BarcodeWidget(
-                                  barcode: pw.Barcode.qrCode(),
-                                  data: qrPayload,
-                                  color: _PdfColors.gold,
-                                ),
-                              ),
-                              pw.SizedBox(height: 3),
-                              pw.Text('تحقق من الكشف',
-                                textDirection: pw.TextDirection.rtl,
-                                style: pw.TextStyle(font: baseFont, fontSize: 6,
-                                    color: _PdfColors.muted)),
-                            ],
-                          ),
                         ),
                       ],
                     ),
@@ -1155,132 +1081,90 @@ class AccountStatementPdfBuilder {
                 ],
               ),
             ),
-            pw.SizedBox(height: 10),
+            pw.SizedBox(height: 18),
 
-            // ── BALANCE SUMMARY CARDS (6 cards: 3 gold + 3 cash) ──
+            // ── BALANCE SUMMARY — six borderless luxury cards ──
             rtl(sectionHeading('ملخص الأرصدة')),
             pw.SizedBox(height: 8),
-            // Gold row
             rtl(
               pw.Row(
                 children: [
-                  pw.Expanded(
-                    child: balCard(
-                      label: 'مدين ذهب',
-                      value: totals.goldDebit.toStringAsFixed(3),
-                      unit: 'جرام (${mainKarat}k)',
-                      valueColor: _PdfColors.positive, // مدين → أخضر
-                    ),
-                  ),
-                  pw.SizedBox(width: 6),
-                  pw.Expanded(
-                    child: balCard(
-                      label: 'دائن ذهب',
-                      value: totals.goldCredit.toStringAsFixed(3),
-                      unit: 'جرام (${mainKarat}k)',
-                      valueColor: _PdfColors.negative, // دائن → أحمر
-                    ),
-                  ),
-                  pw.SizedBox(width: 6),
-                  pw.Expanded(
-                    child: balCard(
-                      label: 'رصيد الذهب',
-                      value: periodClosingGold.toStringAsFixed(3),
-                      unit: 'جرام (${mainKarat}k)',
-                      valueColor: periodClosingGold < 0
-                          ? _PdfColors.negative
-                          : _PdfColors.gold,
-                      featured: true,
-                      balanceTag: periodClosingGold < 0
-                          ? 'دائن'
-                          : periodClosingGold > 0
-                              ? 'مدين'
-                              : null,
-                    ),
-                  ),
+                  pw.Expanded(child: balCell(
+                    'رصيد الذهب   جم',
+                    periodClosingGold.toStringAsFixed(3),
+                    periodClosingGold < 0 ? _PdfColors.negative : _PdfColors.gold,
+                    highlighted: true,
+                  )),
+                  pw.SizedBox(width: 3),
+                  pw.Expanded(child: balCell(
+                    'دائن ذهب   جم',
+                    totals.goldCredit.toStringAsFixed(3),
+                    _PdfColors.negative,
+                  )),
+                  pw.SizedBox(width: 3),
+                  pw.Expanded(child: balCell(
+                    'مدين ذهب   جم',
+                    totals.goldDebit.toStringAsFixed(3),
+                    _PdfColors.positive,
+                  )),
+                  pw.SizedBox(width: 8),
+                  pw.Expanded(child: balCell(
+                    'رصيد النقد   ر.س',
+                    commaFmt.format(periodClosingCash),
+                    periodClosingCash < 0 ? _PdfColors.negative : _PdfColors.positive,
+                    highlighted: true,
+                  )),
+                  pw.SizedBox(width: 3),
+                  pw.Expanded(child: balCell(
+                    'دائن نقد   ر.س',
+                    commaFmt.format(totals.cashCredit),
+                    _PdfColors.negative,
+                  )),
+                  pw.SizedBox(width: 3),
+                  pw.Expanded(child: balCell(
+                    'مدين نقد   ر.س',
+                    commaFmt.format(totals.cashDebit),
+                    _PdfColors.positive,
+                  )),
                 ],
               ),
             ),
-            pw.SizedBox(height: 6),
-            // Cash row
-            rtl(
-              pw.Row(
-                children: [
-                  pw.Expanded(
-                    child: balCard(
-                      label: 'مدين نقد',
-                      value: commaFmt.format(totals.cashDebit),
-                      unit: 'ريال سعودى',
-                      valueColor: _PdfColors.positive, // مدين → أخضر
-                    ),
-                  ),
-                  pw.SizedBox(width: 6),
-                  pw.Expanded(
-                    child: balCard(
-                      label: 'دائن نقد',
-                      value: commaFmt.format(totals.cashCredit),
-                      unit: 'ريال سعودى',
-                      valueColor: _PdfColors.negative, // دائن → أحمر
-                    ),
-                  ),
-                  pw.SizedBox(width: 6),
-                  pw.Expanded(
-                    child: balCard(
-                      label: 'رصيد النقد',
-                      value: commaFmt.format(periodClosingCash),
-                      unit: 'ريال سعودى',
-                      valueColor: periodClosingCash < 0
-                          ? _PdfColors.negative
-                          : _PdfColors.positive,
-                      balanceTag: periodClosingCash < 0
-                          ? 'دائن'
-                          : periodClosingCash > 0
-                              ? 'مدين'
-                              : null,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            pw.SizedBox(height: 8),
+            pw.SizedBox(height: 14),
 
-            // ── FILTER BAR ──
-            rtl(sectionHeading('الفلتر والمظهر')),
-            pw.SizedBox(height: 6),
+            // ── FILTER STRIP — plain single line, no boxes ──
             rtl(
               pw.Container(
-                padding: const pw.EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 8),
-                color: _PdfColors.goldBg,
-                child: pw.Wrap(
-                  spacing: 6,
-                  runSpacing: 5,
-                  alignment: pw.WrapAlignment.end,
+                padding:
+                    const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border(
+                    bottom: pw.BorderSide(
+                        color: _PdfColors.borderLight, width: 0.6),
+                  ),
+                ),
+                child: pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.end,
                   children: [
-                    infoChip(label: 'العرض', value: viewModeLabel),
-                    infoChip(label: 'الفلتر', value: filterLabel),
-                    infoChip(
-                        label: 'حركة فقط',
-                        value: showOnlyMovement ? 'نعم' : 'لا'),
-                    infoChip(
-                        label: 'العيار الأساسي',
-                        value: '$mainKarat'),
-                    if (isMerged)
-                      infoChip(
-                        label: 'البيانات',
-                        value: 'مدمج (ذهب + $cashLabel)',
-                      ),
-                    if (goldPriceChipRendered)
-                      infoChip(
-                        label: 'سعر الجرام',
-                        value:
-                            '${pricePerGram!.toStringAsFixed(2)} ر.س',
-                      ),
+                    filterChip(label: 'الفترة', value: dateRange == null ? 'جميع الفترات' : dateRangeText),
+                    pw.SizedBox(width: 4),
+                    pw.Text('  |  ', style: pw.TextStyle(font: baseFont, fontSize: 7.5, color: _PdfColors.borderLight)),
+                    pw.SizedBox(width: 4),
+                    filterChip(label: 'العيار', value: '$mainKarat'),
+                    pw.SizedBox(width: 4),
+                    pw.Text('  |  ', style: pw.TextStyle(font: baseFont, fontSize: 7.5, color: _PdfColors.borderLight)),
+                    pw.SizedBox(width: 4),
+                    filterChip(label: 'العرض', value: viewModeLabel),
+                    if (goldPriceChipRendered) ...[
+                      pw.SizedBox(width: 4),
+                      pw.Text('  |  ', style: pw.TextStyle(font: baseFont, fontSize: 7.5, color: _PdfColors.borderLight)),
+                      pw.SizedBox(width: 4),
+                      filterChip(label: 'سعر الجرام', value: '${pricePerGram!.toStringAsFixed(2)} ر.س'),
+                    ],
                   ],
                 ),
               ),
             ),
-            pw.SizedBox(height: 8),
+            pw.SizedBox(height: 12),
 
             // ── TRANSACTIONS TABLE ──
             rtl(sectionHeading('تفاصيل الحركات')),
@@ -1293,8 +1177,10 @@ class AccountStatementPdfBuilder {
                   return pw.Container(color: _PdfColors.goldBg, child: cell);
                 }).toList(),
                 data: allRows,
-                border: pw.TableBorder.all(
-                    color: _PdfColors.borderLight, width: 0.6),
+                border: pw.TableBorder(
+                  bottom: pw.BorderSide(color: _PdfColors.borderLight, width: 0.5),
+                  horizontalInside: pw.BorderSide(color: _PdfColors.borderLight, width: 0.4),
+                ),
                 cellPadding: pw.EdgeInsets.zero,
                 columnWidths: colWidths,
               ),
@@ -1313,8 +1199,10 @@ class AccountStatementPdfBuilder {
                       child: pw.Container(
                         padding: const pw.EdgeInsets.all(12),
                         decoration: pw.BoxDecoration(
-                          border: pw.Border.all(
-                              color: _PdfColors.borderLight, width: 0.7),
+                          border: pw.Border(
+                            top: pw.BorderSide(
+                                color: _PdfColors.borderLight, width: 1.5),
+                          ),
                         ),
                         child: pw.Directionality(
                           textDirection: pw.TextDirection.rtl,
