@@ -7,8 +7,10 @@ import subprocess
 import hashlib
 import hmac
 import base64
+import html
 import socket
 from functools import wraps
+from urllib.parse import quote
 from flask import Blueprint, request, jsonify, g, current_app, send_file
 import io
 import os
@@ -3783,6 +3785,95 @@ def _sign_qr_payload(payload: dict) -> str | None:
     return base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
 
 
+def _public_base_url() -> str | None:
+    """Base URL to embed in QR codes.
+
+    IMPORTANT: `request.host_url` often becomes `http://localhost:...` when the
+    Flutter app runs on the same machine, which will NOT work when scanning the
+    QR using a phone. Use an explicit PUBLIC_BASE_URL (e.g. http://192.168.1.10:8001).
+    """
+    try:
+        raw = (os.environ.get('PUBLIC_BASE_URL') or '').strip()
+    except Exception:
+        raw = ''
+
+    if not raw:
+        return None
+
+    raw = raw.rstrip('/')
+    if raw.startswith('http://') or raw.startswith('https://'):
+        return raw
+    # If scheme was omitted, default to http.
+    return f'http://{raw}'
+
+
+def _b64url_encode_utf8(value: str) -> str:
+    return base64.urlsafe_b64encode((value or '').encode('utf-8')).decode('ascii').rstrip('=')
+
+
+def _b64url_decode_utf8(value: str) -> str:
+    raw = (value or '').strip()
+    if not raw:
+        return ''
+    pad = '=' * ((4 - (len(raw) % 4)) % 4)
+    return base64.urlsafe_b64decode((raw + pad).encode('ascii')).decode('utf-8')
+
+
+def _build_qr_verify_token(*, signed_payload: dict | None, signature: str | None) -> str | None:
+    if not isinstance(signed_payload, dict) or not signed_payload:
+        return None
+    sig = (signature or '').strip()
+    if not sig:
+        return None
+    blob = _b64url_encode_utf8(_qr_canonical_json(signed_payload))
+    return f'{blob}.{sig}'
+
+
+def _build_statement_verify_url(token: str | None) -> str | None:
+    base_url = _public_base_url()
+    tok = (token or '').strip()
+    if not base_url or not tok:
+        return None
+    return f'{base_url}/api/verify/statement?t={quote(tok)}'
+
+
+def _verify_statement_token(token: str) -> dict | None:
+    """Return signed payload if token is valid, otherwise None."""
+    tok = (token or '').strip()
+    if not tok or '.' not in tok:
+        return None
+
+    try:
+        blob, sig = tok.rsplit('.', 1)
+    except Exception:
+        return None
+
+    blob = (blob or '').strip()
+    sig = (sig or '').strip()
+    if not blob or not sig:
+        return None
+
+    try:
+        payload_json = _b64url_decode_utf8(blob)
+        payload = json.loads(payload_json)
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict) or not payload:
+        return None
+
+    expected = _sign_qr_payload(payload)
+    if not expected:
+        return None
+    try:
+        if not hmac.compare_digest(expected, sig):
+            return None
+    except Exception:
+        return None
+
+    return payload
+
+
 def _build_statement_qr_signed_payload(*, account: Account, main_karat: int, closing_gold_g: float, closing_cash: float, issued_at: str, is_merged: bool) -> dict:
     settings = None
     try:
@@ -4051,6 +4142,8 @@ def get_account_statement(account_id):
         is_merged=False,
     )
     qr_signature = _sign_qr_payload(qr_signed_payload)
+    qr_verify_token = _build_qr_verify_token(signed_payload=qr_signed_payload, signature=qr_signature)
+    qr_verify_url = _build_statement_verify_url(qr_verify_token)
 
     return jsonify({
         'account_id': account.id,
@@ -4060,6 +4153,8 @@ def get_account_statement(account_id):
         'qr_issued_at': qr_issued_at,
         'qr_signed_payload': qr_signed_payload,
         'qr_signature': qr_signature,
+        'qr_verify_token': qr_verify_token,
+        'qr_verify_url': qr_verify_url,
         'gold_price_snapshot': price_snapshot,
         'valuation': {
             'price_per_gram_main_karat': round(price_main, 4),
@@ -4350,6 +4445,8 @@ def get_account_statement_merged(account_id):
         is_merged=bool(memo_account is not None),
     )
     qr_signature = _sign_qr_payload(qr_signed_payload)
+    qr_verify_token = _build_qr_verify_token(signed_payload=qr_signed_payload, signature=qr_signature)
+    qr_verify_url = _build_statement_verify_url(qr_verify_token)
 
     return jsonify({
         'account_id': account.id,
@@ -4361,6 +4458,8 @@ def get_account_statement_merged(account_id):
         'qr_issued_at': qr_issued_at,
         'qr_signed_payload': qr_signed_payload,
         'qr_signature': qr_signature,
+        'qr_verify_token': qr_verify_token,
+        'qr_verify_url': qr_verify_url,
         'gold_price_snapshot': price_snapshot,
         'valuation': {
             'price_per_gram_main_karat': round(price_main, 4),
@@ -4645,6 +4744,8 @@ def get_customer_statement(id):
     qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
     qr_signed_payload = None
     qr_signature = None
+    qr_verify_token = None
+    qr_verify_url = None
     if qr_account is not None:
         qr_signed_payload = _build_statement_qr_signed_payload(
             account=qr_account,
@@ -4655,6 +4756,8 @@ def get_customer_statement(id):
             is_merged=False,
         )
         qr_signature = _sign_qr_payload(qr_signed_payload)
+        qr_verify_token = _build_qr_verify_token(signed_payload=qr_signed_payload, signature=qr_signature)
+        qr_verify_url = _build_statement_verify_url(qr_verify_token)
 
     return jsonify({
         'account_name': customer.name,
@@ -4662,6 +4765,8 @@ def get_customer_statement(id):
         'qr_issued_at': qr_issued_at,
         'qr_signed_payload': qr_signed_payload,
         'qr_signature': qr_signature,
+        'qr_verify_token': qr_verify_token,
+        'qr_verify_url': qr_verify_url,
         'gold_price_snapshot': price_snapshot,
         'valuation': {
             'price_per_gram_main_karat': round(price_main, 4),
@@ -5944,6 +6049,8 @@ def get_supplier_weight_statement(supplier_id):
     qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
     qr_signed_payload = None
     qr_signature = None
+    qr_verify_token = None
+    qr_verify_url = None
     if qr_account is not None:
         qr_signed_payload = _build_statement_qr_signed_payload(
             account=qr_account,
@@ -5954,6 +6061,8 @@ def get_supplier_weight_statement(supplier_id):
             is_merged=bool(supplier_memo_account_id),
         )
         qr_signature = _sign_qr_payload(qr_signed_payload)
+        qr_verify_token = _build_qr_verify_token(signed_payload=qr_signed_payload, signature=qr_signature)
+        qr_verify_url = _build_statement_verify_url(qr_verify_token)
 
     return jsonify({
         'account_name': supplier.name,
@@ -5961,6 +6070,8 @@ def get_supplier_weight_statement(supplier_id):
         'qr_issued_at': qr_issued_at,
         'qr_signed_payload': qr_signed_payload,
         'qr_signature': qr_signature,
+        'qr_verify_token': qr_verify_token,
+        'qr_verify_url': qr_verify_url,
         'gold_price_snapshot': price_snapshot,
         'valuation': {
             'price_per_gram_main_karat': round(price_main, 4),
@@ -5981,6 +6092,86 @@ def get_supplier_weight_statement(supplier_id):
         'closing_balance_gold_normalized': closing_balance_gold_normalized,
         'closing_balance_gold_details': running_balances_gold,
     })
+
+
+@public_api.route('/verify/statement', methods=['GET'])
+def verify_statement_qr():
+    """Public verification endpoint for statement QR codes.
+
+    Expected query params:
+      - t: base64url(canonical_json(signed_payload)) + '.' + signature
+
+    Notes:
+      - Works best when PUBLIC_BASE_URL is set to a LAN-reachable address.
+      - If QR_HMAC_SECRET is missing, verification is disabled.
+    """
+    token = (request.args.get('t') or '').strip()
+
+    # If secret is disabled, do not reveal any payload details.
+    if not _qr_hmac_secret():
+        return (
+            '<!doctype html><html lang="ar" dir="rtl">'
+            '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<title>التحقق من كشف الحساب</title></head>'
+            '<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; padding:16px">'
+            '<h2 style="margin:0 0 8px">التحقق غير متاح</h2>'
+            '<div>لم يتم تفعيل التوقيع (QR_HMAC_SECRET غير مضبوط).</div>'
+            '</body></html>',
+            404,
+            {'Content-Type': 'text/html; charset=utf-8'},
+        )
+
+    payload = _verify_statement_token(token) if token else None
+    if payload is None:
+        return (
+            '<!doctype html><html lang="ar" dir="rtl">'
+            '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<title>التحقق من كشف الحساب</title></head>'
+            '<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; padding:16px">'
+            '<h2 style="margin:0 0 8px">تعذر التحقق</h2>'
+            '<div>رمز التحقق غير صالح أو تم العبث به.</div>'
+            '</body></html>',
+            400,
+            {'Content-Type': 'text/html; charset=utf-8'},
+        )
+
+    def _txt(key: str) -> str:
+        try:
+            return html.escape(str(payload.get(key, '') or '').strip())
+        except Exception:
+            return ''
+
+    org = _txt('org')
+    account_number = _txt('account_number')
+    account_name = _txt('account_name')
+    issued_at = _txt('issued_at')
+    main_karat = _txt('main_karat')
+    closing_gold_g = _txt('closing_gold_g')
+    closing_cash = _txt('closing_cash')
+    is_merged = 'نعم' if payload.get('is_merged') else 'لا'
+
+    return (
+        '<!doctype html><html lang="ar" dir="rtl">'
+        '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<title>التحقق من كشف الحساب</title></head>'
+        '<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; padding:16px">'
+        '<h2 style="margin:0 0 8px">تم التحقق من صحة الكشف</h2>'
+        + (f'<div style="margin:0 0 12px; opacity:0.9">{org}</div>' if org else '')
+        + '<div style="border:1px solid #ddd; border-radius:10px; padding:12px">'
+        + f'<div><b>الحساب:</b> {account_number} — {account_name}</div>'
+        + f'<div><b>تاريخ الإصدار:</b> {issued_at}</div>'
+        + f'<div><b>العيار الأساسي:</b> {main_karat}</div>'
+        + f'<div><b>الرصيد الختامي (ذهب/جم):</b> {closing_gold_g}</div>'
+        + f'<div><b>الرصيد الختامي (نقد):</b> {closing_cash}</div>'
+        + f'<div><b>كشف مدمج:</b> {is_merged}</div>'
+        + '</div>'
+        + '<div style="margin-top:12px; font-size:13px; opacity:0.75">'
+        + 'ملاحظة: هذا التحقق يعتمد على توقيع الخادم (HMAC) ولا يثبت تفاصيل القيود اليومية.'
+        + '</div>'
+        + '</body></html>',
+        200,
+        {'Content-Type': 'text/html; charset=utf-8'},
+    )
 
 
 @api.route('/suppliers/<int:supplier_id>/weight-summary', methods=['GET'])

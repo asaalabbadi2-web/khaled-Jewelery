@@ -11,8 +11,8 @@ import '../providers/auth_provider.dart';
 import 'add_customer_screen.dart';
 import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
+import '../utils/invoice_direct_print.dart';
 import '../utils.dart';
-import 'invoice_print_screen.dart';
 
 // نسبة افتراضية لخفض سعر السوق للحصول على سعر شراء آمن عند عدم توفر بيانات مخاطبة من المتوسط
 const double kScrapPurchasePriceDiscount = 0.98;
@@ -1222,15 +1222,17 @@ class _ScrapPurchaseInvoiceScreenState
 
       if (!mounted) return;
       if (shouldPrint == true) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => InvoicePrintScreen(
-              invoice: invoiceForPrint,
-              isArabic: true,
-              printSettings: {'paperSize': _uiPaperSize},
-            ),
-          ),
-        );
+        try {
+          await printInvoiceDirect(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          _showError('تعذر فتح الطباعة: $e');
+        }
       }
 
       if (!mounted) return;

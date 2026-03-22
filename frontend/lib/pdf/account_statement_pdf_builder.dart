@@ -7,6 +7,7 @@ import 'package:pdf/pdf.dart' as pdf;
 import 'package:pdf/widgets.dart' as pw;
 
 import '../models/account_statement_model.dart';
+import 'pdf_text_utils.dart';
 
 // ═══════════════════════════════════════════════════════════════════
 //  DESIGN TOKENS  — single source of truth for the PDF theme
@@ -335,28 +336,65 @@ class AccountStatementPdfBuilder {
     };
 
     // ── QR payload ────────────────────────────────────────────────
+    // NOTE: QR encoding can throw (e.g., oversized payload). We generate
+    // fallbacks and pick the first one that encodes successfully.
     final canEmbedSignature =
-        dateRange == null && statement.qrSignedPayload != null;
-    final qrPayload = jsonEncode(canEmbedSignature
-        ? <String, dynamic>{
-            'statement_id': statementId,
-            'algo': 'HS256',
-            'signed': statement.qrSignedPayload,
-            if ((statement.qrSignature ?? '').trim().isNotEmpty)
-              'sig': statement.qrSignature,
-          }
-        : <String, dynamic>{
-            'org': branding.companyName,
-            'statement_id': statementId,
-            'account': accountName,
-            'issued_at': issuedAtText,
-            'main_karat': mainKarat,
-            'closing_gold_g':
-                double.parse(periodClosingGold.toStringAsFixed(3)),
-            'closing_cash':
-                double.parse(periodClosingCash.toStringAsFixed(2)),
-            'is_merged': isMerged,
-          });
+      dateRange == null && statement.qrSignedPayload != null;
+
+    final fullQrPayload = jsonEncode(canEmbedSignature
+      ? <String, dynamic>{
+        'statement_id': statementId,
+        'algo': 'HS256',
+        'signed': statement.qrSignedPayload,
+        if ((statement.qrSignature ?? '').trim().isNotEmpty)
+          'sig': statement.qrSignature,
+        }
+      : <String, dynamic>{
+        'org': branding.companyName,
+        'statement_id': statementId,
+        'account': accountName,
+        'issued_at': issuedAtText,
+        'main_karat': mainKarat,
+        'closing_gold_g':
+          double.parse(periodClosingGold.toStringAsFixed(3)),
+        'closing_cash':
+          double.parse(periodClosingCash.toStringAsFixed(2)),
+        'is_merged': isMerged,
+        });
+
+    final shortQrPayload = jsonEncode(<String, dynamic>{
+      'org': branding.companyName,
+      'statement_id': statementId,
+      'issued_at': issuedAtText,
+    });
+
+    final verifyUrl = (dateRange == null)
+        ? (statement.qrVerifyUrl ?? '').trim()
+        : '';
+
+    final qrCandidates = <String>[
+      if (verifyUrl.isNotEmpty) verifyUrl,
+      fullQrPayload,
+      shortQrPayload,
+      // Last resort: plain identifier.
+      'statement_id=$statementId',
+    ];
+
+    // Pick the first QR payload that actually encodes successfully.
+    // Some failures (like oversized payloads) can throw during rendering.
+    final qrBarcode = pw.Barcode.qrCode();
+    String? qrData;
+    for (final candidate in qrCandidates) {
+      try {
+        // Force-encode once to validate. If this succeeds, BarcodeWidget should
+        // also succeed with the same dimensions.
+        qrBarcode.make(candidate, width: 32, height: 32);
+        qrData = candidate;
+        break;
+      } catch (_) {
+        // Try next candidate.
+      }
+    }
 
     // ── logo ──────────────────────────────────────────────────────
     // preloadedLogo takes priority — it is pre-decoded and resized on the
@@ -449,8 +487,8 @@ class AccountStatementPdfBuilder {
     pw.Widget sectionHeading(String title) => pw.Row(
           children: [
             pw.Text(
-              title,
-              textDirection: pw.TextDirection.rtl,
+              pdfVisualArabic(title),
+              textDirection: pw.TextDirection.ltr,
               style: pw.TextStyle(
                 font: boldFont,
                 fontSize: 9,
@@ -470,14 +508,14 @@ class AccountStatementPdfBuilder {
           mainAxisSize: pw.MainAxisSize.min,
           children: [
             pw.Text(
-              '$label: ',
-              textDirection: pw.TextDirection.rtl,
+              pdfVisualArabic('$label: '),
+              textDirection: pw.TextDirection.ltr,
               style: pw.TextStyle(
                   font: baseFont, fontSize: 7.5, color: _PdfColors.muted),
             ),
             pw.Text(
-              value,
-              textDirection: pw.TextDirection.rtl,
+              pdfVisualArabic(value),
+              textDirection: pw.TextDirection.ltr,
               style: pw.TextStyle(
                   font: boldFont, fontSize: 7.5, color: _PdfColors.dark),
             ),
@@ -499,8 +537,8 @@ class AccountStatementPdfBuilder {
             crossAxisAlignment: pw.CrossAxisAlignment.center,
             children: [
               pw.Text(
-                label,
-                textDirection: pw.TextDirection.rtl,
+                pdfVisualArabic(label),
+                textDirection: pw.TextDirection.ltr,
                 style: pw.TextStyle(
                     font: boldFont, fontSize: 7.5, color: _PdfColors.goldMid),
               ),
@@ -537,8 +575,8 @@ class AccountStatementPdfBuilder {
               isDesc ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.center,
           children: [
             pw.Text(
-              title,
-              textDirection: pw.TextDirection.rtl,
+              pdfVisualArabic(title),
+              textDirection: pw.TextDirection.ltr,
               textAlign: isDesc ? pw.TextAlign.right : pw.TextAlign.center,
               style: pw.TextStyle(
                 font: boldFont,
@@ -549,8 +587,8 @@ class AccountStatementPdfBuilder {
             if (unit != null) ...[
               pw.SizedBox(height: 2),
               pw.Text(
-                unit,
-                textDirection: pw.TextDirection.rtl,
+                pdfVisualArabic(unit),
+                textDirection: pw.TextDirection.ltr,
                 textAlign: pw.TextAlign.center,
                 style: pw.TextStyle(
                   font: baseFont,
@@ -580,7 +618,7 @@ class AccountStatementPdfBuilder {
                   ? pw.Alignment.center
                   : pw.Alignment.center,
           child: pw.Text(
-            text,
+            pdfVisualArabic(text),
             // Only description should wrap; keep numbers/refs stable.
             softWrap: key == descKey,
             overflow: key == descKey ? pw.TextOverflow.visible : pw.TextOverflow.clip,
@@ -589,8 +627,7 @@ class AccountStatementPdfBuilder {
                 : (key == dateKey || key == refKey)
                     ? pw.TextAlign.center
                     : pw.TextAlign.center,
-            textDirection:
-                key == descKey ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+            textDirection: pw.TextDirection.ltr,
             style: pw.TextStyle(
               font: bold ? boldFont : baseFont,
               fontSize: fontSize,
@@ -737,8 +774,8 @@ class AccountStatementPdfBuilder {
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Text(
-              'ملخص التقييم',
-              textDirection: pw.TextDirection.rtl,
+              pdfVisualArabic('ملخص التقييم'),
+              textDirection: pw.TextDirection.ltr,
               style: pw.TextStyle(
                   font: boldFont,
                   fontSize: 8.5,
@@ -758,14 +795,14 @@ class AccountStatementPdfBuilder {
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 pw.Text(
-                  '${commaFmt.format(valuationNet)} ر.س',
-                  textDirection: pw.TextDirection.rtl,
+                  pdfVisualArabic('${commaFmt.format(valuationNet)} ر.س'),
+                  textDirection: pw.TextDirection.ltr,
                   style: pw.TextStyle(
                       font: boldFont, fontSize: 13, color: netColor),
                 ),
                 pw.Text(
-                  'صافي القيمة التقديرية',
-                  textDirection: pw.TextDirection.rtl,
+                  pdfVisualArabic('صافي القيمة التقديرية'),
+                  textDirection: pw.TextDirection.ltr,
                   style: pw.TextStyle(
                       font: boldFont, fontSize: 9, color: _PdfColors.dark),
                 ),
@@ -851,8 +888,10 @@ class AccountStatementPdfBuilder {
                         ),
                         pw.SizedBox(height: 2),
                         pw.Text(
-                          ctx.pageNumber == ctx.pagesCount ? 'نهاية الكشف' : ' ',
-                          textDirection: pw.TextDirection.rtl,
+                          ctx.pageNumber == ctx.pagesCount
+                              ? pdfVisualArabic('نهاية الكشف')
+                              : ' ',
+                          textDirection: pw.TextDirection.ltr,
                           style: pw.TextStyle(
                               font: baseFont,
                               fontSize: 6.5,
@@ -867,16 +906,18 @@ class AccountStatementPdfBuilder {
                         pw.SizedBox(
                           width: 32,
                           height: 32,
-                          child: pw.BarcodeWidget(
-                            barcode: pw.Barcode.qrCode(),
-                            data: qrPayload,
-                            color: _PdfColors.gold,
-                          ),
+                          child: qrData == null
+                              ? pw.Container()
+                              : pw.BarcodeWidget(
+                                  barcode: qrBarcode,
+                                  data: qrData,
+                                  color: _PdfColors.gold,
+                                ),
                         ),
                         pw.SizedBox(height: 2),
                         pw.Text(
-                          'رمز التحقق',
-                          textDirection: pw.TextDirection.rtl,
+                          pdfVisualArabic('رمز التحقق'),
+                          textDirection: pw.TextDirection.ltr,
                           style: pw.TextStyle(
                               font: baseFont, fontSize: 5.5,
                               color: _PdfColors.muted),
@@ -917,19 +958,27 @@ class AccountStatementPdfBuilder {
                       child: pw.Column(
                         crossAxisAlignment: pw.CrossAxisAlignment.start,
                         children: [
-                          pw.Text('رقم الكشف',
-                            textDirection: pw.TextDirection.rtl,
-                            style: pw.TextStyle(font: baseFont, fontSize: 7,
-                                color: _PdfColors.muted)),
+                          pw.Text(
+                            pdfVisualArabic('رقم الكشف'),
+                            textDirection: pw.TextDirection.ltr,
+                            style: pw.TextStyle(
+                                font: baseFont,
+                                fontSize: 7,
+                                color: _PdfColors.muted),
+                          ),
                           pw.SizedBox(height: 1),
                           pw.Text(statementId,
                             style: pw.TextStyle(font: boldFont, fontSize: 8.5,
                                 color: _PdfColors.dark)),
                           pw.SizedBox(height: 6),
-                          pw.Text('تاريخ الإصدار',
-                            textDirection: pw.TextDirection.rtl,
-                            style: pw.TextStyle(font: baseFont, fontSize: 7,
-                                color: _PdfColors.muted)),
+                          pw.Text(
+                            pdfVisualArabic('تاريخ الإصدار'),
+                            textDirection: pw.TextDirection.ltr,
+                            style: pw.TextStyle(
+                                font: baseFont,
+                                fontSize: 7,
+                                color: _PdfColors.muted),
+                          ),
                           pw.SizedBox(height: 1),
                           pw.Text(issuedAtText,
                             style: pw.TextStyle(font: boldFont, fontSize: 8.5,
@@ -937,15 +986,21 @@ class AccountStatementPdfBuilder {
                           pw.SizedBox(height: 6),
                           pw.Container(height: 0.6, color: _PdfColors.borderLight),
                           pw.SizedBox(height: 6),
-                          pw.Text('الحساب',
-                            textDirection: pw.TextDirection.rtl,
-                            style: pw.TextStyle(font: baseFont, fontSize: 7,
-                                color: _PdfColors.muted)),
+                          pw.Text(
+                            pdfVisualArabic('الحساب'),
+                            textDirection: pw.TextDirection.ltr,
+                            style: pw.TextStyle(
+                                font: baseFont,
+                                fontSize: 7,
+                                color: _PdfColors.muted),
+                          ),
                           pw.SizedBox(height: 1),
-                          pw.Text(accountName,
-                            textDirection: pw.TextDirection.rtl,
+                          pw.Text(
+                            pdfVisualArabic(accountName),
+                            textDirection: pw.TextDirection.ltr,
                             style: pw.TextStyle(font: boldFont, fontSize: 8.5,
-                                color: _PdfColors.dark)),
+                                color: _PdfColors.dark),
+                          ),
                         ],
                       ),
                     ),
@@ -960,8 +1015,8 @@ class AccountStatementPdfBuilder {
                       crossAxisAlignment: pw.CrossAxisAlignment.center,
                       children: [
                         pw.Text(
-                          'كشف الحساب',
-                          textDirection: pw.TextDirection.rtl,
+                          pdfVisualArabic('كشف الحساب'),
+                          textDirection: pw.TextDirection.ltr,
                           style: pw.TextStyle(
                               font: boldFont, fontSize: 22, color: _PdfColors.black),
                         ),
@@ -1210,7 +1265,8 @@ class AccountStatementPdfBuilder {
                             crossAxisAlignment: pw.CrossAxisAlignment.start,
                             children: [
                               pw.Text(
-                                'ملاحظة',
+                                pdfVisualArabic('ملاحظة'),
+                                textDirection: pw.TextDirection.ltr,
                                 style: pw.TextStyle(
                                     font: boldFont,
                                     fontSize: 9,
@@ -1222,7 +1278,8 @@ class AccountStatementPdfBuilder {
                                   color: _PdfColors.borderLight),
                               pw.SizedBox(height: 8),
                               pw.Text(
-                                digitalDocumentFooterText,
+                                pdfVisualArabic(digitalDocumentFooterText),
+                                textDirection: pw.TextDirection.ltr,
                                 style: pw.TextStyle(
                                     font: baseFont,
                                     fontSize: 8,
@@ -1230,7 +1287,10 @@ class AccountStatementPdfBuilder {
                               ),
                               pw.SizedBox(height: 6),
                               pw.Text(
-                                'يمكن التحقق من صحة الكشف عبر رمز QR\nأو التواصل مع المكتب مباشرة',
+                                pdfVisualArabic(
+                                  'يمكن التحقق من صحة الكشف عبر رمز QR\nأو التواصل مع المكتب مباشرة',
+                                ),
+                                textDirection: pw.TextDirection.ltr,
                                 style: pw.TextStyle(
                                     font: baseFont,
                                     fontSize: 7.5,
@@ -1272,14 +1332,14 @@ class AccountStatementPdfBuilder {
         mainAxisSize: pw.MainAxisSize.min,
         children: [
           pw.Text(
-            value,
-            textDirection: pw.TextDirection.rtl,
+            pdfVisualArabic(value),
+            textDirection: pw.TextDirection.ltr,
             style: pw.TextStyle(font: font, fontSize: 8, color: color),
           ),
           pw.SizedBox(width: 6),
           pw.Text(
-            '$label:',
-            textDirection: pw.TextDirection.rtl,
+            pdfVisualArabic('$label:'),
+            textDirection: pw.TextDirection.ltr,
             style: pw.TextStyle(
                 font: font,
                 fontSize: 8,
@@ -1297,14 +1357,14 @@ class AccountStatementPdfBuilder {
       child: pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
         children: [
-          pw.Text(label,
-              textDirection: pw.TextDirection.rtl,
+            pw.Text(pdfVisualArabic(label),
+              textDirection: pw.TextDirection.ltr,
               style: pw.TextStyle(
                   font: base,
                   fontSize: 8,
                   color: pdf.PdfColor.fromHex('#666666'))),
-          pw.Text(value,
-              textDirection: pw.TextDirection.rtl,
+            pw.Text(pdfVisualArabic(value),
+              textDirection: pw.TextDirection.ltr,
               style: pw.TextStyle(
                   font: bold,
                   fontSize: 8.5,
@@ -1322,8 +1382,8 @@ class AccountStatementPdfBuilder {
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Text(
-            label,
-            textDirection: pw.TextDirection.rtl,
+            pdfVisualArabic(label),
+            textDirection: pw.TextDirection.ltr,
             style: pw.TextStyle(
                 font: base,
                 fontSize: 7,
@@ -1331,8 +1391,8 @@ class AccountStatementPdfBuilder {
           ),
           pw.SizedBox(height: 3),
           pw.Text(
-            value,
-            textDirection: pw.TextDirection.rtl,
+            pdfVisualArabic(value),
+            textDirection: pw.TextDirection.ltr,
             style: pw.TextStyle(
                 font: bold,
                 fontSize: 9,

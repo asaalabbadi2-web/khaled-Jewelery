@@ -80,6 +80,10 @@ class HomeScreenEnhanced extends StatefulWidget {
 class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   final ApiService api = ApiService();
 
+  // Isolate LTR runs (dates/numbers) inside Arabic sentences to avoid
+  // bidi reordering artifacts like swapped punctuation or digit shaping.
+  String _ltrIsolate(String text) => '\u2066$text\u2069';
+
   // Data
   double? goldPrice;
   DateTime? goldPriceDate;
@@ -1968,15 +1972,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
     String? fallbackText() {
       if (!isFallback || effectiveStartDate == null) return null;
-      final formatted = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
+      final formatted = DateFormat('dd/MM/yyyy', 'en').format(effectiveStartDate);
+      final date = _ltrIsolate(formatted);
       if (isWeek) {
         return isAr
-            ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $formatted'
-            : 'No sales this week — showing the latest week starting $formatted';
+        ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $date'
+        : 'No sales this week — showing the latest week starting $date';
       }
       return isAr
-          ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $formatted'
-          : 'No sales today — showing the latest sales day on $formatted';
+          ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $date'
+          : 'No sales today — showing the latest sales day on $date';
     }
 
     final fallbackMessage = fallbackText();
@@ -1985,21 +1990,26 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       if (effectiveStartDate == null) return null;
       if (isWeek) {
         final weekEnd = effectiveStartDate.add(const Duration(days: 6));
-        final startText = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
-        final endText = DateFormat('dd/MM/yyyy').format(weekEnd);
+        final startText = _ltrIsolate(
+          DateFormat('dd/MM/yyyy', 'en').format(effectiveStartDate),
+        );
+        final endText = _ltrIsolate(DateFormat('dd/MM/yyyy', 'en').format(weekEnd));
         return isAr
             ? 'فترة البيانات: $startText - $endText'
             : 'Data range: $startText - $endText';
       }
 
-      final todayText = DateFormat('dd/MM/yyyy').format(effectiveStartDate);
+      final todayText = _ltrIsolate(
+        DateFormat('dd/MM/yyyy', 'en').format(effectiveStartDate),
+      );
       return isAr ? 'بيانات اليوم: $todayText' : 'Today data: $todayText';
     }
 
     String? lastUpdatedText() {
       if (fetchedAt == null) return null;
-      final formatted = DateFormat('dd/MM/yyyy HH:mm').format(fetchedAt);
-      return isAr ? 'آخر تحديث: $formatted' : 'Last update: $formatted';
+      final formatted = DateFormat('dd/MM/yyyy HH:mm', 'en').format(fetchedAt);
+      final stamp = _ltrIsolate(formatted);
+      return isAr ? 'آخر تحديث: $stamp' : 'Last update: $stamp';
     }
 
     final effectivePeriodLabel = effectivePeriodText();
@@ -2847,7 +2857,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           if (goldPriceDate != null) ...[
                             const SizedBox(height: 2),
                             Text(
-                              'آخر تحديث: ${DateFormat('dd/MM/yyyy HH:mm').format(goldPriceDate!)}',
+                              'آخر تحديث: ${_ltrIsolate(DateFormat('dd/MM/yyyy HH:mm', 'en').format(goldPriceDate!))}',
                               style: TextStyle(
                                 color: colorScheme.onPrimary.withValues(
                                   alpha: 0.75,

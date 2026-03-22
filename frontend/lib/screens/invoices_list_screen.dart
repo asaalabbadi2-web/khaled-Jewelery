@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
 import '../api_service.dart';
 import '../providers/auth_provider.dart';
 import '../services/data_sync_bus.dart';
+import '../utils/invoice_direct_print.dart';
 import 'add_return_invoice_screen.dart';
-import 'invoice_print_screen.dart';
 import 'purchase_invoice_screen.dart';
 import 'sales_invoice_screen_v2.dart';
 import 'scrap_purchase_invoice_screen.dart';
@@ -2248,18 +2250,36 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       }
 
       final mergedInvoice = {...invoice, ...details};
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => InvoicePrintScreen(
-            invoice: mergedInvoice,
-            isArabic: widget.isArabic,
-            autoPrint: autoPrint,
-            autoSharePdf: autoSharePdf,
-            autoDownloadPdf: autoDownloadPdf,
-          ),
-        ),
-      );
+
+      String filename() {
+        final numStr = (mergedInvoice['invoice_type_id'] ?? '').toString().trim();
+        final idStr = (mergedInvoice['id'] ?? '').toString().trim();
+        final base = numStr.isNotEmpty
+            ? 'invoice_$numStr'
+            : (idStr.isNotEmpty ? 'invoice_$idStr' : 'invoice');
+        return '$base.pdf';
+      }
+
+      final wantsShare = autoSharePdf || autoDownloadPdf;
+      final wantsPrint = autoPrint || !wantsShare;
+
+      if (wantsShare) {
+        final bytes = await buildInvoicePdfBytes(
+          context: context,
+          invoice: mergedInvoice,
+          format: PdfPageFormat.a4,
+          isArabic: widget.isArabic,
+        );
+        await Printing.sharePdf(bytes: bytes, filename: filename());
+      }
+
+      if (wantsPrint) {
+        await printInvoiceDirect(
+          context: context,
+          invoice: mergedInvoice,
+          isArabic: widget.isArabic,
+        );
+      }
     } catch (e) {
       if (loaderVisible && mounted) {
         Navigator.of(context, rootNavigator: true).pop();
@@ -2268,8 +2288,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       if (mounted) {
         _showSnackBar(
           widget.isArabic
-              ? 'فشل تحميل تفاصيل الفاتورة: $e'
-              : 'Failed to load invoice details: $e',
+              ? 'فشل طباعة/تصدير الفاتورة: $e'
+              : 'Failed to print/export invoice: $e',
           isError: true,
         );
       }

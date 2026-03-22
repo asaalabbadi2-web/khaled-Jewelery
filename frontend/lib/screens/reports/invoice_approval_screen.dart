@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../api_service.dart';
 import '../../providers/auth_provider.dart';
-import '../invoice_print_screen.dart';
+import '../../utils/invoice_direct_print.dart';
 
 class InvoiceApprovalScreen extends StatefulWidget {
   final ApiService api;
@@ -81,12 +81,22 @@ class _InvoiceApprovalScreenState extends State<InvoiceApprovalScreen> {
     final invoice = _invoice;
     if (invoice == null) return;
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) =>
-            InvoicePrintScreen(invoice: invoice, isArabic: widget.isArabic),
-      ),
-    );
+    try {
+      await printInvoiceDirect(
+        context: context,
+        invoice: invoice,
+        isArabic: widget.isArabic,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.isArabic ? 'تعذر فتح الطباعة: $e' : 'Failed to print: $e',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _confirmAndApprove() async {

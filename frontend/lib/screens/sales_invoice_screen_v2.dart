@@ -17,7 +17,7 @@ import '../widgets/party_picker_dialog.dart';
 import '../widgets/searchable_picker_field.dart';
 import 'settings_screen_enhanced.dart';
 import '../utils/arabic_number_formatter.dart';
-import 'invoice_print_screen.dart';
+import '../utils/invoice_direct_print.dart';
 
 /// شاشة فاتورة البيع - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
@@ -2762,15 +2762,17 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       if (!mounted) return;
       if (shouldPrint == true) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => InvoicePrintScreen(
-              invoice: invoiceForPrint,
-              isArabic: true,
-              printSettings: {'paperSize': _uiPaperSize},
-            ),
-          ),
-        );
+        try {
+          await printInvoiceDirect(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          _showError('تعذر فتح الطباعة: $e');
+        }
       }
 
       if (!mounted) return;

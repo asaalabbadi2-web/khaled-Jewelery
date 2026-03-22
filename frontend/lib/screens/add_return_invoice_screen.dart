@@ -6,7 +6,7 @@ import '../widgets/currency_manager_dialog.dart';
 import '../widgets/widgets.dart'; // Import shared widgets
 import '../theme/app_theme.dart';
 import '../utils.dart';
-import 'invoice_print_screen.dart';
+import '../utils/invoice_direct_print.dart';
 
 /// Screen for creating return invoices (مرتجعات)
 /// Supports: مرتجع بيع, مرتجع شراء, مرتجع شراء (مورد)
@@ -550,15 +550,19 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
       if (!mounted) return;
       if (shouldPrint == true) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => InvoicePrintScreen(
-              invoice: invoiceForPrint,
-              isArabic: true,
-              printSettings: {'paperSize': _uiPaperSize},
-            ),
-          ),
-        );
+        try {
+          await printInvoiceDirect(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('تعذر فتح الطباعة: $e')),
+          );
+        }
       }
 
       if (!mounted) return;

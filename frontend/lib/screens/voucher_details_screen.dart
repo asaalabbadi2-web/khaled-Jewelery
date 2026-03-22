@@ -1,9 +1,15 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
+import 'package:pdf/pdf.dart';
 
 import '../api_service.dart';
-import 'voucher_print_screen.dart';
+import '../pdf/voucher_pdf_builder.dart';
+import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as theme;
 
 Future<bool?> showVoucherDetailsSheet(
@@ -199,30 +205,83 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     }
   }
 
+  Future<Uint8List> _buildVoucherPdfBytes(PdfPageFormat format) async {
+    final voucher = _voucher;
+    if (voucher == null) return Uint8List(0);
+
+    SettingsProvider? sp;
+    try {
+      sp = context.read<SettingsProvider>();
+    } catch (_) {}
+
+    return VoucherPdfBuilder.buildBytes(
+      voucher: voucher,
+      format: format,
+      options: const VoucherPdfOptions(
+        isArabic: true,
+        includeAccountLines: false,
+      ),
+      settings: sp,
+    );
+  }
+
+  Future<({String paperSize, String orientation})> _loadPrintPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedPaper = prefs.getString('printer_paper_size_v1') ?? 'A4';
+    final normalizedPaper = storedPaper.contains('A5') ? 'A5' : 'A4';
+    return (paperSize: normalizedPaper, orientation: 'portrait');
+  }
+
+  String _voucherPdfFilename() {
+    final v = _voucher;
+    final id = (v?['id'] ?? '').toString();
+    final number = (v?['voucher_number'] ?? '').toString();
+    final base = number.trim().isNotEmpty ? number.trim() : (id.isNotEmpty ? 'voucher_$id' : 'voucher');
+    return '$base.pdf';
+  }
+
   Future<void> _printVoucher() async {
     if (_voucher == null) return;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final storedPaper = prefs.getString('printer_paper_size_v1') ?? 'A4';
-      final normalizedPaper = storedPaper.contains('A5') ? 'A5' : 'A4';
-
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => VoucherPrintScreen(
-            voucher: _voucher!,
-            isArabic: true,
-            printSettings: {
-              'showLogo': true,
-              'paperSize': normalizedPaper,
-              'orientation': 'portrait',
-            },
-          ),
-        ),
+      await Printing.layoutPdf(
+        name: _voucherPdfFilename(),
+        onLayout: (format) => _buildVoucherPdfBytes(format),
       );
     } catch (e) {
       if (!mounted) return;
-      _showSnack('تعذر فتح شاشة الطباعة: $e', error: true);
+      _showSnack('تعذر فتح الطباعة: $e', error: true);
+    }
+  }
+
+  Future<void> _downloadVoucherPdf() async {
+    if (_voucher == null) return;
+    try {
+      final prefs = await _loadPrintPrefs();
+      final format = VoucherPdfBuilder.pageFormatFromSettings(
+        paperSize: prefs.paperSize,
+        orientation: prefs.orientation,
+      );
+      final bytes = await _buildVoucherPdfBytes(format);
+      await Printing.sharePdf(bytes: bytes, filename: _voucherPdfFilename());
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('تعذر تحميل PDF: $e', error: true);
+    }
+  }
+
+  Future<void> _shareVoucherPdf() async {
+    if (_voucher == null) return;
+    try {
+      final prefs = await _loadPrintPrefs();
+      final format = VoucherPdfBuilder.pageFormatFromSettings(
+        paperSize: prefs.paperSize,
+        orientation: prefs.orientation,
+      );
+      final bytes = await _buildVoucherPdfBytes(format);
+      await Printing.sharePdf(bytes: bytes, filename: _voucherPdfFilename());
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('تعذر مشاركة PDF: $e', error: true);
     }
   }
 
@@ -318,6 +377,16 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
           onPressed: () async => await _approveVoucher(),
           tooltip: 'اعتماد/ترحيل السند',
         ),
+      IconButton(
+        icon: const Icon(Icons.download),
+        onPressed: _downloadVoucherPdf,
+        tooltip: 'تحميل PDF',
+      ),
+      IconButton(
+        icon: const Icon(Icons.share),
+        onPressed: _shareVoucherPdf,
+        tooltip: 'مشاركة',
+      ),
       IconButton(
         icon: const Icon(Icons.print),
         onPressed: _printVoucher,
@@ -829,7 +898,8 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     if (raw.isEmpty) return 'غير محدد';
     try {
       final dt = DateTime.parse(raw);
-      return DateFormat('yyyy/MM/dd', 'ar').format(dt);
+      // Use Western digits so date stays stable alongside mixed RTL/LTR text.
+      return DateFormat('yyyy/MM/dd', 'en').format(dt);
     } catch (_) {
       return raw;
     }

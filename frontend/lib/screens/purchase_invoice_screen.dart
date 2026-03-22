@@ -14,8 +14,8 @@ import '../providers/settings_provider.dart';
 import '../widgets/invoice_settings_sheet.dart';
 import '../widgets/party_picker_dialog.dart';
 import '../widgets/searchable_picker_field.dart';
+import '../utils/invoice_direct_print.dart';
 import 'add_supplier_screen.dart';
-import 'invoice_print_screen.dart';
 import '../utils.dart';
 
 enum _PurchaseSettlementMode { credit, barter, partial }
@@ -2379,15 +2379,22 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
       if (!mounted) return;
       if (shouldPrint == true) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => InvoicePrintScreen(
-              invoice: invoiceForPrint,
-              isArabic: true,
-              printSettings: {'paperSize': _uiPaperSize},
+        try {
+          await printInvoiceDirect(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('تعذر فتح الطباعة: $e'),
+              backgroundColor: Colors.red,
             ),
-          ),
-        );
+          );
+        }
       }
 
       if (!mounted) return;

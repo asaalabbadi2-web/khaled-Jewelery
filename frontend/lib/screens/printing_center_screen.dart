@@ -2,22 +2,22 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
+import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_service.dart';
+import '../pdf/voucher_pdf_builder.dart';
 import '../providers/auth_provider.dart';
 import 'accounts_screen.dart';
 import 'barcode_print_screen.dart';
 import 'customers_screen.dart';
-import 'invoice_print_screen.dart';
-import 'voucher_print_screen.dart';
 import 'journal_entry_print_screen.dart';
 import 'general_ledger_screen_v2.dart';
 import 'reports/inventory_status_report_screen.dart';
 import 'reports/sales_overview_report_screen.dart';
-import 'template_studio_screen.dart';
 import 'trial_balance_screen_v2.dart';
+import '../utils/invoice_direct_print.dart';
 
 class PrintingCenterScreen extends StatefulWidget {
   final bool isArabic;
@@ -341,11 +341,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
         appBar: AppBar(
           title: Text(isArabic ? 'مركز الطباعة' : 'Printing Center'),
           actions: [
-            IconButton(
-              tooltip: isArabic ? 'موزع عناصر الفاتورة' : 'Invoice layout',
-              icon: const Icon(Icons.grid_view_outlined),
-              onPressed: () => _openTemplateStudio(isArabic: isArabic),
-            ),
             IconButton(
               tooltip: isArabic ? 'إعدادات الطباعة' : 'Print settings',
               icon: const Icon(Icons.local_printshop_outlined),
@@ -2188,14 +2183,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     }
   }
 
-  void _openTemplateStudio({required bool isArabic}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TemplateStudioScreen(isArabic: isArabic),
-      ),
-    );
-  }
-
   Future<void> _handleAction(String action) async {
     switch (action) {
       case 'print_sales_invoice':
@@ -2497,15 +2484,20 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           progress: 0.35,
         );
 
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => InvoicePrintScreen(
-              invoice: selectedInvoice,
-              isArabic: widget.isArabic,
-              printSettings: _getPrintSettings(),
-            ),
-          ),
-        );
+        try {
+          await printInvoiceDirect(
+            context: context,
+            invoice: selectedInvoice,
+            paperSize: (_getPrintSettings()['paperSize'] ?? 'A4').toString(),
+            isArabic: widget.isArabic,
+          );
+        } catch (e) {
+          if (mounted) {
+            _showSnack(
+              widget.isArabic ? 'تعذر فتح الطباعة: $e' : 'Failed to print: $e',
+            );
+          }
+        }
 
         if (!mounted) return;
         _markQueueJobCompleted(jobId);
@@ -2724,20 +2716,21 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           progress: 0.3,
         );
 
-        final printSettings = {
-          'showLogo': true,
-          'showAddress': true,
-          'paperSize': _paperSize,
-          'printInColor': true,
-        };
+        final paper = (_paperSize.contains('A5') ? 'A5' : 'A4');
+        final pageFormat = VoucherPdfBuilder.pageFormatFromSettings(
+          paperSize: paper,
+          orientation: 'portrait',
+        );
 
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VoucherPrintScreen(
-              voucher: selectedVoucher,
-              isArabic: widget.isArabic,
-              printSettings: printSettings,
+        await Printing.layoutPdf(
+          name: 'voucher_$voucherId.pdf',
+          format: pageFormat,
+          onLayout: (format) => VoucherPdfBuilder.buildBytes(
+            voucher: selectedVoucher,
+            format: format,
+            options: const VoucherPdfOptions(
+              isArabic: true,
+              includeAccountLines: false,
             ),
           ),
         );
@@ -3998,17 +3991,27 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       );
 
       if (selectedInvoice != null && mounted) {
-        // الانتقال لشاشة الطباعة
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => InvoicePrintScreen(
-              invoice: selectedInvoice,
-              isArabic: widget.isArabic,
-              printSettings: _getPrintSettings(),
-            ),
-          ),
-        );
+        try {
+          await printInvoiceDirect(
+            context: context,
+            invoice: selectedInvoice,
+            paperSize: (_getPrintSettings()['paperSize'] ?? 'A4').toString(),
+            isArabic: widget.isArabic,
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  widget.isArabic
+                      ? 'تعذر فتح الطباعة: $e'
+                      : 'Failed to print: $e',
+                ),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
       }
     } catch (e) {
       if (mounted) {

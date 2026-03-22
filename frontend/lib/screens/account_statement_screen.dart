@@ -754,7 +754,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     setState(() => _isExporting = true);
     try {
       await action();
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('Account statement export failed: $e');
+      debugPrintStack(stackTrace: st);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,

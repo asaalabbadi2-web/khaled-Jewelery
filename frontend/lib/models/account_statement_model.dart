@@ -27,6 +27,8 @@ class AccountStatement {
   final DateTime? qrIssuedAt;
   final Map<String, dynamic>? qrSignedPayload;
   final String? qrSignature;
+  final String? qrVerifyToken;
+  final String? qrVerifyUrl;
 
   // Optional live price + valuation (may be omitted by some endpoints/versions).
   final double? goldPricePerGramMainKarat;
@@ -56,6 +58,8 @@ class AccountStatement {
     this.qrIssuedAt,
     this.qrSignedPayload,
     this.qrSignature,
+    this.qrVerifyToken,
+    this.qrVerifyUrl,
     this.goldPricePerGramMainKarat,
     this.goldPriceSource,
     this.goldPriceUpdatedAt,
@@ -132,6 +136,12 @@ class AccountStatement {
     final rawSig = (json['qr_signature'] ?? '').toString().trim();
     final qrSignature = rawSig.isEmpty ? null : rawSig;
 
+    final rawVerifyToken = (json['qr_verify_token'] ?? '').toString().trim();
+    final qrVerifyToken = rawVerifyToken.isEmpty ? null : rawVerifyToken;
+
+    final rawVerifyUrl = (json['qr_verify_url'] ?? '').toString().trim();
+    final qrVerifyUrl = rawVerifyUrl.isEmpty ? null : rawVerifyUrl;
+
     return AccountStatement(
       openingBalanceGold:
           json['opening_balance_gold_normalized']?.toDouble() ?? 0.0,
@@ -175,6 +185,8 @@ class AccountStatement {
       qrIssuedAt: parsedQrIssuedAt,
       qrSignedPayload: qrSignedPayload,
       qrSignature: qrSignature,
+      qrVerifyToken: qrVerifyToken,
+      qrVerifyUrl: qrVerifyUrl,
 
       goldPricePerGramMainKarat:
           asDouble(priceSnapshot?['price_per_gram_main_karat']) ??

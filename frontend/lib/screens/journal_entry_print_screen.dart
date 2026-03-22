@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../pdf/pdf_text_utils.dart';
 
 /// شاشة معاينة وطباعة القيود اليومية
 class JournalEntryPrintScreen extends StatefulWidget {
@@ -672,18 +673,19 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
               pw.Text(
-                company,
+                pdfVisualArabic(company),
                 style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColor.fromInt(0xFFA07820)),
-                textDirection: pw.TextDirection.rtl,
+                textDirection: pw.TextDirection.ltr,
               ),
               pw.Text(
-                '${widget.isArabic ? 'طُبع بتاريخ' : 'Printed'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
+                pdfVisualArabic('${widget.isArabic ? 'طُبع بتاريخ' : 'Printed'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}'),
+                textDirection: pw.TextDirection.ltr,
                 style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFF666666)),
               ),
               pw.Text(
-                '${widget.isArabic ? 'صفحة' : 'Page'} ${context.pageNumber} / ${context.pagesCount}',
+                pdfVisualArabic('${widget.isArabic ? 'صفحة' : 'Page'} ${context.pageNumber} / ${context.pagesCount}'),
                 style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFFA07820)),
-                textDirection: pw.TextDirection.rtl,
+                textDirection: pw.TextDirection.ltr,
               ),
             ],
           ),
@@ -693,8 +695,8 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             // Shared text helper
             pw.Widget t(String text, {double size = 10, bool bold = false, PdfColor? color}) =>
               pw.Text(
-                text,
-                textDirection: widget.isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+                pdfVisualArabic(text),
+                textDirection: pw.TextDirection.ltr,
                 style: pw.TextStyle(
                   fontSize: size,
                   fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
@@ -719,17 +721,23 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
               child: pw.Row(
                 mainAxisSize: pw.MainAxisSize.min,
                 children: [
-                  pw.Text('$lbl:',
-                      textDirection: pw.TextDirection.rtl,
-                      style: pw.TextStyle(
-                          font: fontReg, fontSize: 8,
-                          color: PdfColor.fromInt(0xFF444444))),
+                  pw.Text(
+                    pdfVisualArabic('$lbl:'),
+                    textDirection: pw.TextDirection.ltr,
+                    style: pw.TextStyle(
+                        font: fontReg,
+                        fontSize: 8,
+                        color: PdfColor.fromInt(0xFF444444)),
+                  ),
                   pw.SizedBox(width: 6),
-                  pw.Text(val,
-                      textDirection: pw.TextDirection.rtl,
-                      style: pw.TextStyle(
-                          font: fontReg, fontSize: 8,
-                          color: PdfColor.fromInt(0xFF666666))),
+                  pw.Text(
+                    pdfVisualArabic(val),
+                    textDirection: pw.TextDirection.ltr,
+                    style: pw.TextStyle(
+                        font: fontReg,
+                        fontSize: 8,
+                        color: PdfColor.fromInt(0xFF666666)),
+                  ),
                 ],
               ),
             );
@@ -755,9 +763,12 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                                 fit: pw.BoxFit.contain),
                             pw.SizedBox(width: 6),
                           ],
-                          pw.Text(company,
+                            pw.Text(
+                              pdfVisualArabic(company),
+                              textDirection: pw.TextDirection.ltr,
                               style: pw.TextStyle(font: fontBold, fontSize: 14,
-                                  color: PdfColor.fromInt(0xFF111111))),
+                                  color: PdfColor.fromInt(0xFF111111)),
+                            ),
                         ],
                       ),
                     ),

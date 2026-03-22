@@ -18,7 +18,6 @@ import 'backup_restore_screen.dart';
 import 'system_reset_screen.dart';
 import 'weight_closing_settings_screen.dart';
 import 'weight_closing_execute_screen.dart';
-import 'template_studio_screen.dart';
 import '../utils.dart';
 
 enum SettingsEntry {
@@ -1346,32 +1345,6 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _buildSectionCard(
-          icon: Icons.grid_view_outlined,
-          iconColor: _primaryColor,
-          title: 'موزع عناصر الفاتورة',
-          children: [
-            Text(
-              'تعديل أماكن عناصر الطباعة (العنوان، جدول الأصناف، الإجماليات...) حسب مقاس الورق.\n'
-              'يتم حفظ الإعدادات على نفس الجهاز.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const TemplateStudioScreen(isArabic: true),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.open_in_new),
-              label: const Text('فتح موزع عناصر الفاتورة'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
         _buildSectionCard(
           icon: Icons.print_outlined,
           iconColor: _primaryColor,

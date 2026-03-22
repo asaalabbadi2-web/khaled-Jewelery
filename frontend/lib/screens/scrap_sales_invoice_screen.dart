@@ -6,8 +6,8 @@ import '../theme/app_theme.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
+import '../utils/invoice_direct_print.dart';
 import '../utils.dart';
-import 'invoice_print_screen.dart';
 
 enum _PreSaveDecision { cancel, proceed, proceedSuppressWarning }
 
@@ -1026,16 +1026,17 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
         if (!context.mounted) return;
         if (shouldPrint == true) {
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) =>
-                    InvoicePrintScreen(
-                      invoice: invoiceForPrint,
-                      isArabic: true,
-                      printSettings: {'paperSize': _uiPaperSize},
-                    ),
-            ),
-          );
+          try {
+            await printInvoiceDirect(
+              context: context,
+              invoice: invoiceForPrint,
+              paperSize: _uiPaperSize,
+              isArabic: true,
+            );
+          } catch (e) {
+            if (!context.mounted) return;
+            _showError('تعذر فتح الطباعة: $e');
+          }
         }
 
         if (!context.mounted) return;
