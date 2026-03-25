@@ -279,7 +279,10 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
 
   Future<void> _saveLocalDraft({bool showToast = true}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_localDraftKey(), jsonEncode(_buildLocalDraftPayload()));
+    await prefs.setString(
+      _localDraftKey(),
+      jsonEncode(_buildLocalDraftPayload()),
+    );
     if (showToast && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم حفظ القيد لإكماله لاحقاً')),
@@ -349,11 +352,13 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         line.dispose();
       }
 
-      final decodedLines = (decoded['lines'] as List?)?.whereType<Map>().toList() ?? [];
+      final decodedLines =
+          (decoded['lines'] as List?)?.whereType<Map>().toList() ?? [];
       final restored = <JournalLine>[];
       for (final rawLine in decodedLines) {
         final map = Map<String, dynamic>.from(rawLine);
-        final enabled = (map['enabled_karats'] as List?)
+        final enabled =
+            (map['enabled_karats'] as List?)
                 ?.map((e) => toInt(e))
                 .whereType<int>()
                 .toSet() ??
@@ -380,10 +385,14 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       }
 
       setState(() {
-        _dateController.text = (decoded?['date'] ?? _dateController.text).toString();
-        _descriptionController.text = (decoded?['description'] ?? '').toString();
-        _referenceNumberController.text = (decoded?['reference_number'] ?? '').toString();
-        _selectedEntryType = (decoded?['entry_type'] ?? _selectedEntryType).toString();
+        _dateController.text = (decoded?['date'] ?? _dateController.text)
+            .toString();
+        _descriptionController.text = (decoded?['description'] ?? '')
+            .toString();
+        _referenceNumberController.text = (decoded?['reference_number'] ?? '')
+            .toString();
+        _selectedEntryType = (decoded?['entry_type'] ?? _selectedEntryType)
+            .toString();
         _referenceType = decoded?['reference_type']?.toString();
         _lines = restored;
       });
@@ -393,7 +402,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         for (final line in _lines) {
           if (line.accountId == null) continue;
           try {
-            final account = _accounts.firstWhere((acc) => toInt(acc['id']) == line.accountId);
+            final account = _accounts.firstWhere(
+              (acc) => toInt(acc['id']) == line.accountId,
+            );
             line.accountTransactionType = account['transaction_type'];
           } catch (_) {
             // ignore
@@ -493,8 +504,8 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             if (lineId != null && !accountIds.contains(lineId)) {
               final placeholderName =
                   (line.accountName?.trim().isNotEmpty == true)
-                      ? line.accountName!.trim()
-                      : 'حساب غير متاح (ID: $lineId)';
+                  ? line.accountName!.trim()
+                  : 'حساب غير متاح (ID: $lineId)';
               final placeholderNumber = line.accountNumber?.trim() ?? '';
               _accounts.add({
                 'id': lineId,
@@ -968,7 +979,15 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             Expanded(
               flex: 2,
               child: DropdownButtonFormField<String>(
-                initialValue: ['عادي', 'افتتاحي', 'دوري', 'إقفال', 'تسوية', 'تعديل'].contains(_selectedEntryType)
+                initialValue:
+                    [
+                      'عادي',
+                      'افتتاحي',
+                      'دوري',
+                      'إقفال',
+                      'تسوية',
+                      'تعديل',
+                    ].contains(_selectedEntryType)
                     ? _selectedEntryType
                     : 'عادي',
                 decoration: InputDecoration(
@@ -1000,7 +1019,16 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             Expanded(
               flex: 2,
               child: DropdownButtonFormField<String?>(
-                initialValue: [null, 'فاتورة', 'سند', 'شيك', 'أمر دفع', 'recurring_template', 'أخرى'].contains(_referenceType)
+                initialValue:
+                    [
+                      null,
+                      'فاتورة',
+                      'سند',
+                      'شيك',
+                      'أمر دفع',
+                      'recurring_template',
+                      'أخرى',
+                    ].contains(_referenceType)
                     ? _referenceType
                     : null,
                 decoration: InputDecoration(
@@ -1089,9 +1117,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         .toList(growable: false);
 
     final accountIds = sortedAccountsTyped
-      .map((acc) => toInt(acc['id']))
-      .whereType<int>()
-      .toSet();
+        .map((acc) => toInt(acc['id']))
+        .whereType<int>()
+        .toSet();
 
     return Expanded(
       child: Column(
@@ -1124,7 +1152,8 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                 final line = _lines[index];
                 final lineAccountId = line.accountId;
                 final isSelectedAccountMissing =
-                    lineAccountId != null && !accountIds.contains(lineAccountId);
+                    lineAccountId != null &&
+                    !accountIds.contains(lineAccountId);
                 final isSelectedAccountParent =
                     lineAccountId != null && parentIds.contains(lineAccountId);
 
@@ -1232,9 +1261,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
                 final raw = acc['id'];
                 final id = raw is int
                     ? raw
-                    : (raw is num
-                          ? raw.toInt()
-                          : int.tryParse('${raw ?? ''}'));
+                    : (raw is num ? raw.toInt() : int.tryParse('${raw ?? ''}'));
                 if (id == null) return false;
                 return !parentIds.contains(id);
               },
@@ -1485,7 +1512,6 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       ],
     );
   }
-
 
   Widget _buildGoldToggleRow(JournalLine line) {
     final theme = Theme.of(context);

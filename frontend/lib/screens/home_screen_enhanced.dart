@@ -914,10 +914,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         final result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => AddReturnInvoiceScreen(
-              api: api,
-              returnType: 'مرتجع شراء (مورد)',
-            ),
+            builder: (_) =>
+                const PurchaseInvoiceScreen(supplierReturnMode: true),
           ),
         );
         if (result == true) await _loadAllData();
@@ -1972,12 +1970,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
     String? fallbackText() {
       if (!isFallback || effectiveStartDate == null) return null;
-      final formatted = DateFormat('dd/MM/yyyy', 'en').format(effectiveStartDate);
+      final formatted = DateFormat(
+        'dd/MM/yyyy',
+        'en',
+      ).format(effectiveStartDate);
       final date = _ltrIsolate(formatted);
       if (isWeek) {
         return isAr
-        ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $date'
-        : 'No sales this week — showing the latest week starting $date';
+            ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $date'
+            : 'No sales this week — showing the latest week starting $date';
       }
       return isAr
           ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $date'
@@ -1993,7 +1994,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         final startText = _ltrIsolate(
           DateFormat('dd/MM/yyyy', 'en').format(effectiveStartDate),
         );
-        final endText = _ltrIsolate(DateFormat('dd/MM/yyyy', 'en').format(weekEnd));
+        final endText = _ltrIsolate(
+          DateFormat('dd/MM/yyyy', 'en').format(weekEnd),
+        );
         return isAr
             ? 'فترة البيانات: $startText - $endText'
             : 'Data range: $startText - $endText';

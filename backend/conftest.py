@@ -65,6 +65,9 @@ def initialize_db():
             (521, 'تكلفة مبيعات الذهب', 'Expense', True),
             (1200, 'مخزون ذهب عيار 24', 'Asset', True),
             (1220, 'مخزون ذهب عيار 21', 'Asset', True),
+            # Unified inventory fallbacks used by _resolve_inventory_account_id_for_invoice
+            (1300, 'مخزون ذهب معروض للبيع (موحد)', 'Asset', True),
+            (1310, 'مخزون ذهب كسر (موحد)', 'Asset', True),
         ]
 
         for acc_id, name, acc_type, tracks_weight in accounts:

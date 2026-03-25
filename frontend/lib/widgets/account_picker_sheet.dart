@@ -356,8 +356,7 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
                             }),
                           ),
                           chip(
-                            selected:
-                                leafFilter == AccountLeafFilter.leafOnly,
+                            selected: leafFilter == AccountLeafFilter.leafOnly,
                             label: isArabic
                                 ? 'حسابات فرعية فقط'
                                 : 'Leaf accounts only',

@@ -12,6 +12,7 @@ import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/invoice_settings_sheet.dart';
+import '../widgets/original_invoice_selector.dart';
 import '../widgets/party_picker_dialog.dart';
 import '../widgets/searchable_picker_field.dart';
 import '../utils/invoice_direct_print.dart';
@@ -35,8 +36,15 @@ class _GoldSettlementLine {
 
 class PurchaseInvoiceScreen extends StatefulWidget {
   final int? supplierId;
+  final bool supplierReturnMode;
+  final int? originalInvoiceId;
 
-  const PurchaseInvoiceScreen({super.key, this.supplierId});
+  const PurchaseInvoiceScreen({
+    super.key,
+    this.supplierId,
+    this.supplierReturnMode = false,
+    this.originalInvoiceId,
+  });
 
   @override
   State<PurchaseInvoiceScreen> createState() => _PurchaseInvoiceScreenState();
@@ -64,6 +72,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   String _uiPaperSize = 'A4';
 
   bool _checkedLocalDraft = false;
+
+  // Supplier return (مرتجع شراء (مورد))
+  Map<String, dynamic>? _selectedOriginalInvoice;
+  bool _isLoadingOriginalInvoiceDetails = false;
+  String? _originalInvoiceDetailsError;
+
+  bool get _isSupplierReturnMode => widget.supplierReturnMode == true;
 
   // Branches (فروع المعرض/المحل)
   bool _isLoadingBranches = false;
@@ -587,6 +602,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedSupplierId = null;
       _karatLines = [];
       _inlineItems = [];
+      _selectedOriginalInvoice = null;
+      _originalInvoiceDetailsError = null;
       _showAdvancedPaymentOptions = false;
       _selectedPaymentMethodId = null;
       _selectedSafeBoxId = null;
@@ -1142,7 +1159,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     _loadSettings();
     _applyTotals(_KaratTotals.zero);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _maybePromptRestoreLocalDraft();
+      if (!_isSupplierReturnMode) {
+        _maybePromptRestoreLocalDraft();
+      }
+
+      final originalId = widget.originalInvoiceId;
+      if (_isSupplierReturnMode && originalId != null) {
+        _loadOriginalInvoiceDetails(originalId);
+      }
     });
   }
 
@@ -1826,6 +1850,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             karat: result.karat,
             weightGrams: weight,
             wagePerGram: result.wagePerGram,
+            allowInlineCreation: !_isSupplierReturnMode,
             description: result.description,
             itemCode: result.itemCode,
             barcode: result.barcode,
@@ -2200,7 +2225,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final payload = <String, dynamic>{
       'branch_id': _selectedBranchId,
       'supplier_id': _selectedSupplierId,
-      'invoice_type': 'شراء',
+      'invoice_type': _isSupplierReturnMode ? 'مرتجع شراء (مورد)' : 'شراء',
       'date': DateTime.now().toIso8601String(),
       'total': _round(_grandTotal, 2),
       'total_cost': _round(_subtotal, 2),
@@ -2243,6 +2268,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         ),
       },
     };
+
+    if (_isSupplierReturnMode) {
+      final originalId = _parseId(_selectedOriginalInvoice?['id']);
+      if (originalId != null) {
+        payload['original_invoice_id'] = originalId;
+      }
+    }
 
     // Weight-sensitive settlement (gold barter/partial): keep ONE source of weight.
     // If user filled both explicit karat_lines and inline items, prefer karat_lines.
@@ -2360,7 +2392,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 return AlertDialog(
                   title: const Text('تم حفظ الفاتورة'),
                   content: Text(
-                    '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+                    _isSupplierReturnMode
+                        ? '✅ تم حفظ مرتجع الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعته الآن؟'
+                        : '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
                   ),
                   actions: [
                     TextButton(
@@ -2660,12 +2694,17 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final isWideLayout = size.width >= 1100;
+    final hasOriginalInvoice = _selectedOriginalInvoice != null;
 
     final leftColumn = <Widget>[
+      if (_isSupplierReturnMode) ...[
+        _buildOriginalInvoiceSection(),
+        const SizedBox(height: 16),
+      ],
       _buildSupplierSection(),
       const SizedBox(height: 24),
       _buildInlineItemsSection(),
-      if (_karatLines.isNotEmpty) ...[
+      if (!_isSupplierReturnMode && _karatLines.isNotEmpty) ...[
         const SizedBox(height: 24),
         _buildKaratLinesSection(),
       ],
@@ -2689,13 +2728,16 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('فاتورة شراء جديدة'),
+        title: Text(
+          _isSupplierReturnMode ? 'مرتجع شراء (مورد)' : 'فاتورة شراء جديدة',
+        ),
         actions: [
-          IconButton(
-            tooltip: 'إكمال لاحقاً',
-            icon: const Icon(Icons.schedule),
-            onPressed: _completeLater,
-          ),
+          if (!_isSupplierReturnMode)
+            IconButton(
+              tooltip: 'إكمال لاحقاً',
+              icon: const Icon(Icons.schedule),
+              onPressed: _completeLater,
+            ),
           IconButton(
             tooltip: 'تحديث سعر الذهب',
             icon: const Icon(Icons.refresh),
@@ -2770,6 +2812,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
+    final hasOriginalInvoice = _selectedOriginalInvoice != null;
+    final lockedByReturn = _isSupplierReturnMode && hasOriginalInvoice;
+    final helperText = lockedByReturn
+        ? 'المورد والفرع يتم تحديدهما تلقائياً من الفاتورة الأصلية.'
+        : (_isSupplierReturnMode
+              ? 'اختيار الفاتورة الأصلية اختياري. إذا كانت الفاتورة قديمة يمكنك إدخال المورد والفرع يدوياً.'
+              : 'اختر المورد أو أضف مورداً جديداً قبل متابعة إدخال الأوزان.');
+
     return Card(
       elevation: isDark ? 2 : 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -2808,10 +2858,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        'اختر المورد أو أضف مورداً جديداً قبل متابعة إدخال الأوزان.',
-                        style: theme.textTheme.bodyMedium,
-                      ),
+                      Text(helperText, style: theme.textTheme.bodyMedium),
                     ],
                   ),
                 ),
@@ -2822,7 +2869,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                     height: 22,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
-                if (!_isLoadingSuppliers) ...[
+                if (!_isLoadingSuppliers && !lockedByReturn) ...[
                   const SizedBox(width: 12),
                   FilledButton.icon(
                     onPressed: _openAddSupplierDialog,
@@ -2870,39 +2917,219 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 ),
                 dropdownColor: theme.cardColor,
                 icon: Icon(Icons.arrow_drop_down, color: colorScheme.primary),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedBranchId = value;
-                    _branchError = null;
-                  });
-                },
+                onChanged: lockedByReturn
+                    ? null
+                    : (value) {
+                        setState(() {
+                          _selectedBranchId = value;
+                          _branchError = null;
+                        });
+                      },
               ),
             const SizedBox(height: 16),
             SearchablePickerField(
               labelText: 'اختر المورد',
               valueText: _selectedSupplierName(),
-              hintText: 'اضغط للبحث والاختيار',
+              hintText: lockedByReturn
+                  ? (hasOriginalInvoice
+                        ? 'تم تحديد المورد من الفاتورة الأصلية'
+                        : 'اختياري: اختر فاتورة أصلية')
+                  : 'اضغط للبحث والاختيار',
               errorText: _supplierError,
               prefixIcon: Icons.store_mall_directory,
-              enabled: _suppliers.isNotEmpty,
-              onTap: _pickSupplier,
+              enabled: !lockedByReturn && _suppliers.isNotEmpty,
+              onTap: lockedByReturn ? null : _pickSupplier,
             ),
             const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: _loadSuppliers,
-              icon: const Icon(Icons.refresh),
-              label: const Text('تحديث قائمة الموردين'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+            if (!lockedByReturn)
+              OutlinedButton.icon(
+                onPressed: _loadSuppliers,
+                icon: const Icon(Icons.refresh),
+                label: const Text('تحديث قائمة الموردين'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildOriginalInvoiceSection() {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'اختياري: اختر الفاتورة الأصلية لربط المرتجع تلقائياً. إذا كانت الفاتورة قديمة يمكنك تركها فارغة.',
+          style: theme.textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        OriginalInvoiceSelector(
+          api: _api,
+          invoiceType: 'شراء',
+          selectedInvoice: _selectedOriginalInvoice,
+          onInvoiceSelected: _onOriginalInvoiceSelected,
+        ),
+        if (_isLoadingOriginalInvoiceDetails)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+        if (_originalInvoiceDetailsError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              _originalInvoiceDetailsError!,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.red),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _onOriginalInvoiceSelected(Map<String, dynamic> invoice) {
+    final id = _parseId(invoice['id']);
+    if (id == null) return;
+    setState(() {
+      _selectedOriginalInvoice = invoice;
+      _originalInvoiceDetailsError = null;
+    });
+    _loadOriginalInvoiceDetails(id);
+  }
+
+  Future<void> _loadOriginalInvoiceDetails(int invoiceId) async {
+    if (!_isSupplierReturnMode) return;
+
+    setState(() {
+      _isLoadingOriginalInvoiceDetails = true;
+      _originalInvoiceDetailsError = null;
+      _karatLines = [];
+      _inlineItems = [];
+      _applyTotals(_KaratTotals.zero);
+    });
+
+    try {
+      final details = await _api.getInvoiceById(invoiceId);
+      if (!mounted) return;
+
+      final merged = {...?_selectedOriginalInvoice, ...details};
+
+      final supplierId = _parseId(merged['supplier_id']);
+      final branchId = _parseId(merged['branch_id']);
+      if (supplierId == null || branchId == null) {
+        setState(() {
+          _selectedOriginalInvoice = merged;
+          _originalInvoiceDetailsError =
+              'تعذر تحميل بيانات الفاتورة الأصلية (supplier_id/branch_id غير متوفر).';
+        });
+        return;
+      }
+
+      final items = (merged['items'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
+
+      final mapped = _mapOriginalInvoiceItemsToReturnInlineItems(items);
+
+      setState(() {
+        _selectedOriginalInvoice = merged;
+        _selectedSupplierId = supplierId;
+        _selectedBranchId = branchId;
+        _supplierError = null;
+        _branchError = null;
+        _inlineItems = mapped;
+        _karatLines = [];
+        _applyCombinedTotals(inlineItems: mapped, manualLines: const []);
+      });
+
+      _applySupplierDefaultSafeBoxSelections(onlyWhenEmpty: true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _originalInvoiceDetailsError = 'خطأ في تحميل تفاصيل الفاتورة: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطأ في تحميل تفاصيل الفاتورة: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingOriginalInvoiceDetails = false;
+        });
+      }
+    }
+  }
+
+  List<PurchaseInlineItem> _mapOriginalInvoiceItemsToReturnInlineItems(
+    List<Map<String, dynamic>> items,
+  ) {
+    final result = <PurchaseInlineItem>[];
+
+    for (final item in items) {
+      final origItemId = _parseId(item['id']);
+      if (origItemId == null) continue;
+
+      final rawQty = _parseId(item['quantity']);
+      final quantity = (rawQty == null || rawQty <= 0) ? 1 : rawQty;
+
+      final weightPerUnit = _toDouble(
+        item['weight'] ?? item['weight_grams'] ?? item['total_weight'],
+      );
+
+      final karatRaw = item['karat'] ?? 21;
+      final karat = _toDouble(karatRaw);
+
+      var wagePerGram = _toDouble(
+        item['manufacturing_wage_per_gram'] ?? item['wage_per_gram'],
+      );
+      if (wagePerGram <= 0 && weightPerUnit > 0) {
+        final wageTotal = _toDouble(item['wage_total'] ?? item['wage']);
+        if (wageTotal > 0) wagePerGram = wageTotal / weightPerUnit;
+      }
+
+      final name = (item['name'] ?? item['item_name'] ?? 'صنف').toString();
+      final categoryName = (item['category'] ?? item['category_name'])
+          ?.toString();
+      final categoryId = _parseId(item['category_id']);
+      final description = item['description']?.toString();
+
+      final hasStones = item['has_stones'] == true;
+      final stonesWeight = _toDouble(item['stones_weight']);
+      final stonesValue = _toDouble(item['stones_value']);
+
+      for (int i = 0; i < quantity; i++) {
+        result.add(
+          PurchaseInlineItem(
+            name: name,
+            karat: karat <= 0 ? 21 : karat,
+            weightGrams: weightPerUnit,
+            wagePerGram: wagePerGram,
+            description: (description == null || description.trim().isEmpty)
+                ? null
+                : description.trim(),
+            category: categoryName,
+            categoryId: categoryId,
+            hasStones: hasStones,
+            stonesWeight: hasStones ? stonesWeight : 0,
+            stonesValue: hasStones ? stonesValue : 0,
+            entryType: PurchaseInlineEntryType.item,
+            allowInlineCreation: false,
+            originalInvoiceItemId: origItemId,
+            maxWeightGrams: weightPerUnit > 0 ? weightPerUnit : null,
+          ),
+        );
+      }
+    }
+
+    return result;
   }
 
   Widget _buildPaymentSection() {
@@ -3911,6 +4138,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   Widget _buildInlineItemsSection() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasOriginalInvoice = _selectedOriginalInvoice != null;
+
+    final lockedByReturn = _isSupplierReturnMode && hasOriginalInvoice;
 
     return Card(
       elevation: isDark ? 1 : 2,
@@ -3926,39 +4156,44 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
-                      Text(
+                    children: [
+                      const Text(
                         'الأصناف داخل الفاتورة',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
-                        'أدخل وزناً واحداً للصنف أو ألصق عدة أوزان لنفس الصنف دفعة واحدة.',
-                        style: TextStyle(color: Colors.black54),
+                        lockedByReturn
+                            ? 'تم تحميل أصناف الفاتورة الأصلية. عدّل الوزن أو احذف السطر لتحديد الأصناف المُرتجعة.'
+                            : (_isSupplierReturnMode
+                                  ? 'يمكنك إدخال المرتجع يدوياً، أو اختيار فاتورة أصلية (اختياري) للربط التلقائي.'
+                                  : 'أدخل وزناً واحداً للصنف أو ألصق عدة أوزان لنفس الصنف دفعة واحدة.'),
+                        style: const TextStyle(color: Colors.black54),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: _addInlineItem,
-                      icon: const Icon(Icons.add_circle_outline),
-                      label: const Text('إضافة وزن واحد'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _addInlineItemsBulk,
-                      icon: const Icon(Icons.playlist_add),
-                      label: const Text('إضافة عدة أوزان'),
-                    ),
-                  ],
-                ),
+                if (!lockedByReturn)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _addInlineItem,
+                        icon: const Icon(Icons.add_circle_outline),
+                        label: const Text('إضافة وزن واحد'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _addInlineItemsBulk,
+                        icon: const Icon(Icons.playlist_add),
+                        label: const Text('إضافة عدة أوزان'),
+                      ),
+                    ],
+                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -3998,7 +4233,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                     ),
                   )
                 : const Icon(Icons.save_alt),
-            label: Text(_isSavingInvoice ? 'جارٍ الحفظ...' : 'حفظ الفاتورة'),
+            label: Text(
+              _isSavingInvoice
+                  ? 'جارٍ الحفظ...'
+                  : (_isSupplierReturnMode ? 'حفظ المرتجع' : 'حفظ الفاتورة'),
+            ),
             style: FilledButton.styleFrom(
               backgroundColor: theme.colorScheme.secondary,
               foregroundColor: theme.colorScheme.onSecondary,
@@ -4334,6 +4573,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               final parsedWageTotal =
                   double.tryParse(wageTotalController.text) ?? 0;
 
+              final maxWeight = existing?.maxWeightGrams;
+              final clampedWeight =
+                  (maxWeight != null && maxWeight > 0 && parsedWeight > 0)
+                  ? math.min(parsedWeight, maxWeight)
+                  : parsedWeight;
+
               final categoryItems = _buildCategoryDropdownItems();
               final hasCategoryValue = categoryItems.any(
                 (item) => item.value == selectedCategoryName,
@@ -4351,13 +4596,15 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   double.tryParse(stonesValueController.text) ?? 0;
 
               final resolvedWagePerGram = wageInputIsTotal
-                  ? (parsedWeight > 0 ? (parsedWageTotal / parsedWeight) : 0.0)
+                  ? (clampedWeight > 0
+                        ? (parsedWageTotal / clampedWeight)
+                        : 0.0)
                   : parsedWagePerGram;
 
               final isCategoryOnly =
                   entryType == PurchaseInlineEntryType.category;
 
-              if (parsedWeight <= 0) {
+              if (clampedWeight <= 0) {
                 ScaffoldMessenger.of(
                   context,
                 ).showSnackBar(const SnackBar(content: Text('الوزن مطلوب')));
@@ -4391,8 +4638,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 PurchaseInlineItem(
                   name: resolvedName,
                   karat: karat,
-                  weightGrams: parsedWeight,
+                  weightGrams: clampedWeight,
                   wagePerGram: resolvedWagePerGram,
+                  allowInlineCreation:
+                      existing?.allowInlineCreation ?? !_isSupplierReturnMode,
+                  originalInvoiceItemId: existing?.originalInvoiceItemId,
+                  maxWeightGrams: existing?.maxWeightGrams,
                   description: descriptionController.text.trim().isEmpty
                       ? null
                       : descriptionController.text.trim(),
@@ -6506,6 +6757,9 @@ class PurchaseInlineItem {
   final double karat;
   final double weightGrams;
   final double wagePerGram;
+  final bool allowInlineCreation;
+  final int? originalInvoiceItemId;
+  final double? maxWeightGrams;
   final String? description;
   final bool hasStones;
   final double stonesWeight;
@@ -6521,6 +6775,9 @@ class PurchaseInlineItem {
     required this.karat,
     required this.weightGrams,
     required this.wagePerGram,
+    this.allowInlineCreation = true,
+    this.originalInvoiceItemId,
+    this.maxWeightGrams,
     this.description,
     this.hasStones = false,
     this.stonesWeight = 0,
@@ -6537,6 +6794,9 @@ class PurchaseInlineItem {
     double? karat,
     double? weightGrams,
     double? wagePerGram,
+    bool? allowInlineCreation,
+    int? originalInvoiceItemId,
+    double? maxWeightGrams,
     String? description,
     bool? hasStones,
     double? stonesWeight,
@@ -6552,6 +6812,10 @@ class PurchaseInlineItem {
       karat: karat ?? this.karat,
       weightGrams: weightGrams ?? this.weightGrams,
       wagePerGram: wagePerGram ?? this.wagePerGram,
+      allowInlineCreation: allowInlineCreation ?? this.allowInlineCreation,
+      originalInvoiceItemId:
+          originalInvoiceItemId ?? this.originalInvoiceItemId,
+      maxWeightGrams: maxWeightGrams ?? this.maxWeightGrams,
       description: description ?? this.description,
       hasStones: hasStones ?? this.hasStones,
       stonesWeight: stonesWeight ?? this.stonesWeight,
@@ -6569,6 +6833,9 @@ class PurchaseInlineItem {
       'name': name,
       'karat': karat,
       'weight': weightGrams,
+      if (originalInvoiceItemId != null)
+        'original_invoice_item_id': originalInvoiceItemId,
+      if (originalInvoiceItemId != null) 'quantity': 1,
       'manufacturing_wage_per_gram': wagePerGram,
       'wage_per_gram': wagePerGram,
       'wage_total': weightGrams * wagePerGram,
@@ -6582,7 +6849,7 @@ class PurchaseInlineItem {
       'category_id': categoryId,
     };
 
-    if (entryType == PurchaseInlineEntryType.item) {
+    if (allowInlineCreation && entryType == PurchaseInlineEntryType.item) {
       payload['create_inline'] = true;
     }
 

@@ -9278,6 +9278,15 @@ def add_invoice():
             else:
                 invoice_type = 'شراء'
 
+        # Some legacy clients may send supplier returns as 'مرتجع شراء' but include supplier_id.
+        # Canonicalize to supplier return so optional original_invoice_id rules apply.
+        if (
+            invoice_type == 'مرتجع شراء'
+            and data.get('supplier_id')
+            and (data.get('gold_type', 'new') == 'new')
+        ):
+            invoice_type = 'مرتجع شراء (مورد)'
+
         if invoice_type == 'شراء':
             # 'شراء' can represent either supplier purchase (worked gold) or
             # scrap purchase, depending on gold_type.
@@ -9296,34 +9305,154 @@ def add_invoice():
     # 🆕 Validation للمرتجعات
     return_types = ['مرتجع بيع', 'مرتجع شراء', 'مرتجع شراء (مورد)']
     if invoice_type in return_types:
-        # التحقق من وجود original_invoice_id
-        if not data.get('original_invoice_id'):
-            return jsonify({'error': 'original_invoice_id is required for return invoices'}), 400
-        
-        # التحقق من وجود الفاتورة الأصلية
-        original_invoice = Invoice.query.get(data['original_invoice_id'])
-        if not original_invoice:
-            return jsonify({'error': f'Original invoice with ID {data["original_invoice_id"]} not found'}), 404
-        
-        # التحقق من تطابق العميل/المورد
-        if invoice_type == 'مرتجع بيع' and original_invoice.invoice_type == 'بيع':
-            if original_invoice.customer_id != data.get('customer_id'):
-                return jsonify({'error': 'Customer ID must match original invoice'}), 400
-        elif invoice_type == 'مرتجع شراء' and original_invoice.invoice_type == 'شراء من عميل':
-            if original_invoice.customer_id != data.get('customer_id'):
-                return jsonify({'error': 'Customer ID must match original invoice'}), 400
-        elif invoice_type == 'مرتجع شراء (مورد)':
-            original_type = (original_invoice.invoice_type or '').strip()
-            is_supplier_purchase = (
-                original_type == 'شراء'
-                or (
-                    'مورد' in original_type
-                    and 'شراء' in original_type
-                    and 'مرتجع' not in original_type
+        original_invoice = None
+
+        # NOTE: Supplier purchase return can be created without original_invoice_id
+        # for legacy/very old invoices that are not available for selection.
+        require_original = not (
+            invoice_type == 'مرتجع شراء (مورد)'
+            and not data.get('original_invoice_id')
+        )
+
+        if require_original:
+            # التحقق من وجود original_invoice_id
+            if not data.get('original_invoice_id'):
+                return jsonify({'error': 'original_invoice_id is required for return invoices'}), 400
+
+            # التحقق من وجود الفاتورة الأصلية
+            original_invoice = Invoice.query.get(data['original_invoice_id'])
+            if not original_invoice:
+                return jsonify({'error': f'Original invoice with ID {data["original_invoice_id"]} not found'}), 404
+
+            # التحقق من تطابق العميل/المورد
+            if invoice_type == 'مرتجع بيع' and original_invoice.invoice_type == 'بيع':
+                if original_invoice.customer_id != data.get('customer_id'):
+                    return jsonify({'error': 'Customer ID must match original invoice'}), 400
+            elif invoice_type == 'مرتجع شراء' and original_invoice.invoice_type == 'شراء من عميل':
+                if original_invoice.customer_id != data.get('customer_id'):
+                    return jsonify({'error': 'Customer ID must match original invoice'}), 400
+            elif invoice_type == 'مرتجع شراء (مورد)':
+                original_type = (original_invoice.invoice_type or '').strip()
+                is_supplier_purchase = (
+                    original_type == 'شراء'
+                    or (
+                        'مورد' in original_type
+                        and 'شراء' in original_type
+                        and 'مرتجع' not in original_type
+                    )
                 )
-            )
-            if is_supplier_purchase and original_invoice.supplier_id != data.get('supplier_id'):
-                return jsonify({'error': 'Supplier ID must match original invoice'}), 400
+                if is_supplier_purchase and original_invoice.supplier_id != data.get('supplier_id'):
+                    return jsonify({'error': 'Supplier ID must match original invoice'}), 400
+
+        # 🛡️ Server-side validation (when original invoice exists): return items must reference
+        # original invoice items and cannot exceed the original quantities/weights.
+        if original_invoice is not None:
+            try:
+                def _to_float_local(value, default=0.0):
+                    if value in (None, '', False):
+                        return default
+                    try:
+                        normalized = normalize_number(str(value))
+                        return float(normalized)
+                    except Exception:
+                            try:
+                                return float(value)
+                            except Exception:
+                                return default
+
+                items_payload = data.get('items', [])
+                if items_payload in (None, '', False):
+                    items_payload = []
+                if not isinstance(items_payload, list):
+                    return jsonify({'error': 'items must be a list'}), 400
+
+                # Aggregate by original_invoice_item_id to prevent splitting to bypass limits.
+                aggregated = {}  # id -> {'qty': float, 'total_weight': float}
+                for idx, it in enumerate(items_payload, start=1):
+                    if not isinstance(it, dict):
+                        continue
+                    raw_orig_item_id = it.get('original_invoice_item_id')
+                    if raw_orig_item_id in (None, '', False):
+                        return jsonify({
+                            'error': 'missing_original_invoice_item_id',
+                            'message': 'يجب ربط كل صنف مرتجع بصنف من الفاتورة الأصلية (original_invoice_item_id).',
+                            'line_index': idx,
+                        }), 400
+                    try:
+                        orig_item_id = int(raw_orig_item_id)
+                    except Exception:
+                        return jsonify({
+                            'error': 'invalid_original_invoice_item_id',
+                            'message': 'original_invoice_item_id غير صحيح',
+                            'line_index': idx,
+                            'value': raw_orig_item_id,
+                        }), 400
+
+                    req_qty = _to_float_local(it.get('quantity', 1), 1.0) or 0.0
+                    if req_qty < 0:
+                        req_qty = abs(req_qty)
+                    # Return payload uses per-unit weight.
+                    req_weight_per_unit = _to_float_local(it.get('weight', it.get('total_weight', 0.0)), 0.0)
+                    if req_weight_per_unit < 0:
+                        req_weight_per_unit = abs(req_weight_per_unit)
+
+                    req_total_weight = float(req_weight_per_unit) * float(req_qty if req_qty > 0 else 0.0)
+                    current = aggregated.get(orig_item_id) or {'qty': 0.0, 'total_weight': 0.0}
+                    current['qty'] = float(current.get('qty', 0.0) or 0.0) + float(req_qty)
+                    current['total_weight'] = float(current.get('total_weight', 0.0) or 0.0) + float(req_total_weight)
+                    aggregated[orig_item_id] = current
+
+                # Validate aggregated quantities/weights against DB original items.
+                eps_qty = 1e-6
+                eps_weight = 1e-3
+                for orig_item_id, agg in aggregated.items():
+                    orig_item = InvoiceItem.query.get(orig_item_id)
+                    if not orig_item or int(getattr(orig_item, 'invoice_id', 0) or 0) != int(original_invoice.id):
+                        return jsonify({
+                            'error': 'original_invoice_item_not_found',
+                            'message': 'أحد أصناف المرتجع غير موجود ضمن الفاتورة الأصلية',
+                            'original_invoice_item_id': orig_item_id,
+                            'original_invoice_id': int(original_invoice.id),
+                        }), 400
+
+                    try:
+                        orig_qty = int(getattr(orig_item, 'quantity', 1) or 1)
+                    except Exception:
+                        orig_qty = 1
+                    if orig_qty < 0:
+                        orig_qty = abs(orig_qty)
+
+                    try:
+                        orig_weight_per_unit = float(getattr(orig_item, 'weight', 0.0) or 0.0)
+                    except Exception:
+                        orig_weight_per_unit = 0.0
+
+                    orig_total_weight = float(orig_weight_per_unit) * float(orig_qty if orig_qty > 0 else 0.0)
+
+                    req_qty_sum = float(agg.get('qty', 0.0) or 0.0)
+                    req_weight_sum = float(agg.get('total_weight', 0.0) or 0.0)
+
+                    if req_qty_sum > float(orig_qty) + eps_qty:
+                        return jsonify({
+                            'error': 'return_quantity_exceeds_original',
+                            'message': 'كمية المرتجع أكبر من كمية الفاتورة الأصلية',
+                            'original_invoice_item_id': orig_item_id,
+                            'original_quantity': int(orig_qty),
+                            'returned_quantity': float(req_qty_sum),
+                        }), 400
+
+                    # Only enforce weight if the original invoice item has a meaningful weight.
+                    if orig_total_weight > eps_weight and req_weight_sum > orig_total_weight + eps_weight:
+                        return jsonify({
+                            'error': 'return_weight_exceeds_original',
+                            'message': 'وزن المرتجع أكبر من وزن الفاتورة الأصلية',
+                            'original_invoice_item_id': orig_item_id,
+                            'original_total_weight': round(float(orig_total_weight), 3),
+                            'returned_total_weight': round(float(req_weight_sum), 3),
+                        }), 400
+            except Exception:
+                # Do not crash invoice creation on validation failures; fall back to existing behavior.
+                pass
     
     # 🆕 Validation لنوع الذهب
     gold_type = data.get('gold_type', 'new')
@@ -9352,6 +9481,47 @@ def add_invoice():
     payments_data = data.get('payments', [])  # 🆕 دعم وسائل متعددة
     payment_method_obj = None  # نستخدمه لاحقاً عند الحاجة للخزينة الافتراضية
     karat_lines_data = data.get('karat_lines', [])
+
+    # 🧩 Backward-compat: resolve legacy payment_method string into payment_method_id.
+    # Some Flutter screens still send payment_method as a label (cash/card/transfer/deferred)
+    # without payment_method_id. We map best-effort to an active PaymentMethod.
+    if (not payment_method_id) and (not payments_data) and isinstance(data.get('payment_method'), str):
+        legacy_label = (data.get('payment_method') or '').strip()
+        if legacy_label:
+            legacy_norm = legacy_label.lower()
+
+            def _pick_payment_method(q):
+                try:
+                    return (
+                        q.filter_by(is_active=True)
+                        .order_by(PaymentMethod.display_order.asc(), PaymentMethod.id.asc())
+                        .first()
+                    )
+                except Exception:
+                    return None
+
+            pm_guess = None
+            try:
+                # Arabic keywords
+                if ('آجل' in legacy_label) or ('اجل' in legacy_label) or (legacy_norm in {'deferred', 'credit', 'receivable', 'on_account'}):
+                    pm_guess = _pick_payment_method(PaymentMethod.query.filter(PaymentMethod.payment_type.in_(['receivable', 'credit', 'on_account', 'ar'])))
+                elif ('نقد' in legacy_label) or (legacy_norm in {'cash', 'cash_payment'}):
+                    pm_guess = _pick_payment_method(PaymentMethod.query.filter(PaymentMethod.payment_type.in_(['cash'])))
+                    if not pm_guess:
+                        pm_guess = _pick_payment_method(PaymentMethod.query.filter(PaymentMethod.name.contains('نقد')))
+                elif ('تحويل' in legacy_label) or ('بنك' in legacy_label) or (legacy_norm in {'transfer', 'bank', 'bank_transfer'}):
+                    pm_guess = _pick_payment_method(PaymentMethod.query.filter(PaymentMethod.name.contains('تحويل')))
+                    if not pm_guess:
+                        pm_guess = _pick_payment_method(PaymentMethod.query.filter(PaymentMethod.name.contains('بنك')))
+                elif ('بطاق' in legacy_label) or (legacy_norm in {'card', 'mada', 'visa', 'mastercard'}):
+                    pm_guess = _pick_payment_method(PaymentMethod.query.filter(PaymentMethod.payment_type.in_(['mada', 'visa', 'mastercard', 'card'])))
+            except Exception:
+                pm_guess = None
+
+            if pm_guess and getattr(pm_guess, 'id', None):
+                payment_method_id = int(pm_guess.id)
+                # Keep data consistent for downstream logic.
+                data['payment_method_id'] = payment_method_id
 
     # 🛡️ Asset Protection: strict payload validation (weight integrity)
     # منع إرسال items و karat_lines معاً في الحالات التي تؤثر على الأوزان
@@ -10515,6 +10685,9 @@ def add_invoice():
             for payment in payments_data:
                 pm_id = payment.get('payment_method_id')
                 pm_amount = _to_float(payment.get('amount', 0.0))
+                # Ignore zero/empty payment lines (common UI artifacts)
+                if pm_amount <= 0.0001:
+                    continue
                 pm_obj = PaymentMethod.query.get(pm_id)
 
                 is_receivable = _is_receivable_payment_method(pm_obj)
@@ -10841,25 +11014,33 @@ def add_invoice():
                     payment_notes = None
 
             # Legacy single-payment path:
-            # - If the client provided amount_paid (partial), record that.
-            # - Otherwise fall back to the invoice total (historical behavior).
-            single_payment_amount = _extract_float('amount_paid', 0.0)
-            if single_payment_amount <= 0.01:
+            # - If the client explicitly provided amount_paid, respect it.
+            #   (Important for deferred/credit returns where amount_paid=0.)
+            # - Otherwise, fall back to the invoice total (historical behavior).
+            if 'amount_paid' in data and data.get('amount_paid') not in (None, '', False):
+                single_payment_amount = _extract_float('amount_paid', 0.0)
+            else:
                 single_payment_amount = _extract_float('total', 0.0)
-            
-            payment_row = InvoicePayment(
-                invoice_id=new_invoice.id,
-                payment_method_id=payment_method_id,
-                amount=single_payment_amount,
-                commission_rate=pm_commission_rate,
-                commission_amount=commission_amount,
-                net_amount=net_amount,
-                notes=payment_notes,
-            )
-            db.session.add(payment_row)
-            db.session.flush()
 
-            if (not unposted_mode) and (not is_receivable):
+            # If explicit amount is zero, do not create an InvoicePayment row.
+            if single_payment_amount <= 0.0001:
+                single_payment_amount = 0.0
+            
+            payment_row = None
+            if single_payment_amount > 0.0001:
+                payment_row = InvoicePayment(
+                    invoice_id=new_invoice.id,
+                    payment_method_id=payment_method_id,
+                    amount=single_payment_amount,
+                    commission_rate=pm_commission_rate,
+                    commission_amount=commission_amount,
+                    net_amount=net_amount,
+                    notes=payment_notes,
+                )
+                db.session.add(payment_row)
+                db.session.flush()
+
+            if payment_row is not None and (not unposted_mode) and (not is_receivable):
                 safe_account_id = getattr(safe_box_obj, 'account_id', None)
                 if not safe_account_id:
                     db.session.rollback()
@@ -13981,42 +14162,108 @@ def add_invoice():
         
         elif invoice_type == 'مرتجع شراء (مورد)':
             # 6. مرتجع شراء (مورد) (عكس الشراء)
-            # من حـ/ المورد (أو الصندوق) [مدين]
-            #     إلى حـ/ المخزون [دائن]
+            # الهيكل الصحيح: فصل Cash عن Weight كما في فاتورة الشراء الأصلية
+            #   مدين: حساب المورد المالي (نقدي فقط) + حساب مذكرة المورد الوزني (وزن فقط)
+            #   دائن: حساب المخزون النقدي + حساب مذكرة المخزون الوزني
+            #   ملاحظة: السطران الدائنان يحملان exclude_from_ledger=True لعدم ظهورهما في كشف المورد
             
             # 🔥 استخدام الربط المحاسبي (نفس إعدادات "شراء")
             cash_acc_id = get_account_id_for_mapping('شراء', 'cash')
             suppliers_acc_id = get_account_id_for_mapping('شراء', 'suppliers')
             
+            # Prefer posting to the supplier's own subledger account (root-fix).
+            supplier_fin_account_id = None
+            try:
+                if getattr(new_invoice, 'supplier_id', None) and party_account:
+                    supplier_fin_account_id = int(party_account.id)
+            except Exception:
+                supplier_fin_account_id = None
+
             # حسابات المخزون
             inventory_acc_id = None
-            for karat in ['18', '21', '22', '24']:
-                inv_acc_id = get_account_id_for_mapping('شراء', f'inventory_{karat}k')
-                if inv_acc_id:
-                    inventory_acc_id = inv_acc_id
-                    break
+            try:
+                unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice('شراء', gold_type)
+            except Exception:
+                unified_inventory_acc_id = None
+            if unified_inventory_acc_id:
+                inventory_acc_id = unified_inventory_acc_id
+            else:
+                for karat in ['18', '21', '22', '24']:
+                    inv_acc_id = get_account_id_for_mapping('شراء', f'inventory_{karat}k')
+                    if inv_acc_id:
+                        inventory_acc_id = inv_acc_id
+                        break
             
-            # Line 1: مدين المورد/الصندوق
-            acc_id = suppliers_acc_id or cash_acc_id or party_account.id
-            vendor_return_debit = _weight_kwargs_from_map(gold_by_karat, 'debit')
+            if not inventory_acc_id:
+                db.session.rollback()
+                return jsonify({
+                    'error': 'account_mapping_missing',
+                    'message': 'لم يتم العثور على حساب مخزون لمرتجع شراء (مورد). الرجاء ضبط Accounting Mapping (inventory_XXk) أو تفعيل المخزون الموحد.',
+                    'missing': [{'mapping': 'inventory_*', 'operation_type': 'شراء'}],
+                }), 400
+
+            acc_id = supplier_fin_account_id or (party_account.id if party_account else None) or suppliers_acc_id or cash_acc_id
+
+            # حساب مذكرة المورد الوزني: يُستخدم لعكس التزام الذهب (الوزن) للمورد
+            # (memo_party_account هو الحساب الوزني المرتبط بحساب المورد المالي)
+            supplier_weight_acc_id = memo_party_account.id if memo_party_account else acc_id
+
+            # حساب مذكرة المخزون الوزني: يُستخدم لعكس رصيد الذهب في المخزون
+            weight_inventory_acc_id = None
+            try:
+                inv_acc_obj = Account.query.get(inventory_acc_id)
+                if inv_acc_obj and inv_acc_obj.memo_account_id:
+                    weight_inventory_acc_id = inv_acc_obj.memo_account_id
+            except Exception:
+                weight_inventory_acc_id = None
+            if not weight_inventory_acc_id:
+                weight_inventory_acc_id = get_account_id_by_number('7521')
+            if not weight_inventory_acc_id:
+                weight_inventory_acc_id = inventory_acc_id  # last resort fallback
+
+            has_gold_weight = any(float(v or 0) > 0 for v in gold_by_karat.values())
+
+            # Line 1: مدين حساب المورد المالي (تخفيض الذمم المالية - نقدي فقط)
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=acc_id,
                 cash_debit=total_cash,
-                **vendor_return_debit,
-                description="استلام نقدي من مرتجع شراء"
+                description="مرتجع شراء (مورد)"
             )
-            
-            # Line 2: دائن المخزون
-            if inventory_acc_id:
-                vendor_return_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry.id,
-                    account_id=inventory_acc_id,
-                    cash_credit=total_cash,
-                    **vendor_return_credit,
-                    description="خصم من المخزون (مرتجع)"
-                )
+
+            # Line 2: مدين حساب مذكرة المورد الوزني (تخفيض التزام الذهب - وزن فقط)
+            if has_gold_weight:
+                vendor_return_weight_debit = _weight_kwargs_from_map(gold_by_karat, 'debit')
+                if vendor_return_weight_debit:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=supplier_weight_acc_id,
+                        apply_golden_rule=False,
+                        **vendor_return_weight_debit,
+                        description="مرتجع شراء (مورد) - تخفيض وزن ذهب المورد"
+                    )
+
+            # Line 3: دائن حساب المخزون النقدي (تقليص القيمة النقدية - بدون ربط بالمورد)
+            create_dual_journal_entry(
+                journal_entry_id=journal_entry.id,
+                account_id=inventory_acc_id,
+                cash_credit=total_cash,
+                exclude_from_ledger=True,  # مهم: لا يظهر في كشف حساب المورد
+                description="خصم من المخزون النقدي (مرتجع شراء مورد)"
+            )
+
+            # Line 4: دائن حساب مذكرة المخزون الوزني (تقليص رصيد الذهب - بدون ربط بالمورد)
+            if has_gold_weight and weight_inventory_acc_id:
+                vendor_return_weight_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
+                if vendor_return_weight_credit:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=weight_inventory_acc_id,
+                        apply_golden_rule=False,
+                        **vendor_return_weight_credit,
+                        exclude_from_ledger=True,  # مهم: لا يظهر في كشف حساب المورد
+                        description="خصم وزني من المخزون (مرتجع شراء مورد)"
+                    )
 
         # --- 6. Verify Dual Balance Before Commit ---
         db.session.flush()  # Ensure all entries are in DB before verification

@@ -2252,7 +2252,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       final mergedInvoice = {...invoice, ...details};
 
       String filename() {
-        final numStr = (mergedInvoice['invoice_type_id'] ?? '').toString().trim();
+        final numStr = (mergedInvoice['invoice_type_id'] ?? '')
+            .toString()
+            .trim();
         final idStr = (mergedInvoice['id'] ?? '').toString().trim();
         final base = numStr.isNotEmpty
             ? 'invoice_$numStr'
@@ -3705,10 +3707,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => AddReturnInvoiceScreen(
-              api: _apiService,
-              returnType: 'مرتجع شراء (مورد)',
-            ),
+            builder: (_) =>
+                const PurchaseInvoiceScreen(supplierReturnMode: true),
           ),
         );
         break;

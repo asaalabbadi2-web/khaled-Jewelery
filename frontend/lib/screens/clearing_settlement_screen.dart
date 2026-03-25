@@ -12,6 +12,7 @@ import '../widgets/safe_box_picker_dialog.dart';
 class ClearingSettlementScreen extends StatefulWidget {
   final int? initialClearingSafeBoxId;
   final int? initialBankSafeBoxId;
+
   /// Maximum settleable amount (due amount) from the monitor screen.
   /// When provided, overrides the clearing balance as the cap.
   final double? initialDueAmount;
@@ -691,8 +692,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
           'السبت',
           'الأحد',
         ];
-        final idx =
-            int.tryParse(settlementWeekday.toString()) ?? -1;
+        final idx = int.tryParse(settlementWeekday.toString()) ?? -1;
         if (idx >= 0 && idx < weekdays.length) {
           scheduleInfo = 'تسوية أسبوعية يوم ${weekdays[idx]}';
         }
@@ -726,16 +726,18 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
       // Read settlement mode from matched PM
       final mode = matched != null
-          ? (matched['settlement_mode']?.toString().trim().toLowerCase() ?? 'bulk')
+          ? (matched['settlement_mode']?.toString().trim().toLowerCase() ??
+                'bulk')
           : 'bulk';
-      _settlementMode = (mode == 'per_transaction') ? 'per_transaction' : 'bulk';
+      _settlementMode = (mode == 'per_transaction')
+          ? 'per_transaction'
+          : 'bulk';
 
       _feeAlreadyAppliedInInvoice = shouldTreatAsAlreadyApplied;
 
       if (!shouldTreatAsAlreadyApplied && matched != null) {
         // timing == 'settlement': auto-populate commission fields
-        final rate =
-            (matched['commission_rate'] as num?)?.toDouble() ?? 0.0;
+        final rate = (matched['commission_rate'] as num?)?.toDouble() ?? 0.0;
         final fixed =
             (matched['commission_fixed_amount'] as num?)?.toDouble() ?? 0.0;
         _rateController.text = _formatDecimalCompact(rate);
@@ -745,7 +747,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
         // Auto-select fee expense account from PM configuration
         final feeAccId = matched['fee_expense_account_id'];
         if (feeAccId != null) {
-          final id = feeAccId is int ? feeAccId : int.tryParse(feeAccId.toString());
+          final id = feeAccId is int
+              ? feeAccId
+              : int.tryParse(feeAccId.toString());
           if (id != null) {
             final found = _accounts.where((a) => a['id'] == id).firstOrNull;
             if (found != null) _feeAccount = found;
@@ -784,7 +788,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       final res = await _api.getPendingSettlementTransactions(
         clearingSafeBoxId: clearingId,
       );
-      final txList = (res['transactions'] as List?)
+      final txList =
+          (res['transactions'] as List?)
               ?.whereType<Map<String, dynamic>>()
               .toList() ??
           [];
@@ -873,7 +878,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
         ? _dueAmount!
         : availableClearing;
     if (cap > 0 && gross > (cap + 0.01)) {
-      final label = _dueAmount != null ? 'المبلغ المستحق' : 'الرصيد المتاح في خزينة المستحقات';
+      final label = _dueAmount != null
+          ? 'المبلغ المستحق'
+          : 'الرصيد المتاح في خزينة المستحقات';
       _showSnack(
         '$label ${_formatMoney(cap)} ولا يمكن تسوية مبلغ إجمالي ${_formatMoney(gross)}',
         error: true,
@@ -984,10 +991,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
               msg = 'الرصيد المتاح في خزينة المستحقات غير كافٍ لتنفيذ التسوية';
             }
           } else if (err == 'no_due_amount') {
-            msg = decoded['message']?.toString() ??
-                'لا يوجد مبلغ مستحق للتسوية';
+            msg =
+                decoded['message']?.toString() ?? 'لا يوجد مبلغ مستحق للتسوية';
           } else if (err == 'exceeds_due_amount') {
-            msg = decoded['message']?.toString() ??
+            msg =
+                decoded['message']?.toString() ??
                 'المبلغ المطلوب يتجاوز المبلغ المستحق للتسوية';
           } else {
             msg = (decoded['message'] ?? decoded['error'] ?? msg).toString();
@@ -1066,9 +1074,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       await showDialog<void>(
         context: context,
         builder: (_) => AlertDialog(
-          title: Text(settledCount > 0
-              ? 'تمت التسوية الفردية بنجاح'
-              : 'لا توجد معاملات للتسوية'),
+          title: Text(
+            settledCount > 0
+                ? 'تمت التسوية الفردية بنجاح'
+                : 'لا توجد معاملات للتسوية',
+          ),
           content: Text(message),
           actions: [
             TextButton(
@@ -1108,8 +1118,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     final effectiveCap = (_dueAmount != null && _dueAmount! > 0)
         ? _dueAmount!
         : availableClearing;
-    final exceedsAvailable =
-        effectiveCap > 0 && gross > (effectiveCap + 0.01);
+    final exceedsAvailable = effectiveCap > 0 && gross > (effectiveCap + 0.01);
 
     return Scaffold(
       appBar: AppBar(
@@ -1195,15 +1204,16 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 380),
                   transitionBuilder: (child, animation) {
-                    final slide = Tween<Offset>(
-                      begin: const Offset(0, 0.12),
-                      end: Offset.zero,
-                    ).animate(
-                      CurvedAnimation(
-                        parent: animation,
-                        curve: Curves.easeOut,
-                      ),
-                    );
+                    final slide =
+                        Tween<Offset>(
+                          begin: const Offset(0, 0.12),
+                          end: Offset.zero,
+                        ).animate(
+                          CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeOut,
+                          ),
+                        );
                     return FadeTransition(
                       opacity: animation,
                       child: SlideTransition(position: slide, child: child),
@@ -1219,9 +1229,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                             scheduleInfo: _settlementScheduleInfo,
                             feeAccountName: _feeAccount == null
                                 ? null
-                                : (_feeAccount?['name'] as String? ?? '').trim().isNotEmpty
-                                    ? _feeAccount!['name'] as String
-                                    : '${_feeAccount?['account_number'] ?? ''} - ${_feeAccount?['name'] ?? ''}',
+                                : (_feeAccount?['name'] as String? ?? '')
+                                      .trim()
+                                      .isNotEmpty
+                                ? _feeAccount!['name'] as String
+                                : '${_feeAccount?['account_number'] ?? ''} - ${_feeAccount?['name'] ?? ''}',
                           ),
                         )
                       : const SizedBox.shrink(key: ValueKey(0)),
@@ -1231,7 +1243,10 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                 if (_matchedPaymentMethod != null) ...[
                   const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: _settlementMode == 'per_transaction'
                           ? Colors.blue.shade50
@@ -1310,7 +1325,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                             const Center(
                               child: Padding(
                                 padding: EdgeInsets.all(16),
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             )
                           else if (_pendingTransactions.isEmpty)
@@ -1325,16 +1342,21 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                             )
                           else
                             ..._pendingTransactions.map((tx) {
-                              final amount = (tx['amount'] as num?)?.toDouble() ?? 0.0;
-                              final invoiceNum = tx['invoice_number']?.toString() ?? '';
+                              final amount =
+                                  (tx['amount'] as num?)?.toDouble() ?? 0.0;
+                              final invoiceNum =
+                                  tx['invoice_number']?.toString() ?? '';
                               final txDate = tx['date']?.toString() ?? '';
                               return Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
                                 child: Row(
                                   children: [
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           if (invoiceNum.isNotEmpty)
                                             Text(
@@ -1399,13 +1421,13 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                             helperText: (_clearingSafe == null)
                                 ? null
                                 : _dueAmount != null
-                                    ? 'المستحق: ${_formatMoney(_dueAmount!)} ر.س  |  رصيد الخزينة: ${_formatMoney(availableClearing)}'
-                                    : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
+                                ? 'المستحق: ${_formatMoney(_dueAmount!)} ر.س  |  رصيد الخزينة: ${_formatMoney(availableClearing)}'
+                                : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
                             helperMaxLines: 2,
                             errorText: exceedsAvailable
                                 ? (_dueAmount != null
-                                    ? 'الإجمالي يتجاوز المبلغ المستحق (${_formatMoney(_dueAmount!)})'
-                                    : 'الإجمالي يتجاوز الرصيد المتاح')
+                                      ? 'الإجمالي يتجاوز المبلغ المستحق (${_formatMoney(_dueAmount!)})'
+                                      : 'الإجمالي يتجاوز الرصيد المتاح')
                                 : null,
                           ),
                         ),
@@ -1489,7 +1511,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: TextField(
-                                      key: const ValueKey('clearing.fee_fixed_per_tx'),
+                                      key: const ValueKey(
+                                        'clearing.fee_fixed_per_tx',
+                                      ),
                                       controller: _fixedFeeController,
                                       keyboardType:
                                           const TextInputType.numberWithOptions(
@@ -1545,7 +1569,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                           Padding(
                             padding: const EdgeInsets.only(top: 10),
                             child: TextField(
-                              key: const ValueKey('clearing.fee_computed_readonly'),
+                              key: const ValueKey(
+                                'clearing.fee_computed_readonly',
+                              ),
                               controller: _feeController,
                               readOnly: true,
                               decoration: const InputDecoration(
@@ -1643,8 +1669,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                   onPressed: _submitting
                       ? null
                       : (_settlementMode == 'per_transaction'
-                          ? _submitPerTransaction
-                          : _submit),
+                            ? _submitPerTransaction
+                            : _submit),
                   icon: _submitting
                       ? const SizedBox(
                           width: 18,
@@ -1660,8 +1686,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                     _submitting
                         ? 'جارٍ الحفظ...'
                         : (_settlementMode == 'per_transaction'
-                            ? 'تسوية فردية (${_pendingTransactions.length} معاملة)'
-                            : 'تنفيذ التسوية'),
+                              ? 'تسوية فردية (${_pendingTransactions.length} معاملة)'
+                              : 'تنفيذ التسوية'),
                   ),
                   style: FilledButton.styleFrom(
                     backgroundColor: theme.AppColors.primaryGold,
@@ -1784,13 +1810,15 @@ class _PaymentMethodInfoCard extends StatelessWidget {
               ),
               if (rate > 0)
                 _InfoChip(
-                  label: 'نسبة ${rate.toStringAsFixed(rate == rate.truncateToDouble() ? 0 : 2)}%',
+                  label:
+                      'نسبة ${rate.toStringAsFixed(rate == rate.truncateToDouble() ? 0 : 2)}%',
                   color: Colors.blue.shade700,
                   icon: Icons.percent,
                 ),
               if (fixed > 0)
                 _InfoChip(
-                  label: 'ثابت ${fixed.toStringAsFixed(fixed == fixed.truncateToDouble() ? 0 : 2)} ر.س/عملية',
+                  label:
+                      'ثابت ${fixed.toStringAsFixed(fixed == fixed.truncateToDouble() ? 0 : 2)} ر.س/عملية',
                   color: Colors.purple.shade700,
                   icon: Icons.attach_money,
                 ),
