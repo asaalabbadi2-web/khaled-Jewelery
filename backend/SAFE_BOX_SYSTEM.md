@@ -307,3 +307,47 @@ curl http://127.0.0.1:8001/api/safe-boxes/gold/24
 - [ ] دمج مع نظام الفواتير (اختيار الخزينة عند الدفع)
 - [ ] تقارير حركة الخزائن (الإيداعات/السحوبات)
 - [ ] صلاحيات الوصول للخزائن (من يمكنه الصرف من كل خزينة)
+
+---
+
+## ضمان التطابق مع دفتر الأستاذ (GL)
+
+### القاعدة الذهبية
+- دفتر الأستاذ (GL) مصدره `journal_entry` و`journal_entry_line`.
+- دفتر الخزنة مصدره `safe_box_transaction`.
+- أي حركة نقدية على حساب مرتبط بخزنة (أي `safe_box.account_id`) يجب أن يكون لها صف/صفوف مقابلة في `safe_box_transaction`.
+
+### لماذا تظهر فروقات أحياناً؟
+تظهر الفروقات عادةً في حال:
+- مسار “اعتماد/ترحيل” قام بإنشاء قيود GL بدون إنشاء `safe_box_transaction`.
+- أو تم إدخال قيد يدوي على حساب خزنة بدون تشغيل منطق الخزنة.
+
+### تشغيل يومي (مراقبة)
+يوجد ملف PowerShell جاهز للتشغيل على Windows:
+- `backend/ops/windows/safebox_reconcile.ps1`
+
+يشغّل استعلامين:
+1) فرق الخزائن العام (SafeBox vs GL).
+2) (اختياري) تفصيل keyed لخزنة محددة.
+
+مثال:
+```powershell
+# عرض الفروقات العامة
+powershell -ExecutionPolicy Bypass -File .\backend\ops\windows\safebox_reconcile.ps1
+
+# تفصيل خزنة محددة
+powershell -ExecutionPolicy Bypass -File .\backend\ops\windows\safebox_reconcile.ps1 -SafeId 38
+```
+
+### ماذا نفعل عند ظهور فرق؟ (Decision)
+1) شغّل التفصيل keyed للخزنة المتأثرة لتعرف نوع المرجع `ref_type/ref_id`.
+2) إذا كان الفرق ناتج عن:
+   - `voucher`: استخدم `backfill_safebox_from_vouchers.py` على voucher ids.
+   - `invoice_payment` أو `invoice`: استخرج `journal_entry.id` المرتبط ثم استخدم:
+     `backend/devtools/backfill_safebox_from_journal_entries_safe_lines.py` لإضافة حركات الخزنة من GL.
+   - `journal_entry`: استخدم `backfill_safebox_from_journal_entries.py` (للقيود اليدوية/القديمة) أو سكربت safe-lines حسب الحالة.
+
+### ملفات SQL مرجعية
+لمن يفضّل تشغيل الاستعلامات مباشرة من psql:
+- `backend/ops/safebox_gl_diff.sql`
+- `backend/ops/safebox_keyed_diff.sql` (استبدل `SAFE_ID_HERE` قبل التشغيل)

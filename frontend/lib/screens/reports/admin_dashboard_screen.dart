@@ -34,8 +34,10 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _response;
+  Map<String, dynamic>? _safeBoxRecon;
   bool _isLoading = false;
   String? _error;
+  String? _safeBoxReconError;
 
   int? _expandedVaultSafeBoxId;
   int? _pressedVaultSafeBoxId;
@@ -106,12 +108,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     setState(() {
       _isLoading = true;
       _error = null;
+      _safeBoxReconError = null;
     });
 
     try {
-      final result = await widget.api.getAdminDashboard();
+      final dashboardFuture = widget.api.getAdminDashboard();
+      final reconFuture = widget.api.getSafeBoxesReconciliation(
+        safeType: 'cash',
+      );
+
+      final result = await dashboardFuture;
       if (!mounted) return;
-      setState(() => _response = result);
+
+      Map<String, dynamic>? recon;
+      String? reconError;
+      try {
+        recon = await reconFuture;
+      } catch (e) {
+        reconError = e.toString();
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _response = result;
+        _safeBoxRecon = recon;
+        _safeBoxReconError = reconError;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -220,6 +242,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
           // === 2. Audit Zone (Dynamic Alerts) ===
           SliverToBoxAdapter(child: _buildAuditZone(alerts)),
+
+          // === 2.25 SafeBox vs GL Reconciliation ===
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
+              child: _buildSafeBoxReconciliationCard(),
+            ),
+          ),
 
           // === 2.5 Time Range Selector ===
           SliverToBoxAdapter(
@@ -1178,6 +1208,165 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSafeBoxReconciliationCard() {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    if (_safeBoxRecon == null && _safeBoxReconError == null) {
+      return const SizedBox.shrink();
+    }
+
+    if (_safeBoxReconError != null) {
+      return Container(
+        padding: EdgeInsets.all(_s(12)),
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: _s(20)),
+            SizedBox(width: _s(8)),
+            Expanded(
+              child: Text(
+                isArabic
+                    ? 'تعذّر تحميل مطابقة الخزن مع دفتر الأستاذ'
+                    : 'Failed to load SafeBox reconciliation',
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final data = _safeBoxRecon ?? <String, dynamic>{};
+    final mismatchCount = _asInt(data['mismatch_count']);
+    final threshold = _asDouble(data['threshold']);
+    final summary = (data['summary'] as List?) ?? const [];
+
+    final mismatches = <Map<String, dynamic>>[];
+    for (final row in summary) {
+      if (row is! Map) continue;
+      final r = row.cast<String, dynamic>();
+      final diff = _asDouble(r['diff']);
+      if (diff.abs() > threshold) {
+        mismatches.add(r);
+      }
+    }
+    mismatches.sort((a, b) {
+      final ad = _asDouble(a['abs_diff']);
+      final bd = _asDouble(b['abs_diff']);
+      return bd.compareTo(ad);
+    });
+    final top = mismatches.take(3).toList();
+
+    final ok = mismatchCount <= 0;
+    final headerColor = ok ? Colors.green.shade700 : Colors.red.shade700;
+    final borderColor = ok ? Colors.green.shade200 : Colors.red.shade200;
+
+    return Container(
+      padding: EdgeInsets.all(_s(12)),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.account_balance, color: headerColor, size: _s(20)),
+              SizedBox(width: _s(8)),
+              Expanded(
+                child: Text(
+                  isArabic
+                      ? 'مطابقة الخزن مع دفتر الأستاذ (GL)'
+                      : 'SafeBox vs GL Reconciliation',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: headerColor,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => SafeBoxesScreen(
+                        api: widget.api,
+                        isArabic: widget.isArabic,
+                        balancesView: true,
+                        initialFilterType: 'cash',
+                        lockFilterType: true,
+                        titleOverride: isArabic ? 'خزن النقد - مطابقة' : 'Cash Safes - Reconcile',
+                      ),
+                    ),
+                  );
+                },
+                child: Text(isArabic ? 'عرض الخزن' : 'Open safes'),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(8)),
+          Row(
+            children: [
+              Icon(
+                ok ? Icons.check_circle : Icons.error,
+                color: ok ? Colors.green : Colors.red,
+                size: _s(18),
+              ),
+              SizedBox(width: _s(8)),
+              Expanded(
+                child: Text(
+                  ok
+                      ? (isArabic
+                          ? 'كل خزن النقد مطابقة مع القيود'
+                          : 'All cash safes match the ledger')
+                      : (isArabic
+                          ? 'يوجد $mismatchCount خزنة غير مطابقة'
+                          : '$mismatchCount safes mismatched'),
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ],
+          ),
+          if (!ok && top.isNotEmpty) ...[
+            SizedBox(height: _s(8)),
+            ...top.map((r) {
+              final name = (r['safe_box_name'] ?? '').toString();
+              final diff = _asDouble(r['diff']);
+              return Padding(
+                padding: EdgeInsets.only(top: _s(4)),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name.isEmpty
+                            ? (isArabic ? 'خزنة' : 'Safe')
+                            : name,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                    Text(
+                      _formatCurrency(diff),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: diff >= 0 ? Colors.green : Colors.red,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
         ],
       ),
     );

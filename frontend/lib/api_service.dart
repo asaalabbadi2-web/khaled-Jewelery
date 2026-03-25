@@ -4426,6 +4426,50 @@ class ApiService {
     return <SafeBoxModel>[];
   }
 
+  /// مطابقة أرصدة الخزن (Ledger) مع دفتر الأستاذ (GL) لحسابات الخزن.
+  /// Endpoint: GET /safe-boxes/reconciliation
+  Future<Map<String, dynamic>> getSafeBoxesReconciliation({
+    String? safeType,
+    bool? isActive,
+    int? safeBoxId,
+    bool includeKeyed = false,
+    double threshold = 0.01,
+    List<String> ignoreRefTypes = const ['shift_closing_settlement'],
+  }) async {
+    final queryParams = <String, String>{
+      'threshold': threshold.toString(),
+    };
+    if (safeType != null && safeType.trim().isNotEmpty) {
+      queryParams['safe_type'] = safeType.trim().toLowerCase();
+    }
+    if (isActive != null) {
+      queryParams['is_active'] = isActive ? 'true' : 'false';
+    }
+    if (safeBoxId != null) {
+      queryParams['safe_box_id'] = safeBoxId.toString();
+    }
+    if (includeKeyed) {
+      queryParams['include_keyed'] = 'true';
+    }
+    if (ignoreRefTypes.isNotEmpty) {
+      queryParams['ignore_ref_types'] = ignoreRefTypes.join(',');
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/safe-boxes/reconciliation',
+    ).replace(queryParameters: queryParams);
+
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    }
+
+    throw Exception(
+      'Failed to load safe-box reconciliation: ${response.body}',
+    );
+  }
+
   /// إنشاء سند تحويل بين الخزائن (ذهب أو نقدي) وتحديث الـ Ledger فوراً.
   /// Endpoint: POST /safe-boxes/transfer-voucher
   ///

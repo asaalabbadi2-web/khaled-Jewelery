@@ -2933,6 +2933,8 @@ def approve_voucher(voucher_id):
     """
     try:
         from models import Voucher
+        # Reuse canonical posting logic from main routes.
+        from routes import create_journal_entry_from_voucher, _append_safe_transactions_for_voucher
         
         approved_by = g.current_user.username
         
@@ -2951,11 +2953,32 @@ def approve_voucher(voucher_id):
                 'success': False,
                 'message': 'لا يمكن الموافقة على سند ملغى'
             }), 400
+
+        # If voucher is already linked to a journal entry, do not create a new one.
+        # Still ensure SafeBoxTransaction exists (idempotent).
+        if getattr(voucher, 'journal_entry_id', None):
+            voucher.status = 'approved'
+            voucher.approved_at = datetime.now()
+            voucher.approved_by = approved_by
+            _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'message': 'تم الموافقة على السند بنجاح',
+                'voucher': voucher.to_dict()
+            }), 200
         
-        # الموافقة على السند
+        # Canonical behavior: approving a voucher posts it (creates JournalEntry + SafeBoxTransaction).
+        journal_entry = create_journal_entry_from_voucher(voucher)
+        if not journal_entry:
+            return jsonify({'success': False, 'message': 'فشل إنشاء القيد المحاسبي من السند'}), 500
+
         voucher.status = 'approved'
         voucher.approved_at = datetime.now()
         voucher.approved_by = approved_by
+        voucher.journal_entry_id = journal_entry.id
+
+        _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
         
         # تسجيل العملية
         AuditLog.log_action(
@@ -3098,6 +3121,7 @@ def approve_vouchers_batch():
     """
     try:
         from models import Voucher
+        from routes import create_journal_entry_from_voucher, _append_safe_transactions_for_voucher
         
         data = request.get_json()
         approved_by = g.current_user.username
@@ -3118,17 +3142,32 @@ def approve_vouchers_batch():
                 if not voucher:
                     errors.append(f'السند {voucher_id} غير موجود')
                     continue
-                
+
                 if voucher.status != 'pending':
                     errors.append(f'السند {voucher.voucher_number} ليس بانتظار الموافقة')
                     continue
-                
+
+                # Post voucher: create JE if missing, then SafeBoxTransaction.
+                journal_entry_id = getattr(voucher, 'journal_entry_id', None)
+                if not journal_entry_id:
+                    journal_entry = create_journal_entry_from_voucher(voucher)
+                    if not journal_entry:
+                        errors.append(f'فشل إنشاء القيد المحاسبي للسند {voucher.voucher_number}')
+                        db.session.rollback()
+                        continue
+                    voucher.journal_entry_id = journal_entry.id
+
                 voucher.status = 'approved'
                 voucher.approved_at = datetime.now()
                 voucher.approved_by = approved_by
+
+                _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+
+                db.session.commit()
                 approved_count += 1
-                
+
             except Exception as e:
+                db.session.rollback()
                 errors.append(f'خطأ في السند {voucher_id}: {str(e)}')
         
         # تسجيل العملية الجماعية
@@ -3146,7 +3185,7 @@ def approve_vouchers_batch():
             user_agent=request.headers.get('User-Agent')
         )
         
-        db.session.commit()
+        # Note: we commit per voucher above to avoid rolling back the whole batch on a single failure.
         
         return jsonify({
             'success': True,
