@@ -5075,12 +5075,14 @@ def get_suppliers():
         try:
             sid = int(s.id)
             bal = balances_by_supplier.get(sid)
-            if bal is not None:
-                data['balance_cash'] = round(float(bal.get('cash', 0.0) or 0.0), 2)
-                data['balance_gold_18k'] = round(float(bal.get('18k', 0.0) or 0.0), 3)
-                data['balance_gold_21k'] = round(float(bal.get('21k', 0.0) or 0.0), 3)
-                data['balance_gold_22k'] = round(float(bal.get('22k', 0.0) or 0.0), 3)
-                data['balance_gold_24k'] = round(float(bal.get('24k', 0.0) or 0.0), 3)
+            if bal is None:
+                bal = {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
+
+            data['balance_cash'] = round(float(bal.get('cash', 0.0) or 0.0), 2)
+            data['balance_gold_18k'] = round(float(bal.get('18k', 0.0) or 0.0), 3)
+            data['balance_gold_21k'] = round(float(bal.get('21k', 0.0) or 0.0), 3)
+            data['balance_gold_22k'] = round(float(bal.get('22k', 0.0) or 0.0), 3)
+            data['balance_gold_24k'] = round(float(bal.get('24k', 0.0) or 0.0), 3)
         except Exception:
             # Fall back to stored supplier balances if linkage is missing.
             pass
@@ -5559,13 +5561,17 @@ def get_supplier_ledger(supplier_id):
     except Exception:
         pass
 
-    # Office-linked suppliers may post directly to a dedicated office account
-    # (transaction_type='both', tracks_weight=True) which is stored in
-    # supplier.account_category_id. Include it for strict filtering, but do NOT
-    # include it in the fallback_ids used to pull untagged lines.
+    # Office-linked suppliers may post directly to a dedicated office posting account
+    # (transaction_type='both', tracks_weight=True). That account lives on
+    # Office.account_category_id (NOT Supplier.account_category_id).
     try:
         office_posting_acc = None
-        raw_office_acc_id = getattr(supplier, 'account_category_id', None)
+        raw_office_acc_id = None
+        try:
+            office_obj = getattr(supplier, 'office', None)
+            raw_office_acc_id = getattr(office_obj, 'account_category_id', None) if office_obj else None
+        except Exception:
+            raw_office_acc_id = None
         if raw_office_acc_id not in (None, '', 0, '0', False):
             office_posting_acc = Account.query.get(int(raw_office_acc_id))
         if (
@@ -5839,12 +5845,16 @@ def get_supplier_weight_statement(supplier_id):
     except Exception:
         pass
 
-    # Office-linked suppliers can post to a dedicated office account stored in
-    # supplier.account_category_id (tracks_weight=True, transaction_type='both').
-    # Include it in strict allowed_ids, but not in fallback_ids.
+    # Office-linked suppliers can post to a dedicated office posting account.
+    # That account lives on Office.account_category_id (NOT Supplier.account_category_id).
     try:
         office_posting_acc = None
-        raw_office_acc_id = getattr(supplier, 'account_category_id', None)
+        raw_office_acc_id = None
+        try:
+            office_obj = getattr(supplier, 'office', None)
+            raw_office_acc_id = getattr(office_obj, 'account_category_id', None) if office_obj else None
+        except Exception:
+            raw_office_acc_id = None
         if raw_office_acc_id not in (None, '', 0, '0', False):
             office_posting_acc = Account.query.get(int(raw_office_acc_id))
         if (
