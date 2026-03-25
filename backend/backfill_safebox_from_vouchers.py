@@ -23,8 +23,14 @@ Usage
     # Dry-run
     python backfill_safebox_from_vouchers.py --since 2026-03-01 --until 2026-03-16 --limit 500 --newest-first
 
+    # Target specific voucher IDs (dry-run)
+    python backfill_safebox_from_vouchers.py --voucher-ids 634,637,638
+
     # Apply
     python backfill_safebox_from_vouchers.py --since 2026-03-01 --until 2026-03-16 --limit 500 --newest-first --apply
+
+    # Target specific voucher IDs (apply)
+    python backfill_safebox_from_vouchers.py --voucher-ids 634,637,638 --apply
 
 Docker (inside backend container)
     cd /app/backend
@@ -63,6 +69,28 @@ def _parse_ymd(value: str | None) -> datetime | None:
     if not raw:
         return None
     return datetime.strptime(raw, "%Y-%m-%d")
+
+
+def _parse_ids(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+
+    normalized = raw.replace(';', ',')
+    for ch in ('\n', '\r', '\t', ' '):
+        normalized = normalized.replace(ch, ',')
+    parts = [p.strip() for p in normalized.split(',')]
+
+    out: list[int] = []
+    seen: set[int] = set()
+    for p in parts:
+        if not p:
+            continue
+        val = int(p)
+        if val in seen:
+            continue
+        seen.add(val)
+        out.append(val)
+    return out
 
 
 def _normalize_database_url(raw: str) -> str:
@@ -341,6 +369,7 @@ def main() -> int:
     parser.add_argument('--limit', type=int, default=None, help='Max number of vouchers to process.')
     parser.add_argument('--newest-first', action='store_true', help='Process newest vouchers first (useful with --limit).')
     parser.add_argument('--voucher-number', type=str, default=None, help='Process a single voucher_number.')
+    parser.add_argument('--voucher-ids', type=str, default=None, help='Process specific voucher IDs (comma/space separated).')
     parser.add_argument('--created-by', type=str, default='system-backfill', help='Value to store in SafeBoxTransaction.created_by')
     parser.add_argument('--verbose', action='store_true', help='Print per-voucher details.')
     args = parser.parse_args()
@@ -373,9 +402,16 @@ def main() -> int:
         sbt_cols = _table_columns('safe_box_transaction')
         where = ["status = 'approved'", "journal_entry_id IS NOT NULL"]
         params = {}
+
+        voucher_ids = _parse_ids(args.voucher_ids)
+        if args.voucher_number and voucher_ids:
+            raise SystemExit('Use either --voucher-number or --voucher-ids (not both).')
         if args.voucher_number:
             where.append("voucher_number = :vn")
             params['vn'] = str(args.voucher_number)
+        if voucher_ids:
+            where.append("id IN :vids")
+            params['vids'] = [int(v) for v in voucher_ids]
         if since_dt is not None:
             where.append("date >= :since")
             params['since'] = since_dt
@@ -393,7 +429,11 @@ def main() -> int:
             "FROM voucher WHERE " + " AND ".join(where) + f" ORDER BY {order}" + limit_sql
         )
 
-        vouchers = db.session.execute(text(sql), params).mappings().all()
+        stmt = text(sql)
+        if voucher_ids:
+            stmt = stmt.bindparams(bindparam('vids', expanding=True))
+
+        vouchers = db.session.execute(stmt, params).mappings().all()
         vouchers = [dict(v) for v in vouchers]
         print(f"Loaded vouchers: {len(vouchers)}", flush=True)
         if not vouchers:

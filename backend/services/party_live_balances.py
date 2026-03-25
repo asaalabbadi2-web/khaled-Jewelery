@@ -114,14 +114,17 @@ def compute_live_supplier_balances(
 
     allowed_account_ids = list({int(x) for x in allowed_account_to_supplier.keys() if x})
 
+    # Legacy DB robustness:
+    # Some datasets have NULLs in is_draft/is_posted even if the model declares them non-nullable.
+    # Use COALESCE to avoid accidentally excluding valid historical entries.
     jl_filters = [
-        JournalEntry.is_deleted == False,
-        JournalEntryLine.is_deleted == False,
+        func.coalesce(JournalEntry.is_deleted, False) == False,
+        func.coalesce(JournalEntryLine.is_deleted, False) == False,
     ]
     if _db_has_column('journal_entry', 'is_draft'):
-        jl_filters.append(JournalEntry.is_draft == False)
+        jl_filters.append(func.coalesce(JournalEntry.is_draft, False) == False)
     elif _db_has_column('journal_entry', 'is_posted'):
-        jl_filters.append(JournalEntry.is_posted == True)
+        jl_filters.append(func.coalesce(JournalEntry.is_posted, True) == True)
 
     balances_by_supplier: Dict[int, Dict[str, float]] = {}
 
@@ -159,7 +162,6 @@ def compute_live_supplier_balances(
             .join(JournalEntry)
             .join(Account, JournalEntryLine.account_id == Account.id)
             .filter(JournalEntryLine.supplier_id.in_(supplier_ids))
-            .filter(JournalEntry.is_deleted == False)
             .filter(*jl_filters)
             .filter(account_filter)
             .group_by(JournalEntryLine.supplier_id)
@@ -208,7 +210,6 @@ def compute_live_supplier_balances(
             .filter(JournalEntryLine.supplier_id.is_(None))
             .filter(JournalEntryLine.customer_id.is_(None))
             .filter(JournalEntryLine.account_id.in_(allowed_account_ids))
-            .filter(JournalEntry.is_deleted == False)
             .filter(*jl_filters)
             .group_by(JournalEntryLine.account_id)
             .all()

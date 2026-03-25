@@ -313,6 +313,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
 
                     String statusLabel(String? s) {
                       final v = (s ?? '').toLowerCase();
+                      if (v == 'approved') return isAr ? 'معتمد' : 'Approved';
                       if (v == 'completed') return isAr ? 'منفذ' : 'Completed';
                       if (v == 'cancelled') return isAr ? 'ملغي' : 'Cancelled';
                       if (v == 'partial') return isAr ? 'جزئي' : 'Partial';

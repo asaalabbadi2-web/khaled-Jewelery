@@ -287,7 +287,7 @@ def _rollback_reservation(reservation: OfficeReservation, *, apply: bool):
     reservation.executions_created = 0
     reservation.weight_consumed_main_karat = 0.0
     reservation.weight_remaining_main_karat = float(reservation.weight_main_karat or 0.0)
-    reservation.status = "reserved"
+    reservation.status = "approved"
     db.session.add(reservation)
 
 

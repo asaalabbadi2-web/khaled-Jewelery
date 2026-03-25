@@ -26971,7 +26971,8 @@ def create_office_reservation():
             total_amount=total_amount,
             paid_amount=paid_amount,
             payment_status=payment_status,
-            status=data.get('status', 'reserved'),
+            # Auto-approve on save: no separate approval step.
+            status='approved',
             contact_person=data.get('contact_person'),
             contact_phone=data.get('contact_phone'),
             notes=data.get('notes'),

@@ -212,6 +212,8 @@ class _GoldReservationsListScreenState
 
   Color _statusColor(String? status) {
     switch (status) {
+      case 'approved':
+        return AppColors.darkGold;
       case 'completed':
         return AppColors.success;
       case 'partial':
@@ -226,6 +228,8 @@ class _GoldReservationsListScreenState
   String _statusLabel(String? status) {
     final isAr = widget.isArabic;
     switch (status) {
+      case 'approved':
+        return isAr ? 'معتمد' : 'Approved';
       case 'completed':
         return isAr ? 'مكتمل' : 'Completed';
       case 'partial':
@@ -339,6 +343,7 @@ class _GoldReservationsListScreenState
                             child: Text(isAr ? 'كل الحالات' : 'All Statuses'),
                           ),
                           ...[
+                            'approved',
                             'reserved',
                             'partial',
                             'completed',

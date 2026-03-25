@@ -97,17 +97,19 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
         isActive: true,
         includeAccount: true,
       );
-      final cashBankSafes = safes
-          .where(
-            (s) =>
-                (s.safeType == 'cash' || s.safeType == 'bank') && s.id != null,
-          )
-          .toList()
-        ..sort(
-          (a, b) => a.safeType == b.safeType
-              ? a.name.compareTo(b.name)
-              : a.safeType.compareTo(b.safeType),
-        );
+      final cashBankSafes =
+          safes
+              .where(
+                (s) =>
+                    (s.safeType == 'cash' || s.safeType == 'bank') &&
+                    s.id != null,
+              )
+              .toList()
+            ..sort(
+              (a, b) => a.safeType == b.safeType
+                  ? a.name.compareTo(b.name)
+                  : a.safeType.compareTo(b.safeType),
+            );
 
       setState(() {
         _offices = offices.cast<Map<String, dynamic>>();
@@ -190,7 +192,10 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
 
     // Enforce payment safe box selection when any amount is paid.
     if (_paidAmount > 0 && _paymentSafeBoxId == null) {
-      _showMessage('الرجاء اختيار خزينة الدفع عند إدخال مبلغ مدفوع', isError: true);
+      _showMessage(
+        'الرجاء اختيار خزينة الدفع عند إدخال مبلغ مدفوع',
+        isError: true,
+      );
       return;
     }
 
@@ -222,7 +227,6 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
             ? null
             : _notesController.text.trim(),
         'delivery_date': _deliveryDate?.toIso8601String(),
-        'status': 'reserved',
         'created_by': 'flutter_app',
         if (_selectedSupplierId != null) 'supplier_id': _selectedSupplierId,
       };
@@ -690,8 +694,9 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                             // خزينة الدفع
                             ListTile(
                               contentPadding: EdgeInsets.zero,
-                              leading:
-                                  const Icon(Icons.account_balance_wallet_outlined),
+                              leading: const Icon(
+                                Icons.account_balance_wallet_outlined,
+                              ),
                               title: Text(
                                 isAr
                                     ? 'خزينة الدفع: ${_safeNameById(_paymentSafeBoxId)}'
@@ -711,8 +716,9 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                                   ),
                                   if (_paymentSafeBoxId != null)
                                     TextButton(
-                                      onPressed: () =>
-                                          setState(() => _paymentSafeBoxId = null),
+                                      onPressed: () => setState(
+                                        () => _paymentSafeBoxId = null,
+                                      ),
                                       child: Text(isAr ? 'مسح' : 'Clear'),
                                     ),
                                 ],

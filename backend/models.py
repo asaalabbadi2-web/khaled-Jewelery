@@ -576,7 +576,7 @@ class OfficeReservation(db.Model):
     total_amount = db.Column(db.Float, nullable=False)
     paid_amount = db.Column(db.Float, default=0.0)
     payment_status = db.Column(db.String(20), default='pending')
-    status = db.Column(db.String(20), default='reserved')
+    status = db.Column(db.String(20), default='approved')
     contact_person = db.Column(db.String(100))
     contact_phone = db.Column(db.String(50))
     notes = db.Column(db.Text)
