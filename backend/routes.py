@@ -7322,34 +7322,24 @@ def get_invoices():
         pass
 
     # Global tab summary (over FULL filtered result set, before pagination)
+    def _empty_bucket():
+        return {
+            'total_invoices': 0,
+            'total_amount': 0.0,
+            'paid_amount': 0.0,
+            'unpaid_amount': 0.0,
+            'vat_total': 0.0,
+            'sold_weight_total': 0.0,
+        }
+
     tab_summary = {
-        'sales': {
-            'total_invoices': 0,
-            'total_amount': 0.0,
-            'paid_amount': 0.0,
-            'unpaid_amount': 0.0,
-            'vat_total': 0.0,
-            'sold_weight_total': 0.0,
-        },
-        'purchase': {
-            'total_invoices': 0,
-            'total_amount': 0.0,
-            'paid_amount': 0.0,
-            'unpaid_amount': 0.0,
-            'vat_total': 0.0,
-            'sold_weight_total': 0.0,
-        },
-        'returns': {
-            'total_invoices': 0,
-            'total_amount': 0.0,
-            'paid_amount': 0.0,
-            'unpaid_amount': 0.0,
-            'vat_total': 0.0,
-            'sold_weight_total': 0.0,
-        },
+        'sales': _empty_bucket(),
+        'customer_purchase': _empty_bucket(),
+        'supplier_purchase': _empty_bucket(),
+        'returns': _empty_bucket(),
     }
 
-    def _classify_tab(invoice_type_value):
+    def _classify_tab(invoice_type_value, supplier_id_value):
         t = (invoice_type_value or '').strip()
         if not t:
             return None
@@ -7362,7 +7352,7 @@ def get_invoices():
             return 'sales'
         is_purchase = ('شراء' in t) or (lower == 'buy') or ('purchase' in lower)
         if is_purchase:
-            return 'purchase'
+            return 'supplier_purchase' if supplier_id_value else 'customer_purchase'
         return None
 
     try:
@@ -7374,10 +7364,11 @@ def get_invoices():
             Invoice.total_weight,
             Invoice.amount_paid,
             Invoice.barter_total,
+            Invoice.supplier_id,
         ).all()
 
         for row in summary_rows:
-            tab_key = _classify_tab(row[0])
+            tab_key = _classify_tab(row[0], row[7])
             if not tab_key:
                 continue
 
@@ -7409,6 +7400,8 @@ def get_invoices():
             bucket['unpaid_amount'] = round(float(bucket['unpaid_amount']), 2)
             bucket['vat_total'] = round(float(bucket['vat_total']), 2)
             bucket['sold_weight_total'] = round(float(bucket['sold_weight_total']), 4)
+        # Keep legacy 'purchase' key for backwards compatibility
+        tab_summary['purchase'] = tab_summary['customer_purchase']
     except Exception:
         # Non-fatal; frontend falls back to current-page aggregation.
         pass

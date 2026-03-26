@@ -162,9 +162,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       Map<String, dynamic>? summary =
           meta?['tab_summary'] as Map<String, dynamic>?;
 
-      if (summary == null ||
-          summary['customer_purchase'] == null ||
-          summary['supplier_purchase'] == null) {
+      // Use the backend global summary if it has the expected keys.
+      // Only fall back to full-fetch if the backend didn't provide it.
+      if (summary == null || summary['sales'] == null) {
         summary = await _fetchFullTabSummaryFromApi(
           statusForApi: statusForApi,
           dateFrom: null,
@@ -1040,51 +1040,111 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     return count;
   }
 
-  Widget _buildPaginationStrip() {
+  /// Returns the page numbers to display as buttons (int = page, -1 = ellipsis).
+  List<int> _buildPageNumbers() {
+    if (_totalPages <= 7) {
+      return List.generate(_totalPages, (i) => i + 1);
+    }
+    final pages = <int>[];
+    pages.add(1);
+    final start = (_currentPage - 2).clamp(2, _totalPages - 1);
+    final end = (_currentPage + 2).clamp(2, _totalPages - 1);
+    if (start > 2) pages.add(-1); // leading ellipsis
+    for (int p = start; p <= end; p++) pages.add(p);
+    if (end < _totalPages - 1) pages.add(-1); // trailing ellipsis
+    pages.add(_totalPages);
+    return pages;
+  }
+
+  Widget _buildPaginationStrip({bool compact = false}) {
     final isAr = widget.isArabic;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    if (_totalInvoices == 0) return const SizedBox.shrink();
+    if (_totalInvoices == 0 || _totalPages <= 1) return const SizedBox.shrink();
+
+    final primary = colorScheme.primary;
+    final pageNums = _buildPageNumbers();
+
+    Widget prevBtn = SizedBox(
+      width: 32,
+      height: 32,
+      child: IconButton(
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.chevron_left, size: 18),
+        tooltip: isAr ? 'السابق' : 'Previous',
+        onPressed: (_isLoading || _currentPage <= 1)
+            ? null
+            : () => _loadInvoices(page: _currentPage - 1),
+      ),
+    );
+    Widget nextBtn = SizedBox(
+      width: 32,
+      height: 32,
+      child: IconButton(
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.chevron_right, size: 18),
+        tooltip: isAr ? 'التالي' : 'Next',
+        onPressed: (_isLoading || _currentPage >= _totalPages)
+            ? null
+            : () => _loadInvoices(page: _currentPage + 1),
+      ),
+    );
+
+    final pageButtons = pageNums.map<Widget>((p) {
+      if (p == -1) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text('…',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: colorScheme.onSurface.withValues(alpha: 0.4))),
+        );
+      }
+      final isActive = p == _currentPage;
+      return GestureDetector(
+        onTap: (_isLoading || isActive) ? null : () => _loadInvoices(page: p),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          width: 30,
+          height: 28,
+          decoration: BoxDecoration(
+            color: isActive ? primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: isActive
+                ? null
+                : Border.all(
+                    color: colorScheme.outline.withValues(alpha: 0.35),
+                    width: 1,
+                  ),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            '$p',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+              color: isActive
+                  ? colorScheme.onPrimary
+                  : colorScheme.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+        ),
+      );
+    }).toList();
+
     return Padding(
-      padding: const EdgeInsetsDirectional.fromSTEB(12, 2, 6, 4),
+      padding: compact
+          ? const EdgeInsets.symmetric(horizontal: 8, vertical: 6)
+          : const EdgeInsetsDirectional.fromSTEB(8, 2, 8, 4),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Expanded(
-            child: Text(
-              isAr
-                  ? 'الصفحة $_currentPage من $_totalPages • $_totalInvoices فاتورة'
-                  : 'Page $_currentPage of $_totalPages • $_totalInvoices invoices',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.45),
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 28,
-            height: 28,
-            child: IconButton(
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              icon: const Icon(Icons.chevron_left, size: 18),
-              tooltip: isAr ? 'السابق' : 'Previous',
-              onPressed: (_isLoading || _currentPage <= 1)
-                  ? null
-                  : () => _loadInvoices(page: _currentPage - 1),
-            ),
-          ),
-          SizedBox(
-            width: 28,
-            height: 28,
-            child: IconButton(
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              icon: const Icon(Icons.chevron_right, size: 18),
-              tooltip: isAr ? 'التالي' : 'Next',
-              onPressed: (_isLoading || _currentPage >= _totalPages)
-                  ? null
-                  : () => _loadInvoices(page: _currentPage + 1),
-            ),
-          ),
+          prevBtn,
+          const SizedBox(width: 2),
+          ...pageButtons,
+          const SizedBox(width: 2),
+          nextBtn,
         ],
       ),
     );
@@ -1542,16 +1602,19 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       color: Theme.of(context).colorScheme.primary,
       backgroundColor: Theme.of(context).colorScheme.surface,
       child: ListView.builder(
-        padding: const EdgeInsets.all(10),
-        itemCount: tabInvoices.length,
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+        itemCount: tabInvoices.length + 1, // +1 for bottom pagination
         itemBuilder: (context, index) {
+          if (index == tabInvoices.length) {
+            return _buildPaginationStrip(compact: true);
+          }
           try {
             final invoice = tabInvoices[index];
             return _buildInvoiceCard(invoice);
           } catch (e, stackTrace) {
             debugPrint('❌ خطأ في بناء بطاقة الفاتورة $index: $e');
             debugPrint('Stack: $stackTrace');
-            return SizedBox.shrink();
+            return const SizedBox.shrink();
           }
         },
       ),
