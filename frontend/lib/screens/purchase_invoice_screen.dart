@@ -1685,6 +1685,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     setState(() {
       _selectedSupplierId = id;
       _supplierError = null;
+      // في وضع المرتجع: إعادة تعيين الفاتورة الأصلية عند تغيير المورد
+      if (_isSupplierReturnMode) {
+        _selectedOriginalInvoice = null;
+        _inlineItems = [];
+        _karatLines = [];
+        _applyTotals(_KaratTotals.zero);
+      }
     });
 
     _applySupplierDefaultSafeBoxSelections();
@@ -2697,11 +2704,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final hasOriginalInvoice = _selectedOriginalInvoice != null;
 
     final leftColumn = <Widget>[
-      if (_isSupplierReturnMode) ...[
-        _buildOriginalInvoiceSection(),
-        const SizedBox(height: 16),
-      ],
       _buildSupplierSection(),
+      if (_isSupplierReturnMode) ...[
+        const SizedBox(height: 16),
+        _buildOriginalInvoiceSection(),
+      ],
       const SizedBox(height: 24),
       _buildInlineItemsSection(),
       if (!_isSupplierReturnMode && _karatLines.isNotEmpty) ...[
@@ -2972,6 +2979,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         OriginalInvoiceSelector(
           api: _api,
           invoiceType: 'شراء',
+          supplierId: _selectedSupplierId,
           selectedInvoice: _selectedOriginalInvoice,
           onInvoiceSelected: _onOriginalInvoiceSelected,
         ),

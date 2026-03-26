@@ -1580,13 +1580,17 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           CircleAvatar(
-                            radius: 16,
-                            backgroundColor: AppColors.primaryGold.withValues(
-                              alpha: 0.2,
-                            ),
-                            child: Icon(
-                              Icons.person,
-                              color: AppColors.primaryGold,
+                            radius: 17,
+                            backgroundColor: Colors.white.withValues(alpha: 0.25),
+                            child: Text(
+                              displayName.isNotEmpty
+                                  ? displayName[0].toUpperCase()
+                                  : '?',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1598,7 +1602,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               softWrap: false,
-                              style: Theme.of(context).textTheme.bodyMedium,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                shadows: [
+                                  Shadow(
+                                    color: Colors.black26,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 1),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                           const SizedBox(width: 6),
