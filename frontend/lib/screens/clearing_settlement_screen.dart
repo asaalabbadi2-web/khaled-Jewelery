@@ -87,6 +87,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
   void initState() {
     super.initState();
     _dueAmount = widget.initialDueAmount;
+    // Pre-fill gross from initialDueAmount if available
+    if (widget.initialDueAmount != null && widget.initialDueAmount! > 0) {
+      final prefill = widget.initialDueAmount!.toStringAsFixed(2);
+      _grossController.text = prefill;
+    }
     // Track last text values to avoid unnecessary setState on cursor-only changes
     _lastGrossText = _grossController.text;
     _lastRateText = _rateController.text;
@@ -794,12 +799,32 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
               .toList() ??
           [];
       final dueAmt = (res['due_amount'] as num?)?.toDouble();
+      final txCountForFee = (res['tx_count_for_fee'] as num?)?.toInt();
       if (mounted) {
         setState(() {
           _pendingTransactions = txList;
           if (dueAmt != null) _dueAmount = dueAmt;
           _loadingPendingTxs = false;
         });
+        // Auto-fill gross if still empty and due amount is known
+        if (dueAmt != null && dueAmt > 0) {
+          final currentGross = _parseAmount(_grossController.text);
+          if (currentGross <= 0) {
+            final prefill = dueAmt.toStringAsFixed(2);
+            _grossController.text = prefill;
+            _lastGrossText = prefill;
+            _recomputeFeeIfNeeded();
+          }
+        }
+        // Auto-fill tx count for per-transaction commission (bulk mode only)
+        if (txCountForFee != null && txCountForFee > 0 && !_feeAlreadyAppliedInInvoice) {
+          final currentTxCount = int.tryParse(_txCountController.text) ?? 0;
+          if (currentTxCount <= 1) {
+            _txCountController.text = txCountForFee.toString();
+            _lastTxCountText = txCountForFee.toString();
+            _recomputeFeeIfNeeded();
+          }
+        }
       }
     } catch (e) {
       if (mounted) {

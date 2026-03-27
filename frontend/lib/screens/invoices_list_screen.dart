@@ -3436,21 +3436,53 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
 
       if (!mounted) return;
 
-      // Navigate to SalesInvoiceScreenV2 in edit mode
-      final items = _cloneDataList(await _getCachedItems());
-      final saleItems = _filterSaleReadyItems(items);
-      final customers = _cloneDataList(await _getCachedCustomers());
+      final invoiceType = (fullInvoice['invoice_type'] ?? '').toString();
+
+      Widget? screen;
+
+      if (invoiceType == 'بيع') {
+        final items = _cloneDataList(await _getCachedItems());
+        final saleItems = _filterSaleReadyItems(items);
+        final customers = _cloneDataList(await _getCachedCustomers());
+        screen = SalesInvoiceScreenV2(
+          items: saleItems,
+          customers: customers,
+          editInvoiceId: invoiceId,
+          editInvoiceData: fullInvoice,
+        );
+      } else if (invoiceType == 'شراء') {
+        screen = PurchaseInvoiceScreen(
+          editInvoiceId: invoiceId,
+          editInvoiceData: fullInvoice,
+        );
+      } else if (invoiceType == 'مرتجع شراء (مورد)') {
+        screen = PurchaseInvoiceScreen(
+          supplierReturnMode: true,
+          editInvoiceId: invoiceId,
+          editInvoiceData: fullInvoice,
+        );
+      } else if (invoiceType == 'مرتجع بيع' ||
+          invoiceType == 'مرتجع شراء' ||
+          invoiceType == 'مرتجع شراء من عميل') {
+        screen = AddReturnInvoiceScreen(
+          api: _apiService,
+          returnType: invoiceType,
+          editInvoiceId: invoiceId,
+          editInvoiceData: fullInvoice,
+        );
+      } else {
+        _showSnackBar(
+          isAr
+              ? 'التعديل غير متاح لهذا النوع من الفواتير'
+              : 'Edit is not supported for this invoice type',
+          isError: true,
+        );
+        return;
+      }
 
       final result = await Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => SalesInvoiceScreenV2(
-            items: saleItems,
-            customers: customers,
-            editInvoiceId: invoiceId,
-            editInvoiceData: fullInvoice,
-          ),
-        ),
+        MaterialPageRoute(builder: (_) => screen!),
       );
 
       if (result == true && mounted) {

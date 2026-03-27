@@ -38,12 +38,16 @@ class PurchaseInvoiceScreen extends StatefulWidget {
   final int? supplierId;
   final bool supplierReturnMode;
   final int? originalInvoiceId;
+  final int? editInvoiceId;
+  final Map<String, dynamic>? editInvoiceData;
 
   const PurchaseInvoiceScreen({
     super.key,
     this.supplierId,
     this.supplierReturnMode = false,
     this.originalInvoiceId,
+    this.editInvoiceId,
+    this.editInvoiceData,
   });
 
   @override
@@ -79,6 +83,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   String? _originalInvoiceDetailsError;
 
   bool get _isSupplierReturnMode => widget.supplierReturnMode == true;
+  bool get _isEditMode => widget.editInvoiceId != null;
 
   // Branches (فروع المعرض/المحل)
   bool _isLoadingBranches = false;
@@ -616,6 +621,93 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedGoldPaidKarat = _mainKaratFromSettings();
       _applyTotals(_KaratTotals.zero);
     });
+  }
+
+  void _prefillFromEditData() {
+    final data = widget.editInvoiceData;
+    if (data == null) return;
+
+    double toDouble(dynamic v) {
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      return double.tryParse('${v ?? ''}') ?? 0.0;
+    }
+
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('${v ?? ''}');
+    }
+
+    _PurchaseSettlementMode modeFromStr(String? s) {
+      switch (s) {
+        case 'barter':
+          return _PurchaseSettlementMode.barter;
+        case 'partial':
+          return _PurchaseSettlementMode.partial;
+        default:
+          return _PurchaseSettlementMode.credit;
+      }
+    }
+
+    final karatLinesList =
+        (data['karat_lines'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .toList() ??
+        [];
+    final restoredKaratLines = karatLinesList
+        .map(
+          (line) => PurchaseKaratLine(
+            karat: toDouble(line['karat']),
+            weightGrams: toDouble(line['weight_grams']),
+            wagePerGram: 0,
+            goldValueOverride: toDouble(line['gold_value_cash']),
+            wageCashOverride: toDouble(line['manufacturing_wage_cash']),
+            goldTaxOverride: toDouble(line['gold_tax']),
+            wageTaxOverride: toDouble(line['wage_tax']),
+            description: line['description']?.toString(),
+          ),
+        )
+        .toList();
+
+    final itemsList =
+        (data['items'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .toList() ??
+        [];
+    final restoredInlineItems = itemsList.map((item) {
+      final entryType = (item['entry_type']?.toString() == 'category')
+          ? PurchaseInlineEntryType.category
+          : PurchaseInlineEntryType.item;
+      return PurchaseInlineItem(
+        name: (item['name'] ?? '').toString(),
+        karat: toDouble(item['karat']),
+        weightGrams: toDouble(item['weight']),
+        wagePerGram: toDouble(
+          item['wage_per_gram'] ?? item['manufacturing_wage_per_gram'],
+        ),
+        allowInlineCreation: false,
+        description: item['description']?.toString(),
+        hasStones: item['has_stones'] == true,
+        stonesWeight: toDouble(item['stones_weight']),
+        stonesValue: toDouble(item['stones_value']),
+        itemCode: item['item_code']?.toString(),
+        barcode: item['barcode']?.toString(),
+        category: item['category']?.toString(),
+        categoryId: toInt(item['category_id']),
+        entryType: entryType,
+      );
+    }).toList();
+
+    setState(() {
+      _selectedSupplierId = toInt(data['supplier_id']);
+      _selectedBranchId = toInt(data['branch_id']);
+      _settlementMode = modeFromStr(data['settlement_method']?.toString());
+      _karatLines = restoredKaratLines;
+      _inlineItems = restoredInlineItems;
+    });
+    _applyCombinedTotals();
   }
 
   String _localDraftKey() => 'yasargold_purchase_invoice_complete_later';
@@ -1159,13 +1251,17 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     _loadSettings();
     _applyTotals(_KaratTotals.zero);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_isSupplierReturnMode) {
+      if (!_isSupplierReturnMode && !_isEditMode) {
         _maybePromptRestoreLocalDraft();
       }
 
       final originalId = widget.originalInvoiceId;
       if (_isSupplierReturnMode && originalId != null) {
         _loadOriginalInvoiceDetails(originalId);
+      }
+
+      if (_isEditMode) {
+        _prefillFromEditData();
       }
     });
   }
@@ -2372,7 +2468,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
     try {
       final payload = _buildInvoicePayload();
-      final response = await _api.addInvoice(payload);
+      final response = _isEditMode
+          ? await _api.updateUnpostedInvoice(widget.editInvoiceId!, payload)
+          : await _api.addInvoice(payload);
 
       if (!mounted) return;
 
@@ -2439,8 +2537,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       }
 
       if (!mounted) return;
-      await _clearLocalDraft();
-      _resetAfterSave();
+      if (_isEditMode) {
+        Navigator.pop(context, true);
+      } else {
+        await _clearLocalDraft();
+        _resetAfterSave();
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2521,11 +2623,21 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         // Supplier statement running balance uses (debit - credit).
         // A purchase invoice increases supplier payable (credit), which decreases the balance.
         // Payments reduce payable (debit), which increases the balance.
-        projectedCashBalance = _round(currentCashBalance - netCashDue, 2);
-        projectedGoldBalanceMain = _round(
-          currentGoldBalanceMain - netGoldDueMain,
-          3,
-        );
+        // For a regular purchase we OWE the supplier (credit) → balance decreases.
+        // For a return the payable is reversed (debit) → balance increases.
+        if (_isSupplierReturnMode) {
+          projectedCashBalance = _round(currentCashBalance + netCashDue, 2);
+          projectedGoldBalanceMain = _round(
+            currentGoldBalanceMain + netGoldDueMain,
+            3,
+          );
+        } else {
+          projectedCashBalance = _round(currentCashBalance - netCashDue, 2);
+          projectedGoldBalanceMain = _round(
+            currentGoldBalanceMain - netGoldDueMain,
+            3,
+          );
+        }
       } catch (_) {
         // Keep balances null if parsing fails.
       }

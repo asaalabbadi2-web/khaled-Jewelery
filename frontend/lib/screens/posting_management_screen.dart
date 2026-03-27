@@ -71,6 +71,13 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
   String _scheduleFrequency = 'daily'; // daily, weekly, monthly
   bool _autoPostOnSchedule = true;
 
+  // Pagination
+  static const int _pageSize = 25;
+  int _unpostedInvoicesPage = 1;
+  int _postedInvoicesPage = 1;
+  int _unpostedEntriesPage = 1;
+  int _postedEntriesPage = 1;
+
   // Refresh indicator
   final bool _isSyncing = false;
 
@@ -83,6 +90,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       if (mounted) {
         setState(() {
           _searchQuery = _searchController.text;
+          _unpostedInvoicesPage = 1;
+          _postedInvoicesPage = 1;
+          _unpostedEntriesPage = 1;
+          _postedEntriesPage = 1;
         });
       }
     });
@@ -152,6 +163,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         setState(() {
           _unpostedInvoices = data['invoices'] ?? [];
           _selectedInvoiceIds.clear();
+          _unpostedInvoicesPage = 1;
         });
       }
     } catch (e) {
@@ -166,7 +178,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     try {
       final data = await _apiService.getPostedInvoices();
       if (mounted) {
-        setState(() => _postedInvoices = data['invoices'] ?? []);
+        setState(() {
+          _postedInvoices = data['invoices'] ?? [];
+          _postedInvoicesPage = 1;
+        });
       }
     } catch (e) {
       _showError('خطأ في تحميل الفواتير: ${e.toString()}');
@@ -183,6 +198,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         setState(() {
           _unpostedEntries = data['entries'] ?? [];
           _selectedEntryIds.clear();
+          _unpostedEntriesPage = 1;
         });
       }
     } catch (e) {
@@ -197,13 +213,108 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     try {
       final data = await _apiService.getPostedJournalEntries();
       if (mounted) {
-        setState(() => _postedEntries = data['entries'] ?? []);
+        setState(() {
+          _postedEntries = data['entries'] ?? [];
+          _postedEntriesPage = 1;
+        });
       }
     } catch (e) {
       _showError('خطأ في تحميل القيود: ${e.toString()}');
     } finally {
       if (mounted) setState(() => _isLoadingEntries = false);
     }
+  }
+
+  /// Pagination strip shared by all tabs.
+  Widget _buildPaginationStrip({
+    required int currentPage,
+    required int totalItems,
+    required void Function(int) onPageChanged,
+  }) {
+    final totalPages = (totalItems / _pageSize).ceil().clamp(1, 99999);
+    if (totalPages <= 1) return const SizedBox.shrink();
+
+    // Build compact page number list (first, last, neighbours of current).
+    List<int> pageNums() {
+      if (totalPages <= 7) return List.generate(totalPages, (i) => i + 1);
+      final nums = <int>[1];
+      final start = (currentPage - 2).clamp(2, totalPages - 1);
+      final end = (currentPage + 2).clamp(2, totalPages - 1);
+      if (start > 2) nums.add(-1);
+      for (int p = start; p <= end; p++) { nums.add(p); }
+      if (end < totalPages - 1) nums.add(-1);
+      nums.add(totalPages);
+      return nums;
+    }
+
+    final primary = Theme.of(context).colorScheme.primary;
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 32, height: 32,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.chevron_left, size: 18),
+              onPressed: currentPage <= 1 ? null : () => onPageChanged(currentPage - 1),
+            ),
+          ),
+          const SizedBox(width: 2),
+          ...pageNums().map<Widget>((p) {
+            if (p == -1) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Text('…', style: tt.labelSmall?.copyWith(
+                  color: cs.onSurface.withValues(alpha: 0.4),
+                )),
+              );
+            }
+            final isActive = p == currentPage;
+            return GestureDetector(
+              onTap: isActive ? null : () => onPageChanged(p),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 140),
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                width: 30, height: 28,
+                decoration: BoxDecoration(
+                  color: isActive ? primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: isActive ? null : Border.all(
+                    color: cs.outline.withValues(alpha: 0.35), width: 1,
+                  ),
+                ),
+                alignment: Alignment.center,
+                child: Text('$p', style: tt.labelSmall?.copyWith(
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                  color: isActive ? cs.onPrimary : cs.onSurface.withValues(alpha: 0.75),
+                )),
+              ),
+            );
+          }),
+          const SizedBox(width: 2),
+          SizedBox(
+            width: 32, height: 32,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.chevron_right, size: 18),
+              onPressed: currentPage >= totalPages ? null : () => onPageChanged(currentPage + 1),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$currentPage / $totalPages',
+            style: tt.labelSmall?.copyWith(color: cs.onSurface.withValues(alpha: 0.45)),
+          ),
+        ],
+      ),
+    );
   }
 
   // =========================================
@@ -995,6 +1106,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       onSelected: (selected) {
         setState(() {
           _dateFilter = value;
+          _unpostedInvoicesPage = 1;
+          _postedInvoicesPage = 1;
+          _unpostedEntriesPage = 1;
+          _postedEntriesPage = 1;
         });
       },
       selectedColor: theme.AppColors.primaryGold,
@@ -1394,9 +1509,14 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return const Center(child: CircularProgressIndicator());
     }
 
-    final filteredInvoices = _getFilteredInvoices();
+    final allFiltered = _getFilteredInvoices();
+    final totalPages = (allFiltered.length / _pageSize).ceil().clamp(1, 99999);
+    final safePage = _unpostedInvoicesPage.clamp(1, totalPages);
+    final start = (safePage - 1) * _pageSize;
+    final end = (start + _pageSize).clamp(0, allFiltered.length);
+    final filteredInvoices = allFiltered.sublist(start, end);
 
-    if (filteredInvoices.isEmpty) {
+    if (allFiltered.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1423,7 +1543,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           child: Row(
             children: [
               Text(
-                '${filteredInvoices.length} فاتورة',
+                '${allFiltered.length} فاتورة',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Colors.grey[600],
                 ),
@@ -1432,23 +1552,23 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               TextButton.icon(
                 onPressed: () {
                   setState(() {
-                    if (_selectedInvoiceIds.length == filteredInvoices.length) {
+                    if (_selectedInvoiceIds.length == allFiltered.length) {
                       _selectedInvoiceIds.clear();
                     } else {
                       _selectedInvoiceIds.addAll(
-                        filteredInvoices.map((inv) => inv['id'] as int),
+                        allFiltered.map((inv) => inv['id'] as int),
                       );
                     }
                   });
                 },
                 icon: Icon(
-                  _selectedInvoiceIds.length == filteredInvoices.length
+                  _selectedInvoiceIds.length == allFiltered.length
                       ? Icons.deselect
                       : Icons.select_all,
                   size: 18,
                 ),
                 label: Text(
-                  _selectedInvoiceIds.length == filteredInvoices.length
+                  _selectedInvoiceIds.length == allFiltered.length
                       ? 'إلغاء التحديد'
                       : 'تحديد الكل',
                 ),
@@ -1502,14 +1622,20 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               ],
             ),
           ),
-        // List
+        // List + pagination
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: filteredInvoices.length,
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+            itemCount: filteredInvoices.length + 1,
             itemBuilder: (context, index) {
-              final invoice = filteredInvoices[index];
-              return _buildInvoiceCard(invoice, isPosted: false);
+              if (index == filteredInvoices.length) {
+                return _buildPaginationStrip(
+                  currentPage: safePage,
+                  totalItems: allFiltered.length,
+                  onPageChanged: (p) => setState(() => _unpostedInvoicesPage = p),
+                );
+              }
+              return _buildInvoiceCard(filteredInvoices[index], isPosted: false);
             },
           ),
         ),
@@ -1526,12 +1652,24 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return const Center(child: Text('لا توجد فواتير مرحلة'));
     }
 
+    final totalPages = (_postedInvoices.length / _pageSize).ceil().clamp(1, 99999);
+    final safePage = _postedInvoicesPage.clamp(1, totalPages);
+    final start = (safePage - 1) * _pageSize;
+    final end = (start + _pageSize).clamp(0, _postedInvoices.length);
+    final pageItems = _postedInvoices.sublist(start, end);
+
     return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: _postedInvoices.length,
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      itemCount: pageItems.length + 1,
       itemBuilder: (context, index) {
-        final invoice = _postedInvoices[index];
-        return _buildInvoiceCard(invoice, isPosted: true);
+        if (index == pageItems.length) {
+          return _buildPaginationStrip(
+            currentPage: safePage,
+            totalItems: _postedInvoices.length,
+            onPageChanged: (p) => setState(() => _postedInvoicesPage = p),
+          );
+        }
+        return _buildInvoiceCard(pageItems[index], isPosted: true);
       },
     );
   }
@@ -1670,9 +1808,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return const Center(child: CircularProgressIndicator());
     }
 
-    final filteredEntries = _getFilteredEntries();
+    final allFilteredEntries = _getFilteredEntries();
 
-    if (filteredEntries.isEmpty) {
+    if (allFilteredEntries.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1690,6 +1828,12 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       );
     }
 
+    final entTotalPages = (allFilteredEntries.length / _pageSize).ceil().clamp(1, 99999);
+    final entSafePage = _unpostedEntriesPage.clamp(1, entTotalPages);
+    final entStart = (entSafePage - 1) * _pageSize;
+    final entEnd = (entStart + _pageSize).clamp(0, allFilteredEntries.length);
+    final filteredEntries = allFilteredEntries.sublist(entStart, entEnd);
+
     return Column(
       children: [
         _buildSearchAndFilterBarForEntries(),
@@ -1699,7 +1843,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           child: Row(
             children: [
               Text(
-                '${filteredEntries.length} قيد',
+                '${allFilteredEntries.length} قيد',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Colors.grey[600],
                 ),
@@ -1708,23 +1852,23 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               TextButton.icon(
                 onPressed: () {
                   setState(() {
-                    if (_selectedEntryIds.length == filteredEntries.length) {
+                    if (_selectedEntryIds.length == allFilteredEntries.length) {
                       _selectedEntryIds.clear();
                     } else {
                       _selectedEntryIds.addAll(
-                        filteredEntries.map((e) => e['id'] as int),
+                        allFilteredEntries.map((e) => e['id'] as int),
                       );
                     }
                   });
                 },
                 icon: Icon(
-                  _selectedEntryIds.length == filteredEntries.length
+                  _selectedEntryIds.length == allFilteredEntries.length
                       ? Icons.deselect
                       : Icons.select_all,
                   size: 18,
                 ),
                 label: Text(
-                  _selectedEntryIds.length == filteredEntries.length
+                  _selectedEntryIds.length == allFilteredEntries.length
                       ? 'إلغاء التحديد'
                       : 'تحديد الكل',
                 ),
@@ -1778,14 +1922,20 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               ],
             ),
           ),
-        // List
+        // List + pagination
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: filteredEntries.length,
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+            itemCount: filteredEntries.length + 1,
             itemBuilder: (context, index) {
-              final entry = filteredEntries[index];
-              return _buildEntryCard(entry, isPosted: false);
+              if (index == filteredEntries.length) {
+                return _buildPaginationStrip(
+                  currentPage: entSafePage,
+                  totalItems: allFilteredEntries.length,
+                  onPageChanged: (p) => setState(() => _unpostedEntriesPage = p),
+                );
+              }
+              return _buildEntryCard(filteredEntries[index], isPosted: false);
             },
           ),
         ),
@@ -1802,12 +1952,24 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return const Center(child: Text('لا توجد قيود مرحلة'));
     }
 
+    final totalPages = (_postedEntries.length / _pageSize).ceil().clamp(1, 99999);
+    final safePage = _postedEntriesPage.clamp(1, totalPages);
+    final start = (safePage - 1) * _pageSize;
+    final end = (start + _pageSize).clamp(0, _postedEntries.length);
+    final pageItems = _postedEntries.sublist(start, end);
+
     return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: _postedEntries.length,
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      itemCount: pageItems.length + 1,
       itemBuilder: (context, index) {
-        final entry = _postedEntries[index];
-        return _buildEntryCard(entry, isPosted: true);
+        if (index == pageItems.length) {
+          return _buildPaginationStrip(
+            currentPage: safePage,
+            totalItems: _postedEntries.length,
+            onPageChanged: (p) => setState(() => _postedEntriesPage = p),
+          );
+        }
+        return _buildEntryCard(pageItems[index], isPosted: true);
       },
     );
   }

@@ -14,12 +14,16 @@ class AddReturnInvoiceScreen extends StatefulWidget {
   final ApiService api;
   final String returnType; // 'مرتجع بيع', 'مرتجع شراء', 'مرتجع شراء (مورد)'
   final Map<String, dynamic>? prefilledOriginalInvoice;
+  final int? editInvoiceId;
+  final Map<String, dynamic>? editInvoiceData;
 
   const AddReturnInvoiceScreen({
     super.key,
     required this.api,
     required this.returnType,
     this.prefilledOriginalInvoice,
+    this.editInvoiceId,
+    this.editInvoiceData,
   });
 
   @override
@@ -268,6 +272,30 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         });
       }
     }
+
+    // Edit mode: prefill from previously saved return invoice data.
+    final editData = widget.editInvoiceData;
+    final editId = widget.editInvoiceId;
+    if (editData != null && editId != null) {
+      _currentStep = 1;
+      selectedOriginalInvoice = {
+        'id': editData['original_invoice_id'],
+        'customer_id': editData['customer_id'],
+        'supplier_id': editData['supplier_id'],
+        'branch_id': editData['branch_id'],
+        'customer_name': editData['customer_name'],
+        'supplier_name': editData['supplier_name'],
+      };
+      _returnItems = (editData['items'] as List?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(_mapInvoiceItemToReturnRow)
+              .toList() ??
+          [];
+      returnReason = (editData['return_reason'] ?? '').toString();
+      _returnReasonController.text = returnReason;
+      paymentMethod = (editData['payment_method'] ?? 'cash').toString();
+      amountPaid = _parseDouble(editData['amount_paid']);
+    }
   }
 
   @override
@@ -507,7 +535,12 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     };
 
     try {
-      final response = await widget.api.addInvoice(payload);
+      final response = widget.editInvoiceId != null
+          ? await widget.api.updateUnpostedInvoice(
+              widget.editInvoiceId!,
+              payload,
+            )
+          : await widget.api.addInvoice(payload);
       if (!mounted) return;
 
       final invoiceForPrint = Map<String, dynamic>.from(response);
@@ -566,7 +599,11 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       }
 
       if (!mounted) return;
-      _resetAfterSave();
+      if (widget.editInvoiceId != null) {
+        Navigator.pop(context, true);
+      } else {
+        _resetAfterSave();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(

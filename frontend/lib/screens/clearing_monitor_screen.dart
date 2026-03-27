@@ -114,12 +114,23 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
     try {
       final res = await _api.runAutoClearingSettlementsNow();
       if (!mounted) return;
-      final enabled = res['enabled_methods'] ?? 0;
       final msg = res['message']?.toString() ?? 'تمت التسوية التلقائية';
+      final skipped = res['skipped'] as List? ?? [];
+      final hasSkipped = skipped.isNotEmpty;
+      // Build a short reason summary for skipped items
+      String detail = msg;
+      if (hasSkipped) {
+        final reasons = skipped
+            .take(3)
+            .map((s) => '${s['name']}: ${s['reason']}')
+            .join(' — ');
+        detail = '$msg\nتجاوز: $reasons${skipped.length > 3 ? ' (و${skipped.length - 3} أخرى)' : ''}';
+      }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('$msg ($enabled وسيلة دفع)'),
-        backgroundColor: theme.AppColors.success,
-        duration: const Duration(seconds: 4),
+        content: Text(detail),
+        backgroundColor:
+            hasSkipped ? theme.AppColors.warning : theme.AppColors.success,
+        duration: Duration(seconds: hasSkipped ? 6 : 4),
       ));
       await _loadData();
     } catch (e) {

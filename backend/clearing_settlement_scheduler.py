@@ -150,7 +150,21 @@ class ClearingSettlementScheduler:
         fee_amount = round((gross_amount * rate / 100.0) + (fixed * effective_count), 2)
         return fee_amount, transaction_count
 
-    def process_due_settlements(self):
+    def process_due_settlements(self) -> dict:
+        """Run auto-settlement for all eligible payment methods.
+
+        Returns a diagnostic dict with keys:
+          - settled_count: number of bulk settlement vouchers created
+          - per_tx_settled_count: number of per-transaction vouchers created
+          - skipped: list of {pm_id, name, reason} for skipped PMs
+          - enabled_methods: total PMs checked
+        """
+        result: dict = {
+            'settled_count': 0,
+            'per_tx_settled_count': 0,
+            'enabled_methods': 0,
+            'skipped': [],
+        }
         with self.app.app_context():
             from routes import _create_clearing_settlement_voucher
 
@@ -162,29 +176,41 @@ class ClearingSettlementScheduler:
                 .filter_by(is_active=True, auto_settlement_enabled=True)
                 .all()
             )
+            result['enabled_methods'] = len(methods)
 
             if not methods:
                 print('[ClearingSettlementScheduler] No enabled payment methods')
-                return
+                return result
 
             for pm in methods:
                 try:
+                    pm_name = getattr(pm, 'name', str(pm.id))
+
+                    def _skip(reason: str):
+                        result['skipped'].append({'pm_id': pm.id, 'name': pm_name, 'reason': reason})
+
                     # Basic config
                     if not pm.default_safe_box_id:
+                        _skip('no_clearing_safe_box')
                         continue
                     if not pm.settlement_bank_safe_box_id:
+                        _skip('no_bank_safe_box')
                         continue
 
                     clearing_sb = pm.default_safe_box
                     bank_sb = pm.settlement_bank_safe_box
                     if not clearing_sb or not bank_sb:
+                        _skip('safe_box_not_found')
                         continue
                     if not getattr(clearing_sb, 'is_active', True) or not getattr(bank_sb, 'is_active', True):
+                        _skip('safe_box_inactive')
                         continue
 
                     if (clearing_sb.safe_type or '').strip().lower() != 'clearing':
+                        _skip(f'clearing_safe_wrong_type:{clearing_sb.safe_type}')
                         continue
                     if (bank_sb.safe_type or '').strip().lower() != 'bank':
+                        _skip(f'bank_safe_wrong_type:{bank_sb.safe_type}')
                         continue
 
                     schedule_type = (pm.settlement_schedule_type or 'days').strip().lower()
@@ -193,14 +219,18 @@ class ClearingSettlementScheduler:
                     cutoff_days = int(pm.settlement_days or 0)
                     if schedule_type == 'weekday':
                         if pm.settlement_weekday is None:
+                            _skip('weekday_not_configured')
                             continue
                         try:
                             configured_weekday = int(pm.settlement_weekday)
                         except Exception:
+                            _skip('weekday_invalid')
                             continue
                         if configured_weekday < 0 or configured_weekday > 6:
+                            _skip(f'weekday_out_of_range:{configured_weekday}')
                             continue
                         if configured_weekday != weekday:
+                            _skip(f'not_scheduled_today:configured={configured_weekday},today={weekday}')
                             continue
                         # Default weekly: settle up to yesterday (or more if settlement_days>0)
                         cutoff_days = max(cutoff_days, 1)
@@ -215,6 +245,7 @@ class ClearingSettlementScheduler:
 
                     # Nothing due
                     if gross_amount < 0.01:
+                        _skip(f'due_amount_zero:payments={due.payments_up_to_cutoff:.2f},settled={due.settled_total:.2f},cutoff={cutoff_dt.date().isoformat()}')
                         continue
 
                     # فحص الحد الأدنى للتسوية
@@ -224,6 +255,7 @@ class ClearingSettlementScheduler:
                             f"[ClearingSettlementScheduler] Skipping PM#{pm.id} ({pm.name}): "
                             f"balance {gross_amount:.2f} < min_settlement_amount {min_settle:.2f}"
                         )
+                        _skip(f'below_min_settlement:{gross_amount:.2f}<{min_settle:.2f}')
                         continue
 
                     # Cap to current clearing balance for safety
@@ -233,11 +265,13 @@ class ClearingSettlementScheduler:
                         clearing_balance = 0.0
 
                     if clearing_balance <= 0.0:
+                        _skip(f'clearing_balance_zero_or_negative:{clearing_balance:.2f}')
                         continue
                     if gross_amount > clearing_balance:
                         gross_amount = round(clearing_balance, 2)
 
                     if gross_amount < 0.01:
+                        _skip('gross_after_cap_zero')
                         continue
 
                     # نمط التسوية: bulk أو per_transaction
@@ -245,13 +279,14 @@ class ClearingSettlementScheduler:
 
                     if settlement_mode == 'per_transaction':
                         # -------- تسوية فردية: سند لكل معاملة --------
-                        self._settle_per_transaction(
+                        settled = self._settle_per_transaction(
                             pm=pm,
                             clearing_sb=clearing_sb,
                             bank_sb=bank_sb,
                             cutoff_dt=cutoff_dt,
                             today=today,
                         )
+                        result['per_tx_settled_count'] += settled
                         continue
 
                     # -------- تسوية مجمّعة (bulk) — الوضع الافتراضي --------
@@ -271,10 +306,11 @@ class ClearingSettlementScheduler:
                         print(
                             f"[ClearingSettlementScheduler] Skipping PM#{pm.id} ({pm.name}): fee {fee_amount:.2f} >= gross {gross_amount:.2f}"
                         )
+                        _skip(f'fee_exceeds_gross:{fee_amount:.2f}>={gross_amount:.2f}')
                         continue
 
                     try:
-                        result = _create_clearing_settlement_voucher(
+                        voucher_result = _create_clearing_settlement_voucher(
                             clearing_safe_box_id=clearing_sb.id,
                             bank_safe_box_id=bank_sb.id,
                             gross_amount=gross_amount,
@@ -288,11 +324,13 @@ class ClearingSettlementScheduler:
                             ensure_unique_reference=True,
                         )
                         # If the helper reports it was skipped (idempotent), don't commit anything.
-                        if result.get('skipped'):
+                        if voucher_result.get('skipped'):
                             db.session.rollback()
+                            _skip('duplicate_reference_skipped')
                             continue
 
                         db.session.commit()
+                        result['settled_count'] += 1
                         print(
                             f"[ClearingSettlementScheduler] ✓ Settled {gross_amount:.2f}"
                             f" (fee {fee_amount:.2f}, tx_count {fee_tx_count}) for PM#{pm.id} ({pm.name})"
@@ -302,16 +340,22 @@ class ClearingSettlementScheduler:
                         print(
                             f"[ClearingSettlementScheduler] ❌ Failed PM#{pm.id} ({pm.name}): {exc}"
                         )
+                        _skip(f'voucher_creation_error:{str(exc)[:120]}')
 
                 except Exception as exc:
                     db.session.rollback()
                     print(f"[ClearingSettlementScheduler] ❌ Unexpected error for PM#{getattr(pm, 'id', '?')}: {exc}")
+                    result['skipped'].append({'pm_id': getattr(pm, 'id', '?'), 'name': '?', 'reason': f'unexpected:{str(exc)[:120]}'})
+
+        return result
 
     # ------------------------------------------------------------------
     # Per-transaction settlement helper
     # ------------------------------------------------------------------
-    def _settle_per_transaction(self, *, pm, clearing_sb, bank_sb, cutoff_dt, today):
+    def _settle_per_transaction(self, *, pm, clearing_sb, bank_sb, cutoff_dt, today) -> int:
         """Create one clearing-settlement voucher per unsettled invoice payment.
+
+        Returns the number of successfully created per-transaction vouchers.
 
         Each voucher is tracked via ``SafeBoxTransaction.notes`` with the
         pattern ``per_tx:ip_{invoice_payment_id}`` so we can detect which
@@ -449,6 +493,8 @@ class ClearingSettlementScheduler:
                 f"[ClearingSettlementScheduler] ✓ Per-transaction: settled {settled_count} "
                 f"txs ({running_total:.2f}) for PM#{pm.id} ({pm.name})"
             )
+
+        return settled_count
 
     def setup_schedule(self):
         # Run once per day at 04:10.

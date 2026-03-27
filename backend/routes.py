@@ -14155,15 +14155,25 @@ def add_invoice():
         
         elif invoice_type == 'مرتجع شراء (مورد)':
             # 6. مرتجع شراء (مورد) (عكس الشراء)
-            # الهيكل الصحيح: فصل Cash عن Weight كما في فاتورة الشراء الأصلية
-            #   مدين: حساب المورد المالي (نقدي فقط) + حساب مذكرة المورد الوزني (وزن فقط)
-            #   دائن: حساب المخزون النقدي + حساب مذكرة المخزون الوزني
-            #   ملاحظة: السطران الدائنان يحملان exclude_from_ledger=True لعدم ظهورهما في كشف المورد
-            
+            # الهيكل الصحيح: يعكس فاتورة الشراء بالضبط
+            #   مدين: حساب الجسر (قيمة الذهب النقدية - exclude_from_ledger كما في الشراء)
+            #   مدين: حساب المورد المالي (أجور مصنعية فقط إن وجدت)
+            #   مدين: حساب مذكرة المورد الوزني (وزن الذهب)
+            #   دائن: حساب المخزون النقدي (exclude_from_ledger)
+            #   دائن: حساب مذكرة المخزون الوزني (exclude_from_ledger)
+
             # 🔥 استخدام الربط المحاسبي (نفس إعدادات "شراء")
             cash_acc_id = get_account_id_for_mapping('شراء', 'cash')
             suppliers_acc_id = get_account_id_for_mapping('شراء', 'suppliers')
-            
+
+            # حساب الجسر (نفس منطق الشراء الأصلي)
+            bridge_acc_id = (
+                data.get('bridge_account_id')
+                or get_account_id_for_mapping('شراء', 'supplier_bridge')
+                or get_account_id_for_mapping('شراء', 'suppliers')
+                or cash_acc_id
+            )
+
             # Prefer posting to the supplier's own subledger account (root-fix).
             supplier_fin_account_id = None
             try:
@@ -14186,7 +14196,7 @@ def add_invoice():
                     if inv_acc_id:
                         inventory_acc_id = inv_acc_id
                         break
-            
+
             if not inventory_acc_id:
                 db.session.rollback()
                 return jsonify({
@@ -14197,11 +14207,10 @@ def add_invoice():
 
             acc_id = supplier_fin_account_id or (party_account.id if party_account else None) or suppliers_acc_id or cash_acc_id
 
-            # حساب مذكرة المورد الوزني: يُستخدم لعكس التزام الذهب (الوزن) للمورد
-            # (memo_party_account هو الحساب الوزني المرتبط بحساب المورد المالي)
+            # حساب مذكرة المورد الوزني
             supplier_weight_acc_id = memo_party_account.id if memo_party_account else acc_id
 
-            # حساب مذكرة المخزون الوزني: يُستخدم لعكس رصيد الذهب في المخزون
+            # حساب مذكرة المخزون الوزني
             weight_inventory_acc_id = None
             try:
                 inv_acc_obj = Account.query.get(inventory_acc_id)
@@ -14216,13 +14225,57 @@ def add_invoice():
 
             has_gold_weight = any(float(v or 0) > 0 for v in gold_by_karat.values())
 
-            # Line 1: مدين حساب المورد المالي (تخفيض الذمم المالية - نقدي فقط)
-            create_dual_journal_entry(
-                journal_entry_id=journal_entry.id,
-                account_id=acc_id,
-                cash_debit=total_cash,
-                description="مرتجع شراء (مورد)"
+            # استخراج جزء الأجور المصنعية (إن وجد) - يذهب لحساب المورد المالي مباشرة
+            wage_cash = _to_float(
+                data.get('manufacturing_wage_cash') or data.get('wage_cash')
+                or data.get('total_wage') or data.get('wage_subtotal') or 0,
+                0.0
             )
+            # في المرتجع يجب عكس ضريبة الأجور من حساب المورد تماماً كما أُضيفت في الشراء
+            _ret_wage_tax = _to_float(
+                data.get('wage_tax_total') or data.get('wage_tax') or 0,
+                0.0
+            )
+            _ret_gold_tax = _to_float(
+                data.get('gold_tax_total') or data.get('gold_tax') or 0,
+                0.0
+            )
+            # مبلغ الذهب = قيمة الذهب + ضريبة الذهب فقط (لا تشمل أجور ولا ضريبة الأجور)
+            gold_subtt = _to_float(data.get('gold_subtotal') or 0, 0.0)
+            if gold_subtt > 0:
+                gold_value_cash = max(round(gold_subtt + _ret_gold_tax, 2), 0.0)
+            else:
+                gold_value_cash = max(round(total_cash - wage_cash - _ret_wage_tax, 2), 0.0)
+
+            # Line 1: مدين حساب الجسر (قيمة الذهب النقدية - كما في الشراء)
+            # يُعكس الدائن على الجسر من فاتورة الشراء الأصلية
+            if gold_value_cash > 0 and bridge_acc_id:
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=bridge_acc_id,
+                    cash_debit=gold_value_cash,
+                    apply_golden_rule=False,
+                    exclude_from_ledger=True,
+                    description="مرتجع شراء (مورد) - عكس جسر التقييم"
+                )
+            elif total_cash > 0 and not bridge_acc_id:
+                # Fallback: لا يوجد حساب جسر → استخدم حساب المورد المالي
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=acc_id,
+                    cash_debit=total_cash,
+                    description="مرتجع شراء (مورد)"
+                )
+
+            # Line 1b: مدين حساب المورد المالي (أجور مصنعية + ضريبة الأجور - عكس كامل لسطر الشراء)
+            _wage_with_tax = round(wage_cash + _ret_wage_tax, 2)
+            if _wage_with_tax > 0:
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=acc_id,
+                    cash_debit=_wage_with_tax,
+                    description="مرتجع شراء (مورد) - رد أجور مصنعية وضريبتها"
+                )
 
             # Line 2: مدين حساب مذكرة المورد الوزني (تخفيض التزام الذهب - وزن فقط)
             if has_gold_weight:
@@ -14236,16 +14289,16 @@ def add_invoice():
                         description="مرتجع شراء (مورد) - تخفيض وزن ذهب المورد"
                     )
 
-            # Line 3: دائن حساب المخزون النقدي (تقليص القيمة النقدية - بدون ربط بالمورد)
+            # Line 3: دائن حساب المخزون النقدي (تقليص القيمة النقدية)
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=inventory_acc_id,
                 cash_credit=total_cash,
-                exclude_from_ledger=True,  # مهم: لا يظهر في كشف حساب المورد
+                exclude_from_ledger=True,
                 description="خصم من المخزون النقدي (مرتجع شراء مورد)"
             )
 
-            # Line 4: دائن حساب مذكرة المخزون الوزني (تقليص رصيد الذهب - بدون ربط بالمورد)
+            # Line 4: دائن حساب مذكرة المخزون الوزني
             if has_gold_weight and weight_inventory_acc_id:
                 vendor_return_weight_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
                 if vendor_return_weight_credit:
@@ -14254,7 +14307,7 @@ def add_invoice():
                         account_id=weight_inventory_acc_id,
                         apply_golden_rule=False,
                         **vendor_return_weight_credit,
-                        exclude_from_ledger=True,  # مهم: لا يظهر في كشف حساب المورد
+                        exclude_from_ledger=True,
                         description="خصم وزني من المخزون (مرتجع شراء مورد)"
                     )
 
@@ -23504,6 +23557,12 @@ def approve_voucher(voucher_id):
         if not journal_entry:
             raise Exception('فشل إنشاء القيد المحاسبي')
         
+        # Mark the JE as posted immediately — voucher approval means finalised.
+        journal_entry.is_posted = True
+        journal_entry.posted_at = datetime.now()
+        journal_entry.posted_by = approved_by
+        db.session.flush()
+
         # تحديث السند
         voucher.status = 'approved'
         voucher.approved_at = datetime.now()
@@ -26597,10 +26656,37 @@ def get_pending_settlement_transactions():
     # Compute aggregate due_amount for bulk settlement cap
     due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
 
+    # Compute tx_count_for_fee: invoice-payment transactions since last clearing settlement.
+    # This is the count used for fixed-per-transaction commission calculation in bulk mode.
+    tx_count_for_fee = 0
+    try:
+        from sqlalchemy import func as _func
+        last_settlement_dt = (
+            db.session.query(_func.max(Voucher.date))
+            .join(SafeBoxTransaction, SafeBoxTransaction.ref_id == Voucher.id)
+            .filter(
+                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+                Voucher.reference_type == 'clearing_settlement',
+            )
+            .scalar()
+        )
+        tx_q = SafeBoxTransaction.query.filter(
+            SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+            SafeBoxTransaction.ref_type == 'invoice_payment',
+            SafeBoxTransaction.direction == 'in',
+        )
+        if last_settlement_dt is not None:
+            tx_q = tx_q.filter(SafeBoxTransaction.created_at > last_settlement_dt)
+        tx_count_for_fee = int(tx_q.count() or 0)
+    except Exception:
+        tx_count_for_fee = len(pending)
+
     return jsonify({
         'clearing_safe_box_id': clearing_safe_box_id,
         'pending_count': len(pending),
         'due_amount': round(due_amount, 2),
+        'tx_count_for_fee': tx_count_for_fee,
         'transactions': pending,
     }), 200
 
@@ -26616,19 +26702,29 @@ def run_auto_clearing_settlements_now():
     try:
         from clearing_settlement_scheduler import get_clearing_settlement_scheduler
 
-        enabled_methods = (
-            PaymentMethod.query
-            .filter_by(is_active=True, auto_settlement_enabled=True)
-            .count()
-        )
-
         scheduler = get_clearing_settlement_scheduler(current_app._get_current_object())
-        scheduler.process_due_settlements()
+        diag = scheduler.process_due_settlements()
+
+        settled_count = diag.get('settled_count', 0)
+        per_tx_count = diag.get('per_tx_settled_count', 0)
+        enabled_methods = diag.get('enabled_methods', 0)
+        skipped = diag.get('skipped', [])
+
+        total_settled = settled_count + per_tx_count
+        if total_settled > 0:
+            message = f'تم إنشاء {total_settled} سند تسوية تلقائية'
+        elif enabled_methods == 0:
+            message = 'لا توجد وسائل دفع مفعّلة للتسوية التلقائية'
+        else:
+            message = 'لا توجد مستحقات مؤهلة للتسوية الآن'
 
         return jsonify({
             'success': True,
-            'enabled_methods': int(enabled_methods or 0),
-            'message': 'تم تشغيل التسوية التلقائية يدوياً',
+            'enabled_methods': int(enabled_methods),
+            'settled_count': settled_count,
+            'per_tx_settled_count': per_tx_count,
+            'message': message,
+            'skipped': skipped,
         }), 200
     except Exception as exc:
         db.session.rollback()

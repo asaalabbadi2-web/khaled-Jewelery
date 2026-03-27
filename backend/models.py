@@ -1218,10 +1218,10 @@ class Invoice(db.Model):
         # 🆕 إضافة دفعات متعددة (الميزة الجديدة)
         if self.payments:
             result['payments'] = [payment.to_dict() for payment in self.payments]
-            # حساب إجماليات الدفعات
-            result['total_payments_amount'] = sum(p.amount for p in self.payments)
-            result['total_commission'] = sum(p.commission_amount for p in self.payments)
-            result['total_net'] = sum(p.net_amount for p in self.payments)
+            # حساب إجماليات الدفعات (حماية من None)
+            result['total_payments_amount'] = sum((p.amount or 0.0) for p in self.payments)
+            result['total_commission'] = sum((p.commission_amount or 0.0) for p in self.payments)
+            result['total_net'] = sum((p.net_amount or 0.0) for p in self.payments)
         else:
             result['payments'] = []
         
