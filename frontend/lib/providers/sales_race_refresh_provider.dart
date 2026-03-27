@@ -9,4 +9,11 @@ class SalesRaceRefreshProvider with ChangeNotifier {
     _refreshToken += 1;
     notifyListeners();
   }
+
+  /// Called after settings are saved so the home screen re-fetches
+  /// the leaderboard with the latest config values.
+  void notifySettingsChanged() {
+    _refreshToken += 1;
+    notifyListeners();
+  }
 }

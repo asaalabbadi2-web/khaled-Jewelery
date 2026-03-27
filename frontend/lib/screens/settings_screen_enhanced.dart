@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
+import '../providers/sales_race_refresh_provider.dart';
 import '../providers/settings_provider.dart';
 import 'accounting_mapping_screen_enhanced.dart';
 import 'payment_methods_screen_enhanced.dart';
@@ -537,6 +538,12 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       }
 
       if (!mounted) return;
+      // Notify the home screen to re-fetch the leaderboard with the latest
+      // settings config. This is the reliable trigger path (watched in build()).
+      try {
+        Provider.of<SalesRaceRefreshProvider>(context, listen: false)
+            .notifySettingsChanged();
+      } catch (_) {}
       _showSnack('✅ تم حفظ الإعدادات وتطبيقها على جميع الشاشات');
     } catch (error) {
       if (!mounted) return;
