@@ -62,6 +62,7 @@ import 'printing_center_screen.dart';
 import 'security_sessions_screen.dart';
 import 'change_password_screen.dart';
 import 'user_profile_screen.dart';
+import 'sales_race_management_screen.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -1054,6 +1055,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         },
       );
     }
+    addDestination(
+      icon: Icons.emoji_events_rounded,
+      title: isAr ? 'سباق المبيعات' : 'Sales Race',
+      color: AppColors.primaryGold,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                SalesRaceManagementScreen(api: api, isArabic: isAr),
+          ),
+        );
+        _loadLeaderboard(period: _leaderboardPeriod);
+      },
+    );
     addDestination(
       icon: Icons.manage_accounts,
       title: isAr ? 'المستخدمين' : 'Users',

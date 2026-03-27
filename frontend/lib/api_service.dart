@@ -4095,6 +4095,29 @@ class ApiService {
     throw Exception('Failed to load leaderboard: ${response.body}');
   }
 
+  Future<Map<String, dynamic>> getSalesRaceConfig() async {
+    final uri = Uri.parse('$_baseUrl/sales-race/config');
+    final response = await _authedGet(uri);
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200 && decoded is Map<String, dynamic>) {
+      return decoded;
+    }
+    throw Exception('فشل تحميل إعدادات سباق المبيعات');
+  }
+
+  Future<Map<String, dynamic>> updateSalesRaceConfig(
+    Map<String, dynamic> data,
+  ) async {
+    final uri = Uri.parse('$_baseUrl/sales-race/config');
+    final response = await _authedPut(uri, body: json.encode(data));
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200 && decoded is Map<String, dynamic>) {
+      return decoded;
+    }
+    final msg = decoded is Map ? (decoded['message'] ?? decoded['error']) : null;
+    throw Exception(msg?.toString() ?? 'فشل حفظ إعدادات سباق المبيعات');
+  }
+
   // ---------------------------------------------------------------------------
   // Payroll API
   // ---------------------------------------------------------------------------

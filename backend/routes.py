@@ -19042,6 +19042,99 @@ def get_inventory_movement_report():
     })
 
 
+@api.route('/sales-race/config', methods=['GET'])
+@require_permission('system.settings')
+def get_sales_race_config():
+    """Return the current sales race configuration (admin only)."""
+    settings_row = _get_settings_singleton(create_if_missing=True)
+    config = {
+        'enabled': True,
+        'default_period': 'today',
+        'points_per_gram': 10.0,
+        'allow_fallback_to_latest_period': True,
+        'show_invoice_count': True,
+        'show_champion': True,
+        'weekly_sales_target_weight': float(
+            getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
+        ),
+    }
+    raw = getattr(settings_row, 'sales_race_settings', None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                for k in ('enabled', 'default_period', 'points_per_gram',
+                          'allow_fallback_to_latest_period', 'show_invoice_count', 'show_champion'):
+                    if k in parsed:
+                        config[k] = parsed[k]
+        except Exception:
+            pass
+    return jsonify(config)
+
+
+@api.route('/sales-race/config', methods=['PUT'])
+@require_permission('system.settings')
+def update_sales_race_config():
+    """Save sales race configuration (admin only)."""
+    data = request.get_json(silent=True) or {}
+    settings_row = _get_settings_singleton(create_if_missing=True)
+
+    current = {
+        'enabled': True,
+        'default_period': 'today',
+        'points_per_gram': 10.0,
+        'allow_fallback_to_latest_period': True,
+        'show_invoice_count': True,
+        'show_champion': True,
+    }
+    raw = getattr(settings_row, 'sales_race_settings', None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                current.update({k: parsed[k] for k in current if k in parsed})
+        except Exception:
+            pass
+
+    if 'enabled' in data:
+        current['enabled'] = bool(data['enabled'])
+    if 'default_period' in data:
+        p = str(data['default_period']).strip().lower()
+        current['default_period'] = p if p in {'today', 'week'} else 'today'
+    if 'points_per_gram' in data:
+        try:
+            current['points_per_gram'] = max(0.0, float(data['points_per_gram']))
+        except Exception:
+            pass
+    if 'allow_fallback_to_latest_period' in data:
+        current['allow_fallback_to_latest_period'] = bool(data['allow_fallback_to_latest_period'])
+    if 'show_invoice_count' in data:
+        current['show_invoice_count'] = bool(data['show_invoice_count'])
+    if 'show_champion' in data:
+        current['show_champion'] = bool(data['show_champion'])
+    if 'weekly_sales_target_weight' in data:
+        try:
+            settings_row.weekly_sales_target_weight = max(
+                0.0, float(data['weekly_sales_target_weight'] or 0.0)
+            )
+        except Exception:
+            pass
+
+    settings_row.sales_race_settings = json.dumps(current, ensure_ascii=False)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': 'commit_failed', 'message': str(e)}), 500
+
+    result = dict(current)
+    result['weekly_sales_target_weight'] = float(
+        getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
+    )
+    return jsonify(result)
+
+
 @api.route('/home/leaderboard', methods=['GET'])
 def get_home_leaderboard():
     """Gamification leaderboard (safe for employees).
