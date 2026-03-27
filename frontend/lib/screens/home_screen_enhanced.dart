@@ -198,12 +198,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final allowFallback =
         raceSettings['allow_fallback_to_latest_period'] != false;
     final showInvoiceCount = raceSettings['show_invoice_count'] != false;
-    final showSalesAmountPerEmployee =
-        raceSettings['show_sales_amount_per_employee'] == true;
     final showChampion = raceSettings['show_champion'] != false;
-    final showTotalCash = raceSettings['show_total_cash_to_all_users'] != false;
-    final showTotalProfit =
-        raceSettings['show_total_profit_to_all_users'] == true;
     final weeklyTarget = settings.settings['weekly_sales_target_weight'];
 
     return [
@@ -212,10 +207,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       pointsPerGram,
       allowFallback,
       showInvoiceCount,
-      showSalesAmountPerEmployee,
       showChampion,
-      showTotalCash,
-      showTotalProfit,
       weeklyTarget,
     ].join('|');
   }
@@ -1948,9 +1940,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final adminSummary = data?['admin_summary'] as Map?;
     final raceEnabled = config?['enabled'] != false;
     final showInvoiceCount = config?['show_invoice_count'] != false;
-    final showSalesAmountPerEmployee =
-        config?['show_sales_amount_per_employee'] == null ||
-        config?['show_sales_amount_per_employee'] == true;
+    // مبلغ المبيعات يظهر دائماً لجميع الموظفين
+    const showSalesAmountPerEmployee = true;
     final showChampion = config?['show_champion'] != false;
     final isFallback = data?['is_fallback'] == true;
     final effectiveStartDate = DateTime.tryParse(

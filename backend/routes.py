@@ -2212,68 +2212,7 @@ def update_settings():
     if 'allow_partial_invoice_payments' in data:
         settings.allow_partial_invoice_payments = data['allow_partial_invoice_payments']
 
-    # 🆕 إعدادات سباق المبيعات
-    if 'weekly_sales_target_weight' in data:
-        try:
-            weekly_target = float(data.get('weekly_sales_target_weight') or 0.0)
-            settings.weekly_sales_target_weight = max(0.0, weekly_target)
-        except Exception:
-            return jsonify({
-                'error': 'invalid_weekly_sales_target_weight',
-                'message': 'قيمة weekly_sales_target_weight غير صالحة',
-            }), 400
-
-    if 'sales_race_settings' in data:
-        defaults = {
-            'enabled': True,
-            'default_period': 'today',
-            'points_per_gram': 10.0,
-            'allow_fallback_to_latest_period': True,
-            'show_invoice_count': True,
-            'show_sales_amount_per_employee': False,
-            'show_champion': True,
-            'show_total_cash_to_all_users': True,
-            'show_total_profit_to_all_users': False,
-        }
-        raw = data.get('sales_race_settings')
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception:
-                return jsonify({
-                    'error': 'invalid_sales_race_settings',
-                    'message': 'قيمة sales_race_settings يجب أن تكون JSON object صالح',
-                }), 400
-
-        if isinstance(raw, dict):
-            merged = dict(defaults)
-            merged.update(raw)
-
-            period_value = str(merged.get('default_period') or 'today').strip().lower()
-            merged['default_period'] = period_value if period_value in {'today', 'week'} else 'today'
-
-            try:
-                merged['points_per_gram'] = max(0.0, float(merged.get('points_per_gram') or 10.0))
-            except Exception:
-                merged['points_per_gram'] = 10.0
-
-            for key in (
-                'enabled',
-                'allow_fallback_to_latest_period',
-                'show_invoice_count',
-                'show_sales_amount_per_employee',
-                'show_champion',
-                'show_total_cash_to_all_users',
-                'show_total_profit_to_all_users',
-            ):
-                merged[key] = bool(merged.get(key))
-
-            settings.sales_race_settings = json.dumps(merged, ensure_ascii=False)
-        else:
-            return jsonify({
-                'error': 'invalid_sales_race_settings',
-                'message': 'قيمة sales_race_settings يجب أن تكون كائنًا (object)',
-            }), 400
+    # 🆕 إعدادات الوضع الافتراضي للنظام (أُزيلت إعدادات سباق المبيعات — ثابتة الآن)
 
     # 🆕 تحديث سعر الذهب تلقائياً حسب توقيت معين
     if 'gold_price_auto_update_enabled' in data:
@@ -19495,10 +19434,10 @@ def get_home_leaderboard():
             'points_per_gram': points_per_gram,
             'allow_fallback_to_latest_period': bool(sales_race_config.get('allow_fallback_to_latest_period', True)),
             'show_invoice_count': bool(sales_race_config.get('show_invoice_count', True)),
-            'show_sales_amount_per_employee': bool(sales_race_config.get('show_sales_amount_per_employee', False)),
+            'show_sales_amount_per_employee': True,
             'show_champion': bool(sales_race_config.get('show_champion', True)),
-            'show_total_cash_to_all_users': bool(sales_race_config.get('show_total_cash_to_all_users', True)),
-            'show_total_profit_to_all_users': bool(sales_race_config.get('show_total_profit_to_all_users', False)),
+            'show_total_cash_to_all_users': True,
+            'show_total_profit_to_all_users': False,
         },
         'champion': champion,
         'ranking': ranking,
@@ -19524,8 +19463,9 @@ def get_home_leaderboard():
         except Exception:
             can_view_admin = False
 
-    can_view_total_cash = bool(sales_race_config.get('show_total_cash_to_all_users', True)) or can_view_admin
-    can_view_total_profit = bool(sales_race_config.get('show_total_profit_to_all_users', False)) or can_view_admin
+    # مبلغ المبيعات الإجمالي مرئي للجميع — الربح فقط للإداريين وأصحاب صلاحية reports.financial
+    can_view_total_cash = True
+    can_view_total_profit = can_view_admin
 
     if can_view_total_cash or can_view_total_profit:
         # Aggregate across all sales (not per employee) for the same period.
