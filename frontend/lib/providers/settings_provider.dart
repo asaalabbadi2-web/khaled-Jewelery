@@ -353,14 +353,16 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      // Send to server and use the server response as the source of truth.
-      // The backend performs a clean re-fetch after commit, so the response
-      // always reflects the persisted state — no client-side re-validation needed.
-      final effectiveSettings = await ApiService().updateSettings(newSettings);
+      // Step 1: Send the update.
+      await ApiService().updateSettings(newSettings);
 
-      _settings = effectiveSettings;
+      // Step 2: Always do an explicit GET after PUT to guarantee the provider
+      // reflects the actual database state. This eliminates any possibility of
+      // stale PUT-response data being cached and served to the home/race screens.
+      final confirmed = await ApiService().getSettings();
+      _settings = confirmed;
 
-      // Cache the server-confirmed settings locally.
+      // Step 3: Cache the server-confirmed settings locally.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('app_settings', json.encode(_settings));
 

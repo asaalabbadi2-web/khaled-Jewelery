@@ -2387,23 +2387,34 @@ def update_settings():
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(commit_err)}), 500
 
-    # Re-fetch the settings row to guarantee the response reflects what was
-    # actually written to the DB (avoids stale-connection lazy-loads that occur
-    # in Gunicorn multi-worker production environments).
+    # Re-read using a completely independent session so we are 100% guaranteed
+    # to see the committed data and never return a stale cached value.
+    # This is critical in PostgreSQL multi-worker (Gunicorn) production where
+    # the request-scoped session may have a stale identity map after commit.
+    result_dict = None
     try:
-        db.session.expire_all()
-        fresh_settings = db.session.query(Settings).filter_by(id=settings_id).first()
-        if fresh_settings is None:
-            fresh_settings = settings  # fallback: should never happen
+        from sqlalchemy.orm import Session as _IndependentSession
+        with _IndependentSession(db.engine) as _s:
+            _fresh = _s.query(Settings).filter_by(id=settings_id).first()
+            if _fresh is not None:
+                result_dict = _fresh.to_dict()
     except Exception:
-        # If the re-query itself fails, fall back to the in-memory object.
-        fresh_settings = settings
+        result_dict = None
 
-    response = jsonify(fresh_settings.to_dict())
+    if result_dict is None:
+        # Fallback: expire the request session and re-query from it.
+        try:
+            db.session.expire_all()
+            _fallback = db.session.query(Settings).filter_by(id=settings_id).first()
+            result_dict = _fallback.to_dict() if _fallback else settings.to_dict()
+        except Exception:
+            result_dict = settings.to_dict()
+
+    response = jsonify(result_dict)
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    response.headers.update(_settings_diag_headers(fresh_settings))
+    response.headers.update(_settings_diag_headers(settings))
     return response
 
 @api.route('/system/reset', methods=['POST'])
@@ -19119,8 +19130,10 @@ def get_home_leaderboard():
         'show_total_cash_to_all_users': True,
         'show_total_profit_to_all_users': False,
     }
+    # Use _get_settings_singleton to ensure the canonical settings row is read
+    # (not an arbitrary first() row which may differ in multi-row databases).
     try:
-        settings_row = Settings.query.first()
+        settings_row = _get_settings_singleton(create_if_missing=False)
     except Exception:
         settings_row = None
 
@@ -19443,17 +19456,11 @@ def get_home_leaderboard():
             )
             team_weight_g = round(_to_float(team_weight_value, 0.0), 3)
 
-        settings_row = None
-        try:
-            settings_row = Settings.query.first()
-        except Exception:
-            settings_row = None
-
-        if not settings_row:
+        # Re-read the canonical settings row for weekly target (already fetched
+        # above as settings_row; re-use it here to avoid a redundant query).
+        if settings_row is None:
             try:
-                settings_row = Settings(main_karat=get_main_karat() or 21)
-                db.session.add(settings_row)
-                db.session.commit()
+                settings_row = _get_settings_singleton(create_if_missing=True)
             except Exception:
                 settings_row = None
 
