@@ -2377,19 +2377,22 @@ def update_settings():
                 count = 365
             settings.backup_retention_count = count
     
+    # Capture the primary key BEFORE any session manipulation so we can
+    # re-query safely after commit (avoiding DetachedInstanceError).
+    settings_id = settings.id
+
     try:
         db.session.commit()
     except Exception as commit_err:
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(commit_err)}), 500
 
-    # Re-fetch the settings row on a fresh connection to guarantee the response
-    # reflects what was actually written to the DB (avoids stale-connection reads
-    # that occur in Gunicorn multi-worker production environments when the session
-    # pool recycles a connection that predates the commit).
+    # Re-fetch the settings row to guarantee the response reflects what was
+    # actually written to the DB (avoids stale-connection lazy-loads that occur
+    # in Gunicorn multi-worker production environments).
     try:
-        db.session.expunge(settings)
-        fresh_settings = db.session.query(settings.__class__).filter_by(id=settings.id).first()
+        db.session.expire_all()
+        fresh_settings = db.session.query(Settings).filter_by(id=settings_id).first()
         if fresh_settings is None:
             fresh_settings = settings  # fallback: should never happen
     except Exception:
