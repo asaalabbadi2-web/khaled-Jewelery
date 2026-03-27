@@ -2377,16 +2377,30 @@ def update_settings():
                 count = 365
             settings.backup_retention_count = count
     
-    db.session.commit()
     try:
-        db.session.refresh(settings)
+        db.session.commit()
+    except Exception as commit_err:
+        db.session.rollback()
+        return jsonify({'error': 'commit_failed', 'message': str(commit_err)}), 500
+
+    # Re-fetch the settings row on a fresh connection to guarantee the response
+    # reflects what was actually written to the DB (avoids stale-connection reads
+    # that occur in Gunicorn multi-worker production environments when the session
+    # pool recycles a connection that predates the commit).
+    try:
+        db.session.expunge(settings)
+        fresh_settings = db.session.query(settings.__class__).filter_by(id=settings.id).first()
+        if fresh_settings is None:
+            fresh_settings = settings  # fallback: should never happen
     except Exception:
-        pass
-    response = jsonify(settings.to_dict())
+        # If the re-query itself fails, fall back to the in-memory object.
+        fresh_settings = settings
+
+    response = jsonify(fresh_settings.to_dict())
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    response.headers.update(_settings_diag_headers(settings))
+    response.headers.update(_settings_diag_headers(fresh_settings))
     return response
 
 @api.route('/system/reset', methods=['POST'])

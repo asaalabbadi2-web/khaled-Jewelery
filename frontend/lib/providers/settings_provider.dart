@@ -353,46 +353,11 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      // Send to server and use the server response as source of truth.
-      var effectiveSettings = await ApiService().updateSettings(newSettings);
+      // Send to server and use the server response as the source of truth.
+      // The backend performs a clean re-fetch after commit, so the response
+      // always reflects the persisted state — no client-side re-validation needed.
+      final effectiveSettings = await ApiService().updateSettings(newSettings);
 
-      // For sales race settings, trust the normalized PUT response first.
-      // Only fall back to read-after-write retries if the save response itself
-      // does not reflect the requested values.
-      final bool shouldVerifySalesRace =
-          newSettings.containsKey('sales_race_settings') ||
-          newSettings.containsKey('weekly_sales_target_weight');
-
-      if (shouldVerifySalesRace &&
-          !_salesRaceSettingsMatchExpected(effectiveSettings, newSettings)) {
-        Map<String, dynamic>? verifiedReadback;
-        bool matched = false;
-
-        for (var attempt = 0; attempt < 2; attempt++) {
-          final readback = await ApiService().getSettings();
-          if (_salesRaceSettingsMatchExpected(readback, newSettings)) {
-            verifiedReadback = readback;
-            matched = true;
-            break;
-          }
-
-          // Small delay and retry once to avoid transient race on slow environments.
-          await Future<void>.delayed(const Duration(milliseconds: 350));
-        }
-
-        if (!matched) {
-          throw Exception(
-            'فشل التحقق من حفظ إعدادات سباق المبيعات بعد الحفظ. '
-            'تم رفض التحديث لأن القراءة اللاحقة لا تطابق القيم المطلوبة.',
-          );
-        }
-
-        if (verifiedReadback != null) {
-          effectiveSettings = verifiedReadback;
-        }
-      }
-
-      // Use verified server settings directly (normalized/merged values).
       _settings = effectiveSettings;
 
       // Cache the server-confirmed settings locally.
@@ -407,85 +372,6 @@ class SettingsProvider with ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
-  }
-
-  bool _salesRaceSettingsMatchExpected(
-    Map<String, dynamic> serverSettings,
-    Map<String, dynamic> requestedSettings,
-  ) {
-    final expectedWeekly = requestedSettings['weekly_sales_target_weight'];
-    if (expectedWeekly != null) {
-      final expected = _safeDouble(expectedWeekly, fallback: -1.0);
-      final actual = _safeDouble(
-        serverSettings['weekly_sales_target_weight'],
-        fallback: -2.0,
-      );
-      if ((expected - actual).abs() > 0.000001) {
-        return false;
-      }
-    }
-
-    if (!requestedSettings.containsKey('sales_race_settings')) {
-      return true;
-    }
-
-    final expectedRaw = requestedSettings['sales_race_settings'];
-    final actualRaw = serverSettings['sales_race_settings'];
-
-    final expected = _normalizeDynamicMap(expectedRaw);
-    final actual = _normalizeDynamicMap(actualRaw);
-
-    for (final entry in expected.entries) {
-      final key = entry.key;
-      final expectedValue = entry.value;
-      final actualValue = actual[key];
-
-      if (expectedValue is num) {
-        final e = _safeDouble(expectedValue, fallback: double.nan);
-        final a = _safeDouble(actualValue, fallback: double.nan);
-        if (e.isNaN || a.isNaN || (e - a).abs() > 0.000001) {
-          return false;
-        }
-        continue;
-      }
-
-      if (expectedValue is bool) {
-        final e = _safeBool(expectedValue, fallback: !expectedValue);
-        final a = _safeBool(actualValue, fallback: !expectedValue);
-        if (e != a) {
-          return false;
-        }
-        continue;
-      }
-
-      if ((expectedValue?.toString() ?? '') !=
-          (actualValue?.toString() ?? '')) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  Map<String, dynamic> _normalizeDynamicMap(dynamic value) {
-    if (value is Map<String, dynamic>) return value;
-    if (value is Map) {
-      return value.map((key, mapValue) => MapEntry(key.toString(), mapValue));
-    }
-    if (value is String && value.trim().isNotEmpty) {
-      try {
-        final decoded = json.decode(value);
-        if (decoded is Map<String, dynamic>) return decoded;
-        if (decoded is Map) {
-          return decoded.map(
-            (key, mapValue) => MapEntry(key.toString(), mapValue),
-          );
-        }
-      } catch (_) {
-        return const <String, dynamic>{};
-      }
-    }
-    return const <String, dynamic>{};
   }
 
   Future<Map<String, dynamic>> fetchWeightClosingSettings() async {
