@@ -23285,6 +23285,9 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
     # this voucher, causing a false-positive match and silently skipping SBT creation.
     # Fix: when this voucher is linked to an invoice, require the SBT's invoice_id
     # to also match so we don't confuse unrelated records.
+    # Fix 2: for standalone vouchers (not linked to any invoice), only look for
+    # ref_type='voucher' SBTs — never 'invoice_payment', because old-code SBTs used
+    # invoice_payment.id as ref_id which can collide with the new voucher.id numerically.
     linked_invoice_id_pre = None
     try:
         if (getattr(voucher, 'reference_type', None) == 'invoice') and getattr(voucher, 'reference_id', None):
@@ -23292,12 +23295,21 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
     except Exception:
         linked_invoice_id_pre = None
 
-    _guard_q = SafeBoxTransaction.query.filter(
-        SafeBoxTransaction.ref_id == voucher.id,
-        SafeBoxTransaction.ref_type.in_(['voucher', 'invoice_payment']),
-    )
     if linked_invoice_id_pre is not None:
-        _guard_q = _guard_q.filter(SafeBoxTransaction.invoice_id == linked_invoice_id_pre)
+        # Voucher is linked to an invoice: check both legacy ref_types but also
+        # require invoice_id match to prevent cross-entity ID collision.
+        _guard_q = SafeBoxTransaction.query.filter(
+            SafeBoxTransaction.ref_id == voucher.id,
+            SafeBoxTransaction.ref_type.in_(['voucher', 'invoice_payment']),
+            SafeBoxTransaction.invoice_id == linked_invoice_id_pre,
+        )
+    else:
+        # Standalone voucher: old code never created SBTs with ref_type='voucher'
+        # for standalone vouchers, so only match the modern pattern.
+        _guard_q = SafeBoxTransaction.query.filter(
+            SafeBoxTransaction.ref_id == voucher.id,
+            SafeBoxTransaction.ref_type == 'voucher',
+        )
 
     existing_count = _guard_q.count()
     if existing_count > 0:
