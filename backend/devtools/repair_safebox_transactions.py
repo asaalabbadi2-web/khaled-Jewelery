@@ -118,11 +118,12 @@ def _ensure_sbt_for_je(
     if not hits:
         return []
 
-    # Existing SBTs for this ref_id on each safe_box (any ref_type)
+    # Existing SBTs for this ref_id *and* ref_type on each safe_box
     existing_sb_ids: set[int] = {
         int(sbt.safe_box_id)
         for sbt in SafeBoxTransaction.query.filter(
             SafeBoxTransaction.ref_id == ref_id,
+            SafeBoxTransaction.ref_type == ref_type,
         ).all()
         if abs(float(getattr(sbt, "amount_cash", 0) or 0)) > 0.005
     }
@@ -134,8 +135,9 @@ def _ensure_sbt_for_je(
         if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe:
             pm_by_safe[pm.default_safe_box_id] = pm.id
 
-    # For invoice JEs, also carry invoice_id on the SBT
+    # For invoice JEs carry invoice_id; for invoice_payment JEs carry invoice_payment_id
     invoice_id = ref_id if ref_type == "invoice" else None
+    invoice_payment_id = ref_id if ref_type == "invoice_payment" else None
 
     eps = 0.005
     actions: list[dict] = []
@@ -167,6 +169,7 @@ def _ensure_sbt_for_je(
                     ref_type=ref_type,
                     ref_id=ref_id,
                     invoice_id=invoice_id,
+                    invoice_payment_id=invoice_payment_id,
                     payment_method_id=pm_by_safe.get(sb.id),
                     direction=direction,
                     amount_cash=amount,
