@@ -7723,6 +7723,195 @@ def update_invoice_status(invoice_id: int):
     return jsonify(invoice.to_dict()), 200
 
 
+@api.route('/invoices/<int:invoice_id>/approve', methods=['POST'])
+@require_permission('invoice.edit')
+def approve_invoice(invoice_id: int):
+    """ترحيل فاتورة غير مرحّلة (تحتاج اعتماد المدير أو خيار الترحيل التلقائي معطّل).
+
+    يُرحّل الفاتورة وجميع قيودها المحاسبية المرتبطة دفعةً واحدة.
+    """
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
+
+    if invoice.is_posted:
+        return jsonify({'error': 'already_posted', 'message': 'الفاتورة مرحّلة بالفعل'}), 400
+
+    data = request.get_json(silent=True) or {}
+    approved_by = (
+        (getattr(getattr(g, 'current_user', None), 'username', None))
+        or data.get('approved_by')
+        or 'system'
+    )
+
+    try:
+        now = datetime.utcnow()
+
+        # 1. Cascade: post all linked invoice JEs
+        linked_jes = JournalEntry.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        for je in linked_jes:
+            if not je.is_posted:
+                je.is_posted = True
+                je.posted_at = now
+                je.posted_by = approved_by
+
+        # 1b. Cascade: post all linked voucher JEs
+        try:
+            _linked_vouchers = Voucher.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id
+            ).all()
+            _voucher_ids = [v.id for v in _linked_vouchers]
+            if _voucher_ids:
+                _voucher_jes = JournalEntry.query.filter(
+                    JournalEntry.reference_type == 'voucher',
+                    JournalEntry.reference_id.in_(_voucher_ids),
+                ).all()
+                for _vje in _voucher_jes:
+                    if not _vje.is_posted:
+                        _vje.is_posted = True
+                        _vje.is_draft = False
+                        _vje.posted_at = now
+                        _vje.posted_by = approved_by
+                linked_jes.extend(_voucher_jes)  # include in linked_jes for SBT sync below
+        except Exception as exc:
+            print(f"⚠️ Auto-post voucher JEs on approve skipped: {exc}")
+
+        # 2. Post the invoice itself
+        invoice.is_posted = True
+        invoice.posted_at = now
+        if not invoice.posted_by:
+            invoice.posted_by = approved_by
+
+        # 3. Sync payment status
+        try:
+            total_amount = float(invoice.total or 0.0)
+            paid_amount = float(invoice.amount_paid or 0.0)
+            barter_total = float(getattr(invoice, 'barter_total', 0.0) or 0.0)
+            total_settled = paid_amount + barter_total
+            eps = 0.01
+            if total_amount <= eps:
+                invoice.status = 'paid' if total_settled > eps else 'unpaid'
+            elif total_settled <= eps:
+                invoice.status = 'unpaid'
+            elif total_settled >= total_amount - eps:
+                invoice.status = 'paid'
+            else:
+                invoice.status = 'partially_paid'
+        except Exception:
+            pass
+
+        db.session.flush()
+
+        # 4. Record category-weight movements (skipped if already recorded)
+        try:
+            from category_weight_tracking import record_category_weight_movements_for_invoice_payload
+            # Build minimal items payload from stored InvoiceItem rows
+            items_payload = [
+                {'item_id': ii.item_id, 'weight': float(ii.weight or 0.0)}
+                for ii in InvoiceItem.query.filter_by(invoice_id=invoice_id).all()
+                if ii.item_id
+            ]
+            record_category_weight_movements_for_invoice_payload(
+                invoice_id=invoice_id,
+                items_payload=items_payload or None,
+            )
+        except Exception as exc:
+            print(f"⚠️ Category weight tracking skipped on approve: {exc}")
+
+        # 5. Mark any SystemAlerts for this invoice as reviewed
+        try:
+            from models import SystemAlert
+            SystemAlert.query.filter_by(
+                entity_type='Invoice', entity_id=invoice_id, is_reviewed=False
+            ).update({'is_reviewed': True, 'reviewed_by': approved_by, 'reviewed_at': now})
+        except Exception:
+            pass
+
+        # 6. Sync safe-box transactions for invoice JE lines
+        try:
+            for je in linked_jes:
+                _ensure_safe_box_transactions_for_invoice_je(
+                    invoice_id=invoice_id,
+                    journal_entry_id=je.id,
+                    created_by=approved_by,
+                )
+        except Exception as exc:
+            print(f"⚠️ safe-box SBT sync skipped on approve: {exc}")
+
+        db.session.commit()
+        return jsonify({'success': True, 'invoice': invoice.to_dict()}), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        import traceback; traceback.print_exc()
+        return jsonify({'error': 'approve_failed', 'message': str(exc)}), 500
+
+
+@api.route('/invoices/<int:invoice_id>/unpost', methods=['POST'])
+@require_permission('invoice.edit')
+def unpost_invoice(invoice_id: int):
+    """إلغاء ترحيل فاتورة (يتطلب تمكين خيار allow_unposting في الإعدادات).
+
+    يُلغي ترحيل الفاتورة وجميع قيودها المحاسبية المرتبطة دفعةً واحدة.
+    """
+    # Check setting
+    try:
+        settings_row = Settings.query.first()
+        allow_unposting = bool(getattr(settings_row, 'allow_unposting', False)) if settings_row else False
+    except Exception:
+        allow_unposting = False
+
+    if not allow_unposting:
+        return jsonify({
+            'error': 'unposting_disabled',
+            'message': 'إلغاء الترحيل غير مفعّل. يمكن تفعيله من إعدادات النظام.',
+        }), 403
+
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
+
+    if not invoice.is_posted:
+        return jsonify({'error': 'not_posted', 'message': 'الفاتورة غير مرحّلة أصلاً'}), 400
+
+    data = request.get_json(silent=True) or {}
+    unposted_by = (
+        (getattr(getattr(g, 'current_user', None), 'username', None))
+        or data.get('unposted_by')
+        or 'system'
+    )
+
+    try:
+        # 1. Cascade: unpost all linked invoice JEs
+        linked_jes = JournalEntry.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        for je in linked_jes:
+            je.is_posted = False
+            je.posted_at = None
+            je.posted_by = None
+
+        # 2. Unpost the invoice
+        invoice.is_posted = False
+        invoice.posted_at = None
+
+        # 3. Remove category-weight movements (only valid for posted invoices)
+        try:
+            from models import CategoryWeightMovement
+            CategoryWeightMovement.query.filter_by(invoice_id=invoice_id).delete()
+        except Exception:
+            pass
+
+        db.session.commit()
+        return jsonify({'success': True, 'invoice': invoice.to_dict()}), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': 'unpost_failed', 'message': str(exc)}), 500
+
+
 @api.route('/invoices/<int:invoice_id>/payments', methods=['POST'])
 def add_invoice_payment(invoice_id: int):
     """Add a payment entry to an existing invoice.
@@ -8669,6 +8858,144 @@ def safe_boxes_reconciliation():
         'summary': summary,
         'keyed': keyed,
     })
+
+
+@api.route('/safe-boxes/repair-transactions', methods=['POST'])
+@require_permission('admin')
+def repair_safe_box_transactions():
+    """Backfill missing SafeBoxTransactions for historical posted invoices.
+
+    Scans all posted invoice JEs whose lines hit safe-box accounts and creates
+    missing SBTs.  Idempotent — running it twice produces no duplicates.
+
+    Query params:
+      - dry_run: true/false (default true). When true, returns what WOULD be created.
+    """
+    dry_run = (request.args.get('dry_run') or request.args.get('dryRun') or 'true').strip().lower() in ('1', 'true', 'yes')
+    data = request.get_json(silent=True) or {}
+    approved_by = (
+        (getattr(getattr(g, 'current_user', None), 'username', None))
+        or data.get('approved_by')
+        or 'system'
+    )
+
+    try:
+        now = datetime.utcnow()
+
+        # ── Phase A: Post unposted voucher JEs for posted invoices ──
+        posted_invoices = Invoice.query.filter(
+            func.coalesce(Invoice.is_posted, False) == True,  # noqa: E712
+        ).with_entities(Invoice.id).all()
+        posted_invoice_ids = [int(r[0]) for r in posted_invoices]
+
+        voucher_je_repairs = []
+        if posted_invoice_ids:
+            # Find vouchers linked to posted invoices
+            linked_vouchers = Voucher.query.filter(
+                Voucher.reference_type == 'invoice',
+                Voucher.reference_id.in_(posted_invoice_ids),
+            ).all()
+            voucher_ids = [v.id for v in linked_vouchers]
+            voucher_to_invoice = {v.id: v.reference_id for v in linked_vouchers}
+
+            if voucher_ids:
+                unposted_voucher_jes = JournalEntry.query.filter(
+                    JournalEntry.reference_type == 'voucher',
+                    JournalEntry.reference_id.in_(voucher_ids),
+                    func.coalesce(JournalEntry.is_deleted, False) == False,  # noqa: E712
+                    or_(
+                        JournalEntry.is_posted == False,  # noqa: E712
+                        JournalEntry.is_posted == None,   # noqa: E711
+                    ),
+                ).all()
+
+                for vje in unposted_voucher_jes:
+                    inv_id = voucher_to_invoice.get(vje.reference_id)
+                    if dry_run:
+                        voucher_je_repairs.append({
+                            'voucher_id': vje.reference_id,
+                            'journal_entry_id': vje.id,
+                            'invoice_id': inv_id,
+                            'action': 'would_post_voucher_je',
+                        })
+                    else:
+                        vje.is_posted = True
+                        vje.is_draft = False
+                        if not getattr(vje, 'posted_at', None):
+                            vje.posted_at = now
+                        if not getattr(vje, 'posted_by', None):
+                            vje.posted_by = approved_by
+                        voucher_je_repairs.append({
+                            'voucher_id': vje.reference_id,
+                            'journal_entry_id': vje.id,
+                            'invoice_id': inv_id,
+                            'action': 'posted_voucher_je',
+                        })
+
+        # ── Phase B: Create missing SBTs for invoice JE lines on safe-box accounts ──
+        # Find all posted invoice JEs
+        invoice_jes = (
+            JournalEntry.query
+            .filter(JournalEntry.reference_type == 'invoice')
+            .filter(func.coalesce(JournalEntry.is_posted, True) == True)   # noqa: E712
+            .filter(func.coalesce(JournalEntry.is_deleted, False) == False) # noqa: E712
+            .filter(func.coalesce(JournalEntry.is_draft, False) == False)   # noqa: E712
+            .all()
+        )
+
+        # Map safe-box accounts
+        all_safe_boxes = SafeBox.query.all()
+        sb_account_ids = {int(sb.account_id) for sb in all_safe_boxes if sb.account_id is not None}
+
+        sbt_repairs = []
+        for je in invoice_jes:
+            invoice_id = je.reference_id
+            if not invoice_id:
+                continue
+
+            lines = [l for l in (getattr(je, 'lines', None) or []) if not getattr(l, 'is_deleted', False)]
+            hits_sb = any(int(l.account_id) in sb_account_ids for l in lines if l.account_id is not None)
+            if not hits_sb:
+                continue
+
+            if dry_run:
+                # Check if SBTs already exist
+                existing = SafeBoxTransaction.query.filter_by(invoice_id=invoice_id).count()
+                sbt_repairs.append({
+                    'invoice_id': invoice_id,
+                    'journal_entry_id': je.id,
+                    'existing_sbt_count': existing,
+                    'action': 'skip' if existing > 0 else 'would_create',
+                })
+            else:
+                created = _ensure_safe_box_transactions_for_invoice_je(
+                    invoice_id=invoice_id,
+                    journal_entry_id=je.id,
+                    created_by=approved_by,
+                )
+                if created:
+                    sbt_repairs.append({
+                        'invoice_id': invoice_id,
+                        'journal_entry_id': je.id,
+                        'created_count': len(created),
+                    })
+
+        if not dry_run:
+            db.session.commit()
+
+        return jsonify({
+            'dry_run': dry_run,
+            'scanned_invoice_jes': len(invoice_jes),
+            'voucher_je_repairs': voucher_je_repairs,
+            'total_voucher_je_repairs': len(voucher_je_repairs),
+            'sbt_repairs': sbt_repairs,
+            'total_sbt_repairs': len(sbt_repairs),
+        })
+
+    except Exception as exc:
+        db.session.rollback()
+        import traceback; traceback.print_exc()
+        return jsonify({'error': 'repair_failed', 'message': str(exc)}), 500
 
 
 @api.route('/invoices/<int:invoice_id>/print-template', methods=['PUT'])
@@ -14717,6 +15044,28 @@ def add_invoice():
         if hasattr(journal_entry, 'posted_by') and not getattr(journal_entry, 'posted_by', None):
             journal_entry.posted_by = new_invoice.posted_by
 
+        # ── Auto-post voucher JEs linked to this invoice ──
+        try:
+            _linked_vouchers = Voucher.query.filter_by(
+                reference_type='invoice', reference_id=new_invoice.id
+            ).all()
+            _voucher_ids = [v.id for v in _linked_vouchers]
+            if _voucher_ids:
+                _voucher_jes = JournalEntry.query.filter(
+                    JournalEntry.reference_type == 'voucher',
+                    JournalEntry.reference_id.in_(_voucher_ids),
+                ).all()
+                for _vje in _voucher_jes:
+                    if not _vje.is_posted:
+                        _vje.is_posted = True
+                        _vje.is_draft = False
+                        if not getattr(_vje, 'posted_at', None):
+                            _vje.posted_at = now
+                        if not getattr(_vje, 'posted_by', None):
+                            _vje.posted_by = new_invoice.posted_by
+        except Exception as exc:
+            print(f"⚠️ Auto-post voucher JEs skipped: {exc}")
+
         print(f"✅ Committing transaction...")
 
         # 📦 Category-weight tracking (by location / gold SafeBox)
@@ -14756,6 +15105,21 @@ def add_invoice():
                     )
         except Exception:
             pass
+
+        # ── Sync safe-box transactions for invoice JE lines ──
+        try:
+            db.session.flush()
+            _inv_jes = JournalEntry.query.filter_by(
+                reference_type='invoice', reference_id=new_invoice.id
+            ).all()
+            for _ij in _inv_jes:
+                _ensure_safe_box_transactions_for_invoice_je(
+                    invoice_id=new_invoice.id,
+                    journal_entry_id=_ij.id,
+                    created_by=posted_by_username or 'system',
+                )
+        except Exception as exc:
+            print(f"⚠️ safe-box SBT sync skipped: {exc}")
 
         db.session.commit()
         return jsonify(new_invoice.to_dict()), 201
@@ -16752,7 +17116,34 @@ def soft_delete_journal_entry(id):
             SafeBoxTransaction.query.filter_by(ref_type='journal_entry', ref_id=int(entry.id)).delete(synchronize_session=False)
         except Exception:
             pass
-        
+
+        # Cascade: if this JE belongs to an invoice, mark the invoice as unposted.
+        # The JE no longer counts in GL so the invoice should reflect that.
+        if entry.reference_type == 'invoice' and entry.reference_id:
+            try:
+                linked_inv = Invoice.query.get(entry.reference_id)
+                if linked_inv and linked_inv.is_posted:
+                    linked_inv.is_posted = False
+                    linked_inv.posted_at = None
+                    # Remove category-weight movements; only valid for posted invoices.
+                    try:
+                        from models import CategoryWeightMovement
+                        CategoryWeightMovement.query.filter_by(invoice_id=linked_inv.id).delete()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # Cascade: if this JE belongs to a voucher (directly), reset voucher to pending.
+        if entry.reference_type == 'voucher' and entry.reference_id:
+            try:
+                linked_v = Voucher.query.get(entry.reference_id)
+                if linked_v and linked_v.status == 'approved':
+                    linked_v.status = 'pending'
+                    linked_v.journal_entry_id = None
+            except Exception:
+                pass
+
         db.session.commit()
         
         return jsonify({
@@ -16834,15 +17225,40 @@ def delete_journal_entry(id):
             db.session.delete(line)
         
         # إزالة المراجع من الجداول الأخرى
-        # 1. الفواتير
+        # 1. الفواتير — unpost when their JE is hard-deleted
         invoices = Invoice.query.filter_by(journal_entry_id=entry.id).all()
         for inv in invoices:
             inv.journal_entry_id = None
+            if inv.is_posted:
+                inv.is_posted = False
+                inv.posted_at = None
+                # Remove category-weight movements; only valid for posted invoices.
+                try:
+                    from models import CategoryWeightMovement
+                    CategoryWeightMovement.query.filter_by(invoice_id=inv.id).delete()
+                except Exception:
+                    pass
+        # Also cascade via reference_type link (invoice JEs use reference_type, not invoice.journal_entry_id)
+        ref_invoices = Invoice.query.join(
+            JournalEntry,
+            (JournalEntry.reference_type == 'invoice') & (JournalEntry.reference_id == Invoice.id) & (JournalEntry.id == entry.id)
+        ).all()
+        for inv in ref_invoices:
+            if inv not in invoices and inv.is_posted:
+                inv.is_posted = False
+                inv.posted_at = None
+                try:
+                    from models import CategoryWeightMovement
+                    CategoryWeightMovement.query.filter_by(invoice_id=inv.id).delete()
+                except Exception:
+                    pass
         
-        # 2. السندات
+        # 2. السندات — reset to pending when their JE is hard-deleted
         vouchers = Voucher.query.filter_by(journal_entry_id=entry.id).all()
         for v in vouchers:
             v.journal_entry_id = None
+            if v.status == 'approved':
+                v.status = 'pending'
         
         # 3. أوامر إقفال الأوزان
         weight_orders = WeightClosingOrder.query.filter_by(valuation_journal_entry_id=entry.id).all()
@@ -22748,6 +23164,102 @@ def create_journal_entry_from_voucher(voucher):
         import traceback
         traceback.print_exc()
         return None
+
+
+def _ensure_safe_box_transactions_for_invoice_je(invoice_id: int, journal_entry_id: int, created_by: str = 'system'):
+    """Create missing SafeBoxTransactions for invoice JE lines that hit safe-box accounts.
+
+    When an invoice JE debits/credits a safe-box account (e.g. party_account fell
+    back to cash_account = safe_box.account), we must ensure the SafeBoxTransaction
+    sub-ledger has matching entries so reconciliation stays in sync.
+
+    If a voucher for this invoice already created SBT rows for the same safe-box,
+    this function skips to avoid duplication (idempotent).
+    """
+    je = JournalEntry.query.get(journal_entry_id)
+    if not je:
+        return []
+
+    je_lines = [l for l in (getattr(je, 'lines', None) or []) if not getattr(l, 'is_deleted', False)]
+    if not je_lines:
+        return []
+
+    account_ids = list({int(l.account_id) for l in je_lines if getattr(l, 'account_id', None) is not None})
+    safe_by_account_id: dict = {}
+    if account_ids:
+        for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
+            if getattr(sb, 'account_id', None) is not None:
+                safe_by_account_id[int(sb.account_id)] = sb
+
+    if not safe_by_account_id:
+        return []
+
+    # Check existing SBTs for this invoice to avoid duplicates
+    existing_sbt = SafeBoxTransaction.query.filter(
+        SafeBoxTransaction.invoice_id == invoice_id,
+    ).all()
+    existing_sb_ids_with_cash = set()
+    for sbt in existing_sbt:
+        if abs(float(getattr(sbt, 'amount_cash', 0) or 0)) > 0.005:
+            existing_sb_ids_with_cash.add(int(sbt.safe_box_id))
+
+    # Resolve linked payment info
+    linked_payment_method_id = None
+    pm_by_safe_id = {}
+    safe_ids = list({sb.id for sb in safe_by_account_id.values()})
+    if safe_ids:
+        for pm in PaymentMethod.query.filter(PaymentMethod.default_safe_box_id.in_(safe_ids)).all():
+            if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe_id:
+                pm_by_safe_id[pm.default_safe_box_id] = pm.id
+
+    eps = 0.005
+    created = []
+
+    for line in je_lines:
+        sb = safe_by_account_id.get(int(line.account_id))
+        if not sb:
+            continue
+
+        # If SBT already exists for this safe_box (from voucher), skip
+        if sb.id in existing_sb_ids_with_cash:
+            continue
+
+        cash_debit = float(getattr(line, 'cash_debit', 0) or 0)
+        cash_credit = float(getattr(line, 'cash_credit', 0) or 0)
+
+        if cash_debit > eps:
+            tx = SafeBoxTransaction(
+                safe_box_id=sb.id,
+                ref_type='invoice',
+                ref_id=invoice_id,
+                invoice_id=invoice_id,
+                payment_method_id=linked_payment_method_id or pm_by_safe_id.get(sb.id),
+                direction='in',
+                amount_cash=cash_debit,
+                notes=f"Invoice #{invoice_id} - direct safe-box debit",
+                created_by=created_by,
+            )
+            db.session.add(tx)
+            created.append(tx)
+            existing_sb_ids_with_cash.add(sb.id)
+
+        if cash_credit > eps:
+            tx = SafeBoxTransaction(
+                safe_box_id=sb.id,
+                ref_type='invoice',
+                ref_id=invoice_id,
+                invoice_id=invoice_id,
+                payment_method_id=linked_payment_method_id or pm_by_safe_id.get(sb.id),
+                direction='out',
+                amount_cash=cash_credit,
+                notes=f"Invoice #{invoice_id} - direct safe-box credit",
+                created_by=created_by,
+            )
+            db.session.add(tx)
+            created.append(tx)
+            existing_sb_ids_with_cash.add(sb.id)
+
+    return created
 
 
 def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
