@@ -447,7 +447,12 @@ def main() -> int:
             existing_rows = db.session.execute(
                 text(
                     "SELECT id, safe_box_id, ref_type, ref_id, direction, amount_cash, weight_18k, weight_21k, weight_22k, weight_24k "
-                    "FROM safe_box_transaction WHERE ref_id = :rid AND ref_type IN ('voucher','invoice_payment')"
+                    "FROM safe_box_transaction "
+                    "WHERE ref_id = :rid "
+                    "  AND ("
+                    "    ref_type = 'voucher'"
+                    "    OR (ref_type = 'invoice_payment' AND (invoice_payment_id IS NULL OR invoice_payment_id != ref_id))"
+                    "  )"
                 ),
                 {'rid': int(v['id'])},
             ).mappings().all()
@@ -471,9 +476,19 @@ def main() -> int:
             if dry_run:
                 continue
 
-            # Apply: delete existing, insert expected
+            # Apply: delete existing, insert expected.
+            # Scope to voucher-owned rows only: ref_type='voucher', or ref_type='invoice_payment'
+            # rows created by a previous backfill (identified by invoice_payment_id != ref_id).
+            # Real invoice_payment SBTs have invoice_payment_id = ref_id and must NOT be deleted.
             db.session.execute(
-                text("DELETE FROM safe_box_transaction WHERE ref_id = :rid AND ref_type IN ('voucher','invoice_payment')"),
+                text(
+                    "DELETE FROM safe_box_transaction "
+                    "WHERE ref_id = :rid "
+                    "  AND ("
+                    "    ref_type = 'voucher'"
+                    "    OR (ref_type = 'invoice_payment' AND (invoice_payment_id IS NULL OR invoice_payment_id != ref_id))"
+                    "  )"
+                ),
                 {'rid': int(v['id'])},
             )
             base_insert_cols = [
