@@ -23279,10 +23279,27 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
         return []
 
     # ── Idempotency guard: prevent double-posting ──────────────────────────
-    existing_count = SafeBoxTransaction.query.filter(
+    # We always store SBTs with ref_id=voucher.id.  However, legacy rows created
+    # by an older code version used ref_id=invoice_payment.id (≠ voucher.id).
+    # A later invoice_payment row can coincidentally share the same numeric id as
+    # this voucher, causing a false-positive match and silently skipping SBT creation.
+    # Fix: when this voucher is linked to an invoice, require the SBT's invoice_id
+    # to also match so we don't confuse unrelated records.
+    linked_invoice_id_pre = None
+    try:
+        if (getattr(voucher, 'reference_type', None) == 'invoice') and getattr(voucher, 'reference_id', None):
+            linked_invoice_id_pre = int(voucher.reference_id)
+    except Exception:
+        linked_invoice_id_pre = None
+
+    _guard_q = SafeBoxTransaction.query.filter(
         SafeBoxTransaction.ref_id == voucher.id,
         SafeBoxTransaction.ref_type.in_(['voucher', 'invoice_payment']),
-    ).count()
+    )
+    if linked_invoice_id_pre is not None:
+        _guard_q = _guard_q.filter(SafeBoxTransaction.invoice_id == linked_invoice_id_pre)
+
+    existing_count = _guard_q.count()
     if existing_count > 0:
         return []
     # ───────────────────────────────────────────────────────────────────────
