@@ -87,14 +87,24 @@ def _create_app() -> Flask:
 
 # ── core logic ─────────────────────────────────────────────────────────────────
 
-def _ensure_sbt_for_invoice_je(
-    invoice_id: int,
+def _ensure_sbt_for_je(
     je: JournalEntry,
     safe_by_account: dict,
     created_by: str,
     dry_run: bool,
+    phase: str = "B",
 ) -> list[dict]:
-    """Create (or report) missing SBTs for one invoice JE.  Returns action dicts."""
+    """Create (or report) missing SBTs for a JE whose lines hit safe-box accounts.
+
+    Works for any reference_type (invoice, invoice_payment, etc.).
+    Idempotent: skips safe-boxes that already have an SBT row for this ref_id.
+    """
+    ref_type = str(je.reference_type or "")
+    ref_id = je.reference_id
+    if not ref_id:
+        return []
+    ref_id = int(ref_id)
+
     lines = [
         ln for ln in (getattr(je, "lines", None) or [])
         if not getattr(ln, "is_deleted", False)
@@ -108,10 +118,12 @@ def _ensure_sbt_for_invoice_je(
     if not hits:
         return []
 
-    # Existing SBTs for this invoice (keyed by safe_box_id that already have cash)
+    # Existing SBTs for this ref_id on each safe_box (any ref_type)
     existing_sb_ids: set[int] = {
         int(sbt.safe_box_id)
-        for sbt in SafeBoxTransaction.query.filter_by(invoice_id=invoice_id).all()
+        for sbt in SafeBoxTransaction.query.filter(
+            SafeBoxTransaction.ref_id == ref_id,
+        ).all()
         if abs(float(getattr(sbt, "amount_cash", 0) or 0)) > 0.005
     }
 
@@ -121,6 +133,9 @@ def _ensure_sbt_for_invoice_je(
     for pm in PaymentMethod.query.filter(PaymentMethod.default_safe_box_id.in_(safe_ids)).all():
         if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe:
             pm_by_safe[pm.default_safe_box_id] = pm.id
+
+    # For invoice JEs, also carry invoice_id on the SBT
+    invoice_id = ref_id if ref_type == "invoice" else None
 
     eps = 0.005
     actions: list[dict] = []
@@ -136,8 +151,9 @@ def _ensure_sbt_for_invoice_je(
             if amount <= eps:
                 continue
             action = {
-                "phase": "B",
-                "invoice_id": invoice_id,
+                "phase": phase,
+                "ref_type": ref_type,
+                "ref_id": ref_id,
                 "journal_entry_id": je.id,
                 "safe_box_id": sb.id,
                 "safe_box_name": getattr(sb, "name", str(sb.id)),
@@ -148,13 +164,13 @@ def _ensure_sbt_for_invoice_je(
             if not dry_run:
                 tx = SafeBoxTransaction(
                     safe_box_id=sb.id,
-                    ref_type="invoice",
-                    ref_id=invoice_id,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
                     invoice_id=invoice_id,
                     payment_method_id=pm_by_safe.get(sb.id),
                     direction=direction,
                     amount_cash=amount,
-                    notes=f"Invoice #{invoice_id} – backfill via repair_safebox_transactions",
+                    notes=f"{ref_type} #{ref_id} – backfill via repair_safebox_transactions",
                     created_by=created_by,
                 )
                 db.session.add(tx)
@@ -162,6 +178,17 @@ def _ensure_sbt_for_invoice_je(
             actions.append(action)
 
     return actions
+
+
+# Keep old name as alias for backward compat
+def _ensure_sbt_for_invoice_je(
+    invoice_id: int,
+    je: JournalEntry,
+    safe_by_account: dict,
+    created_by: str,
+    dry_run: bool,
+) -> list[dict]:
+    return _ensure_sbt_for_je(je, safe_by_account, created_by, dry_run, phase="B")
 
 
 def run(dry_run: bool, created_by: str = "system") -> None:
@@ -236,41 +263,28 @@ def run(dry_run: bool, created_by: str = "system") -> None:
         if sb.account_id is not None
     }
 
-    invoice_jes = (
-        JournalEntry.query
-        .filter(JournalEntry.reference_type == "invoice")
-        .filter(
-            JournalEntry.is_posted.is_(None) | (JournalEntry.is_posted == True)  # noqa: E712
+    def _query_jes(ref_type: str):
+        return (
+            JournalEntry.query
+            .filter(JournalEntry.reference_type == ref_type)
+            .filter(JournalEntry.is_posted.is_(None) | (JournalEntry.is_posted == True))   # noqa: E712
+            .filter(JournalEntry.is_deleted.is_(None) | (JournalEntry.is_deleted == False)) # noqa: E712
+            .filter(JournalEntry.is_draft.is_(None) | (JournalEntry.is_draft == False))     # noqa: E712
+            .all()
         )
-        .filter(
-            JournalEntry.is_deleted.is_(None) | (JournalEntry.is_deleted == False)  # noqa: E712
-        )
-        .filter(
-            JournalEntry.is_draft.is_(None) | (JournalEntry.is_draft == False)  # noqa: E712
-        )
-        .all()
-    )
 
     phase_b_actions: list[dict] = []
     skipped = 0
 
-    for je in invoice_jes:
-        invoice_id = je.reference_id
-        if not invoice_id:
+    for je in _query_jes("invoice"):
+        if not je.reference_id:
             continue
-
-        actions = _ensure_sbt_for_invoice_je(
-            invoice_id=int(invoice_id),
-            je=je,
-            safe_by_account=safe_by_account,
-            created_by=created_by,
-            dry_run=dry_run,
-        )
+        actions = _ensure_sbt_for_je(je, safe_by_account, created_by, dry_run, phase="B")
         if actions:
             for a in actions:
                 phase_b_actions.append(a)
                 print(f"  {'[would create]' if dry_run else '[created]'} SBT  "
-                      f"invoice #{invoice_id}  JE #{je.id}  "
+                      f"{a['ref_type']} #{a['ref_id']}  JE #{je.id}  "
                       f"safe_box #{a['safe_box_id']} ({a['safe_box_name'][:20]})  "
                       f"{a['direction']}  {a['amount_cash']:,.2f}")
         else:
@@ -279,6 +293,30 @@ def run(dry_run: bool, created_by: str = "system") -> None:
     if not phase_b_actions:
         print("  ✅ nothing to do")
     print(f"  Phase B total: {len(phase_b_actions)}  (skipped {skipped} JEs with no missing SBTs)\n")
+
+    # ── Phase C: backfill SBTs for invoice_payment JE lines ─────────────────
+    print("Phase C — backfill missing SBTs for invoice_payment JE lines …")
+
+    phase_c_actions: list[dict] = []
+    skipped_c = 0
+
+    for je in _query_jes("invoice_payment"):
+        if not je.reference_id:
+            continue
+        actions = _ensure_sbt_for_je(je, safe_by_account, created_by, dry_run, phase="C")
+        if actions:
+            for a in actions:
+                phase_c_actions.append(a)
+                print(f"  {'[would create]' if dry_run else '[created]'} SBT  "
+                      f"{a['ref_type']} #{a['ref_id']}  JE #{je.id}  "
+                      f"safe_box #{a['safe_box_id']} ({a['safe_box_name'][:20]})  "
+                      f"{a['direction']}  {a['amount_cash']:,.2f}")
+        else:
+            skipped_c += 1
+
+    if not phase_c_actions:
+        print("  ✅ nothing to do")
+    print(f"  Phase C total: {len(phase_c_actions)}  (skipped {skipped_c} JEs with no missing SBTs)\n")
 
     # ── commit or rollback ────────────────────────────────────────────────────
     if dry_run:
@@ -291,7 +329,10 @@ def run(dry_run: bool, created_by: str = "system") -> None:
     print(f"  Summary [{mode_label}]")
     print(f"{'='*65}")
     print(f"  Phase A (voucher JE posts):      {len(phase_a_actions):>5}")
-    print(f"  Phase B (SBT rows created):      {len(phase_b_actions):>5}")
+    print(f"  Phase B (invoice SBTs):          {len(phase_b_actions):>5}")
+    print(f"  Phase C (invoice_payment SBTs):  {len(phase_c_actions):>5}")
+    total = len(phase_a_actions) + len(phase_b_actions) + len(phase_c_actions)
+    print(f"  Total actions:                   {total:>5}")
     print(f"  Mode:                            {mode_label}")
     if dry_run:
         print("\n  ⚠️  Dry-run — no changes written.  Pass --apply to apply.\n")
