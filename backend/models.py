@@ -1611,6 +1611,8 @@ class InventoryCostingConfig(db.Model):
     __tablename__ = 'inventory_costing_config'
 
     id = db.Column(db.Integer, primary_key=True)
+    # 'normal' = supplier purchases (new gold), 'scrap' = scrap/settlement purchases
+    costing_type = db.Column(db.String(20), default='normal', nullable=False)
     costing_method = db.Column(db.String(20), default='moving_average')
     current_avg_cost_per_gram = db.Column(db.Float, default=0.0)
     avg_gold_price_per_gram = db.Column(db.Float, default=0.0)

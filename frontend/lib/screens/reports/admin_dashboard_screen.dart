@@ -467,6 +467,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final sales = (periodData['sales'] as Map<String, dynamic>?) ?? {};
     final purchases = (periodData['purchases'] as Map<String, dynamic>?) ?? {};
     final expenses = (periodData['expenses'] as Map<String, dynamic>?) ?? {};
+    final scrapData = (periodData['scrap_purchases'] as Map<String, dynamic>?) ?? {};
 
     final salesValue = _asDouble(sales['total_value']);
     final salesWeight = _asDouble(sales['total_weight']);
@@ -477,6 +478,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final purchasesDocs = purchases['docs'] as int? ?? 0;
 
     final expensesValue = _asDouble(expenses['total_value']);
+
+    final scrapValue = _asDouble(scrapData['total_value']);
+    final scrapWeight = _asDouble(scrapData['total_weight']);
+    final scrapDocs = scrapData['docs'] as int? ?? 0;
+    final scrapAvgRate = _asDouble(scrapData['avg_rate']);
+    final scrapCumWeight = _asDouble(scrapData['cumulative_weight']);
+
+    const scrapColor = Color(0xFF7B4F2E);
 
     final byKaratSales = (sales['by_karat'] as List?) ?? [];
     final byKaratPurchases = (purchases['by_karat'] as List?) ?? [];
@@ -777,7 +786,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     SizedBox(width: _s(10)),
                     Expanded(
                       child: metricTile(
-                        isArabic ? 'إجمالي المشتريات' : 'Total Purchases',
+                        isArabic ? 'مشتريات الموردين' : 'Supplier Purchases',
                         _currencyFormat.format(purchasesValue),
                         '${_weightFormat.format(purchasesWeight)} ${isArabic ? "جم" : "g"} · $purchasesDocs ${isArabic ? "فاتورة" : "inv"}',
                         Icons.trending_down,
@@ -808,7 +817,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     ),
                     SizedBox(height: _s(8)),
                     metricTile(
-                      isArabic ? 'إجمالي المشتريات' : 'Total Purchases',
+                      isArabic ? 'مشتريات الموردين' : 'Supplier Purchases',
                       _currencyFormat.format(purchasesValue),
                       '${_weightFormat.format(purchasesWeight)} ${isArabic ? "جم" : "g"} · $purchasesDocs ${isArabic ? "فاتورة" : "inv"}',
                       Icons.trending_down,
@@ -827,6 +836,105 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               }
             },
           ),
+          SizedBox(height: _s(10)),
+
+          // ── بطاقة مشتريات الكسر والتسكير ─────────────────────────────
+          Container(
+            padding: EdgeInsets.all(_s(12)),
+            decoration: BoxDecoration(
+              color: scrapColor.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: scrapColor.withValues(alpha: 0.25)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.recycling_rounded, size: _s(16), color: scrapColor),
+                    SizedBox(width: _s(6)),
+                    Text(
+                      isArabic ? 'مشتريات الكسر والتسكير' : 'Scrap & Settlement Purchases',
+                      style: TextStyle(
+                        fontSize: _s(12),
+                        fontWeight: FontWeight.bold,
+                        color: scrapColor,
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(2)),
+                      decoration: BoxDecoration(
+                        color: scrapColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '$scrapDocs ${isArabic ? "فاتورة" : "inv"}',
+                        style: TextStyle(fontSize: _s(10), color: scrapColor, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: _s(10)),
+                LayoutBuilder(
+                  builder: (ctx, bc) {
+                    final wide = bc.maxWidth >= 500;
+                    final chips = [
+                      _ScrapChip(
+                        label: isArabic ? 'إجمالي المبلغ' : 'Total Value',
+                        value: _currencyFormat.format(scrapValue),
+                        unit: isArabic ? 'ر.س' : 'SAR',
+                        icon: Icons.payments_outlined,
+                        color: scrapColor,
+                        scale: _s(1),
+                      ),
+                      _ScrapChip(
+                        label: isArabic ? 'الوزن المشترى' : 'Weight Bought',
+                        value: _weightFormat.format(scrapWeight),
+                        unit: isArabic ? 'جم' : 'g',
+                        icon: Icons.scale_outlined,
+                        color: scrapColor,
+                        scale: _s(1),
+                      ),
+                      _ScrapChip(
+                        label: isArabic ? 'المعدل الحالي' : 'Current Avg Rate',
+                        value: _currencyFormat.format(scrapAvgRate),
+                        unit: isArabic ? 'ر.س/جم' : 'SAR/g',
+                        icon: Icons.show_chart_rounded,
+                        color: scrapColor,
+                        scale: _s(1),
+                      ),
+                      _ScrapChip(
+                        label: isArabic ? 'قاعدة المعدل (كلي)' : 'Avg Base (total)',
+                        value: _weightFormat.format(scrapCumWeight),
+                        unit: isArabic ? 'جم · منذ البداية' : 'g · all time',
+                        icon: Icons.inventory_2_outlined,
+                        color: scrapColor,
+                        scale: _s(1),
+                      ),
+                    ];
+                    if (wide) {
+                      return Row(
+                        children: chips
+                            .map((c) => Expanded(child: c))
+                            .toList()
+                            .fold<List<Widget>>([], (list, w) =>
+                              list.isEmpty ? [w] : [...list, SizedBox(width: _s(8)), w]),
+                      );
+                    } else {
+                      return Column(
+                        children: [
+                          Row(children: [Expanded(child: chips[0]), SizedBox(width: _s(8)), Expanded(child: chips[1])]),
+                          SizedBox(height: _s(8)),
+                          Row(children: [Expanded(child: chips[2]), SizedBox(width: _s(8)), Expanded(child: chips[3])]),
+                        ],
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
           SizedBox(height: _s(16)),
 
           // Karat breakdown
@@ -837,7 +945,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           SizedBox(height: _s(10)),
           _SummarySection(
-            title: isArabic ? 'توزيع المشتريات بالعيار (وزن + قيمة)' : 'Purchases by Karat (weight + value)',
+            title: isArabic ? 'توزيع مشتريات الموردين بالعيار (وزن + قيمة)' : 'Supplier Purchases by Karat',
             scale: _s(1),
             child: karatChips(byKaratPurchases),
           ),
@@ -851,7 +959,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           SizedBox(height: _s(10)),
           _SummarySection(
-            title: isArabic ? 'المشتريات بالمستخدم' : 'Purchases by User',
+            title: isArabic ? 'مشتريات الموردين بالمستخدم' : 'Supplier Purchases by User',
             scale: _s(1),
             child: userRows(byUserPurchases, Colors.blue),
           ),
@@ -2888,6 +2996,75 @@ class _AlertItem {
   final String text;
 
   _AlertItem({required this.icon, required this.color, required this.text});
+}
+
+/// Small metric chip used in the scrap purchases card.
+class _ScrapChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final String unit;
+  final IconData icon;
+  final Color color;
+  final double scale;
+
+  const _ScrapChip({
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.icon,
+    required this.color,
+    required this.scale,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8 * scale, vertical: 7 * scale),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 12 * scale, color: color),
+              SizedBox(width: 4 * scale),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 9 * scale,
+                    color: theme.textTheme.bodySmall?.color,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 4 * scale),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13 * scale,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          Text(
+            unit,
+            style: TextStyle(
+              fontSize: 9 * scale,
+              color: theme.textTheme.bodySmall?.color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SafeBoxHeroDetailsScreen extends StatefulWidget {

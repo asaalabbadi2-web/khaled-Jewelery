@@ -77,7 +77,7 @@ from dual_system_helpers import (
 from services.journals import create_wage_weight_release_journal
 from services.weight_execution import list_weight_profiles, resolve_weight_profile
 from services.live_balances import live_balances_by_account_ids
-from gold_costing_service import GoldCostingService
+from gold_costing_service import GoldCostingService, ScrapCostingService
 from category_weight_tracking import (
     get_category_weight_balances,
     record_category_weight_movements_for_invoice_payload,
@@ -1690,9 +1690,12 @@ def _resolve_inventory_account_id_for_invoice(invoice_type: str, gold_type: str)
         if v <= 0:
             return None
 
-        acc = Account.query.get(v)
+        # Always prefer looking up by account_number first.
+        # The numeric constants used as fallbacks (e.g. 1310, 1300) are
+        # chart-of-accounts numbers, NOT database primary keys.
+        acc = Account.query.filter_by(account_number=str(v)).first()
         if not acc:
-            acc = Account.query.filter_by(account_number=str(v)).first()
+            acc = Account.query.get(v)
         return int(acc.id) if acc else None
 
     resolved = _resolve(preferred)
@@ -6994,7 +6997,9 @@ def _rebuild_costing_from_invoices(limit: int | None = None) -> dict:
     _costing_zero_config()
 
     # Invoice types that affect inventory weight
-    add_types = {'شراء', 'شراء من عميل', 'مرتجع بيع'}
+    # Note: 'شراء من عميل' (customer scrap) intentionally excluded — scrap purchases
+    # are priced differently and must not distort the moving average cost basis.
+    add_types = {'شراء', 'مرتجع بيع'}
     consume_types = {'بيع', 'مرتجع شراء', 'مرتجع شراء (مورد)'}
     relevant_types = add_types.union(consume_types)
 
@@ -7020,6 +7025,11 @@ def _rebuild_costing_from_invoices(limit: int | None = None) -> dict:
         if inv.invoice_type in consume_types:
             GoldCostingService.consume_inventory(weight_main, auto_commit=False)
             processed += 1
+            continue
+
+        # Skip settlement/reservation scrap purchases — gold_type='scrap' means this
+        # invoice came from an office reservation, not a regular supplier purchase.
+        if inv.invoice_type == 'شراء' and str(getattr(inv, 'gold_type', '') or '').strip().lower() == 'scrap':
             continue
 
         # Add inventory (purchase or sales return)
@@ -7129,6 +7139,125 @@ def reset_gold_costing():
         'status': 'error',
         'message': 'وضع غير معروف. استخدم mode=zero أو mode=rebuild',
     }), 400
+
+
+# ── Scrap / Settlement costing ────────────────────────────────────────────────
+
+def _scrap_costing_snapshot_payload() -> dict:
+    """Return scrap moving-average data formatted for API responses."""
+    config = ScrapCostingService._get_config()  # pylint: disable=protected-access
+    snapshot = ScrapCostingService.snapshot()
+    return {
+        'costing_type': 'scrap',
+        'avg_gold_price_per_gram': config.avg_gold_price_per_gram or 0.0,
+        'avg_manufacturing_per_gram': config.avg_manufacturing_per_gram or 0.0,
+        'avg_total_cost_per_gram': config.avg_total_cost_per_gram or 0.0,
+        'total_inventory_weight': config.total_inventory_weight or 0.0,
+        'total_gold_value': config.total_gold_value or 0.0,
+        'last_purchase_price': config.last_purchase_price,
+        'last_purchase_weight': config.last_purchase_weight,
+        'last_updated': config.last_updated.isoformat() if config.last_updated else None,
+        'snapshot': snapshot.to_dict(),
+    }
+
+
+def _rebuild_scrap_costing_from_invoices(limit: int | None = None) -> dict:
+    """Rebuild the scrap moving average by replaying scrap/settlement invoices."""
+
+    # Zero the scrap accumulators
+    ScrapCostingService.reset(auto_commit=True)
+
+    # Two sources of scrap gold:
+    #   1. 'شراء من عميل' — buyback from customer regardless of gold_type
+    #   2. 'شراء' with gold_type='scrap' — office settlement/reservation pickup
+    scrap_customer_invoices = (
+        Invoice.query
+        .filter(Invoice.invoice_type == 'شراء من عميل')
+        .options(joinedload(Invoice.karat_lines))
+        .order_by(Invoice.date.asc())
+    )
+    settlement_invoices = (
+        Invoice.query
+        .filter(
+            Invoice.invoice_type == 'شراء',
+            Invoice.gold_type == 'scrap',
+        )
+        .options(joinedload(Invoice.karat_lines))
+        .order_by(Invoice.date.asc())
+    )
+    if limit is not None:
+        scrap_customer_invoices = scrap_customer_invoices.limit(int(limit))
+        settlement_invoices = settlement_invoices.limit(int(limit))
+
+    all_invoices = list(scrap_customer_invoices.all()) + list(settlement_invoices.all())
+    # Sort chronologically across both sets
+    all_invoices.sort(key=lambda i: (i.date or ''))
+
+    processed = 0
+    for inv in all_invoices:
+        try:
+            weight_main = float(inv.calculate_total_weight() or 0.0)
+        except Exception:
+            weight_main = float(getattr(inv, 'total_weight', 0.0) or 0.0)
+
+        if weight_main <= 0:
+            continue
+
+        gold_value_cash = 0.0
+        wage_value_cash = 0.0
+
+        if getattr(inv, 'karat_lines', None):
+            gold_value_cash = sum((line.gold_value_cash or 0.0) for line in inv.karat_lines)
+            wage_value_cash = sum((line.manufacturing_wage_cash or 0.0) for line in inv.karat_lines)
+
+        if gold_value_cash == 0.0 and getattr(inv, 'gold_subtotal', None) is not None:
+            gold_value_cash = float(inv.gold_subtotal or 0.0)
+        if wage_value_cash == 0.0 and getattr(inv, 'wage_subtotal', None) is not None:
+            wage_value_cash = float(inv.wage_subtotal or 0.0)
+
+        gold_price_per_gram = (gold_value_cash / weight_main) if weight_main > 0 else 0.0
+        wage_per_gram = (wage_value_cash / weight_main) if weight_main > 0 else 0.0
+
+        if gold_price_per_gram == 0.0 and wage_per_gram == 0.0:
+            total_cash = float(getattr(inv, 'total', 0.0) or 0.0)
+            gold_price_per_gram = (total_cash / weight_main) if weight_main > 0 else 0.0
+
+        ScrapCostingService.update_average_on_purchase(
+            weight_main,
+            gold_price_per_gram,
+            wage_per_gram,
+            auto_commit=False,
+        )
+        processed += 1
+
+    db.session.commit()
+    return {
+        'processed_invoices': processed,
+        **_scrap_costing_snapshot_payload(),
+    }
+
+
+@api.route('/gold-costing/scrap', methods=['GET'])
+def get_scrap_costing():
+    """Return current scrap moving-average snapshot."""
+    return jsonify(_scrap_costing_snapshot_payload())
+
+
+@api.route('/gold-costing/scrap/recompute', methods=['POST'])
+def recompute_scrap_costing():
+    """Rebuild scrap moving average from all scrap/settlement invoices."""
+    limit = request.args.get('limit', type=int)
+    result = _rebuild_scrap_costing_from_invoices(limit=limit)
+    return jsonify({'status': 'success', 'result': result})
+
+
+@api.route('/gold-costing/scrap/reset', methods=['POST'])
+def reset_scrap_costing():
+    """Zero the scrap costing accumulators without rebuilding."""
+    config = ScrapCostingService.reset(auto_commit=True)
+    return jsonify({'status': 'success', 'config': config})
+
+
 # Invoices CRUD
 @api.route('/invoices', methods=['GET'])
 def get_invoices():
@@ -13280,9 +13409,9 @@ def add_invoice():
             # B) القيود الوزنية (وزن فقط)
             # ============================================
             
-            # 1) مدين: المخزون الوزني (الوزن الفعلي - استثناء من القاعدة)
-            # 🔧 Fix: for scrap purchase, record physical weights into the resolved gold safe account
-            # (employee gold safe if explicitly set/enabled, else main scrap safe).
+            # 1) مدين: مذكرة المخزون وزناً (الوزن الفعلي - متسق مع دائن المخزون في البيع)
+            # الخزنة الفيزيائية تتتبع الوزن عبر SafeBoxTransaction (تم إنشاؤه أعلاه) ← لا تكرار هنا.
+            # القيد الوزني المحاسبي يذهب دائماً لمذكرة المخزون (1310 مذكرة) لتتسق مع قيود البيع.
             for karat, weight in gold_by_karat.items():
                 if weight <= 0:
                     continue
@@ -13290,14 +13419,11 @@ def add_invoice():
                 inv_acc_id = inventory_accounts.get(karat) if isinstance(inventory_accounts, dict) else None
                 inv_account = db.session.query(Account).get(inv_acc_id) if inv_acc_id else None
 
-                # Prefer the resolved scrap gold safe account (tracks weight), otherwise use memo/fallback.
-                target_weight_account_id = None
-                if scrap_purchase_gold_safe_account_id not in (None, 0):
-                    target_weight_account_id = scrap_purchase_gold_safe_account_id
-                elif inv_account and inv_account.memo_account_id:
-                    target_weight_account_id = inv_account.memo_account_id
-
+                # الأولوية: مذكرة المخزون (inv_account.memo_account_id) ← متسق مع البيع.
                 # Fallbacks: generic inventory memo (7521) then the inventory account itself.
+                target_weight_account_id = None
+                if inv_account and inv_account.memo_account_id:
+                    target_weight_account_id = inv_account.memo_account_id
                 if not target_weight_account_id:
                     target_weight_account_id = get_account_id_by_number('7521') or inv_acc_id
 
@@ -13319,16 +13445,18 @@ def add_invoice():
             
             print(f"⚖️ Cash weight equivalent (purchase): {cash_weight_equivalent} grams")
             
-            # الحصول على حساب المذكرة الخاص بالنقدية
+            # الحصول على حساب المذكرة الخاص بالطرف الدائن وزناً
+            # الأولوية: حساب مذكرة العميل (إن وُجد مربوط بحسابه المالي)،
+            # ثم حساب مذكرة النقدية الافتراضي (71100) كبديل عند غياب مذكرة العميل.
             cash_account = db.session.query(Account).get(acc_id)
             memo_cash_credit_account_id = None
             try:
                 memo_cash_credit_account_id = (
-                    default_memo_cash_account_id
-                    or customer_account_id
+                    customer_account_id
+                    or default_memo_cash_account_id
                 )
             except Exception:
-                memo_cash_credit_account_id = default_memo_cash_account_id or customer_account_id
+                memo_cash_credit_account_id = customer_account_id or default_memo_cash_account_id
 
             if cash_account and memo_cash_credit_account_id:
                 settlement_method_raw_w = (
@@ -30706,15 +30834,19 @@ def get_admin_dashboard():
             'year': (year_start, tomorrow_start),
         }
 
-        def _build_inv_summary(inv_types_dict, start, end):
-            invs = (
+        def _build_inv_summary(inv_types_dict, start, end, exclude_gold_type=None):
+            q = (
                 Invoice.query
                 .filter(Invoice.invoice_type.in_(list(inv_types_dict.keys())))
                 .filter(Invoice.is_posted.is_(True))
                 .filter(Invoice.date >= start)
                 .filter(Invoice.date < end)
-                .all()
             )
+            if exclude_gold_type:
+                q = q.filter(
+                    (Invoice.gold_type == None) | (Invoice.gold_type != exclude_gold_type)
+                )
+            invs = q.all()
             total_value = 0.0
             total_weight = 0.0
             by_user: dict = {}
@@ -30785,11 +30917,50 @@ def get_admin_dashboard():
             except Exception:
                 return {'total_value': 0.0, 'by_account': []}
 
+        def _build_scrap_summary(start, end):
+            """مشتريات الكسر والتسكير فقط (gold_type='scrap')."""
+            try:
+                scrap_inv_types = {'شراء من عميل': 1, 'شراء': 1, 'مرتجع شراء': -1}
+                invs = (
+                    Invoice.query
+                    .filter(Invoice.invoice_type.in_(list(scrap_inv_types.keys())))
+                    .filter(Invoice.gold_type == 'scrap')
+                    .filter(Invoice.is_posted.is_(True))
+                    .filter(Invoice.date >= start)
+                    .filter(Invoice.date < end)
+                    .all()
+                )
+                total_value = 0.0
+                total_weight = 0.0
+                for inv in invs:
+                    sign = scrap_inv_types.get(inv.invoice_type, 1)
+                    total_value += float(inv.total or 0) * sign
+                    total_weight += float(inv.total_weight or 0) * sign
+                # Current scrap moving average
+                from models import InventoryCostingConfig as ICC
+                scrap_cfg = ICC.query.filter_by(costing_type='scrap').first()
+                avg_rate = float(scrap_cfg.avg_total_cost_per_gram or 0.0) if scrap_cfg else 0.0
+                avg_gold = float(scrap_cfg.avg_gold_price_per_gram or 0.0) if scrap_cfg else 0.0
+                cum_weight = float(scrap_cfg.total_inventory_weight or 0.0) if scrap_cfg else 0.0
+                return {
+                    'total_value': round(total_value, 2),
+                    'total_weight': round(total_weight, 3),
+                    'docs': len(invs),
+                    'avg_rate': round(avg_rate, 4),
+                    'avg_gold': round(avg_gold, 4),
+                    'cumulative_weight': round(cum_weight, 3),
+                }
+            except Exception:
+                return {'total_value': 0.0, 'total_weight': 0.0, 'docs': 0, 'avg_rate': 0.0, 'avg_gold': 0.0, 'cumulative_weight': 0.0}
+
         for period_key, (p_start, p_end) in _summary_periods.items():
             sales_purchases_summary[period_key] = {
                 'sales': _build_inv_summary(sale_types, p_start, p_end),
-                'purchases': _build_inv_summary(purchase_types, p_start, p_end),
+                # Exclude scrap invoices to avoid double-counting:
+                # scrap is tracked separately in scrap_purchases.
+                'purchases': _build_inv_summary(purchase_types, p_start, p_end, exclude_gold_type='scrap'),
                 'expenses': _build_expenses_summary(p_start, p_end),
+                'scrap_purchases': _build_scrap_summary(p_start, p_end),
             }
     except Exception:
         sales_purchases_summary = {}

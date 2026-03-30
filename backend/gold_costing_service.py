@@ -23,10 +23,21 @@ class GoldCostingService:
     """Encapsulates moving-average costing logic (gold + manufacturing)."""
 
     @staticmethod
-    def _get_config(create_if_missing: bool = True) -> InventoryCostingConfig:
-        config: Optional[InventoryCostingConfig] = InventoryCostingConfig.query.first()
+    def _get_config(costing_type: str = 'normal', create_if_missing: bool = True) -> InventoryCostingConfig:
+        config: Optional[InventoryCostingConfig] = (
+            InventoryCostingConfig.query
+            .filter_by(costing_type=costing_type)
+            .first()
+        )
+        # Backward-compat fallback: if no 'normal' row exists, try the first row
+        if not config and costing_type == 'normal':
+            config = InventoryCostingConfig.query.first()
+            if config and not config.costing_type:
+                config.costing_type = 'normal'
+                db.session.flush()
         if not config and create_if_missing:
             config = InventoryCostingConfig(
+                costing_type=costing_type,
                 costing_method='moving_average',
                 current_avg_cost_per_gram=0.0,
                 avg_gold_price_per_gram=0.0,
@@ -160,6 +171,105 @@ class GoldCostingService:
             'manufacturing_component': manufacturing_component,
             'total_cogs': total,
         }
+
+
+class ScrapCostingService:
+    """Separate moving-average tracker for scrap and settlement gold purchases.
+
+    Tracks the average price paid when buying old gold from customers
+    (invoice_type='شراء من عميل') and when receiving gold via office
+    settlements (invoice_type='شراء' with gold_type='scrap').
+
+    This average is independent of the main inventory average and is
+    useful for pricing buyback offers and assessing scrap profitability.
+    Does NOT track consumption — scrap gold merges into main inventory.
+    """
+
+    COSTING_TYPE = 'scrap'
+
+    @staticmethod
+    def _get_config(create_if_missing: bool = True) -> InventoryCostingConfig:
+        return GoldCostingService._get_config(
+            costing_type=ScrapCostingService.COSTING_TYPE,
+            create_if_missing=create_if_missing,
+        )
+
+    @staticmethod
+    def snapshot() -> AverageSnapshot:
+        config = ScrapCostingService._get_config()
+        return AverageSnapshot(
+            avg_total=config.avg_total_cost_per_gram or 0.0,
+            avg_gold=config.avg_gold_price_per_gram or 0.0,
+            avg_manufacturing=config.avg_manufacturing_per_gram or 0.0,
+        )
+
+    @staticmethod
+    def config_dict() -> dict:
+        return ScrapCostingService._get_config().to_dict()
+
+    @staticmethod
+    def update_average_on_purchase(
+        weight_grams: float,
+        gold_price_per_gram: float,
+        manufacturing_wage_per_gram: float = 0.0,
+        auto_commit: bool = True,
+    ) -> AverageSnapshot:
+        """Update scrap moving average when buying scrap/settlement gold."""
+        if not weight_grams or weight_grams <= 0:
+            return ScrapCostingService.snapshot()
+
+        config = ScrapCostingService._get_config()
+
+        gold_value = (gold_price_per_gram or 0.0) * weight_grams
+        manufacturing_value = (manufacturing_wage_per_gram or 0.0) * weight_grams
+
+        config.total_inventory_weight = (config.total_inventory_weight or 0.0) + weight_grams
+        config.total_gold_value = (config.total_gold_value or 0.0) + gold_value
+        config.total_manufacturing_value = (config.total_manufacturing_value or 0.0) + manufacturing_value
+
+        if config.total_inventory_weight > 0:
+            config.avg_gold_price_per_gram = config.total_gold_value / config.total_inventory_weight
+            config.avg_manufacturing_per_gram = (
+                config.total_manufacturing_value / config.total_inventory_weight
+            )
+            config.avg_total_cost_per_gram = (
+                config.avg_gold_price_per_gram + config.avg_manufacturing_per_gram
+            )
+            config.current_avg_cost_per_gram = config.avg_total_cost_per_gram
+        else:
+            config.avg_gold_price_per_gram = 0.0
+            config.avg_manufacturing_per_gram = 0.0
+            config.avg_total_cost_per_gram = 0.0
+            config.current_avg_cost_per_gram = 0.0
+
+        config.last_purchase_price = gold_price_per_gram
+        config.last_purchase_weight = weight_grams
+
+        if auto_commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+
+        return ScrapCostingService.snapshot()
+
+    @staticmethod
+    def reset(auto_commit: bool = True) -> dict:
+        """Zero out all scrap costing accumulators."""
+        config = ScrapCostingService._get_config()
+        config.current_avg_cost_per_gram = 0.0
+        config.avg_gold_price_per_gram = 0.0
+        config.avg_manufacturing_per_gram = 0.0
+        config.avg_total_cost_per_gram = 0.0
+        config.total_inventory_weight = 0.0
+        config.total_gold_value = 0.0
+        config.total_manufacturing_value = 0.0
+        config.last_purchase_price = None
+        config.last_purchase_weight = None
+        if auto_commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+        return config.to_dict()
 
 
 def calculate_profit_weight(profit_cash: float, reference_price_per_gram: float) -> float:
