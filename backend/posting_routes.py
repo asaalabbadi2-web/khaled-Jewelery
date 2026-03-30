@@ -841,6 +841,44 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
     return created
 
 
+def _append_safe_reversal_transactions_for_voucher(voucher, created_by=None, reason=None):
+    """Append reversing SafeBoxTransaction rows for a previously-approved voucher (payment/receipt)."""
+    if not voucher or not getattr(voucher, 'id', None):
+        return []
+    existing_reversal = (
+        SafeBoxTransaction.query.filter_by(ref_type='voucher_reversal', ref_id=voucher.id)
+        .order_by(SafeBoxTransaction.id.desc())
+        .first()
+    )
+    if existing_reversal:
+        return []
+    original = SafeBoxTransaction.query.filter(
+        SafeBoxTransaction.ref_id == voucher.id,
+        SafeBoxTransaction.ref_type.in_(['voucher', 'invoice_payment']),
+    ).all()
+    if not original:
+        return []
+    created = []
+    for tx in original:
+        rev = SafeBoxTransaction(
+            safe_box_id=tx.safe_box_id,
+            ref_type='voucher_reversal',
+            ref_id=voucher.id,
+            payment_method_id=tx.payment_method_id,
+            direction='out' if (tx.direction or 'in') == 'in' else 'in',
+            amount_cash=float(tx.amount_cash or 0.0),
+            weight_18k=float(tx.weight_18k or 0.0),
+            weight_21k=float(tx.weight_21k or 0.0),
+            weight_22k=float(tx.weight_22k or 0.0),
+            weight_24k=float(tx.weight_24k or 0.0),
+            notes=(reason or f"Reversal for voucher {voucher.voucher_number}"),
+            created_by=created_by or getattr(voucher, 'created_by', 'system'),
+        )
+        db.session.add(rev)
+        created.append(rev)
+    return created
+
+
 def _append_safe_reversal_transactions_for_invoice_gold(invoice: Invoice, created_by: str = None, reason: str = None):
     """Append reversing SafeBoxTransaction rows for a previously-posted invoice gold movement."""
     if not invoice or not getattr(invoice, 'id', None):
@@ -2126,7 +2164,7 @@ def unpost_invoice(invoice_id):
             reason=f"Unpost invoice {getattr(invoice, 'invoice_number', None) or invoice.id}",
         )
 
-        # إلغاء ترحيل القيود المرتبطة بالفاتورة أيضاً
+        # إلغاء ترحيل قيود الفاتورة
         try:
             linked_jes = JournalEntry.query.filter_by(
                 reference_type='invoice', reference_id=invoice_id, is_posted=True
@@ -2135,6 +2173,38 @@ def unpost_invoice(invoice_id):
                 _je.is_posted = False
                 _je.posted_at = None
                 _je.posted_by = None
+        except Exception:
+            pass
+
+        # إلغاء ترحيل السندات المرتبطة (وعكس حركات الخزينة النقدية)
+        try:
+            linked_vouchers = Voucher.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id
+            ).all()
+            for v in linked_vouchers:
+                # عكس SafeBoxTransactions النقدية للسند
+                try:
+                    _append_safe_reversal_transactions_for_voucher(
+                        v,
+                        created_by=posted_by,
+                        reason=f"Unpost invoice #{invoice_id} — reverse voucher {v.voucher_number}",
+                    )
+                except Exception:
+                    pass
+                # إلغاء ترحيل قيد السند
+                if v.journal_entry_id:
+                    _vje = JournalEntry.query.get(v.journal_entry_id)
+                    if _vje and _vje.is_posted:
+                        _vje.is_posted = False
+                        _vje.posted_at = None
+                        _vje.posted_by = None
+                for _vje2 in JournalEntry.query.filter_by(
+                    reference_type='voucher', reference_id=v.id, is_posted=True
+                ).all():
+                    _vje2.is_posted = False
+                    _vje2.posted_at = None
+                    _vje2.posted_by = None
+                v.status = 'pending'
         except Exception:
             pass
 
@@ -2540,7 +2610,7 @@ def unpost_invoices_batch():
                 invoice, created_by=posted_by,
                 reason=f"Batch unpost {getattr(invoice, 'invoice_number', None) or invoice.id}",
             )
-            # إلغاء القيود المرتبطة
+            # إلغاء قيود الفاتورة
             try:
                 for _je in JournalEntry.query.filter_by(
                     reference_type='invoice', reference_id=invoice.id, is_posted=True
@@ -2548,6 +2618,33 @@ def unpost_invoices_batch():
                     _je.is_posted = False
                     _je.posted_at = None
                     _je.posted_by = None
+            except Exception:
+                pass
+            # إلغاء السندات وقيودها وعكس حركات الخزينة النقدية
+            try:
+                for _v in Voucher.query.filter_by(
+                    reference_type='invoice', reference_id=invoice.id
+                ).all():
+                    try:
+                        _append_safe_reversal_transactions_for_voucher(
+                            _v, created_by=posted_by,
+                            reason=f"Batch unpost invoice #{invoice.id} — reverse voucher {_v.voucher_number}",
+                        )
+                    except Exception:
+                        pass
+                    if _v.journal_entry_id:
+                        _vje = JournalEntry.query.get(_v.journal_entry_id)
+                        if _vje and _vje.is_posted:
+                            _vje.is_posted = False
+                            _vje.posted_at = None
+                            _vje.posted_by = None
+                    for _vje2 in JournalEntry.query.filter_by(
+                        reference_type='voucher', reference_id=_v.id, is_posted=True
+                    ).all():
+                        _vje2.is_posted = False
+                        _vje2.posted_at = None
+                        _vje2.posted_by = None
+                    _v.status = 'pending'
             except Exception:
                 pass
 

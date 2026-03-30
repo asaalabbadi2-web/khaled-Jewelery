@@ -8022,11 +8022,45 @@ def unpost_invoice(invoice_id: int):
             je.posted_at = None
             je.posted_by = None
 
-        # 2. Unpost the invoice
+        # 2. Cascade: cancel linked payment vouchers + their JEs + reverse SBTs
+        try:
+            linked_vouchers = Voucher.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id
+            ).all()
+            for v in linked_vouchers:
+                # Reverse SafeBox cash transactions tied to this voucher
+                try:
+                    _append_safe_reversal_transactions_for_voucher(
+                        v,
+                        created_by=unposted_by,
+                        reason=f"Unpost invoice #{invoice_id} — reverse voucher {v.voucher_number}",
+                    )
+                except Exception:
+                    pass
+                # Unpost the voucher JE
+                if v.journal_entry_id:
+                    vje = JournalEntry.query.get(v.journal_entry_id)
+                    if vje and vje.is_posted:
+                        vje.is_posted = False
+                        vje.posted_at = None
+                        vje.posted_by = None
+                # Cascade: also find voucher JEs via reference_type (belt-and-suspenders)
+                for vje2 in JournalEntry.query.filter_by(
+                    reference_type='voucher', reference_id=v.id, is_posted=True
+                ).all():
+                    vje2.is_posted = False
+                    vje2.posted_at = None
+                    vje2.posted_by = None
+                # Reset voucher status so it can be reposted if needed
+                v.status = 'pending'
+        except Exception:
+            pass
+
+        # 3. Unpost the invoice
         invoice.is_posted = False
         invoice.posted_at = None
 
-        # 3. Remove category-weight movements (only valid for posted invoices)
+        # 4. Remove category-weight movements (only valid for posted invoices)
         try:
             from models import CategoryWeightMovement
             CategoryWeightMovement.query.filter_by(invoice_id=invoice_id).delete()
@@ -8328,6 +8362,26 @@ def add_invoice_payment(invoice_id: int):
                     pass
     except Exception:
         pass
+
+    # شراء من عميل / مرتجع شراء: safe_box_id قد يكون خزينة ذهبية (لتتبع الوزن).
+    # سند الصرف النقدي يجب أن يستخدم دائماً خزينة نقدية.
+    if (
+        str(getattr(invoice, 'invoice_type', '') or '').strip() in ('شراء من عميل', 'مرتجع شراء')
+        and resolved_safe_box_id is not None
+    ):
+        try:
+            _pmt_sb = SafeBox.query.get(resolved_safe_box_id)
+            if _pmt_sb and ((_pmt_sb.safe_type or '').lower() == 'gold'):
+                _pmt_settings = Settings.query.first()
+                _pmt_main = getattr(_pmt_settings, 'main_cash_safe_box_id', None) if _pmt_settings else None
+                if _pmt_main not in (None, '', 0, '0', False):
+                    resolved_safe_box_id = int(_pmt_main)
+                else:
+                    _pmt_cs = SafeBox.get_default_by_type('cash')
+                    if _pmt_cs and _pmt_cs.id:
+                        resolved_safe_box_id = int(_pmt_cs.id)
+        except Exception:
+            pass
 
     if resolved_safe_box_id is None:
         return jsonify({
@@ -11172,6 +11226,26 @@ def add_invoice():
                     except Exception:
                         pass
 
+                    # شراء من عميل / مرتجع شراء: safe_box_id قد يكون خزينة ذهبية (لتتبع الوزن).
+                    # سند الصرف النقدي يجب أن يستخدم دائماً خزينة نقدية.
+                    if (
+                        str(getattr(new_invoice, 'invoice_type', '') or '').strip() in ('شراء من عميل', 'مرتجع شراء')
+                        and resolved_safe_box_id is not None
+                    ):
+                        try:
+                            _pmt_sb = SafeBox.query.get(resolved_safe_box_id)
+                            if _pmt_sb and ((_pmt_sb.safe_type or '').lower() == 'gold'):
+                                _pmt_settings = Settings.query.first()
+                                _pmt_main = getattr(_pmt_settings, 'main_cash_safe_box_id', None) if _pmt_settings else None
+                                if _pmt_main not in (None, '', 0, '0', False):
+                                    resolved_safe_box_id = int(_pmt_main)
+                                else:
+                                    _pmt_cs = SafeBox.get_default_by_type('cash')
+                                    if _pmt_cs and _pmt_cs.id:
+                                        resolved_safe_box_id = int(_pmt_cs.id)
+                        except Exception:
+                            pass
+
                     if resolved_safe_box_id is None:
                         db.session.rollback()
                         return jsonify({
@@ -11378,6 +11452,27 @@ def add_invoice():
                 # Ultimate fallback: use cash safe as last resort.
                 if resolved_safe_box_id is None:
                     resolved_safe_box_id = _fallback_cash_safe_box_id()
+
+                # شراء من عميل / مرتجع شراء: safe_box_id قد يكون خزينة ذهبية (لتتبع الوزن).
+                # سند الصرف النقدي يجب أن يستخدم دائماً خزينة نقدية.
+                if (
+                    str(getattr(new_invoice, 'invoice_type', '') or '').strip() in ('شراء من عميل', 'مرتجع شراء')
+                    and resolved_safe_box_id is not None
+                ):
+                    try:
+                        _pmt_sb = SafeBox.query.get(resolved_safe_box_id)
+                        if _pmt_sb and ((_pmt_sb.safe_type or '').lower() == 'gold'):
+                            _pmt_settings = Settings.query.first()
+                            _pmt_main = getattr(_pmt_settings, 'main_cash_safe_box_id', None) if _pmt_settings else None
+                            if _pmt_main not in (None, '', 0, '0', False):
+                                resolved_safe_box_id = int(_pmt_main)
+                            else:
+                                _pmt_cs = SafeBox.get_default_by_type('cash')
+                                if _pmt_cs and _pmt_cs.id:
+                                    resolved_safe_box_id = int(_pmt_cs.id)
+                    except Exception:
+                        pass
+
                 if resolved_safe_box_id is None:
                     db.session.rollback()
                     return jsonify({
@@ -13363,24 +13458,18 @@ def add_invoice():
             settlement_method_key = str(settlement_method_raw).strip().lower()
             is_offset_settlement = settlement_method_key in ('offset', 'barter', 'trade', 'swap')
 
+            # ================================================================
+            # نمط "البيع" المعكوس: قيد الفاتورة يُدائن حساب العميل (AR)،
+            # وسند الصرف (Phase 1) يُدين AR ويُدائن الخزينة النقدية.
+            # النتيجة: AR يصفر، والخزينة تُحرَّك مرة واحدة فقط من السند.
+            # ================================================================
             acc_id = None
-            safe_box = None
-            if not is_offset_settlement:
-                # 🆕 الحصول على الحساب من الخزينة
-                if safe_box_id:
-                    safe_box = SafeBox.query.get(safe_box_id)
-                elif payment_method_obj and payment_method_obj.default_safe_box:
-                    safe_box = payment_method_obj.default_safe_box
-
-                if safe_box and safe_box.account:
-                    acc_id = safe_box.account.id
-                else:
-                    acc_id = cash_acc_id or (cash_account.id if cash_account else None)
+            if is_offset_settlement:
+                # مقايضة/تقاص: استخدام AR مباشرة (يتقاطع مع الجانب الدائن لفاتورة البيع)
+                acc_id = party_account.id if party_account else (cash_acc_id or (cash_account.id if cash_account else None))
             else:
-                if party_account:
-                    acc_id = party_account.id
-                else:
-                    acc_id = cash_acc_id or (cash_account.id if cash_account else None)
+                # دفع نقدي: دائن AR (كما في بيع يُدين AR) ← السند يُغلق AR مقابل الخزينة
+                acc_id = party_account.id if party_account else (cash_acc_id or (cash_account.id if cash_account else None))
 
             if not acc_id:
                 db.session.rollback()
@@ -13402,7 +13491,7 @@ def add_invoice():
                 account_id=acc_id,
                 cash_credit=total_cash,
                 apply_golden_rule=False,
-                description=("تقاص/مقايضة شراء ذهب" if is_offset_settlement else "دفع نقدي لشراء ذهب")
+                description=("تقاص/مقايضة شراء ذهب" if is_offset_settlement else "ذمم عميل - مستحق الدفع مقابل شراء الكسر")
             )
             
             # ============================================
