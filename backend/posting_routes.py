@@ -37,6 +37,8 @@ from models import (
     Employee,
     SafeBox,
     SafeBoxTransaction,
+    Voucher,
+    VoucherAccountLine,
 )
 from sqlalchemy import func, case, or_, and_
 import json

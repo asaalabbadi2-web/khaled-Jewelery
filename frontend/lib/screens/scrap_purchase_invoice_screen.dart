@@ -4612,6 +4612,10 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
+                        onTap: () => _focusAndSelect(
+                          _weightFocusNode,
+                          _weightController,
+                        ),
                         decoration: const InputDecoration(
                           labelText: 'الوزن',
                           border: OutlineInputBorder(),
@@ -4639,6 +4643,10 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
+                        onTap: () => _focusAndSelect(
+                          _wageFocusNode,
+                          _wageController,
+                        ),
                         decoration: const InputDecoration(
                           labelText: 'المصنعية/جم',
                           border: OutlineInputBorder(),
@@ -4661,6 +4669,10 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
+                        onTap: () => _focusAndSelect(
+                          _countFocusNode,
+                          _countController,
+                        ),
                         decoration: const InputDecoration(
                           labelText: 'العدد',
                           border: OutlineInputBorder(),
@@ -4687,6 +4699,10 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         textInputAction: TextInputAction.done,
                         inputFormatters: [NormalizeNumberFormatter()],
+                        onTap: () => _focusAndSelect(
+                          _amountFocusNode,
+                          _amountController,
+                        ),
                         decoration: InputDecoration(
                           labelText: 'المبلغ (اختياري)',
                           suffixText: widget.currencySymbol,

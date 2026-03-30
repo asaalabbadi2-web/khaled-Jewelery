@@ -13498,9 +13498,8 @@ def add_invoice():
             # B) القيود الوزنية (وزن فقط)
             # ============================================
             
-            # 1) مدين: مذكرة المخزون وزناً (الوزن الفعلي - متسق مع دائن المخزون في البيع)
-            # الخزنة الفيزيائية تتتبع الوزن عبر SafeBoxTransaction (تم إنشاؤه أعلاه) ← لا تكرار هنا.
-            # القيد الوزني المحاسبي يذهب دائماً لمذكرة المخزون (1310 مذكرة) لتتسق مع قيود البيع.
+            # 1) مدين: حساب عهدة الموظف الذهبي وزناً (إذا توفر) ← الذهب يدخل عهدة الموظف.
+            # Fallback: مذكرة المخزون (inv_account.memo_account_id) ثم 7521.
             for karat, weight in gold_by_karat.items():
                 if weight <= 0:
                     continue
@@ -13508,11 +13507,15 @@ def add_invoice():
                 inv_acc_id = inventory_accounts.get(karat) if isinstance(inventory_accounts, dict) else None
                 inv_account = db.session.query(Account).get(inv_acc_id) if inv_acc_id else None
 
-                # الأولوية: مذكرة المخزون (inv_account.memo_account_id) ← متسق مع البيع.
-                # Fallbacks: generic inventory memo (7521) then the inventory account itself.
+                # الأولوية 1: حساب الخزينة الذهبية للموظف (عهدة وزنية)
+                # scrap_purchase_gold_safe_account_id = حساب الخزينة الذهبية المستهدفة (713100011 مثلاً)
                 target_weight_account_id = None
-                if inv_account and inv_account.memo_account_id:
+                if scrap_purchase_gold_safe_account_id:
+                    target_weight_account_id = scrap_purchase_gold_safe_account_id
+                # الأولوية 2: مذكرة المخزون المرتبطة بحساب المخزون
+                if not target_weight_account_id and inv_account and inv_account.memo_account_id:
                     target_weight_account_id = inv_account.memo_account_id
+                # الأولوية 3: حساب مذكرة افتراضي
                 if not target_weight_account_id:
                     target_weight_account_id = get_account_id_by_number('7521') or inv_acc_id
 
@@ -13523,7 +13526,7 @@ def add_invoice():
                         journal_entry_id=journal_entry.id,
                         account_id=target_weight_account_id,
                         **weight_params,
-                        description=f"شراء ذهب عيار {karat} (وزن فعلي)"
+                        description=f"شراء ذهب عيار {karat} — دخول عهدة"
                     )
                 else:
                     print(f"⚠️ No weight target account for scrap purchase karat {karat} (inv account {inv_acc_id})")
