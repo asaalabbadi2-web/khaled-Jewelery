@@ -2489,35 +2489,47 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       }
 
       final shouldPrint = _uiAutoOpenPrintAfterSave
-          ? true
-          : await showDialog<bool>(
+          ? 'print'
+          : await showDialog<String>(
               context: context,
               barrierDismissible: false,
               builder: (dialogContext) {
                 return AlertDialog(
                   title: const Text('تم حفظ الفاتورة'),
-                  content: Text(
-                    _isSupplierReturnMode
-                        ? '✅ تم حفظ مرتجع الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعته الآن؟'
-                        : '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nهل تريد طباعتها الآن؟',
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        _isSupplierReturnMode
+                            ? '✅ تم حفظ مرتجع الشراء #${invoiceForPrint['id'] ?? ''}\nاختر الإجراء:'
+                            : '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nاختر الإجراء:',
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, 'print'),
+                        icon: const Icon(Icons.print),
+                        label: const Text('طباعة'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, 'share'),
+                        icon: const Icon(Icons.share, size: 18),
+                        label: const Text('مشاركة'),
+                      ),
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext, null),
+                        child: const Text('تم'),
+                      ),
+                    ],
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      child: const Text('تم'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      icon: const Icon(Icons.print),
-                      label: const Text('طباعة'),
-                    ),
-                  ],
                 );
               },
             );
 
       if (!mounted) return;
-      if (shouldPrint == true) {
+      if (shouldPrint == 'print') {
         try {
           await printInvoiceDirect(
             context: context,
@@ -2532,6 +2544,20 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               content: Text('تعذر فتح الطباعة: $e'),
               backgroundColor: Colors.red,
             ),
+          );
+        }
+      } else if (shouldPrint == 'share') {
+        try {
+          await shareInvoicePdf(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('تعذر مشاركة الفاتورة: $e')),
           );
         }
       }

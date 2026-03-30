@@ -903,6 +903,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         'customer_id': customerId,
         'branch_id': _selectedBranchId,
         'transaction_type': 'sell',
+        'gold_type': 'scrap',
         'date': DateTime.now().toIso8601String(),
         'total': totalAmount,
         'total_weight': totalWeight,
@@ -993,8 +994,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         }
 
         final shouldPrint = _uiAutoOpenPrintAfterSave
-            ? true
-            : await showDialog<bool>(
+            ? 'print'
+            : await showDialog<String>(
                 context: context,
                 barrierDismissible: false,
                 builder: (dialogContext) {
@@ -1004,28 +1005,40 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
                           : 'تم حفظ الفاتورة',
                     ),
-                    content: Text(
-                      '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
-                      '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
-                      '\n\nهل تريد طباعتها الآن؟',
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
+                          '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
+                          '\n\nاختر الإجراء:',
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          onPressed: () => Navigator.pop(dialogContext, 'print'),
+                          icon: const Icon(Icons.print),
+                          label: const Text('طباعة'),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () => Navigator.pop(dialogContext, 'share'),
+                          icon: const Icon(Icons.share, size: 18),
+                          label: const Text('مشاركة'),
+                        ),
+                        const SizedBox(height: 4),
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogContext, null),
+                          child: const Text('تم'),
+                        ),
+                      ],
                     ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dialogContext, false),
-                        child: const Text('تم'),
-                      ),
-                      FilledButton.icon(
-                        onPressed: () => Navigator.pop(dialogContext, true),
-                        icon: const Icon(Icons.print),
-                        label: const Text('طباعة'),
-                      ),
-                    ],
                   );
                 },
               );
 
         if (!context.mounted) return;
-        if (shouldPrint == true) {
+        if (shouldPrint == 'print') {
           try {
             await printInvoiceDirect(
               context: context,
@@ -1036,6 +1049,18 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           } catch (e) {
             if (!context.mounted) return;
             _showError('تعذر فتح الطباعة: $e');
+          }
+        } else if (shouldPrint == 'share') {
+          try {
+            await shareInvoicePdf(
+              context: context,
+              invoice: invoiceForPrint,
+              paperSize: _uiPaperSize,
+              isArabic: true,
+            );
+          } catch (e) {
+            if (!context.mounted) return;
+            _showError('تعذر مشاركة الفاتورة: $e');
           }
         }
 

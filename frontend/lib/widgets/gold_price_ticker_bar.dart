@@ -1,10 +1,68 @@
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import '../api_service.dart';
 import '../theme/app_theme.dart';
+
+/// Drives the ticker scroll via [FlowDelegate.paintChildren] only.
+/// Because [repaint] is the animation, each animation tick triggers a
+/// paint-only pass — no widget rebuild, no layout pass.
+class _TickerFlowDelegate extends FlowDelegate {
+  final Animation<double> animation;
+  final double cycleWidth;
+  final int cycles;
+  final bool isArabic;
+  final double viewportWidth;
+
+  _TickerFlowDelegate({
+    required this.animation,
+    required this.cycleWidth,
+    required this.cycles,
+    required this.isArabic,
+    required this.viewportWidth,
+  }) : super(repaint: animation);
+
+  @override
+  Size getSize(BoxConstraints constraints) =>
+      Size(constraints.maxWidth, constraints.maxHeight);
+
+  @override
+  BoxConstraints getConstraintsForChild(int i, BoxConstraints constraints) {
+    // Let every child (content tile and measure child) use its natural width.
+    // Constraining to a fixed cycleWidth causes overflow when the tile content
+    // is wider than the fallback estimate.
+    return BoxConstraints(maxHeight: constraints.maxHeight);
+  }
+
+  @override
+  void paintChildren(FlowPaintingContext context) {
+    // Use the actual rendered width of the first tile so that spacing is
+    // always exact regardless of the cycleWidth estimate.
+    final tileW = (cycles > 0 ? context.getChildSize(0)?.width : null) ??
+        cycleWidth;
+    if (tileW <= 0) return;
+    final shift = animation.value * tileW;
+    final baseX = isArabic ? (-tileW + shift) : (viewportWidth - shift);
+    for (int j = 0; j < cycles; j++) {
+      final dx = baseX + ((j - 2) * tileW);
+      final childH = context.getChildSize(j)?.height ?? 0;
+      final dy = (context.size.height - childH) / 2;
+      context.paintChild(
+        j,
+        transform: Matrix4.translationValues(dx, dy, 0),
+      );
+    }
+    // Child at index [cycles] is the hidden measure widget — never painted.
+  }
+
+  @override
+  bool shouldRepaint(_TickerFlowDelegate old) =>
+      old.cycleWidth != cycleWidth ||
+      old.cycles != cycles ||
+      old.isArabic != isArabic ||
+      old.viewportWidth != viewportWidth;
+}
 
 class GoldPriceTickerBar extends StatefulWidget {
   final bool isArabic;
@@ -60,6 +118,19 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
 
   final GlobalKey _measureKey = GlobalKey();
   double _measuredWidth = 0.0;
+
+  void _scheduleMeasure() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final renderObject = _measureKey.currentContext?.findRenderObject();
+      final box = renderObject is RenderBox ? renderObject : null;
+      if (box == null) return;
+      final w = box.size.width;
+      if (w <= 0) return;
+      if ((w - _measuredWidth).abs() < 0.5) return;
+      setState(() => _measuredWidth = w);
+    });
+  }
 
   @override
   void initState() {
@@ -237,6 +308,12 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
         _controller.repeat();
       }
     });
+
+    // Re-measure content width so cycleWidth is correct after data loads.
+    // This is required when the parent provides ouncePriceUsd directly
+    // (bypassing _load()), so _scheduleMeasure() would never be triggered
+    // otherwise.
+    _scheduleMeasure();
   }
 
   Future<void> _load() async {
@@ -274,6 +351,7 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
       }
 
       _applyOuncePrice(ounce, resetError: true);
+      _scheduleMeasure();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -533,161 +611,97 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(14),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                const horizontalPad = 12.0;
-                const gap = 36.0;
+          child: LayoutBuilder(builder: (context, constraints) {
+            const horizontalPad = 12.0;
+            const gap = 36.0;
 
-                Widget buildContent() => _content(
-                  baseStyle: effectiveStyle,
-                  isDark: isDark,
-                  isArabic: widget.isArabic,
-                );
+            Widget buildContent() => _content(
+              baseStyle: effectiveStyle,
+              isDark: isDark,
+              isArabic: widget.isArabic,
+            );
 
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  final renderObject = _measureKey.currentContext
-                      ?.findRenderObject();
-                  final box = renderObject is RenderBox ? renderObject : null;
-                  if (box == null || !mounted) return;
-                  final w = box.size.width;
-                  if (w <= 0) return;
-                  if ((w - _measuredWidth).abs() < 0.5) return;
-                  setState(() => _measuredWidth = w);
-                });
+            // Constant fallback until the true content width is measured.
+            const fallbackWidth = 900.0;
+            final cycleWidth =
+                _measuredWidth > 0 ? _measuredWidth : fallbackWidth;
+            final viewportWidth = constraints.maxWidth;
+            final cycles = (viewportWidth / cycleWidth).ceil() + 4;
 
-                // Safe fallback while width is not yet measured.
-                final fallbackText = widget.isArabic
-                    ? 'تحديث سعر الذهب • جاري التحميل...'
-                    : 'Gold Price Update • Loading...';
-                final fallbackPainter = TextPainter(
-                  text: TextSpan(text: fallbackText, style: effectiveStyle),
-                  textDirection: widget.isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  maxLines: 1,
-                )..layout();
-                final fallbackWidth =
-                    fallbackPainter.size.width + (horizontalPad * 2) + gap;
+            // Keep pixel speed constant regardless of content width.
+            const speed = 55.0;
+            final targetMs =
+                ((cycleWidth / speed).clamp(10.0, 22.0) * 1000).round();
+            if (_controller.duration?.inMilliseconds != targetMs) {
+              _controller.duration = Duration(milliseconds: targetMs);
+              _controller
+                ..reset()
+                ..repeat();
+            }
 
-                final cycleWidth = (_measuredWidth > 0)
-                    ? _measuredWidth
-                    : fallbackWidth;
-                final viewportWidth = constraints.maxWidth;
-                final cycles = (viewportWidth / cycleWidth).ceil() + 4;
+            // Build content tiles HERE (LayoutBuilder scope).
+            // They are rebuilt only when data changes or the viewport
+            // resizes — never on each 60 fps animation tick.
+            Widget makeSlot() => RepaintBoundary(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: horizontalPad),
+                child: Directionality(
+                  textDirection:
+                      widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  child: DefaultTextStyle(
+                    style: effectiveStyle,
+                    child: buildContent(),
+                  ),
+                ),
+              ),
+            );
 
-                final speed = 55.0;
-                final seconds = (cycleWidth / speed).clamp(10.0, 22.0);
-                if (_controller.duration?.inMilliseconds !=
-                    (seconds * 1000).round()) {
-                  _controller.duration = Duration(
-                    milliseconds: (seconds * 1000).round(),
-                  );
-                  _controller
-                    ..reset()
-                    ..repeat();
-                }
+            final copies = List.generate(cycles, (_) => makeSlot());
 
-                return AnimatedBuilder(
+            // Hidden child used only to measure natural content width.
+            final measureWidget = Offstage(
+              offstage: true,
+              child: RepaintBoundary(
+                key: _measureKey,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: horizontalPad),
+                  child: Directionality(
+                    textDirection: widget.isArabic
+                        ? TextDirection.rtl
+                        : TextDirection.ltr,
+                    child: DefaultTextStyle(
+                      style: effectiveStyle,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          buildContent(),
+                          const SizedBox(width: gap),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+
+            // Flow: on each animation tick only paintChildren() runs.
+            // No widget rebuild, no layout pass during scroll.
+            return ClipRect(
+              child: Flow(
+                delegate: _TickerFlowDelegate(
                   animation: _controller,
-                  builder: (context, _) {
-                    final shift = _controller.value * cycleWidth;
-                    final baseX = widget.isArabic
-                        ? (-cycleWidth + shift)
-                        : (viewportWidth - shift);
-
-                    Widget chunk() {
-                      return SizedBox(
-                        width: cycleWidth,
-                        child: Align(
-                          alignment: widget.isArabic
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            reverse: widget.isArabic,
-                            physics: const NeverScrollableScrollPhysics(),
-                            clipBehavior: Clip.hardEdge,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: horizontalPad,
-                                  ),
-                                  child: Directionality(
-                                    textDirection: widget.isArabic
-                                        ? TextDirection.rtl
-                                        : TextDirection.ltr,
-                                    child: DefaultTextStyle(
-                                      style: effectiveStyle,
-                                      child: buildContent(),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: gap),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    }
-
-                    final measureRow = Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: horizontalPad,
-                      ),
-                      child: Directionality(
-                        textDirection: widget.isArabic
-                            ? TextDirection.rtl
-                            : TextDirection.ltr,
-                        child: DefaultTextStyle(
-                          style: effectiveStyle,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              buildContent(),
-                              const SizedBox(width: gap),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-
-                    return ClipRect(
-                      child: Stack(
-                        children:
-                            (List.generate(cycles, (j) {
-                              final i = j - 2;
-                              final dx = baseX + (i * cycleWidth);
-                              return Positioned(
-                                left: dx,
-                                top: 0,
-                                bottom: 0,
-                                child: Center(child: chunk()),
-                              );
-                            })..add(
-                              Positioned(
-                                left: -99999,
-                                top: 0,
-                                child: Offstage(
-                                  offstage: true,
-                                  child: RepaintBoundary(
-                                    key: _measureKey,
-                                    child: measureRow,
-                                  ),
-                                ),
-                              ),
-                            )),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+                  cycleWidth: cycleWidth,
+                  cycles: cycles,
+                  isArabic: widget.isArabic,
+                  viewportWidth: viewportWidth,
+                ),
+                children: [...copies, measureWidget],
+              ),
+            );
+          }),
           ),
-        ),
       ),
     );
   }

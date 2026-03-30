@@ -1213,7 +1213,7 @@ class _ScrapPurchaseInvoiceScreenState
       }
 
       final shouldPrint = _uiAutoOpenPrintAfterSave
-          ? true
+          ? 'print'
           : await _showPostSaveInvoiceSummary(
               invoice: invoiceForPrint,
               approvalRequired: approvalRequired,
@@ -1221,7 +1221,7 @@ class _ScrapPurchaseInvoiceScreenState
             );
 
       if (!mounted) return;
-      if (shouldPrint == true) {
+      if (shouldPrint == 'print') {
         try {
           await printInvoiceDirect(
             context: context,
@@ -1232,6 +1232,18 @@ class _ScrapPurchaseInvoiceScreenState
         } catch (e) {
           if (!mounted) return;
           _showError('تعذر فتح الطباعة: $e');
+        }
+      } else if (shouldPrint == 'share') {
+        try {
+          await shareInvoicePdf(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          _showError('تعذر مشاركة الفاتورة: $e');
         }
       }
 
@@ -1531,7 +1543,7 @@ class _ScrapPurchaseInvoiceScreenState
     }
   }
 
-  Future<bool> _showPostSaveInvoiceSummary({
+  Future<String?> _showPostSaveInvoiceSummary({
     required Map<String, dynamic> invoice,
     bool approvalRequired = false,
     String? approvalWarning,
@@ -1578,7 +1590,7 @@ class _ScrapPurchaseInvoiceScreenState
       );
     }
 
-    return await showModalBottomSheet<bool>(
+    return await showModalBottomSheet<String>(
           context: context,
           isScrollControlled: true,
           backgroundColor: colorScheme.surface,
@@ -1672,21 +1684,42 @@ class _ScrapPurchaseInvoiceScreenState
                         '${totalWeight.toStringAsFixed(3)} جم',
                       ),
                     const SizedBox(height: 14),
-                    Row(
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(sheetContext, false),
-                            child: const Text('تم'),
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: () =>
+                                    Navigator.pop(sheetContext, 'print'),
+                                icon: const Icon(Icons.print),
+                                label: const Text('طباعة'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () =>
+                                    Navigator.pop(sheetContext, 'share'),
+                                icon: const Icon(Icons.share, size: 18),
+                                label: const Text('مشاركة'),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: () => Navigator.pop(sheetContext, true),
-                            icon: const Icon(Icons.print),
-                            label: const Text('طباعة'),
-                          ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextButton(
+                                onPressed: () =>
+                                    Navigator.pop(sheetContext, null),
+                                child: const Text('تم'),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -1695,8 +1728,7 @@ class _ScrapPurchaseInvoiceScreenState
               ),
             );
           },
-        ) ??
-        false;
+        );
   }
 
   // 🆕 Helper methods لأيقونات وألوان طرق الدفع
@@ -1992,6 +2024,8 @@ class _ScrapPurchaseInvoiceScreenState
                         _buildNotesSection(),
                         const SizedBox(height: 24),
                         _buildPaymentSection(),
+                        const SizedBox(height: 16),
+                        _buildSaveButton(theme, colorScheme),
                       ],
                     ),
                   ),
@@ -2009,39 +2043,10 @@ class _ScrapPurchaseInvoiceScreenState
               _buildNotesSection(),
               const SizedBox(height: 24),
               _buildPaymentSection(),
+              const SizedBox(height: 16),
+              _buildSaveButton(theme, colorScheme),
             ],
             const SizedBox(height: 32),
-            Align(
-              alignment: Alignment.center,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: FilledButton.icon(
-                  onPressed:
-                      _items.isEmpty ||
-                          _payments.isEmpty ||
-                          _remainingAmount > 0.01
-                      ? null
-                      : _submitInvoice,
-                  icon: const Icon(Icons.check_circle_outline),
-                  label: Text(
-                    _remainingAmount > 0.01
-                        ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
-                        : 'حفظ الفاتورة',
-                  ),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 16,
-                      horizontal: 24,
-                    ),
-                    textStyle: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                    backgroundColor: colorScheme.primary,
-                    foregroundColor: colorScheme.onPrimary,
-                  ),
-                ),
-              ),
-            ),
           ],
         );
 
@@ -3309,6 +3314,29 @@ class _ScrapPurchaseInvoiceScreenState
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildSaveButton(ThemeData theme, ColorScheme colorScheme) {
+    return FilledButton.icon(
+      onPressed:
+          _items.isEmpty || _payments.isEmpty || _remainingAmount > 0.01
+          ? null
+          : _submitInvoice,
+      icon: const Icon(Icons.check_circle_outline, size: 24),
+      label: Text(
+        _remainingAmount > 0.01
+            ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+            : 'حفظ الفاتورة',
+      ),
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(double.infinity, 56),
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 24),
+        textStyle: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+        backgroundColor: colorScheme.primary,
+        foregroundColor: colorScheme.onPrimary,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }

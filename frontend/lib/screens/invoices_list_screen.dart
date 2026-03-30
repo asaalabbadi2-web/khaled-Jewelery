@@ -1968,7 +1968,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                           _viewInvoiceDetails(invoice, autoPrint: true),
                     ),
                     IconButton(
-                      tooltip: isAr ? 'مشاركة PDF' : 'Share PDF',
+                      tooltip: isAr ? 'مشاركة' : 'Share',
                       icon: Icon(Icons.share, color: colorScheme.primary),
                       visualDensity: VisualDensity.compact,
                       onPressed: () =>
@@ -2283,6 +2283,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     bool autoPrint = false,
     bool autoSharePdf = false,
     bool autoDownloadPdf = false,
+    bool autoWhatsApp = false,
   }) async {
     final invoiceIdValue = invoice['id'];
     final invoiceId = invoiceIdValue is int
@@ -2325,8 +2326,17 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         return '$base.pdf';
       }
 
+      final wantsWhatsApp = autoWhatsApp;
       final wantsShare = autoSharePdf || autoDownloadPdf;
-      final wantsPrint = autoPrint || !wantsShare;
+      final wantsPrint = autoPrint || (!wantsShare && !wantsWhatsApp);
+
+      if (wantsWhatsApp) {
+        await shareInvoiceWhatsApp(
+          context: context,
+          invoice: mergedInvoice,
+          isArabic: widget.isArabic,
+        );
+      }
 
       if (wantsShare) {
         final bytes = await buildInvoicePdfBytes(
@@ -2570,7 +2580,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                           _viewInvoiceDetails(invoice, autoSharePdf: true);
                         },
                         icon: const Icon(Icons.share, size: 18),
-                        label: Text(isAr ? 'واتساب' : 'WhatsApp'),
+                        label: Text(isAr ? 'مشاركة' : 'Share'),
                       ),
                     ),
                   ],

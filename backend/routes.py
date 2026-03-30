@@ -9323,6 +9323,7 @@ def get_account_id_for_mapping(operation_type, account_type):
         # الإيرادات
         'revenue': ['400', '40'],
         'sales_gold_new': ['400', '40'],
+        'sales_gold_scrap': ['401'],          # مبيعات ذهب كسر
         'sales_wage': ['41'],
         'sales_returns': ['40'],
 
@@ -9352,6 +9353,7 @@ def get_account_id_for_mapping(operation_type, account_type):
     DEFAULT_ACCOUNT_NAME_CANDIDATES = {
         'cash': ['صندوق النقدية'],
         'sales_gold_new': ['مبيعات ذهب جديد'],
+        'sales_gold_scrap': ['مبيعات ذهب كسر'],
         'revenue': ['مبيعات ذهب جديد'],
         'cost_of_sales': ['تكلفة مبيعات الذهب'],
         'cost': ['تكلفة مبيعات الذهب'],
@@ -9926,6 +9928,20 @@ def add_invoice():
     
     # 🆕 Validation لنوع الذهب
     gold_type = data.get('gold_type', 'new')
+    # For return invoices: inherit gold_type from the original invoice when not explicitly provided.
+    # This ensures مرتجع بيع on a scrap sale uses the scrap inventory account (1310),
+    # and مرتجع شراء correctly marks the safe-box weight transaction as scrap.
+    if invoice_type in ('مرتجع بيع', 'مرتجع شراء', 'مرتجع شراء (مورد)') and not data.get('gold_type'):
+        try:
+            _orig_inv = original_invoice or (
+                Invoice.query.get(data['original_invoice_id']) if data.get('original_invoice_id') else None
+            )
+            if _orig_inv:
+                _inherited = str(getattr(_orig_inv, 'gold_type', 'new') or 'new').strip().lower()
+                if _inherited in ('new', 'scrap'):
+                    gold_type = _inherited
+        except Exception:
+            pass
     if gold_type not in ['new', 'scrap']:
         return jsonify({'error': 'gold_type must be either "new" or "scrap"'}), 400
     
@@ -12513,7 +12529,10 @@ def add_invoice():
             
             # الحصول على الحسابات من الربط المحاسبي
             cash_acc_id = get_account_id_for_mapping('بيع', 'cash')
-            sales_gold_new_acc_id = get_account_id_for_mapping('بيع', 'sales_gold_new') or get_account_id_for_mapping('بيع', 'revenue')
+            _sales_new_acc_id  = get_account_id_for_mapping('بيع', 'sales_gold_new') or get_account_id_for_mapping('بيع', 'revenue')
+            _sales_scrap_acc_id = get_account_id_for_mapping('بيع', 'sales_gold_scrap') or _sales_new_acc_id
+            # اختر حساب المبيعات حسب نوع الذهب
+            sales_gold_new_acc_id = _sales_scrap_acc_id if gold_type == 'scrap' else _sales_new_acc_id
             cost_of_sales_acc_id = get_account_id_for_mapping('بيع', 'cost_of_sales')
             vat_payable_acc_id = get_account_id_for_mapping('بيع', 'vat_payable')
             commission_acc_id = get_account_id_for_mapping('بيع', 'commission')
@@ -13012,7 +13031,7 @@ def add_invoice():
                 journal_entry_id=journal_entry.id,
                 account_id=sales_gold_new_acc_id,
                 cash_credit=sales_amount,
-                description="مبيعات ذهب (بدون ضريبة)",
+                description="مبيعات ذهب كسر (بدون ضريبة)" if gold_type == 'scrap' else "مبيعات ذهب (بدون ضريبة)",
                 apply_golden_rule=False
             )
             
@@ -13657,7 +13676,11 @@ def add_invoice():
                     if inv_acc_id:
                         inventory_accounts[karat] = inv_acc_id
             
-            total_cost = data.get('total_cost', 0) or (total_cash * 0.8)
+            # Use explicit total_cost if provided; otherwise default to total_cash.
+            # In this system COGS is recorded at selling price (not a separate lower cost basis),
+            # so cost = selling price. The old default of 0.8 * total_cash was incorrect and
+            # caused a cash imbalance when no sales_returns account was configured.
+            total_cost = data.get('total_cost') or total_cash
             
             # Line 1: مدين المخزون (نقد فقط) + قيد وزني للمذكرة (وزن فعلي)
             total_weight_returned = sum(
@@ -13763,13 +13786,16 @@ def add_invoice():
             customers_acc_id = get_account_id_for_mapping('مرتجع شراء', 'customers')
             purchase_returns_acc_id = get_account_id_for_mapping('مرتجع شراء', 'purchase_returns')
             
-            # حسابات المخزون
-            inventory_acc_id = None
-            for karat in ['18', '21', '22', '24']:
-                inv_acc_id = get_account_id_for_mapping('مرتجع شراء', f'inventory_{karat}k')
-                if inv_acc_id:
-                    inventory_acc_id = inv_acc_id
-                    break
+            # حسابات المخزون — يجب أن تكون مدركة لـ gold_type
+            # (كسر → 1310، جديد → 1300) مثل سائر أنواع الفواتير الأخرى.
+            inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
+            if not inventory_acc_id:
+                # Fallback: scan generic karat mappings (legacy behaviour)
+                for karat in ['18', '21', '22', '24']:
+                    inv_acc_id = get_account_id_for_mapping('مرتجع شراء', f'inventory_{karat}k')
+                    if inv_acc_id:
+                        inventory_acc_id = inv_acc_id
+                        break
             
             # Line 1: مدين العميل/الصندوق
             acc_id = customers_acc_id or cash_acc_id or party_account.id
@@ -30926,59 +30952,75 @@ def get_admin_dashboard():
             'year': (year_start, tomorrow_start),
         }
 
+        _EMPTY_INV_SUMMARY = {
+            'total_value': 0.0, 'total_weight': 0.0, 'docs': 0,
+            'by_user': [], 'by_karat': [],
+        }
+
         def _build_inv_summary(inv_types_dict, start, end, exclude_gold_type=None):
-            q = (
-                Invoice.query
-                .filter(Invoice.invoice_type.in_(list(inv_types_dict.keys())))
-                .filter(Invoice.is_posted.is_(True))
-                .filter(Invoice.date >= start)
-                .filter(Invoice.date < end)
-            )
-            if exclude_gold_type:
-                q = q.filter(
-                    (Invoice.gold_type == None) | (Invoice.gold_type != exclude_gold_type)
+            try:
+                q = (
+                    Invoice.query
+                    .filter(Invoice.invoice_type.in_(list(inv_types_dict.keys())))
+                    .filter(Invoice.is_posted.is_(True))
+                    .filter(Invoice.date >= start)
+                    .filter(Invoice.date < end)
                 )
-            invs = q.all()
-            total_value = 0.0
-            total_weight = 0.0
-            by_user: dict = {}
-            by_karat: dict = {}
-            for inv in invs:
-                sign = inv_types_dict.get(inv.invoice_type, 1)
-                v = float(inv.total or 0) * sign
-                w = float(inv.total_weight or 0) * sign
-                total_value += v
-                total_weight += w
-                user = ((inv.posted_by or '').strip()) or 'غير معروف'
-                if user not in by_user:
-                    by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
-                by_user[user]['value'] += v
-                by_user[user]['weight'] += w
-                by_user[user]['docs'] += 1
-                for ii in (inv.items or []):
+                if exclude_gold_type:
                     try:
-                        k = f"{int(float(ii.karat))}k" if ii.karat else '?'
-                    except Exception:
-                        k = '?'
-                    wt = float(ii.weight or 0) * sign
-                    vl = float(ii.net or 0) * sign
-                    if k not in by_karat:
-                        by_karat[k] = {'weight': 0.0, 'value': 0.0}
-                    by_karat[k]['weight'] += wt
-                    by_karat[k]['value'] += vl
-            return {
-                'total_value': round(total_value, 2),
-                'total_weight': round(total_weight, 3),
-                'docs': len(invs),
-                'by_user': sorted(
-                    [{'user': u, 'value': round(d['value'], 2), 'weight': round(d['weight'], 3), 'docs': d['docs']} for u, d in by_user.items()],
-                    key=lambda x: -x['value']
-                ),
-                'by_karat': sorted(
-                    [{'karat': k, 'weight': round(d['weight'], 3), 'value': round(d['value'], 2)} for k, d in by_karat.items() if d['weight'] != 0],
-                    key=lambda x: -(x['weight'] or 0)
-                ),
-            }
+                        q = q.filter(
+                            (Invoice.gold_type == None) | (Invoice.gold_type != exclude_gold_type)
+                        )
+                    except Exception as _col_err:
+                        import traceback
+                        print(f'[dashboard] gold_type filter error: {_col_err}')
+                        traceback.print_exc()
+                invs = q.all()
+                total_value = 0.0
+                total_weight = 0.0
+                by_user: dict = {}
+                by_karat: dict = {}
+                for inv in invs:
+                    sign = inv_types_dict.get(inv.invoice_type, 1)
+                    v = float(inv.total or 0) * sign
+                    w = float(inv.total_weight or 0) * sign
+                    total_value += v
+                    total_weight += w
+                    user = ((inv.posted_by or '').strip()) or 'غير معروف'
+                    if user not in by_user:
+                        by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
+                    by_user[user]['value'] += v
+                    by_user[user]['weight'] += w
+                    by_user[user]['docs'] += 1
+                    for ii in (inv.items or []):
+                        try:
+                            k = f"{int(float(ii.karat))}k" if ii.karat else '?'
+                        except Exception:
+                            k = '?'
+                        wt = float(ii.weight or 0) * sign
+                        vl = float(ii.net or 0) * sign
+                        if k not in by_karat:
+                            by_karat[k] = {'weight': 0.0, 'value': 0.0}
+                        by_karat[k]['weight'] += wt
+                        by_karat[k]['value'] += vl
+                return {
+                    'total_value': round(total_value, 2),
+                    'total_weight': round(total_weight, 3),
+                    'docs': len(invs),
+                    'by_user': sorted(
+                        [{'user': u, 'value': round(d['value'], 2), 'weight': round(d['weight'], 3), 'docs': d['docs']} for u, d in by_user.items()],
+                        key=lambda x: -x['value']
+                    ),
+                    'by_karat': sorted(
+                        [{'karat': k, 'weight': round(d['weight'], 3), 'value': round(d['value'], 2)} for k, d in by_karat.items() if d['weight'] != 0],
+                        key=lambda x: -(x['weight'] or 0)
+                    ),
+                }
+            except Exception as _inv_err:
+                import traceback
+                print(f'[dashboard] _build_inv_summary error: {_inv_err}')
+                traceback.print_exc()
+                return dict(_EMPTY_INV_SUMMARY)
 
         def _build_expenses_summary(start, end):
             try:
@@ -31046,15 +31088,24 @@ def get_admin_dashboard():
                 return {'total_value': 0.0, 'total_weight': 0.0, 'docs': 0, 'avg_rate': 0.0, 'avg_gold': 0.0, 'cumulative_weight': 0.0}
 
         for period_key, (p_start, p_end) in _summary_periods.items():
-            sales_purchases_summary[period_key] = {
-                'sales': _build_inv_summary(sale_types, p_start, p_end),
-                # Exclude scrap invoices to avoid double-counting:
-                # scrap is tracked separately in scrap_purchases.
-                'purchases': _build_inv_summary(purchase_types, p_start, p_end, exclude_gold_type='scrap'),
-                'expenses': _build_expenses_summary(p_start, p_end),
-                'scrap_purchases': _build_scrap_summary(p_start, p_end),
-            }
-    except Exception:
+            try:
+                sales_purchases_summary[period_key] = {
+                    'sales': _build_inv_summary(sale_types, p_start, p_end),
+                    # Exclude scrap invoices to avoid double-counting:
+                    # scrap is tracked separately in scrap_purchases.
+                    'purchases': _build_inv_summary(purchase_types, p_start, p_end, exclude_gold_type='scrap'),
+                    'expenses': _build_expenses_summary(p_start, p_end),
+                    'scrap_purchases': _build_scrap_summary(p_start, p_end),
+                }
+            except Exception as _period_err:
+                import traceback
+                print(f'[dashboard] sales_purchases_summary period={period_key} error: {_period_err}')
+                traceback.print_exc()
+                sales_purchases_summary[period_key] = {}
+    except Exception as _summary_err:
+        import traceback
+        print(f'[dashboard] sales_purchases_summary outer error: {_summary_err}')
+        traceback.print_exc()
         sales_purchases_summary = {}
 
     return jsonify({
@@ -31167,4 +31218,87 @@ def _time_ago(dt, now):
     else:
         days = int(seconds // 86400)
         return f'منذ {days} يوم'
+
+
+# ---------------------------------------------------------------------------
+# Temporary PDF hosting — used by the WhatsApp share flow.
+# The Flutter client generates a PDF, uploads the bytes here, and receives
+# a short-lived token. It then constructs a public URL and sends it via the
+# WhatsApp deep-link API (wa.me/?text=…). Files are auto-cleaned after 24 h.
+# ---------------------------------------------------------------------------
+
+_TEMP_PDF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_pdfs')
+_TEMP_PDF_MAX_BYTES = 10 * 1024 * 1024   # 10 MB per upload
+_TEMP_PDF_TTL_SECONDS = 86400             # 24 hours
+
+
+def _temp_pdf_lazy_cleanup():
+    """Remove temp PDF files older than _TEMP_PDF_TTL_SECONDS (best-effort)."""
+    import time as _time
+    try:
+        cutoff = _time.time() - _TEMP_PDF_TTL_SECONDS
+        for fname in os.listdir(_TEMP_PDF_DIR):
+            fpath = os.path.join(_TEMP_PDF_DIR, fname)
+            try:
+                if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
+                    os.remove(fpath)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+@api.route('/temp-pdf', methods=['POST'])
+def upload_temp_pdf():
+    """
+    Accept raw PDF bytes (Content-Type: application/pdf).
+    Returns: {"token": "<url-safe token>"} with status 201.
+    The caller builds the download URL as <api_base>/temp-pdf/<token>.
+    """
+    import secrets
+    import re
+
+    data = request.get_data()
+    if not data:
+        return jsonify({'error': 'empty body'}), 400
+    if len(data) > _TEMP_PDF_MAX_BYTES:
+        return jsonify({'error': 'file too large'}), 413
+
+    # Validate that the payload looks like a PDF.
+    if not data.startswith(b'%PDF'):
+        return jsonify({'error': 'not a PDF'}), 400
+
+    os.makedirs(_TEMP_PDF_DIR, exist_ok=True)
+    _temp_pdf_lazy_cleanup()
+
+    token = secrets.token_urlsafe(24)  # 32 url-safe chars, no path traversal risk
+    # Paranoid check: token must be safe for filesystem and URL use.
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', token):
+        token = secrets.token_hex(24)
+
+    filepath = os.path.join(_TEMP_PDF_DIR, f'{token}.pdf')
+    with open(filepath, 'wb') as fh:
+        fh.write(data)
+
+    return jsonify({'token': token}), 201
+
+
+@api.route('/temp-pdf/<string:token>', methods=['GET'])
+def serve_temp_pdf(token):
+    """
+    Serve a previously uploaded temporary PDF.
+    Validates the token strictly to prevent path traversal.
+    """
+    import re
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', token):
+        return jsonify({'error': 'invalid token'}), 400
+
+    filepath = os.path.join(_TEMP_PDF_DIR, f'{token}.pdf')
+    # os.path.abspath check guards against any remaining traversal risk.
+    if not os.path.abspath(filepath).startswith(os.path.abspath(_TEMP_PDF_DIR)):
+        return jsonify({'error': 'invalid token'}), 400
+    if not os.path.isfile(filepath):
+        return jsonify({'error': 'not found or expired'}), 404
+
+    return send_file(filepath, mimetype='application/pdf', as_attachment=False)
 

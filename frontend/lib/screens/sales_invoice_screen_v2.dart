@@ -2753,7 +2753,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       }
 
       final shouldPrint = _uiAutoOpenPrintAfterSave
-          ? true
+          ? 'print'
           : await _showPostSaveInvoiceSummary(
               invoice: invoiceForPrint,
               approvalRequired: approvalRequired,
@@ -2761,7 +2761,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             );
 
       if (!mounted) return;
-      if (shouldPrint == true) {
+      if (shouldPrint == 'print') {
         try {
           await printInvoiceDirect(
             context: context,
@@ -2772,6 +2772,18 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         } catch (e) {
           if (!mounted) return;
           _showError('تعذر فتح الطباعة: $e');
+        }
+      } else if (shouldPrint == 'share') {
+        try {
+          await shareInvoicePdf(
+            context: context,
+            invoice: invoiceForPrint,
+            paperSize: _uiPaperSize,
+            isArabic: true,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          _showError('تعذر مشاركة الفاتورة: $e');
         }
       }
 
@@ -2919,7 +2931,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
   }
 
-  Future<bool> _showPostSaveInvoiceSummary({
+  Future<String?> _showPostSaveInvoiceSummary({
     required Map<String, dynamic> invoice,
     required bool approvalRequired,
     String? approvalWarning,
@@ -2967,7 +2979,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       );
     }
 
-    return await showModalBottomSheet<bool>(
+    return await showModalBottomSheet<String>(
           context: context,
           isScrollControlled: true,
           backgroundColor: colorScheme.surface,
@@ -3065,21 +3077,42 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       ),
                     ],
                     const SizedBox(height: 14),
-                    Row(
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(sheetContext, false),
-                            child: const Text('تم'),
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: () =>
+                                    Navigator.pop(sheetContext, 'print'),
+                                icon: const Icon(Icons.print),
+                                label: const Text('طباعة'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () =>
+                                    Navigator.pop(sheetContext, 'share'),
+                                icon: const Icon(Icons.share, size: 18),
+                                label: const Text('مشاركة'),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: () => Navigator.pop(sheetContext, true),
-                            icon: const Icon(Icons.print),
-                            label: const Text('طباعة'),
-                          ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextButton(
+                                onPressed: () =>
+                                    Navigator.pop(sheetContext, null),
+                                child: const Text('تم'),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -3088,8 +3121,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               ),
             );
           },
-        ) ??
-        false;
+        );
   }
 
   // 🆕 Helper methods لأيقونات وألوان طرق الدفع

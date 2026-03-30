@@ -291,10 +291,6 @@ class ClearingSettlementScheduler:
 
                     # -------- تسوية مجمّعة (bulk) — الوضع الافتراضي --------
                     reference_number = f"AUTO-PM-{pm.id}-{today.isoformat()}"
-                    description = (
-                        f"تسوية تلقائية لمستحقات التحصيل: {pm.name} "
-                        f"({clearing_sb.name} → {bank_sb.name})"
-                    )
 
                     fee_amount, fee_tx_count = self._compute_bulk_fee_amount(
                         pm=pm,
@@ -308,6 +304,13 @@ class ClearingSettlementScheduler:
                         )
                         _skip(f'fee_exceeds_gross:{fee_amount:.2f}>={gross_amount:.2f}')
                         continue
+
+                    _bulk_net = round(gross_amount - fee_amount, 2)
+                    description = (
+                        f"تسوية تلقائية لمستحقات التحصيل: {pm.name} "
+                        f"({clearing_sb.name} → {bank_sb.name}) "
+                        f"(إجمالي {gross_amount:.2f}، عمولة {fee_amount:.2f}، صافي {_bulk_net:.2f})"
+                    )
 
                     try:
                         voucher_result = _create_clearing_settlement_voucher(
@@ -457,9 +460,11 @@ class ClearingSettlementScheduler:
                 except Exception:
                     pass
 
+            _pertx_net = round(gross - fee, 2)
             desc = (
                 f'تسوية فردية تلقائية: {clearing_sb.name} → {bank_sb.name}'
-                f' — مبلغ {gross:.2f}{inv_info}'
+                f'{inv_info} '
+                f'(إجمالي {gross:.2f}، عمولة {fee:.2f}، صافي {_pertx_net:.2f})'
             )
 
             try:

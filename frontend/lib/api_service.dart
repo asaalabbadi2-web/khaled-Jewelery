@@ -131,6 +131,10 @@ class ApiService {
 
   ApiService({String? baseUrl}) : _baseUrl = baseUrl ?? _resolveApiBaseUrl();
 
+  /// Exposes the resolved API base URL for use outside of [ApiService]
+  /// (e.g. building temporary PDF upload URLs in utility functions).
+  static String get resolvedBaseUrl => _resolveApiBaseUrl();
+
   int? _decodeJwtExpSeconds(String token) {
     try {
       final parts = token.split('.');
