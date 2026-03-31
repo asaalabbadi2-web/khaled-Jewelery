@@ -31027,6 +31027,12 @@ def get_admin_dashboard():
     if sales_today_value > 0:
         today_profit_margin_pct = (today_profit / sales_today_value) * 100
 
+    # --- Yesterday Profit (for trend comparison) ---
+    yesterday_profit = yesterday_sales_value - yesterday_purchases_value
+    today_profit_vs_yesterday_pct = None
+    if abs(yesterday_profit) > 0.01:
+        today_profit_vs_yesterday_pct = ((today_profit - yesterday_profit) / abs(yesterday_profit)) * 100
+
     # --- Gold Price Change from Yesterday ---
     gold_price_change_pct = None
     try:
@@ -31438,6 +31444,8 @@ def get_admin_dashboard():
             },
             'today_profit': round(today_profit, 2),
             'today_profit_margin_pct': round(today_profit_margin_pct, 1) if today_profit_margin_pct is not None else None,
+            'yesterday_profit': round(yesterday_profit, 2),
+            'today_profit_vs_yesterday_pct': round(today_profit_vs_yesterday_pct, 1) if today_profit_vs_yesterday_pct is not None else None,
         },
         'series': {
             'last_7_days_sales': [

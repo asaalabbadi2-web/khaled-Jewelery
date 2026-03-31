@@ -1,10 +1,12 @@
 import 'dart:ui' show ImageFilter;
 
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_service.dart';
 import '../../models/safe_box_model.dart';
@@ -44,6 +46,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   _TimeRange _timeRange = _TimeRange.today;
 
+  // ── Overlay alert state ──────────────────────────────────────────────────
+  /// Alerts that the user has manually dismissed (by id/text key).
+  final Set<String> _dismissedAlertKeys = {};
+
+  // ── Vault ordering ────────────────────────────────────────────────────────
+  /// Local ordered list of safe-box ids (persisted in SharedPreferences).
+  List<int> _vaultOrder = [];
+  /// Safe-box ids that were opened in the current session ("recently used").
+  final Set<int> _recentVaultIds = {};
+  static const String _kVaultOrderKey = 'dashboard_vault_order';
+  /// Horizontal scroll controller for the vault list (mouse wheel support).
+  final ScrollController _vaultScrollController = ScrollController();
+  /// When true the vault list becomes a drag-and-drop reorderable list.
+  bool _isReorderingVaults = false;
+
   /// Maps the unified top-level time selector to the backend summary key.
   String get _summaryPeriod {
     switch (_timeRange) {
@@ -81,7 +98,74 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       decimalDigits: _currencyDecimals,
     );
     _weightFormat = NumberFormat('#,##0.000');
+    _loadVaultOrder();
     _loadData();
+  }
+
+  // ── Vault order persistence ──────────────────────────────────────────────
+  Future<void> _loadVaultOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList(_kVaultOrderKey) ?? [];
+      if (mounted) {
+        setState(() {
+          _vaultOrder = raw
+              .map((s) => int.tryParse(s))
+              .whereType<int>()
+              .toList();
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveVaultOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _kVaultOrderKey,
+        _vaultOrder.map((id) => id.toString()).toList(),
+      );
+    } catch (_) {}
+  }
+
+  /// Returns safe-box list sorted: recently-used first, then user order.
+  List<Map<String, dynamic>> _sortedVaults(List<dynamic> raw) {
+    final maps = raw.whereType<Map<String, dynamic>>().toList();
+
+    // Seed _vaultOrder with any new ids not yet stored
+    final knownIds = _vaultOrder.toSet();
+    for (final sb in maps) {
+      final id = sb['id'];
+      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+      if (sbId != null && !knownIds.contains(sbId)) {
+        _vaultOrder.add(sbId);
+        knownIds.add(sbId);
+      }
+    }
+
+    maps.sort((a, b) {
+      final aId = a['id'] is int ? a['id'] as int : int.tryParse(a['id']?.toString() ?? '') ?? -1;
+      final bId = b['id'] is int ? b['id'] as int : int.tryParse(b['id']?.toString() ?? '') ?? -1;
+
+      final aRecent = _recentVaultIds.contains(aId);
+      final bRecent = _recentVaultIds.contains(bId);
+      if (aRecent && !bRecent) return -1;
+      if (!aRecent && bRecent) return 1;
+
+      final aPos = _vaultOrder.indexOf(aId);
+      final bPos = _vaultOrder.indexOf(bId);
+      final aRank = aPos < 0 ? 9999 : aPos;
+      final bRank = bPos < 0 ? 9999 : bPos;
+      return aRank.compareTo(bRank);
+    });
+
+    return maps;
+  }
+
+  @override
+  void dispose() {
+    _vaultScrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -160,12 +244,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Directionality(
       textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
-        body: SafeArea(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-              ? _buildErrorState()
-              : _buildContent(),
+        body: Stack(
+          children: [
+            SafeArea(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? _buildErrorState()
+                  : _buildContent(),
+            ),
+            // macOS-style floating notification toasts (bottom-left corner)
+            if (!_isLoading && _error == null)
+              PositionedDirectional(
+                bottom: 24,
+                start: 16,
+                child: SafeArea(
+                  child: _buildFloatingAlerts(),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -207,7 +304,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final globalSnapshot =
         (_response?['global_snapshot'] as Map<String, dynamic>?) ?? {};
     final kpis = (_response?['kpis'] as Map<String, dynamic>?) ?? {};
-    final alerts = (_response?['alerts'] as Map<String, dynamic>?) ?? {};
     final valuation = (_response?['valuation'] as Map<String, dynamic>?) ?? {};
     final liquidity = (_response?['liquidity'] as Map<String, dynamic>?) ?? {};
     final safeBoxes = (_response?['safe_boxes'] as List?) ?? [];
@@ -223,7 +319,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
-          // === 1. The Global Snapshot Header ===
+          // === 1. Global Snapshot Header ===
           SliverToBoxAdapter(
             child: _buildGlobalSnapshotHeader(
               globalSnapshot,
@@ -232,61 +328,65 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
           ),
 
-          // === 1.5 Critical Alert Bar (Smart Alerts) ===
+          // === 2. Time Range Selector (TOP) ===
           SliverToBoxAdapter(
             child: Padding(
-              padding: EdgeInsets.fromLTRB(_s(16), 0, _s(16), _s(10)),
-              child: _buildCriticalAlertBar(alerts),
-            ),
-          ),
-
-          // === 2. Audit Zone (Dynamic Alerts) ===
-          SliverToBoxAdapter(child: _buildAuditZone(alerts)),
-
-          // === 2.25 SafeBox vs GL Reconciliation ===
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
-              child: _buildSafeBoxReconciliationCard(),
-            ),
-          ),
-
-          // === 2.5 Time Range Selector ===
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
+              padding: EdgeInsets.fromLTRB(_s(16), _s(4), _s(16), 0),
               child: _buildRangeSelector(),
             ),
           ),
 
-          // === 3. Core KPIs Grid (Responsive) ===
+          // === 3. HERO Profit Card (always TODAY, range-independent) ===
+          SliverToBoxAdapter(
+            child: _buildHeroProfitSection(kpis, liquidity),
+          ),
+
+          // === 4. Safe Box Reconciliation ===
           SliverToBoxAdapter(
             child: Padding(
-              padding: EdgeInsets.all(_s(16)),
-              child: _buildKpiGrid(
-                kpis: kpis,
-                series: series,
-                goldByKarat: goldByKarat,
-                liquidity: liquidity,
+              padding: EdgeInsets.fromLTRB(_s(16), _s(4), _s(16), 0),
+              child: _buildSafeBoxReconciliationCard(),
+            ),
+          ),
+
+          // === 5. Time-range-dependent content (animated on switch) ===
+          SliverToBoxAdapter(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+              child: Column(
+                key: ValueKey(_timeRange),
+                children: [
+                  // KPI Grid
+                  Padding(
+                    padding: EdgeInsets.all(_s(16)),
+                    child: _buildKpiGrid(
+                      kpis: kpis,
+                      series: series,
+                      goldByKarat: goldByKarat,
+                      liquidity: liquidity,
+                    ),
+                  ),
+                  // Sales / Purchases / Expenses Summary
+                  Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: _s(16),
+                      vertical: _s(8),
+                    ),
+                    child: _buildSalesSummaryCard(salesPurchasesSummary),
+                  ),
+                ],
               ),
             ),
           ),
 
-          // === 3.5 Sales / Purchases / Expenses Summary ===
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: _s(16),
-                vertical: _s(8),
-              ),
-              child: _buildSalesSummaryCard(salesPurchasesSummary),
-            ),
-          ),
-
-          // === 4. Vaults & Custody (Horizontal List) ===
+          // === 6. Vaults & Custody (Horizontal List) ===
           SliverToBoxAdapter(child: _buildVaultsSection(safeBoxes)),
 
-          // === 5. Sensitive Operations Feed ===
+          // === 7. Sensitive Operations Feed ===
           SliverToBoxAdapter(
             child: _buildSensitiveOperationsSection(sensitiveOps),
           ),
@@ -323,17 +423,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     ]);
 
     final isCompact = MediaQuery.of(context).size.width < 700;
+    final isDark = theme.brightness == Brightness.dark;
 
     return Container(
       padding: EdgeInsets.fromLTRB(_s(16), _s(12), _s(16), _s(16)),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            AppColors.primaryGold.withValues(alpha: 0.15),
-            theme.scaffoldBackgroundColor,
-          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [
+                  AppColors.primaryGold.withValues(alpha: 0.20),
+                  theme.scaffoldBackgroundColor.withValues(alpha: 0.95),
+                  AppColors.darkGold.withValues(alpha: 0.08),
+                ]
+              : [
+                  AppColors.primaryGold.withValues(alpha: 0.22),
+                  const Color(0xFFFFFBF0),
+                  AppColors.lightGold.withValues(alpha: 0.35),
+                ],
+        ),
+        border: Border(
+          bottom: BorderSide(
+            color: AppColors.primaryGold.withValues(
+              alpha: isDark ? 0.28 : 0.35,
+            ),
+            width: 1.5,
+          ),
         ),
       ),
       child: Column(
@@ -627,53 +743,125 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         );
       }
+      final maxValue = items.take(5).fold<double>(
+        0,
+        (m, u) => (u is Map ? _asDouble(u['value']) : 0.0) > m
+            ? _asDouble(u['value'])
+            : m,
+      );
+      final isDark = theme.brightness == Brightness.dark;
       return Column(
-        children: items.take(5).map((u) {
+        children: items.take(5).toList().asMap().entries.map((entry) {
+          final rank = entry.key + 1;
+          final u = entry.value;
           final user = u['user'] as String? ?? '—';
           final value = _asDouble(u['value']);
           final weight = _asDouble(u['weight']);
           final docs = u['docs'] as int? ?? 0;
+          final pct = maxValue > 0 ? (value / maxValue).clamp(0.0, 1.0) : 0.0;
+
+          // Medal color for top 3
+          final Color rankColor;
+          switch (rank) {
+            case 1:
+              rankColor = AppColors.primaryGold;
+              break;
+            case 2:
+              rankColor = Colors.blueGrey.shade300;
+              break;
+            case 3:
+              rankColor = Colors.brown.shade300;
+              break;
+            default:
+              rankColor = theme.hintColor;
+          }
+
           return Container(
+            margin: EdgeInsets.only(bottom: _s(6)),
+            padding: EdgeInsets.all(_s(8)),
             decoration: BoxDecoration(
-              border: Border(bottom: rowDivider),
+              color: isDark
+                  ? accentColor.withValues(alpha: 0.06)
+                  : accentColor.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: accentColor.withValues(alpha: 0.12),
+              ),
             ),
-            padding: EdgeInsets.symmetric(vertical: _s(5)),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+            child: Column(
               children: [
-                Icon(Icons.person_outline,
-                    size: _s(14), color: accentColor),
-                SizedBox(width: _s(4)),
-                Expanded(
-                  child: Text(
-                    user,
-                    style: TextStyle(
-                      fontSize: _s(11),
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
-                      _currencyFormat.format(value),
-                      style: TextStyle(
-                        fontSize: _s(12),
-                        fontWeight: FontWeight.w700,
-                        color: accentColor,
+                    // Rank badge
+                    Container(
+                      width: _s(22),
+                      height: _s(22),
+                      decoration: BoxDecoration(
+                        color: rankColor.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: rankColor.withValues(alpha: 0.4), width: 1),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '$rank',
+                          style: TextStyle(
+                            fontSize: _s(10),
+                            fontWeight: FontWeight.bold,
+                            color: rankColor,
+                          ),
+                        ),
                       ),
                     ),
-                    Text(
-                      '${_weightFormat.format(weight)}${isArabic ? "جم" : "g"} · $docs ${isArabic ? "فاتورة" : "inv"}',
-                      style: TextStyle(
-                        fontSize: _s(9),
-                        color: theme.textTheme.bodySmall?.color,
+                    SizedBox(width: _s(6)),
+                    Expanded(
+                      child: Text(
+                        user,
+                        style: TextStyle(
+                          fontSize: _s(11),
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          _currencyFormat.format(value),
+                          style: TextStyle(
+                            fontSize: _s(12),
+                            fontWeight: FontWeight.w700,
+                            color: accentColor,
+                          ),
+                        ),
+                        Text(
+                          '${_weightFormat.format(weight)}${isArabic ? "جم" : "g"} · $docs ${isArabic ? "فاتورة" : "inv"}',
+                          style: TextStyle(
+                            fontSize: _s(9),
+                            color: theme.textTheme.bodySmall?.color,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
+                ),
+                SizedBox(height: _s(5)),
+                // Performance bar
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(_s(3)),
+                  child: LinearProgressIndicator(
+                    value: pct,
+                    minHeight: _s(4),
+                    backgroundColor: accentColor.withValues(alpha: 0.12),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      rank == 1
+                          ? AppColors.primaryGold
+                          : accentColor,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -953,13 +1141,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
           // By user
           _SummarySection(
-            title: isArabic ? 'المبيعات بالمستخدم' : 'Sales by User',
+            title: isArabic ? 'أداء الموظفين — المبيعات' : 'Staff Performance — Sales',
             scale: _s(1),
             child: userRows(byUserSales, Colors.green),
           ),
           SizedBox(height: _s(10)),
           _SummarySection(
-            title: isArabic ? 'مشتريات الموردين بالمستخدم' : 'Supplier Purchases by User',
+            title: isArabic ? 'أداء الموظفين — المشتريات' : 'Staff Performance — Purchases',
             scale: _s(1),
             child: userRows(byUserPurchases, Colors.blue),
           ),
@@ -989,7 +1177,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         double ratio;
 
         if (width >= 1200) {
-          crossAxisCount = 4;
+          crossAxisCount = 3;
           ratio = 1.55;
         } else if (width >= 900) {
           crossAxisCount = 3;
@@ -1013,7 +1201,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             _buildSalesVsPurchasesCard(kpis, series),
             _buildKaratDistributionCard(goldByKarat),
             _buildLiquidityBreakdownCard(liquidity),
-            _buildTodayProfitCard(kpis),
           ],
         );
       },
@@ -1025,15 +1212,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     bool isArabic,
     double netPosition,
   ) {
+    final isDark = theme.brightness == Brightness.dark;
     return Container(
       padding: EdgeInsets.all(_s(16)),
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(16),
+        border: isDark
+            ? Border.all(
+                color: AppColors.primaryGold.withValues(alpha: 0.25),
+              )
+            : Border.all(
+                color: AppColors.primaryGold.withValues(alpha: 0.50),
+                width: 1.2,
+              ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryGold.withValues(alpha: 0.1),
-            blurRadius: 10,
+            color: AppColors.primaryGold.withValues(
+              alpha: isDark ? 0.10 : 0.14,
+            ),
+            blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ],
@@ -1104,9 +1302,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: (isPositive ? Colors.green : Colors.red).withValues(
-              alpha: 0.3,
+              alpha: theme.brightness == Brightness.dark ? 0.40 : 0.55,
             ),
+            width: 1.2,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: (isPositive ? Colors.green : Colors.red).withValues(
+                alpha: theme.brightness == Brightness.dark ? 0.10 : 0.12,
+              ),
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1196,127 +1404,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 2. AUDIT ZONE (Dynamic Alerts)
-  // ══════════════════════════════════════════════════════════════════════════
-  Widget _buildAuditZone(Map<String, dynamic> alerts) {
-    final theme = Theme.of(context);
-    final isArabic = widget.isArabic;
-
-    final criticalCount = _asInt(alerts['critical_unreviewed_count']);
-    final unpostedCount = _asInt(alerts['unposted_invoices_count']);
-    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
-
-    final cashDiff = _asDouble(lastShift?['cash_difference']);
-    final goldDiff = _asDouble(lastShift?['gold_pure_24k_difference']);
-
-    List<_AlertItem> alertItems = [];
-
-    if (criticalCount > 0) {
-      alertItems.add(
-        _AlertItem(
-          icon: Icons.warning_amber_rounded,
-          color: Colors.red,
-          text: isArabic
-              ? '$criticalCount تنبيهات حرجة بانتظار المراجعة'
-              : '$criticalCount critical alerts pending',
-        ),
-      );
-    }
-
-    if (cashDiff.abs() > 0.01) {
-      alertItems.add(
-        _AlertItem(
-          icon: Icons.account_balance_wallet,
-          color: Colors.orange,
-          text: isArabic
-              ? 'فرق نقدي (${_formatCurrency(cashDiff)}) في آخر إغلاق'
-              : 'Cash difference (${_formatCurrency(cashDiff)}) in last closing',
-        ),
-      );
-    }
-
-    if (goldDiff.abs() > 0.001) {
-      alertItems.add(
-        _AlertItem(
-          icon: Icons.auto_awesome,
-          color: Colors.orange,
-          text: isArabic
-              ? 'فرق ذهب (${_formatWeight(goldDiff)}) في آخر إغلاق'
-              : 'Gold difference (${_formatWeight(goldDiff)}) in last closing',
-        ),
-      );
-    }
-
-    if (unpostedCount > 0) {
-      alertItems.add(
-        _AlertItem(
-          icon: Icons.pending_actions,
-          color: Colors.blue,
-          text: isArabic
-              ? '$unpostedCount فاتورة بانتظار الترحيل'
-              : '$unpostedCount invoices pending posting',
-        ),
-      );
-    }
-
-    if (alertItems.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: _s(16)),
-      padding: EdgeInsets.all(_s(12)),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.red.shade50, Colors.orange.shade50],
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.red.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.security, color: Colors.red.shade700, size: _s(22)),
-              SizedBox(width: _s(8)),
-              Text(
-                isArabic ? 'الرقابة والمطابقة' : 'Audit Zone',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.red.shade700,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: _s(8)),
-          ...alertItems.map(
-            (alert) => Padding(
-              padding: EdgeInsets.only(bottom: _s(6)),
-              child: Row(
-                children: [
-                  Icon(alert.icon, color: alert.color, size: _s(18)),
-                  SizedBox(width: _s(8)),
-                  Expanded(
-                    child: Text(
-                      alert.text,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: alert.color,
-                        fontWeight: FontWeight.w500,
-                        fontSize: _s(12),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1480,123 +1567,198 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Widget _buildCriticalAlertBar(Map<String, dynamic> alerts) {
-    final theme = Theme.of(context);
+  // ── macOS-style floating notification toasts ──────────────────────────────
+  /// Collects all current alerts from response data, filters dismissed ones.
+  List<_AlertItem> _getAllAlerts() {
+    if (_response == null) return [];
     final isArabic = widget.isArabic;
+    final alerts = (_response!['alerts'] as Map<String, dynamic>?) ?? {};
+    final items = <_AlertItem>[];
 
-    final items = (alerts['critical_bar'] as List?) ?? [];
-    if (items.isEmpty) return const SizedBox.shrink();
-
-    Color borderColor = Colors.orange.shade300;
-    Color background = Colors.orange.shade50;
-
-    final hasCritical = items.any((e) {
-      if (e is Map) {
-        return (e['severity']?.toString().toLowerCase() ?? '') == 'critical';
+    // Critical bar alerts
+    final rawItems = (alerts['critical_bar'] as List?) ?? [];
+    for (final raw in rawItems) {
+      final item = raw is Map ? raw : <String, dynamic>{};
+      final severity = (item['severity']?.toString().toLowerCase() ?? 'warning');
+      final isCrit = severity == 'critical';
+      final msg = (isArabic
+              ? item['message_ar']?.toString()
+              : item['message_en']?.toString()) ??
+          item['message']?.toString() ??
+          '';
+      if (msg.isNotEmpty) {
+        items.add(_AlertItem(
+          icon: isCrit ? Icons.error_outline : Icons.warning_amber_rounded,
+          color: isCrit ? Colors.red : Colors.orange,
+          text: msg,
+        ));
       }
-      return false;
-    });
-
-    if (hasCritical) {
-      borderColor = Colors.red.shade300;
-      background = Colors.red.shade50;
     }
 
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) =>
-                SystemAlertsScreen(api: widget.api, isArabic: widget.isArabic),
-          ),
-        );
-      },
-      child: Container(
-        padding: EdgeInsets.all(_s(12)),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  hasCritical ? Icons.report : Icons.warning_amber_rounded,
-                  color: hasCritical
-                      ? Colors.red.shade700
-                      : Colors.orange.shade800,
-                  size: _s(20),
-                ),
-                SizedBox(width: _s(8)),
-                Expanded(
-                  child: Text(
-                    isArabic ? 'تنبيهات ذكية' : 'Smart Alerts',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: hasCritical
-                          ? Colors.red.shade700
-                          : Colors.orange.shade800,
-                    ),
-                  ),
-                ),
-                Icon(
-                  isArabic ? Icons.chevron_left : Icons.chevron_right,
-                  color: theme.hintColor,
-                ),
-              ],
-            ),
-            SizedBox(height: _s(8)),
-            ...items.take(3).map((raw) {
-              final item = raw is Map ? raw : <String, dynamic>{};
-              final severity =
-                  (item['severity']?.toString().toLowerCase() ?? 'warning');
-              final msg =
-                  (isArabic
-                      ? (item['message_ar']?.toString())
-                      : (item['message_en']?.toString())) ??
-                  (item['message']?.toString() ?? '');
-              return Padding(
-                padding: EdgeInsets.only(bottom: _s(6)),
-                child: _buildCriticalAlertBarRow(severity: severity, text: msg),
-              );
-            }),
-          ],
-        ),
-      ),
+    // Audit zone alerts
+    final criticalCount = alerts['critical_unreviewed_count'];
+    final unpostedCount = alerts['unposted_invoices_count'];
+    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
+    final cashDiff = lastShift?['cash_difference'];
+    final goldDiff = lastShift?['gold_pure_24k_difference'];
+
+    final cCount = criticalCount is num ? criticalCount.toInt() : 0;
+    final uCount = unpostedCount is num ? unpostedCount.toInt() : 0;
+    final cDiff = cashDiff is num ? cashDiff.toDouble() : 0.0;
+    final gDiff = goldDiff is num ? goldDiff.toDouble() : 0.0;
+
+    if (cCount > 0) {
+      items.add(_AlertItem(
+        icon: Icons.warning_amber_rounded,
+        color: Colors.red,
+        text: isArabic
+            ? '$cCount تنبيهات حرجة بانتظار المراجعة'
+            : '$cCount critical alerts pending',
+      ));
+    }
+    if (cDiff.abs() > 0.01) {
+      items.add(_AlertItem(
+        icon: Icons.account_balance_wallet,
+        color: Colors.orange,
+        text: isArabic
+            ? 'فرق نقدي (${_formatCurrency(cDiff)}) في آخر إغلاق'
+            : 'Cash difference (${_formatCurrency(cDiff)}) in last closing',
+      ));
+    }
+    if (gDiff.abs() > 0.001) {
+      items.add(_AlertItem(
+        icon: Icons.auto_awesome,
+        color: Colors.orange,
+        text: isArabic
+            ? 'فرق ذهب (${_formatWeight(gDiff)}) في آخر إغلاق'
+            : 'Gold difference (${_formatWeight(gDiff)}) in last closing',
+      ));
+    }
+    if (uCount > 0) {
+      items.add(_AlertItem(
+        icon: Icons.pending_actions,
+        color: Colors.blue,
+        text: isArabic
+            ? '$uCount فاتورة بانتظار الترحيل'
+            : '$uCount invoices pending posting',
+      ));
+    }
+
+    return items.where((a) => !_dismissedAlertKeys.contains(a.text)).toList();
+  }
+
+  Widget _buildFloatingAlerts() {
+    final toasts = _getAllAlerts();
+    if (toasts.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: toasts.map((alert) => _buildToastCard(alert)).toList(),
     );
   }
 
-  Widget _buildCriticalAlertBarRow({
-    required String severity,
-    required String text,
-  }) {
+  Widget _buildToastCard(_AlertItem alert) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final isArabic = widget.isArabic;
 
-    final isCritical = severity == 'critical';
-    final color = isCritical ? Colors.red : Colors.orange;
-    final icon = isCritical ? Icons.error_outline : Icons.warning_amber_rounded;
-
-    return Row(
-      children: [
-        Icon(icon, color: color, size: _s(18)),
-        SizedBox(width: _s(8)),
-        Expanded(
-          child: Text(
-            text,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: color.shade700,
-              fontWeight: FontWeight.w600,
-              fontSize: _s(12),
+    return TweenAnimationBuilder<Offset>(
+      key: Key('toast_${alert.text.hashCode}'),
+      tween: Tween(
+        begin: Offset(isArabic ? -1.2 : 1.2, 0.0),
+        end: Offset.zero,
+      ),
+      duration: const Duration(milliseconds: 380),
+      curve: Curves.easeOutCubic,
+      builder: (context, offset, child) => FractionalTranslation(
+        translation: offset,
+        child: child,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            width: 300,
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? const Color(0xFF2A2A2A).withValues(alpha: 0.88)
+                  : Colors.white.withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(12),
+              border: Border(
+                // Accent line on the END side (right in LTR, left in RTL)
+                right: isArabic
+                    ? BorderSide(color: alert.color, width: 4)
+                    : BorderSide(color: alert.color.withValues(alpha: 0.2), width: 0.8),
+                left: isArabic
+                    ? BorderSide(color: alert.color.withValues(alpha: 0.2), width: 0.8)
+                    : BorderSide(color: alert.color, width: 4),
+                top: BorderSide(
+                  color: alert.color.withValues(alpha: 0.20),
+                  width: 0.8,
+                ),
+                bottom: BorderSide(
+                  color: alert.color.withValues(alpha: 0.20),
+                  width: 0.8,
+                ),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.40 : 0.14),
+                  blurRadius: 20,
+                  spreadRadius: 0,
+                  offset: const Offset(0, 6),
+                ),
+                BoxShadow(
+                  color: alert.color.withValues(alpha: 0.10),
+                  blurRadius: 12,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+                  child: Icon(alert.icon, color: alert.color, size: 18),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    child: Text(
+                      alert.text,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.88)
+                            : const Color(0xFF1C1C1E),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () =>
+                      setState(() => _dismissedAlertKeys.add(alert.text)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.close,
+                      size: 14,
+                      color: (isDark ? Colors.white : Colors.black)
+                          .withValues(alpha: 0.40),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -1723,13 +1885,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         children: [
           Row(
             children: [
-              Icon(Icons.swap_horiz, color: Colors.blue, size: _s(20)),
+              Icon(Icons.swap_vert_circle_outlined,
+                  color: AppColors.primaryGold, size: _s(20)),
               SizedBox(width: _s(6)),
               Expanded(
                 child: Text(
-                  isArabic ? 'المبيعات vs المشتريات' : 'Sales vs Purchases',
+                  isArabic ? 'حركة الذهب اليوم' : 'Gold Movement Today',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     fontSize: _s(12),
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -1744,17 +1907,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    isArabic ? 'مبيعات' : 'Sales',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.hintColor,
-                      fontSize: _s(11),
-                    ),
+                  Row(
+                    children: [
+                      Icon(Icons.arrow_downward,
+                          size: _s(12), color: Colors.red.shade600),
+                      SizedBox(width: _s(2)),
+                      Text(
+                        isArabic ? 'خرج (مبيعات)' : 'OUT (Sales)',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.red.shade600,
+                          fontSize: _s(11),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                   Text(
                     _formatWeight(salesWeight),
                     style: TextStyle(
-                      color: Colors.green,
+                      color: Colors.red.shade600,
                       fontWeight: FontWeight.bold,
                       fontSize: _s(14),
                     ),
@@ -1762,8 +1933,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   SizedBox(height: _s(4)),
                   _buildTrendPill(
                     value: salesTrendPct,
-                    positiveColor: Colors.green,
-                    negativeColor: Colors.red,
+                    positiveColor: Colors.red,
+                    negativeColor: Colors.green,
                     label: isArabic ? 'عن أمس' : 'vs yesterday',
                   ),
                 ],
@@ -1771,17 +1942,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    isArabic ? 'مشتريات' : 'Purchases',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.hintColor,
-                      fontSize: _s(11),
-                    ),
+                  Row(
+                    children: [
+                      Icon(Icons.arrow_upward,
+                          size: _s(12), color: Colors.green.shade600),
+                      SizedBox(width: _s(2)),
+                      Text(
+                        isArabic ? 'دخل (مشتريات)' : 'IN (Purch.)',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green.shade600,
+                          fontSize: _s(11),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                   Text(
                     _formatWeight(purchasesWeight),
                     style: TextStyle(
-                      color: Colors.orange,
+                      color: Colors.green.shade600,
                       fontWeight: FontWeight.bold,
                       fontSize: _s(14),
                     ),
@@ -1789,8 +1968,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   SizedBox(height: _s(4)),
                   _buildTrendPill(
                     value: purchasesTrendPct,
-                    positiveColor: Colors.orange,
-                    negativeColor: Colors.blueGrey,
+                    positiveColor: Colors.green,
+                    negativeColor: Colors.red,
                     label: isArabic ? 'عن أمس' : 'vs yesterday',
                   ),
                 ],
@@ -1801,26 +1980,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           Container(
             padding: EdgeInsets.symmetric(horizontal: _s(8), vertical: _s(4)),
             decoration: BoxDecoration(
-              color: (netFlow >= 0 ? Colors.red : Colors.green).withValues(
+              color: (netFlow >= 0 ? Colors.green : Colors.red).withValues(
                 alpha: 0.1,
               ),
               borderRadius: BorderRadius.circular(_s(6)),
+              border: Border.all(
+                color: (netFlow >= 0 ? Colors.green : Colors.red)
+                    .withValues(alpha: 0.25),
+              ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  netFlow >= 0 ? Icons.arrow_upward : Icons.arrow_downward,
+                  netFlow >= 0 ? Icons.trending_up : Icons.trending_down,
                   size: _s(14),
-                  color: netFlow >= 0 ? Colors.red : Colors.green,
+                  color: netFlow >= 0 ? Colors.green.shade600 : Colors.red.shade600,
                 ),
                 SizedBox(width: _s(4)),
                 Text(
-                  '${isArabic ? "صافي التدفق: " : "Net: "}${_formatWeight(netFlow.abs())}',
+                  '${isArabic ? "صافي الحركة: " : "Net: "}${netFlow >= 0 ? "+" : "-"}${_formatWeight(netFlow.abs())}',
                   style: TextStyle(
                     fontSize: _s(11),
                     fontWeight: FontWeight.bold,
-                    color: netFlow >= 0 ? Colors.red : Colors.green,
+                    color: netFlow >= 0
+                        ? Colors.green.shade600
+                        : Colors.red.shade600,
                   ),
                 ),
               ],
@@ -1940,24 +2125,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               LineChartBarData(
                 spots: spotsSales,
                 isCurved: true,
-                color: Colors.green,
+                color: Colors.red.shade500,
                 barWidth: _s(2),
                 dotData: const FlDotData(show: false),
                 belowBarData: BarAreaData(
                   show: true,
-                  color: Colors.green.withValues(alpha: 0.12),
+                  color: Colors.red.withValues(alpha: 0.10),
                 ),
               ),
             if (spotsPurchases.isNotEmpty)
               LineChartBarData(
                 spots: spotsPurchases,
                 isCurved: true,
-                color: Colors.orange,
+                color: Colors.green.shade600,
                 barWidth: _s(2),
                 dotData: const FlDotData(show: false),
                 belowBarData: BarAreaData(
                   show: true,
-                  color: Colors.orange.withValues(alpha: 0.12),
+                  color: Colors.green.withValues(alpha: 0.10),
                 ),
               ),
           ],
@@ -2213,7 +2398,277 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  // Today's Profit Card
+  // ══════════════════════════════════════════════════════════════════════════
+  // HERO PROFIT SECTION (always shows TODAY, range-independent)
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildHeroProfitSection(
+    Map<String, dynamic> kpis,
+    Map<String, dynamic> liquidity,
+  ) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    final todayProfit = _asDouble(kpis['today_profit']);
+    final marginValue = _asDoubleOrNull(kpis['today_profit_margin_pct']);
+    final vsYesterdayPct = _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct']);
+    final salesChangePct = _asDoubleOrNull(
+        (kpis['sales_today'] as Map?)?['change_pct'],
+    );
+
+    final salesToday = _asDouble((kpis['sales_today'] as Map?)?['net_value']);
+    final purchasesToday = _asDouble((kpis['purchases_today'] as Map?)?['net_value']);
+    final cashAvailable = _asDouble(liquidity['cash_available']);
+
+    final isProfit = todayProfit >= 0;
+    final profitColor = isProfit ? AppColors.success : Colors.red.shade600;
+
+    // Build smart insight text
+    String insightText = '';
+    if (vsYesterdayPct != null) {
+      final direction = vsYesterdayPct >= 0
+          ? (isArabic ? 'ارتفع' : 'Up')
+          : (isArabic ? 'انخفض' : 'Down');
+      insightText = isArabic
+          ? 'الربح $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
+          : 'Profit $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% vs yesterday';
+    } else if (salesChangePct != null && salesChangePct.abs() > 0) {
+      final dirSales = salesChangePct >= 0
+          ? (isArabic ? 'ارتفعت' : 'up')
+          : (isArabic ? 'انخفضت' : 'down');
+      insightText = isArabic
+          ? 'المبيعات $dirSales ${salesChangePct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
+          : 'Sales $dirSales ${salesChangePct.abs().toStringAsFixed(1)}% vs yesterday';
+    } else if (isProfit) {
+      insightText = isArabic ? 'النتيجة: ربح ✓' : 'Result: Profit ✓';
+    } else {
+      insightText = isArabic ? 'المصروف أعلى من المبيعات اليوم' : 'Expenses exceed sales today';
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
+      child: Container(
+        padding: EdgeInsets.all(_s(20)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+            colors: isProfit
+                ? [
+                    AppColors.success.withValues(alpha: 0.10),
+                    theme.cardColor,
+                  ]
+                : [
+                    Colors.red.shade600.withValues(alpha: 0.08),
+                    theme.cardColor,
+                  ],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: profitColor.withValues(alpha: 0.25),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: profitColor.withValues(alpha: 0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title row + vs-yesterday badge
+            Row(
+              children: [
+                Icon(
+                  isProfit ? Icons.trending_up : Icons.trending_down,
+                  color: profitColor,
+                  size: _s(20),
+                ),
+                SizedBox(width: _s(6)),
+                Text(
+                  isArabic ? 'صافي الربح اليوم' : "Today's Net Profit",
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.textTheme.bodySmall?.color,
+                  ),
+                ),
+                const Spacer(),
+                if (vsYesterdayPct != null)
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: _s(8),
+                      vertical: _s(3),
+                    ),
+                    decoration: BoxDecoration(
+                      color: (vsYesterdayPct >= 0 ? Colors.green : Colors.red)
+                          .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          vsYesterdayPct >= 0
+                              ? Icons.arrow_upward
+                              : Icons.arrow_downward,
+                          size: _s(12),
+                          color: vsYesterdayPct >= 0
+                              ? Colors.green.shade700
+                              : Colors.red.shade600,
+                        ),
+                        SizedBox(width: _s(2)),
+                        Text(
+                          '${vsYesterdayPct.abs().toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            fontSize: _s(11),
+                            fontWeight: FontWeight.bold,
+                            color: vsYesterdayPct >= 0
+                                ? Colors.green.shade700
+                                : Colors.red.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            SizedBox(height: _s(10)),
+
+            // The hero number
+            Text(
+              _formatCurrency(todayProfit),
+              style: theme.textTheme.displaySmall?.copyWith(
+                fontWeight: FontWeight.w900,
+                color: profitColor,
+                fontSize: _s(30),
+                letterSpacing: -0.5,
+              ),
+            ),
+
+            // Margin badge
+            if (marginValue != null) ...[
+              SizedBox(height: _s(4)),
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: _s(8),
+                  vertical: _s(3),
+                ),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${marginValue.toStringAsFixed(1)}% ${isArabic ? "هامش ربح" : "margin"}',
+                  style: TextStyle(
+                    fontSize: _s(11),
+                    fontWeight: FontWeight.bold,
+                    color: profitColor,
+                  ),
+                ),
+              ),
+            ],
+
+            SizedBox(height: _s(10)),
+            // Smart insight
+            if (insightText.isNotEmpty)
+              Row(
+                children: [
+                  Icon(
+                    Icons.lightbulb_outline,
+                    size: _s(13),
+                    color: theme.hintColor,
+                  ),
+                  SizedBox(width: _s(4)),
+                  Text(
+                    insightText,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: _s(11),
+                      color: theme.hintColor,
+                    ),
+                  ),
+                ],
+              ),
+
+            SizedBox(height: _s(14)),
+            // Quick chips row
+            Wrap(
+              spacing: _s(8),
+              runSpacing: _s(6),
+              children: [
+                _heroChip(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: isArabic ? 'السيولة' : 'Cash',
+                  value: _formatCurrency(cashAvailable),
+                  color: AppColors.primaryGold,
+                ),
+                _heroChip(
+                  icon: Icons.arrow_upward,
+                  label: isArabic ? 'مبيعات' : 'Sales',
+                  value: _formatCurrency(salesToday),
+                  color: const Color(0xFF1B9E4B),
+                ),
+                _heroChip(
+                  icon: Icons.arrow_downward,
+                  label: isArabic ? 'مشتريات' : 'Purch.',
+                  value: _formatCurrency(purchasesToday),
+                  color: Colors.orange.shade700,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _heroChip({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: _s(10), vertical: _s(6)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: _s(12), color: color),
+          SizedBox(width: _s(4)),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: _s(9),
+                  color: theme.hintColor,
+                ),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: _s(11),
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Today's Profit Card (kept for potential future reuse)
+  // ignore: unused_element
   Widget _buildTodayProfitCard(Map<String, dynamic> kpis) {
     final theme = Theme.of(context);
     final isArabic = widget.isArabic;
@@ -2281,20 +2736,43 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   Widget _buildKpiCardWrapper({required Widget child, VoidCallback? onTap}) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: EdgeInsets.all(_s(12)),
         decoration: BoxDecoration(
-          color: theme.cardColor,
+          color: isDark ? theme.cardColor : Colors.white,
           borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          border: isDark
+              ? Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.22),
+                  width: 1,
+                )
+              : Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.45),
+                  width: 1.2,
+                ),
+          boxShadow: isDark
+              ? [
+                  BoxShadow(
+                    color: AppColors.primaryGold.withValues(alpha: 0.09),
+                    blurRadius: 16,
+                    offset: const Offset(0, 0),
+                  ),
+                ]
+              : [
+                  BoxShadow(
+                    color: AppColors.primaryGold.withValues(alpha: 0.15),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
         ),
         child: child,
       ),
@@ -2312,7 +2790,55 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     final anyExpanded = _expandedVaultSafeBoxId != null;
     // Give cards enough vertical room to avoid RenderFlex overflow.
-    final listHeight = anyExpanded ? _s(240) : _s(148);
+    final listHeight = anyExpanded ? _s(260) : _s(168);
+    final sorted = _sortedVaults(safeBoxes);
+
+    Widget buildCard(int index, Map<String, dynamic> sb, {bool reorderMode = false}) {
+      final id = sb['id'];
+      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+      final heroTag = sbId != null ? 'vault_safe_box_$sbId' : 'vault_safe_box_$index';
+      final isExpanded = (sbId != null && sbId == _expandedVaultSafeBoxId);
+      final isPressed = (sbId != null && sbId == _pressedVaultSafeBoxId);
+
+      return _buildVaultCard(
+        sb,
+        heroTag: heroTag,
+        isExpanded: isExpanded,
+        isPressed: isPressed,
+        reorderMode: reorderMode,
+        onTap: () {
+          if (sbId == null) return;
+          setState(() {
+            _expandedVaultSafeBoxId = isExpanded ? null : sbId;
+          });
+        },
+        onOpenDetails: () {
+          if (sbId != null) {
+            setState(() => _recentVaultIds.add(sbId));
+          }
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => _SafeBoxHeroDetailsScreen(
+                api: widget.api,
+                isArabic: widget.isArabic,
+                safeBox: sb,
+                heroTag: heroTag,
+              ),
+            ),
+          );
+        },
+        onPressChanged: (pressed) {
+          if (sbId == null) return;
+          setState(() {
+            if (pressed) {
+              _pressedVaultSafeBoxId = sbId;
+            } else if (_pressedVaultSafeBoxId == sbId) {
+              _pressedVaultSafeBoxId = null;
+            }
+          });
+        },
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2334,6 +2860,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
               ),
               const Spacer(),
+              // Reorder toggle
+              Tooltip(
+                message: _isReorderingVaults
+                    ? (isArabic ? 'تم الترتيب' : 'Done')
+                    : (isArabic ? 'إعادة ترتيب' : 'Reorder'),
+                child: IconButton(
+                  icon: Icon(
+                    _isReorderingVaults ? Icons.check_circle_outline : Icons.swap_horiz,
+                    size: _s(20),
+                    color: _isReorderingVaults
+                        ? theme.colorScheme.primary
+                        : theme.hintColor,
+                  ),
+                  onPressed: () => setState(() => _isReorderingVaults = !_isReorderingVaults),
+                ),
+              ),
               TextButton(
                 onPressed: () {
                   Navigator.of(context).push(
@@ -2354,66 +2896,71 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         SizedBox(height: _s(12)),
         SizedBox(
           height: listHeight,
-          child: AnimationLimiter(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: EdgeInsets.symmetric(horizontal: _s(16)),
-              itemCount: safeBoxes.length,
-              itemBuilder: (context, index) {
-                final sb = safeBoxes[index] as Map<String, dynamic>;
-                final id = sb['id'];
-                final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
-                final heroTag = sbId != null ? 'vault_safe_box_$sbId' : 'vault_safe_box_$index';
-                final isExpanded =
-                    (sbId != null && sbId == _expandedVaultSafeBoxId);
-                final isPressed =
-                    (sbId != null && sbId == _pressedVaultSafeBoxId);
-
-                final card = _buildVaultCard(
-                  sb,
-                  heroTag: heroTag,
-                  isExpanded: isExpanded,
-                  isPressed: isPressed,
-                  onTap: () {
-                    if (sbId == null) return;
-                    setState(() {
-                      _expandedVaultSafeBoxId = isExpanded ? null : sbId;
-                    });
-                  },
-                  onOpenDetails: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => _SafeBoxHeroDetailsScreen(
-                          api: widget.api,
-                          isArabic: widget.isArabic,
-                          safeBox: sb,
-                          heroTag: heroTag,
-                        ),
-                      ),
-                    );
-                  },
-                  onPressChanged: (pressed) {
-                    if (sbId == null) return;
-                    setState(() {
-                      if (pressed) {
-                        _pressedVaultSafeBoxId = sbId;
-                      } else if (_pressedVaultSafeBoxId == sbId) {
-                        _pressedVaultSafeBoxId = null;
-                      }
-                    });
-                  },
-                );
-
-                return AnimationConfiguration.staggeredList(
-                  position: index,
-                  duration: const Duration(milliseconds: 420),
-                  child: SlideAnimation(
-                    verticalOffset: 18.0,
-                    child: FadeInAnimation(child: card),
+          child: Listener(
+            onPointerSignal: (event) {
+              if (event is PointerScrollEvent) {
+                final offset = (_vaultScrollController.offset +
+                    event.scrollDelta.dy * 1.5)
+                    .clamp(0.0,
+                        _vaultScrollController.position.maxScrollExtent);
+                _vaultScrollController.jumpTo(offset);
+              }
+            },
+            child: _isReorderingVaults
+                ? ReorderableListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    scrollController: _vaultScrollController,
+                    padding: EdgeInsets.symmetric(horizontal: _s(16)),
+                    itemCount: sorted.length,
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) newIndex--;
+                        final item = sorted.removeAt(oldIndex);
+                        sorted.insert(newIndex, item);
+                        // Rebuild _vaultOrder from reordered list
+                        _vaultOrder = sorted
+                            .map((sb) {
+                              final id = sb['id'];
+                              return id is int
+                                  ? id
+                                  : int.tryParse(id?.toString() ?? '');
+                            })
+                            .whereType<int>()
+                            .toList();
+                      });
+                      _saveVaultOrder();
+                    },
+                    itemBuilder: (context, index) {
+                      final sb = sorted[index];
+                      final id = sb['id'];
+                      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+                      return KeyedSubtree(
+                        key: ValueKey(sbId ?? index),
+                        child: buildCard(index, sb, reorderMode: true),
+                      );
+                    },
+                  )
+                : AnimationLimiter(
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      controller: _vaultScrollController,
+                      padding: EdgeInsets.symmetric(horizontal: _s(16)),
+                      itemCount: sorted.length,
+                      itemBuilder: (context, index) {
+                        final sb = sorted[index];
+                        return AnimationConfiguration.staggeredList(
+                          position: index,
+                          duration: const Duration(milliseconds: 420),
+                          child: SlideAnimation(
+                            verticalOffset: 18.0,
+                            child: FadeInAnimation(
+                              child: buildCard(index, sb),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                );
-              },
-            ),
           ),
         ),
       ],
@@ -2438,6 +2985,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     required VoidCallback onTap,
     required VoidCallback onOpenDetails,
     required ValueChanged<bool> onPressChanged,
+    bool reorderMode = false,
   }) {
     final theme = Theme.of(context);
     final isArabic = widget.isArabic;
@@ -2507,7 +3055,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         subtitle = isArabic ? 'نقد' : 'Cash';
     }
 
-    final cardWidth = isExpanded ? _s(280) : _s(155);
+    final cardWidth = isExpanded ? _s(290) : _s(172);
 
     Widget buildDetailChip(String label, String value, {Color? chipColor}) {
       final c = chipColor ?? color;
@@ -2707,13 +3255,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                                 MaterialRectArcTween(begin: begin, end: end),
                             child: Material(
                               color: Colors.transparent,
-                              child: Text(
-                                name,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: _s(12.5),
+                              child: Tooltip(
+                                message: name.toString(),
+                                child: Text(
+                                  name,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: _s(12.5),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ),

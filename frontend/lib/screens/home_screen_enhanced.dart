@@ -2698,7 +2698,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'غرفة العمليات',
+                  'لوحة التحكم',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
