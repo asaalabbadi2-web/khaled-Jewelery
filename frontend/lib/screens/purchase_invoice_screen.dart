@@ -2839,7 +2839,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final isWideLayout = size.width >= 1100;
-    final hasOriginalInvoice = _selectedOriginalInvoice != null;
 
     final leftColumn = <Widget>[
       _buildSupplierSection(),

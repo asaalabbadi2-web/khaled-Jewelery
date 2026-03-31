@@ -4255,7 +4255,15 @@ class ApiService {
         json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
       );
     } else {
-      throw Exception('Failed to mark payroll as paid: ${response.body}');
+      // استخراج رسالة عربية واضحة من الـ JSON إن وُجدت
+      String msg = response.body;
+      try {
+        final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        msg = (decoded['message'] as String?) ??
+            (decoded['error'] as String?) ??
+            response.body;
+      } catch (_) {}
+      throw Exception(msg);
     }
   }
 
@@ -4289,6 +4297,78 @@ class ApiService {
       // fallthrough
     }
     throw Exception('Failed to post payroll accrual: ${response.body}');
+  }
+
+  Future<PayrollModel> clonePayroll(
+    int payrollId, {
+    required int month,
+    required int year,
+    String? createdBy,
+  }) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/payroll/$payrollId/clone'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode({
+        'month': month,
+        'year': year,
+        if (createdBy != null) 'created_by': createdBy,
+      }),
+    );
+
+    if (response.statusCode == 201) {
+      return PayrollModel.fromJson(
+        json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
+      );
+    } else {
+      String msg = response.body;
+      try {
+        final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        msg = (decoded['message'] as String?) ?? (decoded['error'] as String?) ?? response.body;
+      } catch (_) {}
+      throw Exception(msg);
+    }
+  }
+
+  Future<Map<String, dynamic>> bulkApprovePayroll({
+    List<int>? ids,
+    int? year,
+    int? month,
+    String? createdBy,
+  }) async {
+    final body = <String, dynamic>{};
+    if (ids != null) body['ids'] = ids;
+    if (year != null) body['year'] = year;
+    if (month != null) body['month'] = month;
+    if (createdBy != null) body['created_by'] = createdBy;
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/payroll/bulk-approve'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(body),
+    );
+    final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    if (response.statusCode == 200) return decoded;
+    throw Exception((decoded['message'] ?? decoded['error']) ?? response.body);
+  }
+
+  Future<Map<String, dynamic>> bulkCancelPayroll({
+    List<int>? ids,
+    int? year,
+    int? month,
+  }) async {
+    final body = <String, dynamic>{};
+    if (ids != null) body['ids'] = ids;
+    if (year != null) body['year'] = year;
+    if (month != null) body['month'] = month;
+
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/payroll/bulk-cancel'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(body),
+    );
+    final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    if (response.statusCode == 200) return decoded;
+    throw Exception((decoded['message'] ?? decoded['error']) ?? response.body);
   }
 
   // ---------------------------------------------------------------------------

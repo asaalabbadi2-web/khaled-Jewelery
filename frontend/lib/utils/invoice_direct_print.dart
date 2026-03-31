@@ -122,7 +122,7 @@ Future<void> shareInvoicePdf({
 /// الخطوات:
 ///  1. توليد bytes من الفاتورة.
 ///  2. رفع الـ bytes إلى POST /api/temp-pdf  →  يُرجع {"token": "..."}.
-///  3. بناء رابط عام: <apiBase>/temp-pdf/<token>
+///  3. بناء رابط عام: [apiBase]/temp-pdf/[token]
 ///  4. فتح https://wa.me/?text=... بالرابط المُضمَّن.
 Future<void> shareInvoiceWhatsApp({
   required BuildContext context,

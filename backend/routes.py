@@ -22595,6 +22595,8 @@ def update_payroll(payroll_id):
     payroll_entry = Payroll.query.get_or_404(payroll_id)
     data = request.get_json() or {}
 
+    old_status = (payroll_entry.status or '').strip().lower()
+
     if 'employee_id' in data:
         employee_id = data['employee_id']
         if employee_id:
@@ -22632,9 +22634,30 @@ def update_payroll(payroll_id):
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
 
+    # ── قيد الاستحقاق التلقائي ────────────────────────────────────────
+    # عند التغيير إلى approved أو paid ينشأ القيد تلقائياً داخل نفس
+    # الـ transaction — إذا فشل الحفظ يُرجع خطأ واضح للمستخدم.
+    new_status = (payroll_entry.status or '').strip().lower()
+    accrual_result = None
+    if new_status in ('approved', 'paid') and old_status not in ('approved', 'paid'):
+        try:
+            ok, err, je = _post_payroll_accrual_internal(
+                payroll_entry,
+                created_by=data.get('created_by', 'system'),
+            )
+            if ok:
+                accrual_result = {'accrual_posted': True, 'accrual_already_existed': je is not None and not hasattr(je, '_sa_instance_state')}
+            else:
+                accrual_result = {'accrual_posted': False, 'accrual_warning': err}
+        except Exception as exc:
+            accrual_result = {'accrual_posted': False, 'accrual_warning': str(exc)}
+
     try:
         db.session.commit()
-        return jsonify(payroll_entry.to_dict(include_employee=True, include_voucher=True))
+        result = payroll_entry.to_dict(include_employee=True, include_voucher=True)
+        if accrual_result:
+            result.update(accrual_result)
+        return jsonify(result)
     except IntegrityError as exc:
         db.session.rollback()
         return jsonify({'error': f'فشل تحديث سجل الراتب: {str(exc)}'}), 400
@@ -22658,6 +22681,149 @@ def delete_payroll(payroll_id):
     except Exception as exc:
         db.session.rollback()
         return jsonify({'error': f'فشل حذف سجل الراتب: {str(exc)}'}), 500
+
+
+@api.route('/payroll/<int:payroll_id>/clone', methods=['POST'])
+@require_permission('employees.payroll')
+def clone_payroll(payroll_id):
+    """
+    استنساخ سجل راتب إلى شهر/سنة جديدة.
+    يُنشئ سجلاً جديداً بنفس بيانات الراتب (أساسي، بدلات، خصومات) بحالة pending.
+    """
+    source = Payroll.query.get_or_404(payroll_id)
+    data = request.get_json() or {}
+
+    target_month = int(data.get('month', source.month))
+    target_year  = int(data.get('year',  source.year))
+
+    # التحقق من أن السجل غير موجود مسبقاً لنفس الموظف/الشهر/السنة
+    existing = Payroll.query.filter_by(
+        employee_id=source.employee_id,
+        month=target_month,
+        year=target_year,
+    ).first()
+    if existing:
+        return jsonify({
+            'error': 'payroll_already_exists',
+            'message': f'يوجد سجل راتب بالفعل للموظف في {target_month}/{target_year}.',
+        }), 409
+
+    new_entry = Payroll(
+        employee_id  = source.employee_id,
+        month        = target_month,
+        year         = target_year,
+        basic_salary = source.basic_salary,
+        allowances   = source.allowances,
+        deductions   = source.deductions,
+        net_salary   = source.net_salary,
+        status       = 'pending',
+        notes        = source.notes,
+        created_by   = data.get('created_by'),
+    )
+
+    try:
+        db.session.add(new_entry)
+        db.session.commit()
+        return jsonify(new_entry.to_dict(include_employee=True)), 201
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            'error': 'payroll_already_exists',
+            'message': f'يوجد سجل راتب بالفعل للموظف في {target_month}/{target_year}.',
+        }), 409
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': f'فشل استنساخ سجل الراتب: {str(exc)}'}), 500
+
+
+@api.route('/payroll/bulk-approve', methods=['POST'])
+@require_permission('employees.payroll')
+def bulk_approve_payroll():
+    """اعتماد مجموعة سجلات رواتب (pending → approved) مع إنشاء قيود الاستحقاق."""
+    data = request.get_json() or {}
+    ids = data.get('ids')  # قائمة بـ IDs أو None لاعتماد كل الـ pending للشهر/السنة
+    year  = data.get('year',  type(0) and None) or data.get('year')
+    month = data.get('month', type(0) and None) or data.get('month')
+    created_by = data.get('created_by', 'system')
+
+    query = Payroll.query.filter(Payroll.status == 'pending')
+    if ids:
+        query = query.filter(Payroll.id.in_(ids))
+    else:
+        if year:
+            query = query.filter_by(year=int(year))
+        if month:
+            query = query.filter_by(month=int(month))
+
+    entries = query.all()
+    if not entries:
+        return jsonify({'approved': 0, 'skipped': 0, 'message': 'لا توجد سجلات معلقة'}), 200
+
+    approved_count = 0
+    skipped = []
+    for entry in entries:
+        entry.status = 'approved'
+        ok, err, _ = _post_payroll_accrual_internal(entry, created_by=created_by)
+        if ok:
+            approved_count += 1
+        else:
+            skipped.append({'id': entry.id, 'reason': err})
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': f'فشل الاعتماد الجماعي: {str(exc)}'}), 500
+
+    return jsonify({
+        'approved': approved_count,
+        'skipped': len(skipped),
+        'skipped_details': skipped,
+    }), 200
+
+
+@api.route('/payroll/bulk-cancel', methods=['POST'])
+@require_permission('employees.payroll')
+def bulk_cancel_payroll():
+    """إلغاء مجموعة سجلات رواتب (لا يُلغي السندات المدفوعة)."""
+    data = request.get_json() or {}
+    ids   = data.get('ids')
+    year  = data.get('year')
+    month = data.get('month')
+
+    query = Payroll.query.filter(Payroll.status.in_(['pending', 'approved']))
+    if ids:
+        query = query.filter(Payroll.id.in_(ids))
+    else:
+        if year:
+            query = query.filter_by(year=int(year))
+        if month:
+            query = query.filter_by(month=int(month))
+
+    entries = query.all()
+    if not entries:
+        return jsonify({'cancelled': 0, 'message': 'لا توجد سجلات قابلة للإلغاء'}), 200
+
+    cancelled_count = 0
+    skipped = []
+    for entry in entries:
+        if entry.voucher_id:
+            skipped.append({'id': entry.id, 'reason': 'مرتبط بسند دفع'})
+            continue
+        entry.status = 'cancelled'
+        cancelled_count += 1
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': f'فشل الإلغاء الجماعي: {str(exc)}'}), 500
+
+    return jsonify({
+        'cancelled': cancelled_count,
+        'skipped': len(skipped),
+        'skipped_details': skipped,
+    }), 200
 
 
 @api.route('/payroll/payment-accounts', methods=['GET'])
@@ -22684,22 +22850,16 @@ def get_payment_accounts():
     } for sb in safe_boxes])
 
 
-@api.route('/payroll/<int:payroll_id>/post-accrual', methods=['POST'])
-@require_permission('employees.payroll')
-def post_payroll_accrual(payroll_id):
-    """Post payroll accrual journal entry.
+def _post_payroll_accrual_internal(payroll_entry, created_by='system'):
+    """Core accrual logic — works within the current db.session (no commit).
 
-    Debit: Salary expense (production: 5410)
-    Credit: Employee salary payable (2400xxxx)
+    Returns a tuple: (ok: bool, error: str | None, journal_entry | None)
+    The caller is responsible for committing or rolling back.
 
-    Idempotent via JournalEntry(reference_type='payroll_accrual', reference_id=payroll_id)
+    Debit:  5410 — مصروف الرواتب
+    Credit: 2400xxxx — ذمم رواتب الموظف
     """
-    payroll_entry = Payroll.query.get_or_404(payroll_id)
-    data = request.get_json() or {}
-
-    if (payroll_entry.status or '').strip().lower() == 'cancelled':
-        return jsonify({'error': 'لا يمكن ترحيل استحقاق سجل راتب ملغي'}), 400
-
+    # ── idempotency ──────────────────────────────────────────────────
     existing = (
         JournalEntry.query
         .filter_by(reference_type='payroll_accrual', reference_id=int(payroll_entry.id), is_deleted=False)
@@ -22707,42 +22867,40 @@ def post_payroll_accrual(payroll_id):
         .first()
     )
     if existing:
-        return jsonify({
-            'message': 'تم ترحيل الاستحقاق مسبقاً',
-            'already_posted': True,
-            'journal_entry': existing.to_dict(),
-        }), 200
+        return True, None, existing  # already posted — nothing to do
 
-    if (payroll_entry.status or '').strip().lower() not in ('approved', 'paid'):
-        return jsonify({'error': 'يجب اعتماد سجل الراتب قبل ترحيل الاستحقاق'}), 400
+    # ── validations ───────────────────────────────────────────────────
+    status = (payroll_entry.status or '').strip().lower()
+    if status == 'cancelled':
+        return False, 'لا يمكن ترحيل استحقاق سجل راتب ملغي', None
+    if status not in ('approved', 'paid'):
+        return False, 'يجب اعتماد سجل الراتب قبل ترحيل الاستحقاق', None
 
     try:
         net_salary = float(payroll_entry.net_salary or 0.0)
     except Exception:
         net_salary = 0.0
     if net_salary <= 0:
-        return jsonify({'error': 'صافي الراتب غير صالح للترحيل'}), 400
+        return False, 'صافي الراتب غير صالح للترحيل', None
 
     employee = Employee.query.get(payroll_entry.employee_id)
     if not employee:
-        return jsonify({'error': 'الموظف غير موجود'}), 404
+        return False, 'الموظف غير موجود', None
 
+    # ── حساب مصروف الرواتب (5410) ────────────────────────────────────
     salary_expense_account = Account.query.filter_by(account_number='5410').first()
     if not salary_expense_account:
-        return jsonify({
-            'error': 'حساب مصروف الرواتب (5410) غير موجود في شجرة الحسابات',
-            'details': {'expected_account_number': '5410'},
-        }), 400
+        return False, 'حساب مصروف الرواتب (5410) غير موجود في شجرة الحسابات', None
 
+    # ── حساب ذمم رواتب الموظف (2400xxxx) ──────────────────────────────
     salary_payable_account_id = None
     try:
         from employee_account_helpers import get_or_create_employee_payables_accounts
         from employee_account_naming import employee_payable_account_name
-
         expected_name = employee_payable_account_name(employee.name, category_ar='رواتب')
         payables = get_or_create_employee_payables_accounts(
             employee.name,
-            created_by=data.get('created_by', 'system'),
+            created_by=created_by,
         )
         salary_acc = next((a for a in payables if (a.name or '').strip() == expected_name), None)
         salary_payable_account_id = int(salary_acc.id) if salary_acc else None
@@ -22750,58 +22908,63 @@ def post_payroll_accrual(payroll_id):
         salary_payable_account_id = None
 
     if not salary_payable_account_id:
-        return jsonify({
-            'error': 'لا يوجد حساب ذمم رواتب (2400xxxx) لهذا الموظف. يرجى تشغيل Ensure setup للموظف.',
-        }), 400
+        return False, 'لا يوجد حساب ذمم رواتب (2400xxxx) لهذا الموظف. يرجى تشغيل Ensure setup للموظف.', None
 
+    # ── إنشاء القيد ───────────────────────────────────────────────────
     now = datetime.utcnow()
-    created_by = data.get('created_by', 'system')
     description = f"إثبات استحقاق راتب {employee.name} - {payroll_entry.month}/{payroll_entry.year}"
 
+    journal_entry = JournalEntry(
+        date=now,
+        description=description,
+        entry_type='استحقاق رواتب',
+        reference_type='payroll_accrual',
+        reference_id=int(payroll_entry.id),
+        reference_number=f"{payroll_entry.year}-{int(payroll_entry.month):02d}",
+        created_by=created_by,
+        is_posted=True,
+        posted_at=now,
+        posted_by=created_by,
+    )
+    db.session.add(journal_entry)
+    db.session.flush()
+
+    create_dual_journal_entry(
+        journal_entry_id=journal_entry.id,
+        account_id=salary_expense_account.id,
+        cash_debit=net_salary,
+        description=description,
+    )
+    create_dual_journal_entry(
+        journal_entry_id=journal_entry.id,
+        account_id=salary_payable_account_id,
+        cash_credit=net_salary,
+        description=description,
+    )
+
+    balance_state = verify_dual_balance(journal_entry.id)
+    if not balance_state.get('balanced', True):
+        return False, 'فشل ترحيل قيد الاستحقاق بسبب عدم توازن القيد', None
+
+    return True, None, journal_entry
+
+
+@api.route('/payroll/<int:payroll_id>/post-accrual', methods=['POST'])
+@require_permission('employees.payroll')
+def post_payroll_accrual(payroll_id):
+    """Post payroll accrual journal entry (manual trigger — kept for backward compatibility).
+
+    Debit: Salary expense (5410)
+    Credit: Employee salary payable (2400xxxx)
+
+    Idempotent: returns existing entry if already posted.
+    """
+    payroll_entry = Payroll.query.get_or_404(payroll_id)
+    data = request.get_json() or {}
+    created_by = data.get('created_by', 'system')
+
     try:
-        journal_entry = JournalEntry(
-            date=now,
-            description=description,
-            entry_type='استحقاق رواتب',
-            reference_type='payroll_accrual',
-            reference_id=int(payroll_entry.id),
-            reference_number=f"{payroll_entry.year}-{int(payroll_entry.month):02d}",
-            created_by=created_by,
-            is_posted=True,
-            posted_at=now,
-            posted_by=created_by,
-        )
-        db.session.add(journal_entry)
-        db.session.flush()
-
-        create_dual_journal_entry(
-            journal_entry_id=journal_entry.id,
-            account_id=salary_expense_account.id,
-            cash_debit=net_salary,
-            description=description,
-        )
-
-        create_dual_journal_entry(
-            journal_entry_id=journal_entry.id,
-            account_id=salary_payable_account_id,
-            cash_credit=net_salary,
-            description=description,
-        )
-
-        balance_state = verify_dual_balance(journal_entry.id)
-        if not balance_state.get('balanced', True):
-            db.session.rollback()
-            return jsonify({
-                'error': 'فشل ترحيل قيد الاستحقاق بسبب عدم توازن القيد',
-                'details': balance_state,
-            }), 500
-
-        db.session.commit()
-        return jsonify({
-            'message': 'تم ترحيل استحقاق الرواتب بنجاح',
-            'already_posted': False,
-            'journal_entry': journal_entry.to_dict(),
-        }), 200
+        ok, err, je = _post_payroll_accrual_internal(payroll_entry, created_by=created_by)
     except Exception as exc:
         db.session.rollback()
         expose = (os.getenv('EXPOSE_API_ERRORS') or '').strip() == '1'
@@ -22809,6 +22972,28 @@ def post_payroll_accrual(payroll_id):
         if expose:
             payload['details'] = str(exc)
         return jsonify(payload), 500
+
+    if not ok:
+        db.session.rollback()
+        return jsonify({'error': err}), 400
+
+    already = je and (
+        JournalEntry.query
+        .filter_by(reference_type='payroll_accrual', reference_id=int(payroll_entry.id), is_deleted=False)
+        .count()
+    ) > 1  # existing was returned without adding a new one
+    # Simpler: check if je was already in session before flush
+    # Just commit and return
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': f'فشل الحفظ: {str(exc)}'}), 500
+
+    return jsonify({
+        'message': 'تم ترحيل استحقاق الرواتب بنجاح',
+        'journal_entry': je.to_dict(),
+    }), 200
 
 
 @api.route('/payroll/<int:payroll_id>/mark-paid', methods=['POST'])
@@ -22959,7 +23144,14 @@ def mark_payroll_paid(payroll_id):
             if advance_deduction_amount > 1e-9:
                 if not employee.account_id:
                     db.session.rollback()
-                    return jsonify({'error': 'employee_missing_account_for_advance_deduction'}), 400
+                    return jsonify({
+                        'error': 'employee_missing_account_for_advance_deduction',
+                        'message': (
+                            f'لا يمكن خصم السلفة: الموظف "{employee.name}" ليس لديه حساب سلف مرتبط. '
+                            'يرجى تعيين حساب سلفة للموظف من صفحة الموظفين أولاً، '
+                            'أو اترك حقل "خصم السلفة" بالقيمة صفر.'
+                        ),
+                    }), 400
 
                 advance_line = VoucherAccountLine(
                     voucher_id=voucher.id,

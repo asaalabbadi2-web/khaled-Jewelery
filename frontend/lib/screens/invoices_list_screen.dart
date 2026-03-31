@@ -1050,7 +1050,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     final start = (_currentPage - 2).clamp(2, _totalPages - 1);
     final end = (_currentPage + 2).clamp(2, _totalPages - 1);
     if (start > 2) pages.add(-1); // leading ellipsis
-    for (int p = start; p <= end; p++) pages.add(p);
+    for (int p = start; p <= end; p++) { pages.add(p); }
     if (end < _totalPages - 1) pages.add(-1); // trailing ellipsis
     pages.add(_totalPages);
     return pages;

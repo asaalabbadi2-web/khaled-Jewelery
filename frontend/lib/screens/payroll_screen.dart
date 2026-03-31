@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../api_service.dart';
@@ -349,7 +351,15 @@ class _PayrollScreenState extends State<PayrollScreen> {
               child: Text(isAr ? 'إلغاء' : 'Cancel'),
             ),
             ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () {
+                // تحقق: إذا أدخل المستخدم مبلغ سلفة تحذير واضح
+                if (advanceDeductionAmount > 0) {
+                  // سنسمح للباكند بالتحقق من وجود الحساب
+                  Navigator.pop(ctx, true);
+                } else {
+                  Navigator.pop(ctx, true);
+                }
+              },
               child: Text(isAr ? 'تأكيد الدفع' : 'Confirm Payment'),
             ),
           ],
@@ -380,7 +390,27 @@ class _PayrollScreenState extends State<PayrollScreen> {
             : 'Payment confirmed and voucher created',
       );
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
+      // استخراج رسالة واضحة من خطأ JSON إن وُجدت
+      String errorMsg = e.toString();
+      try {
+        final raw = errorMsg;
+        // البحث عن { في الرسالة لاستخراج JSON
+        final braceIdx = raw.indexOf('{');
+        if (braceIdx != -1) {
+          final jsonPart = raw.substring(braceIdx);
+          final decoded = json.decode(jsonPart) as Map<String, dynamic>;
+          final backendMsg = decoded['message'] as String?;
+          final backendErr = decoded['error'] as String?;
+          if (backendMsg != null && backendMsg.isNotEmpty) {
+            errorMsg = backendMsg;
+          } else if (backendErr == 'employee_missing_account_for_advance_deduction') {
+            errorMsg = isAr
+                ? 'لا يمكن خصم السلفة: الموظف ليس لديه حساب سلف.\nاترك حقل "خصم السلفة" بالقيمة صفر أو راجع إعدادات الموظف.'
+                : 'Cannot deduct advance: employee has no advance account.\nLeave the advance field at zero or check employee settings.';
+          }
+        }
+      } catch (_) {/* keep original */}
+      _showSnack(errorMsg, isError: true);
     }
   }
 
@@ -393,6 +423,199 @@ class _PayrollScreenState extends State<PayrollScreen> {
     } else {
       return Icons.money; // نقدية/صندوق
     }
+  }
+
+  // ── عمليات جماعية ──────────────────────────────────────────────────────────
+
+  Future<void> _bulkApprove() async {
+    final isAr = widget.isArabic;
+    final pending = _entries.where((e) => e.status == 'pending').toList();
+    if (pending.isEmpty) {
+      _showSnack(isAr ? 'لا توجد سجلات معلقة' : 'No pending entries', isError: true);
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isAr ? 'اعتماد الكل' : 'Approve All'),
+        content: Text(
+          isAr
+              ? 'سيتم اعتماد ${pending.length} سجل معلق وإنشاء قيود الاستحقاق تلقائياً. هل تريد المتابعة؟'
+              : 'Approve ${pending.length} pending entries and auto-post accruals. Continue?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(isAr ? 'اعتماد الكل' : 'Approve All')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() => _loading = true);
+    try {
+      final result = await widget.api.bulkApprovePayroll(
+        ids: pending.map((e) => e.id!).toList(),
+      );
+      final approved = result['approved'] ?? 0;
+      final skipped  = result['skipped']  ?? 0;
+      await _loadPayroll();
+      _showSnack(
+        isAr
+            ? 'تم اعتماد $approved سجل${skipped > 0 ? " (تخطي $skipped)" : ""}'
+            : 'Approved $approved${skipped > 0 ? " (skipped $skipped)" : ""}',
+      );
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _bulkCancel() async {
+    final isAr = widget.isArabic;
+    final cancellable = _entries.where((e) => e.status == 'pending' || e.status == 'approved').toList();
+    if (cancellable.isEmpty) {
+      _showSnack(isAr ? 'لا توجد سجلات قابلة للإلغاء' : 'No cancellable entries', isError: true);
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isAr ? 'إلغاء الكل' : 'Cancel All'),
+        content: Text(
+          isAr
+              ? 'سيتم إلغاء ${cancellable.length} سجل (المعلق والمعتمد). السجلات المرتبطة بسندات دفع ستُتخطى. هل تريد المتابعة؟'
+              : 'Cancel ${cancellable.length} entries (pending & approved). Paid entries will be skipped. Continue?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(isAr ? 'إلغاء الكل' : 'Cancel All'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() => _loading = true);
+    try {
+      final result = await widget.api.bulkCancelPayroll(
+        ids: cancellable.map((e) => e.id!).toList(),
+      );
+      final cancelled = result['cancelled'] ?? 0;
+      final skipped   = result['skipped']   ?? 0;
+      await _loadPayroll();
+      _showSnack(
+        isAr
+            ? 'تم إلغاء $cancelled سجل${skipped > 0 ? " (تخطي $skipped)" : ""}'
+            : 'Cancelled $cancelled${skipped > 0 ? " (skipped $skipped)" : ""}',
+        isError: cancelled == 0,
+      );
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _bulkClone() async {
+    final isAr = widget.isArabic;
+    if (_entries.isEmpty) {
+      _showSnack(isAr ? 'لا توجد سجلات لاستنساخها' : 'No entries to clone', isError: true);
+      return;
+    }
+
+    final now = DateTime.now();
+    // تحديد الشهر الافتراضي = الشهر التالي للفلتر الحالي أو الشهر الحالي
+    final srcMonth = _selectedMonth ?? now.month;
+    final srcYear  = _selectedYear  ?? now.year;
+    int targetMonth = srcMonth == 12 ? 1       : srcMonth + 1;
+    int targetYear  = srcMonth == 12 ? srcYear + 1 : srcYear;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text(isAr ? 'استنساخ الكل' : 'Clone All'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isAr
+                    ? 'سيتم استنساخ ${_entries.length} سجل إلى الشهر المحدد بحالة "معلق". السجلات الموجودة مسبقاً ستُتخطى.'
+                    : 'Clone ${_entries.length} entries to the selected month with status "pending". Duplicates will be skipped.',
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      value: targetMonth,
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'الشهر' : 'Month',
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      items: List.generate(12, (i) => i + 1).map((m) {
+                        const ar = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+                        return DropdownMenuItem(value: m, child: Text(isAr ? ar[m - 1] : m.toString().padLeft(2, '0')));
+                      }).toList(),
+                      onChanged: (v) => setS(() => targetMonth = v ?? targetMonth),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      value: targetYear,
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'السنة' : 'Year',
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      items: List.generate(5, (i) => now.year - 1 + i).map((y) {
+                        return DropdownMenuItem(value: y, child: Text(y.toString()));
+                      }).toList(),
+                      onChanged: (v) => setS(() => targetYear = v ?? targetYear),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
+            FilledButton.icon(
+              icon: const Icon(Icons.copy_all_outlined, size: 16),
+              label: Text(isAr ? 'استنساخ الكل' : 'Clone All'),
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _loading = true);
+    int cloned = 0;
+    int skipped = 0;
+    for (final entry in _entries) {
+      try {
+        await widget.api.clonePayroll(entry.id ?? 0, month: targetMonth, year: targetYear);
+        cloned++;
+      } catch (_) {
+        skipped++;
+      }
+    }
+    await _loadPayroll();
+    if (mounted) setState(() => _loading = false);
+    _showSnack(
+      isAr
+          ? 'تم استنساخ $cloned سجل إلى $targetMonth/$targetYear${skipped > 0 ? " (تخطي $skipped)" : ""}'
+          : 'Cloned $cloned to $targetMonth/$targetYear${skipped > 0 ? " (skipped $skipped)" : ""}',
+    );
   }
 
   @override
@@ -495,6 +718,53 @@ class _PayrollScreenState extends State<PayrollScreen> {
               ],
             ),
           ),
+          // ── شريط العمليات الجماعية ─────────────────────────────────────
+          if (_entries.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                children: [
+                  Text(
+                    isAr ? 'عمليات جماعية:' : 'Bulk:',
+                    style: theme.textTheme.labelMedium?.copyWith(color: colorScheme.primary),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.done_all, size: 16),
+                    label: Text(isAr ? 'اعتماد الكل' : 'Approve All'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.blue,
+                      side: const BorderSide(color: Colors.blue),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    onPressed: _bulkApprove,
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.cancel_outlined, size: 16),
+                    label: Text(isAr ? 'إلغاء الكل' : 'Cancel All'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      side: const BorderSide(color: Colors.red),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    onPressed: _bulkCancel,
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.copy_all_outlined, size: 16),
+                    label: Text(isAr ? 'استنساخ الكل' : 'Clone All'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    onPressed: _bulkClone,
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -548,12 +818,24 @@ class _PayrollScreenState extends State<PayrollScreen> {
                                 _deleteEntry(entry);
                               } else if (value == 'paid') {
                                 _markAsPaid(entry);
+                              } else if (value == 'clone') {
+                                _clonePayroll(entry);
                               }
                             },
                             itemBuilder: (context) => [
                               PopupMenuItem(
                                 value: 'edit',
                                 child: Text(isAr ? 'تعديل' : 'Edit'),
+                              ),
+                              PopupMenuItem(
+                                value: 'clone',
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.copy_outlined, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(isAr ? 'استنساخ لشهر آخر' : 'Clone to another month'),
+                                  ],
+                                ),
                               ),
                               PopupMenuItem(
                                 value: 'paid',
@@ -573,6 +855,100 @@ class _PayrollScreenState extends State<PayrollScreen> {
         ],
       ),
     );
+  }
+
+  /// عرض نافذة اختيار الشهر/السنة ثم استنساخ السجل
+  Future<void> _clonePayroll(PayrollModel entry) async {
+    final isAr = widget.isArabic;
+    final now = DateTime.now();
+
+    // الشهر الافتراضي = الشهر التالي للسجل المصدر
+    int targetMonth = entry.month == 12 ? 1 : entry.month + 1;
+    int targetYear  = entry.month == 12 ? entry.year + 1 : entry.year;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text(isAr ? 'استنساخ سجل الراتب' : 'Clone Payroll Entry'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isAr
+                    ? 'سيتم نسخ سجل راتب "${entry.employee?.name ?? entry.employeeId}" إلى الشهر المحدد بحالة "معلق".'
+                    : 'Clone payroll for "${entry.employee?.name ?? entry.employeeId}" to the selected month with status "pending".',
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      value: targetMonth,
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'الشهر' : 'Month',
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      items: List.generate(12, (i) => i + 1).map((m) {
+                        const arabic = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+                        return DropdownMenuItem(value: m, child: Text(isAr ? arabic[m - 1] : m.toString().padLeft(2, '0')));
+                      }).toList(),
+                      onChanged: (v) => setS(() => targetMonth = v ?? targetMonth),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      value: targetYear,
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'السنة' : 'Year',
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      items: List.generate(5, (i) => now.year - 1 + i).map((y) {
+                        return DropdownMenuItem(value: y, child: Text(y.toString()));
+                      }).toList(),
+                      onChanged: (v) => setS(() => targetYear = v ?? targetYear),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(isAr ? 'إلغاء' : 'Cancel'),
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.copy_outlined, size: 16),
+              label: Text(isAr ? 'استنساخ' : 'Clone'),
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final cloned = await widget.api.clonePayroll(
+        entry.id ?? 0,
+        month: targetMonth,
+        year: targetYear,
+      );
+      setState(() => _entries.insert(0, cloned));
+      _showSnack(
+        isAr
+            ? 'تم استنساخ السجل إلى $targetMonth/$targetYear'
+            : 'Cloned to $targetMonth/$targetYear',
+      );
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    }
   }
 
   Color _statusColor(String status) {
