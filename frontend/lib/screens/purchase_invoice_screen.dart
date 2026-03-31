@@ -4927,6 +4927,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                     TextField(
                                       controller: nameController,
                                       textInputAction: TextInputAction.next,
+                                      onTap: () => nameController.selection = TextSelection(
+                                        baseOffset: 0,
+                                        extentOffset: nameController.text.length,
+                                      ),
                                       onSubmitted: (_) => focusAndSelect(
                                         weightFocusNode,
                                         weightController,
@@ -4972,6 +4976,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                             decimal: true,
                                           ),
                                       textInputAction: TextInputAction.next,
+                                      onTap: () => weightController.selection = TextSelection(
+                                        baseOffset: 0,
+                                        extentOffset: weightController.text.length,
+                                      ),
                                       inputFormatters: [
                                         NormalizeNumberFormatter(),
                                         FilteringTextInputFormatter.allow(
@@ -5042,6 +5050,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                             decimal: true,
                                           ),
                                       textInputAction: TextInputAction.next,
+                                      onTap: () {
+                                        final c = wageInputIsTotal ? wageTotalController : wageController;
+                                        c.selection = TextSelection(
+                                          baseOffset: 0,
+                                          extentOffset: c.text.length,
+                                        );
+                                      },
                                       inputFormatters: [
                                         NormalizeNumberFormatter(),
                                         FilteringTextInputFormatter.allow(
@@ -5068,6 +5083,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                       controller: descriptionController,
                                       focusNode: descriptionFocusNode,
                                       maxLines: 2,
+                                      onTap: () => descriptionController.selection = TextSelection(
+                                        baseOffset: 0,
+                                        extentOffset: descriptionController.text.length,
+                                      ),
                                       textInputAction: isCategoryOnly
                                           ? TextInputAction.done
                                           : TextInputAction.next,
@@ -5095,6 +5114,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                         controller: itemCodeController,
                                         focusNode: itemCodeFocusNode,
                                         textInputAction: TextInputAction.next,
+                                        onTap: () => itemCodeController.selection = TextSelection(
+                                          baseOffset: 0,
+                                          extentOffset: itemCodeController.text.length,
+                                        ),
                                         onSubmitted: (_) => focusAndSelect(
                                           barcodeFocusNode,
                                           barcodeController,
@@ -5128,6 +5151,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                         controller: barcodeController,
                                         focusNode: barcodeFocusNode,
                                         textInputAction: TextInputAction.done,
+                                        onTap: () => barcodeController.selection = TextSelection(
+                                          baseOffset: 0,
+                                          extentOffset: barcodeController.text.length,
+                                        ),
                                         onSubmitted: (_) => submit(),
                                         decoration: const InputDecoration(
                                           labelText: 'الباركود (اختياري)',
@@ -5159,6 +5186,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                               decimal: true,
                                             ),
                                         textInputAction: TextInputAction.next,
+                                        onTap: () => stonesWeightController.selection = TextSelection(
+                                          baseOffset: 0,
+                                          extentOffset: stonesWeightController.text.length,
+                                        ),
                                         inputFormatters: [
                                           NormalizeNumberFormatter(),
                                           FilteringTextInputFormatter.allow(
@@ -5185,6 +5216,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                               decimal: true,
                                             ),
                                         textInputAction: TextInputAction.done,
+                                        onTap: () => stonesValueController.selection = TextSelection(
+                                          baseOffset: 0,
+                                          extentOffset: stonesValueController.text.length,
+                                        ),
                                         inputFormatters: [
                                           NormalizeNumberFormatter(),
                                           FilteringTextInputFormatter.allow(

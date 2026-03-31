@@ -35,6 +35,13 @@ def start_all_schedulers(app):
 	except Exception as exc:
 		print(f"[WARNING] Clearing settlement scheduler not started: {exc}")
 
+	# SafeBox reconciliation scheduler (nightly self-healing)
+	try:
+		from safebox_reconciliation_scheduler import start_safebox_reconciliation_scheduler
+		start_safebox_reconciliation_scheduler(app)
+	except Exception as exc:
+		print(f"[WARNING] SafeBox reconciliation scheduler not started: {exc}")
+
 
 def run_forever(poll_seconds: float = 3600.0):
 	"""Keep the scheduler process alive."""

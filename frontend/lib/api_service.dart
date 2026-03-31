@@ -1915,6 +1915,8 @@ class ApiService {
     String? endDate,
     bool showBalances = true,
     bool karatDetail = false,
+    int page = 1,
+    int perPage = 2000,
   }) async {
     final queryParams = <String, String>{};
 
@@ -1923,6 +1925,8 @@ class ApiService {
     if (endDate != null) queryParams['end_date'] = endDate;
     queryParams['show_balances'] = showBalances.toString();
     queryParams['karat_detail'] = karatDetail.toString();
+    queryParams['page'] = page.toString();
+    queryParams['per_page'] = perPage.toString();
 
     final uri = Uri.parse(
       '$_baseUrl/general_ledger_all',

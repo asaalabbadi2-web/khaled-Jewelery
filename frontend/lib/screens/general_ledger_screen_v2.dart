@@ -33,6 +33,11 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
 
+  // Pagination
+  int _currentPage = 1;
+  static const int _perPage = 500;
+  bool _hasMore = false;
+
   @override
   void initState() {
     super.initState();
@@ -71,10 +76,14 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
     }
   }
 
-  Future<void> _loadLedger() async {
+  Future<void> _loadLedger({bool resetPage = true}) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      if (resetPage) {
+        _currentPage = 1;
+        _ledgerData = null;
+      }
     });
 
     try {
@@ -84,10 +93,23 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
         endDate: _endDate?.toIso8601String().split('T')[0],
         showBalances: _showBalances,
         karatDetail: _karatDetail,
+        page: _currentPage,
+        perPage: _perPage,
       );
 
+      final pagination = data['pagination'] as Map<String, dynamic>?;
+      final newEntries = List<Map<String, dynamic>>.from(data['entries'] ?? []);
+
       setState(() {
-        _ledgerData = data;
+        if (resetPage || _ledgerData == null) {
+          _ledgerData = data;
+        } else {
+          // Append entries to existing data
+          final existing = List<Map<String, dynamic>>.from(_ledgerData!['entries'] ?? []);
+          existing.addAll(newEntries);
+          _ledgerData = {..._ledgerData!, 'entries': existing, 'pagination': pagination};
+        }
+        _hasMore = pagination?['has_next'] == true;
         _isLoading = false;
       });
     } catch (e) {
@@ -96,6 +118,12 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadNextPage() async {
+    if (_isLoading || !_hasMore) return;
+    setState(() => _currentPage++);
+    await _loadLedger(resetPage: false);
   }
 
   void _showFilterDialog() {
@@ -322,8 +350,25 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
           child: entries.isEmpty
               ? const Center(child: Text('لا توجد حركات'))
               : ListView.builder(
-                  itemCount: entries.length,
+                  itemCount: entries.length + (_hasMore ? 1 : 0),
                   itemBuilder: (context, index) {
+                    if (index == entries.length) {
+                      // زر "تحميل المزيد"
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: _isLoading
+                              ? const CircularProgressIndicator()
+                              : OutlinedButton.icon(
+                                  icon: const Icon(Icons.expand_more),
+                                  label: Text(
+                                    'تحميل المزيد (صفحة ${_currentPage + 1})',
+                                  ),
+                                  onPressed: _loadNextPage,
+                                ),
+                        ),
+                      );
+                    }
                     return _buildEntryCard(entries[index]);
                   },
                 ),

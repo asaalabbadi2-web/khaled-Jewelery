@@ -7773,11 +7773,29 @@ def delete_unposted_invoice(invoice_id: int):
             JournalEntryLine.query.filter_by(journal_entry_id=je.id).delete()
             db.session.delete(je)
 
-        # Vouchers
+        # Vouchers + their JEs + their SBTs — all cleaned atomically
         linked_vouchers = Voucher.query.filter_by(
             reference_type='invoice', reference_id=invoice_id
         ).all()
         for v in linked_vouchers:
+            # Collect all JE IDs linked to this voucher (via FK + reference_type)
+            vje_ids: set = set()
+            if v.journal_entry_id:
+                vje_ids.add(v.journal_entry_id)
+            for vje in JournalEntry.query.filter_by(
+                reference_type='voucher', reference_id=v.id
+            ).all():
+                vje_ids.add(vje.id)
+            for vje_id in vje_ids:
+                JournalEntryLine.query.filter_by(journal_entry_id=vje_id).delete()
+                vje_obj = JournalEntry.query.get(vje_id)
+                if vje_obj:
+                    db.session.delete(vje_obj)
+            # Delete SBTs for this voucher (including any stray reversal rows)
+            SafeBoxTransaction.query.filter(
+                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+                SafeBoxTransaction.ref_id == v.id,
+            ).delete(synchronize_session=False)
             VoucherAccountLine.query.filter_by(voucher_id=v.id).delete()
             db.session.delete(v)
 
@@ -8022,45 +8040,46 @@ def unpost_invoice(invoice_id: int):
             je.posted_at = None
             je.posted_by = None
 
-        # 2. Cascade: cancel linked payment vouchers + their JEs + reverse SBTs
-        try:
-            linked_vouchers = Voucher.query.filter_by(
-                reference_type='invoice', reference_id=invoice_id
-            ).all()
-            for v in linked_vouchers:
-                # Reverse SafeBox cash transactions tied to this voucher
-                try:
-                    _append_safe_reversal_transactions_for_voucher(
-                        v,
-                        created_by=unposted_by,
-                        reason=f"Unpost invoice #{invoice_id} — reverse voucher {v.voucher_number}",
-                    )
-                except Exception:
-                    pass
-                # Unpost the voucher JE
-                if v.journal_entry_id:
-                    vje = JournalEntry.query.get(v.journal_entry_id)
-                    if vje and vje.is_posted:
-                        vje.is_posted = False
-                        vje.posted_at = None
-                        vje.posted_by = None
-                # Cascade: also find voucher JEs via reference_type (belt-and-suspenders)
-                for vje2 in JournalEntry.query.filter_by(
-                    reference_type='voucher', reference_id=v.id, is_posted=True
-                ).all():
-                    vje2.is_posted = False
-                    vje2.posted_at = None
-                    vje2.posted_by = None
-                # Reset voucher status so it can be reposted if needed
-                v.status = 'pending'
-        except Exception:
-            pass
+        # 2. Cascade: reset linked payment vouchers + their JEs atomically
+        linked_vouchers = Voucher.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all()
+        voucher_ids = [v.id for v in linked_vouchers]
+        for v in linked_vouchers:
+            # Unpost the voucher JE via FK
+            if v.journal_entry_id:
+                vje = JournalEntry.query.get(v.journal_entry_id)
+                if vje and vje.is_posted:
+                    vje.is_posted = False
+                    vje.posted_at = None
+                    vje.posted_by = None
+            # Unpost any additional voucher JEs via reference_type link
+            for vje2 in JournalEntry.query.filter_by(
+                reference_type='voucher', reference_id=v.id, is_posted=True
+            ).all():
+                vje2.is_posted = False
+                vje2.posted_at = None
+                vje2.posted_by = None
+            # Reset voucher to pending so it can be reposted if needed
+            v.status = 'pending'
 
-        # 3. Unpost the invoice
+        # 3. Atomically delete ALL SafeBoxTransactions linked to this invoice.
+        # Using direct DELETE rather than append-only reversal rows avoids orphan
+        # voucher_reversal SBTs that have no matching GL reversal JE.
+        SafeBoxTransaction.query.filter(
+            SafeBoxTransaction.invoice_id == invoice_id
+        ).delete(synchronize_session=False)
+        if voucher_ids:
+            SafeBoxTransaction.query.filter(
+                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+                SafeBoxTransaction.ref_id.in_(voucher_ids),
+            ).delete(synchronize_session=False)
+
+        # 4. Unpost the invoice
         invoice.is_posted = False
         invoice.posted_at = None
 
-        # 4. Remove category-weight movements (only valid for posted invoices)
+        # 5. Remove category-weight movements (only valid for posted invoices)
         try:
             from models import CategoryWeightMovement
             CategoryWeightMovement.query.filter_by(invoice_id=invoice_id).delete()
@@ -17357,9 +17376,29 @@ def soft_delete_journal_entry(id):
         # إعادة حساب أرصدة الحسابات المتأثرة
         _recalculate_account_balances_for_accounts(affected_account_ids)
 
-        # Remove derived safebox ledger rows for manual journal entries.
+        # Remove derived safebox ledger rows for this journal entry.
         try:
+            # 1. SBTs created directly from this JE (ref_type='journal_entry')
             SafeBoxTransaction.query.filter_by(ref_type='journal_entry', ref_id=int(entry.id)).delete(synchronize_session=False)
+        except Exception:
+            pass
+        try:
+            # 2. If this JE is a voucher reversal, remove the voucher_reversal SBTs
+            #    (ref_type='voucher_reversal', ref_id = the original voucher id).
+            #    These become orphans the moment the reversal JE is deleted.
+            if entry.reference_type == 'voucher_reversal' and entry.reference_id:
+                SafeBoxTransaction.query.filter_by(
+                    ref_type='voucher_reversal', ref_id=int(entry.reference_id)
+                ).delete(synchronize_session=False)
+        except Exception:
+            pass
+        try:
+            # 3. If this JE is for a voucher being un-approved/deleted, also remove
+            #    the voucher SBTs so the sub-ledger stays consistent.
+            if entry.reference_type == 'voucher' and entry.reference_id:
+                SafeBoxTransaction.query.filter_by(
+                    ref_type='voucher', ref_id=int(entry.reference_id)
+                ).delete(synchronize_session=False)
         except Exception:
             pass
 
@@ -17525,7 +17564,32 @@ def delete_journal_entry(id):
         payments = InvoicePayment.query.filter_by(journal_entry_id=entry.id).all()
         for pmt in payments:
             pmt.journal_entry_id = None
-        
+
+        # 7. حذف SBTs المرتبطة بهذا القيد
+        try:
+            # SBTs created directly from this JE
+            SafeBoxTransaction.query.filter_by(
+                ref_type='journal_entry', ref_id=int(entry.id)
+            ).delete(synchronize_session=False)
+        except Exception:
+            pass
+        try:
+            # If this is a voucher_reversal JE → orphan voucher_reversal SBTs
+            if entry.reference_type == 'voucher_reversal' and entry.reference_id:
+                SafeBoxTransaction.query.filter_by(
+                    ref_type='voucher_reversal', ref_id=int(entry.reference_id)
+                ).delete(synchronize_session=False)
+        except Exception:
+            pass
+        try:
+            # If this is a voucher JE being hard-deleted → remove its voucher SBTs
+            if entry.reference_type == 'voucher' and entry.reference_id:
+                SafeBoxTransaction.query.filter_by(
+                    ref_type='voucher', ref_id=int(entry.reference_id)
+                ).delete(synchronize_session=False)
+        except Exception:
+            pass
+
         # الآن حذف القيد نفسه
         db.session.delete(entry)
         db.session.commit()
@@ -20344,9 +20408,26 @@ def get_general_ledger_all():
                 func.lower(func.coalesce(SafeBox.branch, '')) == branch_normalized
             )
 
+    # ── Pagination ────────────────────────────────────────────────────────────
+    # بدون فلتر حساب → نفرض حداً افتراضياً 2000 صف لتجنب 502 Bad Gateway.
+    # بفلتر حساب واحد يمكن رفع الحد دون خطر.
+    DEFAULT_LIMIT = 2000
+    MAX_LIMIT     = 10000
+    try:
+        per_page = min(int(request.args.get('per_page', DEFAULT_LIMIT)), MAX_LIMIT)
+    except (ValueError, TypeError):
+        per_page = DEFAULT_LIMIT
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (ValueError, TypeError):
+        page = 1
+
+    total_count = query.count()
     lines = (
         query
         .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .limit(per_page)
+        .offset((page - 1) * per_page)
         .all()
     )
 
@@ -20482,6 +20563,14 @@ def get_general_ledger_all():
     return jsonify({
         'entries': entries_payload,
         'summary': summary,
+        'pagination': {
+            'page': page,
+            'per_page': per_page,
+            'total': total_count,
+            'pages': max(1, -(-total_count // per_page)),  # ceiling division
+            'has_next': page * per_page < total_count,
+            'has_prev': page > 1,
+        },
         'filters': {
             'account_id': account_id,
             'start_date': start_date_param,
@@ -24748,12 +24837,21 @@ def cancel_voucher(voucher_id):
                 reason=reason
             )
 
-        # Reverse SafeBox ledger movements (append-only)
-        _append_safe_reversal_transactions_for_voucher(
-            voucher,
-            created_by=cancelled_by,
-            reason=f"Voucher cancel: {reason}",
-        )
+        # Reverse SafeBox ledger movements only when a matching GL reversal JE was
+        # created.  If the voucher was never posted (no JE) we must NOT append
+        # voucher_reversal SBTs — they would be orphans with no GL counterpart.
+        # Instead, delete any stray SBTs that already exist for this voucher.
+        if reversal_entry is not None:
+            _append_safe_reversal_transactions_for_voucher(
+                voucher,
+                created_by=cancelled_by,
+                reason=f"Voucher cancel: {reason}",
+            )
+        else:
+            SafeBoxTransaction.query.filter(
+                SafeBoxTransaction.ref_type == 'voucher',
+                SafeBoxTransaction.ref_id == voucher.id,
+            ).delete(synchronize_session=False)
 
         voucher.status = 'cancelled'
         voucher.cancellation_reason = reason
