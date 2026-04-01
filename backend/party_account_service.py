@@ -309,7 +309,7 @@ def ensure_customer_accounts(
 def ensure_supplier_accounts(
     supplier: Supplier,
     *,
-    memo_root_number: str = '7220',
+    memo_root_number: str = '7210',
     memo_root_name: str = 'موردو ذهب مشغول وزني',
     memo_root_type: str = 'Liability',
     memo_root_prefix_hint: str = '72',
@@ -377,15 +377,16 @@ def ensure_supplier_accounts(
 
     if not financial:
         if not category:
-            # Prefer current chart numbers (e.g., 220/210/21). Keep legacy fallbacks for old DBs.
+            # Prefer current chart numbers (e.g., 2100/210/21). Keep legacy fallbacks for old DBs.
             category = (
                 _find_account_by_number('2100')
-                or _find_account_by_number('220')
                 or _find_account_by_number('210')
                 or _find_account_by_number('21')
                 or _find_account_by_number('21100')
                 or _find_account_by_number('2110')
                 or _find_account_by_number('211')
+                or _find_account_by_number('2200')  # raw gold — last resort only
+                or _find_account_by_number('220')
             )
 
         # If the chart is missing supplier roots, bootstrap a minimal hierarchy.

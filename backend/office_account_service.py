@@ -5,9 +5,9 @@ from typing import Optional
 
 from models import db, Account, Office
 
-# Default parent for closing offices: under raw-gold suppliers (per current COA).
-DEFAULT_PARENT_ACCOUNT_NUMBER = '2200'
-DEFAULT_PARENT_ACCOUNT_NAME = 'موردي الذهب الخام'
+# Default parent for closing offices: under manufactured-gold suppliers (per current COA).
+DEFAULT_PARENT_ACCOUNT_NUMBER = '2100'
+DEFAULT_PARENT_ACCOUNT_NAME = 'حسابات موردو الذهب المشغول'
 
 
 def _digits_only(value: str) -> str:
@@ -32,13 +32,13 @@ def ensure_office_parent_account(parent_account_number: str = DEFAULT_PARENT_ACC
         if parent:
             return parent
 
-    # 2) Fallback to current COA roots (new charts use 220/2200 and 210/2100).
+    # 2) Fallback to current COA roots (new charts use 210/2100 for manufactured gold).
     for fallback_number in (
-        '2200',
-        '220',
-        '2100',  # supplier posting group (preferred)
+        '2100',  # manufactured gold posting group (preferred)
         '210',
         '21',
+        '2200',  # raw gold — only if no manufactured group found
+        '220',
         '21100',
         '211',
     ):
@@ -47,7 +47,7 @@ def ensure_office_parent_account(parent_account_number: str = DEFAULT_PARENT_ACC
             return parent
 
     # 3) Bootstrap a minimal supplier hierarchy so office creation never hard-fails.
-    # Prefer 220/2200 (raw gold suppliers). If that fails, create 210/2100.
+    # Prefer 210/2100 (manufactured gold suppliers). If that fails, create 220/2200.
 
     category_22 = Account.query.filter_by(account_number='22').first()
     category_220 = Account.query.filter_by(account_number='220').first()
