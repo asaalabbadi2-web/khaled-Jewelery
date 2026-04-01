@@ -49,6 +49,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // ── Overlay alert state ──────────────────────────────────────────────────
   /// Alerts that the user has manually dismissed (by id/text key).
   final Set<String> _dismissedAlertKeys = {};
+  /// Live OverlayEntry for the floating toast stack (null = not shown).
+  OverlayEntry? _toastOverlayEntry;
 
   // ── Vault ordering ────────────────────────────────────────────────────────
   /// Local ordered list of safe-box ids (persisted in SharedPreferences).
@@ -164,6 +166,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   void dispose() {
+    _toastOverlayEntry?.remove();
+    _toastOverlayEntry = null;
     _vaultScrollController.dispose();
     super.dispose();
   }
@@ -222,8 +226,42 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       if (!mounted) return;
       setState(() => _error = e.toString());
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _updateToastOverlay();
+        });
+      }
     }
+  }
+
+  void _updateToastOverlay() {
+    _toastOverlayEntry?.remove();
+    _toastOverlayEntry = null;
+    if (!mounted) return;
+    final alerts = _getAllAlerts();
+    if (alerts.isEmpty) return;
+    final entry = OverlayEntry(
+      builder: (ctx) => Positioned(
+        bottom: 24,
+        left: 16,
+        child: Material(
+          color: Colors.transparent,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: alerts
+                .map((a) => _buildToastCard(a, onDismiss: () {
+                      setState(() => _dismissedAlertKeys.add(a.text));
+                      _updateToastOverlay();
+                    }))
+                .toList(),
+          ),
+        ),
+      ),
+    );
+    _toastOverlayEntry = entry;
+    Overlay.of(context, rootOverlay: true).insert(entry);
   }
 
   double _asDouble(dynamic value) => value is num ? value.toDouble() : 0.0;
@@ -244,25 +282,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Directionality(
       textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
-        body: Stack(
-          children: [
-            SafeArea(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _error != null
-                  ? _buildErrorState()
-                  : _buildContent(),
-            ),
-            // macOS-style floating notification toasts (bottom-left corner)
-            if (!_isLoading && _error == null)
-              PositionedDirectional(
-                bottom: 24,
-                start: 16,
-                child: SafeArea(
-                  child: _buildFloatingAlerts(),
-                ),
-              ),
-          ],
+        body: SafeArea(
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+              ? _buildErrorState()
+              : _buildContent(),
         ),
       ),
     );
@@ -1647,116 +1672,95 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return items.where((a) => !_dismissedAlertKeys.contains(a.text)).toList();
   }
 
-  Widget _buildFloatingAlerts() {
-    final toasts = _getAllAlerts();
-    if (toasts.isEmpty) return const SizedBox.shrink();
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: toasts.map((alert) => _buildToastCard(alert)).toList(),
-    );
-  }
-
-  Widget _buildToastCard(_AlertItem alert) {
+  Widget _buildToastCard(_AlertItem alert, {required VoidCallback onDismiss}) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final isArabic = widget.isArabic;
 
-    return TweenAnimationBuilder<Offset>(
+    // Accent color band: slightly tinted background based on alert color
+    final bgColor = isDark
+        ? Color.lerp(const Color(0xFF2C2C2E), alert.color, 0.06)!
+        : Color.lerp(Colors.white, alert.color, 0.05)!;
+
+    return TweenAnimationBuilder<double>(
       key: Key('toast_${alert.text.hashCode}'),
-      tween: Tween(
-        begin: Offset(isArabic ? -1.2 : 1.2, 0.0),
-        end: Offset.zero,
-      ),
-      duration: const Duration(milliseconds: 380),
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: const Duration(milliseconds: 420),
       curve: Curves.easeOutCubic,
-      builder: (context, offset, child) => FractionalTranslation(
-        translation: offset,
-        child: child,
+      builder: (context, t, child) => Transform.translate(
+        offset: Offset(-40 * (1 - t), 0),
+        child: Opacity(opacity: t, child: child),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            width: 300,
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF2A2A2A).withValues(alpha: 0.88)
-                  : Colors.white.withValues(alpha: 0.82),
-              borderRadius: BorderRadius.circular(12),
-              border: Border(
-                // Accent line on the END side (right in LTR, left in RTL)
-                right: isArabic
-                    ? BorderSide(color: alert.color, width: 4)
-                    : BorderSide(color: alert.color.withValues(alpha: 0.2), width: 0.8),
-                left: isArabic
-                    ? BorderSide(color: alert.color.withValues(alpha: 0.2), width: 0.8)
-                    : BorderSide(color: alert.color, width: 4),
-                top: BorderSide(
-                  color: alert.color.withValues(alpha: 0.20),
-                  width: 0.8,
-                ),
-                bottom: BorderSide(
-                  color: alert.color.withValues(alpha: 0.20),
-                  width: 0.8,
-                ),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: isDark ? 0.40 : 0.14),
-                  blurRadius: 20,
-                  spreadRadius: 0,
-                  offset: const Offset(0, 6),
-                ),
-                BoxShadow(
-                  color: alert.color.withValues(alpha: 0.10),
-                  blurRadius: 12,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+      child: Container(
+        width: 300,
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border(
+            left: BorderSide(color: alert.color, width: 4),
+            top: BorderSide(
+              color: alert.color.withValues(alpha: 0.22),
+              width: 0.8,
             ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
-                  child: Icon(alert.icon, color: alert.color, size: 18),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                    child: Text(
-                      alert.text,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: isDark
-                            ? Colors.white.withValues(alpha: 0.88)
-                            : const Color(0xFF1C1C1E),
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w500,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () =>
-                      setState(() => _dismissedAlertKeys.add(alert.text)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(
-                      Icons.close,
-                      size: 14,
-                      color: (isDark ? Colors.white : Colors.black)
-                          .withValues(alpha: 0.40),
-                    ),
-                  ),
-                ),
-              ],
+            right: BorderSide(
+              color: alert.color.withValues(alpha: 0.22),
+              width: 0.8,
+            ),
+            bottom: BorderSide(
+              color: alert.color.withValues(alpha: 0.22),
+              width: 0.8,
             ),
           ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.18),
+              blurRadius: 20,
+              spreadRadius: 0,
+              offset: const Offset(0, 6),
+            ),
+            BoxShadow(
+              color: alert.color.withValues(alpha: 0.12),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+              child: Icon(alert.icon, color: alert.color, size: 18),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                child: Text(
+                  alert.text,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.92)
+                        : const Color(0xFF1C1C1E),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ),
+            GestureDetector(
+              onTap: onDismiss,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Icon(
+                  Icons.close,
+                  size: 14,
+                  color: (isDark ? Colors.white : Colors.black)
+                      .withValues(alpha: 0.40),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
