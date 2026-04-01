@@ -218,20 +218,22 @@ def ensure_office_account(
             parent = ensure_office_parent_account(parent_account_number)
             if parent and existing.parent_id != parent.id:
                 existing.parent_id = parent.id
-            # Office accounts participate in dual (cash+weight) entries.
-            # Ensure they can track weight so stored balances stay correct.
+            # Office financial accounts use transaction_type='cash' so they are
+            # accepted by ensure_supplier_accounts() validation.  Weight always
+            # goes to the linked memo account (72xxxxx), never to this account.
+            # Do NOT force 'both' / tracks_weight=True — that would cause
+            # ensure_supplier_accounts to reject the account and silently create a
+            # duplicate posting account for the same office.
             changed = False
-            if getattr(existing, 'transaction_type', None) != 'both':
-                existing.transaction_type = 'both'
-                changed = True
-            if not bool(getattr(existing, 'tracks_weight', False)):
-                existing.tracks_weight = True
+            if getattr(existing, 'transaction_type', None) == 'both':
+                existing.transaction_type = 'cash'
+                existing.tracks_weight = False
                 changed = True
             if changed or (parent and existing.parent_id == parent.id):
                 db.session.add(existing)
                 db.session.flush()
 
-            # Ensure memo account exists even for legacy 'both' office accounts.
+            # Ensure memo account exists for the office financial account.
             try:
                 _ensure_memo_account_for_office_account(existing)
             except Exception:
@@ -258,8 +260,11 @@ def ensure_office_account(
             account_number=account_number,
             name=office.name or 'مكتب',
             type=(parent.type or 'Liability'),
-            transaction_type='both',
-            tracks_weight=True,
+            # Use 'cash' so ensure_supplier_accounts() accepts this account
+            # and does NOT create a second account for voucher payments.
+            # Weight is always tracked via the linked memo account (72xxxxx).
+            transaction_type='cash',
+            tracks_weight=False,
             parent_id=parent.id,
         )
         db.session.add(account)
