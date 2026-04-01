@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import '../api_service.dart';
@@ -7,7 +8,9 @@ import '../providers/settings_provider.dart';
 import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
 import '../utils/invoice_direct_print.dart';
+import '../utils/arabic_number_formatter.dart';
 import '../utils.dart';
+import 'settings_screen_enhanced.dart';
 
 enum _PreSaveDecision { cancel, proceed, proceedSuppressWarning }
 
@@ -57,6 +60,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
   // Items List
   final List<InvoiceItem> _items = [];
+
+  // Categories (for category-line dialog)
+  List<Map<String, dynamic>> _categories = [];
+  bool _isLoadingCategories = false;
+  String? _categoriesLoadingError;
 
   // Gold Price & Settings
   double _goldPrice24k = 0.0;
@@ -372,47 +380,40 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   // }
 
   // ==================== Smart Input Processing ====================
-  Future<void> _processSmartInput(String input) async {
-    if (input.trim().isEmpty) return;
+  Map<String, dynamic>? _findItemBySmartInput(String input) {
+    final normalizedInput = input.toLowerCase();
+    final strategies = <bool Function(Map<String, dynamic>)>[
+      (item) {
+        final barcode = item['barcode']?.toString().toLowerCase();
+        return barcode != null && barcode == normalizedInput;
+      },
+      (item) {
+        final code = item['item_code']?.toString().toLowerCase();
+        return code != null && code == normalizedInput;
+      },
+      (item) {
+        final name = item['name']?.toString().toLowerCase();
+        return name?.contains(normalizedInput) ?? false;
+      },
+    ];
 
-    debugPrint('🔍 البحث عن: "$input"');
-    debugPrint('📦 عدد الأصناف المتاحة: ${widget.items.length}');
+    for (final matches in strategies) {
+      for (final item in widget.items) {
+        if (matches(item)) return item;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _processSmartInput(String input) async {
+    final normalizedInput = input.trim();
+    if (normalizedInput.isEmpty) return;
 
     try {
-      // البحث بالترتيب: Barcode → Item Code → Name
-      Map<String, dynamic>? foundItem;
+      final foundItem = _findItemBySmartInput(normalizedInput);
 
-      // 1. البحث بالباركود
-      foundItem = widget.items.firstWhere((item) {
-        final barcode = item['barcode']?.toString().toLowerCase();
-        final match = barcode == input.toLowerCase();
-        if (match) debugPrint('✅ تطابق بالباركود: ${item['name']}');
-        return match;
-      }, orElse: () => {});
-
-      // 2. البحث برقم الصنف
-      if (foundItem.isEmpty) {
-        foundItem = widget.items.firstWhere((item) {
-          final code = item['item_code']?.toString().toLowerCase();
-          final match = code == input.toLowerCase();
-          if (match) debugPrint('✅ تطابق برقم الصنف: ${item['name']}');
-          return match;
-        }, orElse: () => {});
-      }
-
-      // 3. البحث بالاسم
-      if (foundItem.isEmpty) {
-        foundItem = widget.items.firstWhere((item) {
-          final name = item['name']?.toString().toLowerCase();
-          final match = name?.contains(input.toLowerCase()) ?? false;
-          if (match) debugPrint('✅ تطابق بالاسم: ${item['name']}');
-          return match;
-        }, orElse: () => {});
-      }
-
-      if (foundItem.isNotEmpty) {
-        debugPrint('✨ تمت إضافة: ${foundItem['name']}');
-        _addItemFromData(foundItem);
+      if (foundItem != null && foundItem.isNotEmpty) {
+        await _addItemFromData(foundItem);
         _smartInputController.clear();
         _smartInputFocus.requestFocus();
 
@@ -426,69 +427,492 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           );
         }
       } else {
-        debugPrint('❌ لم يتم العثور على الصنف');
         _showError('⚠️ لم يتم العثور على الصنف');
       }
     } catch (e) {
-      debugPrint('🔴 خطأ في البحث: $e');
       _showError('خطأ في البحث: $e');
     }
   }
 
   Future<void> _addItemFromData(Map<String, dynamic> itemData) async {
-    debugPrint('➕ إضافة صنف: ${itemData['name']} (ID: ${itemData['id']})');
-    debugPrint(
-      '   البيانات الخام: karat=${itemData['karat']}, wage=${itemData['wage']}',
-    );
-
     // تحديث سعر الذهب قبل إضافة الصنف
     try {
       final apiService = ApiService();
       final priceData = await apiService.getGoldPrice();
       final newPrice = _parseDouble(priceData['price_24k']);
-      if (newPrice > 0) {
-        if (mounted) {
-          setState(() {
-            _goldPrice24k = newPrice;
-          });
-        }
-        debugPrint('💰 سعر الذهب المحدث: $_goldPrice24k ر.س/جم');
-      } else {
-        debugPrint(
-          '⚠️ سعر الذهب غير صالح في الاستجابة: ${priceData['price_24k']}',
-        );
+      if (newPrice > 0 && mounted) {
+        setState(() => _goldPrice24k = newPrice);
       }
-    } catch (e) {
-      debugPrint('⚠️ فشل تحديث سعر الذهب: $e');
+    } catch (_) {
       // الاستمرار باستخدام السعر الحالي
     }
 
-    // تحويل آمن للقيم
     double karat = _parseDouble(itemData['karat']);
     if (karat <= 0) karat = 21.0;
-
     double wage = _parseDouble(itemData['wage']);
-
-    // تحويل آمن للوزن
     double weight = _parseDouble(itemData['weight']);
-    if (weight <= 0) weight = 10.0; // افتراضي إذا لم يكن موجود
+    if (weight <= 0) weight = 10.0;
+    final count = (itemData['count'] is int)
+        ? itemData['count'] as int
+        : int.tryParse('${itemData['count'] ?? '1'}') ?? 1;
 
     setState(() {
       _items.add(
         InvoiceItem(
-          id: itemData['id'],
+          id: itemData['id'] as int?,
           name: itemData['name'] ?? '',
           barcode: itemData['barcode'] ?? '',
           karat: karat,
-          weight: weight, // استخدام الوزن الفعلي من قاعدة البيانات
+          weight: weight,
           wage: wage,
+          count: count,
           goldPrice24k: _goldPrice24k,
           mainKarat: _settingsProvider.mainKarat,
           taxRate: _effectiveTaxRateForKarat(karat),
         ),
       );
-      debugPrint('📋 عدد الأصناف الآن: ${_items.length}');
     });
+  }
+
+  // ==================== Categories Loading ====================
+  Future<void> _ensureCategoriesLoaded() async {
+    if (_isLoadingCategories || _categories.isNotEmpty) return;
+    setState(() {
+      _isLoadingCategories = true;
+      _categoriesLoadingError = null;
+    });
+    try {
+      final api = ApiService();
+      final raw = await api.getCategories();
+      final parsed = raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      parsed.sort(
+        (a, b) => ('${a['name'] ?? ''}').compareTo('${b['name'] ?? ''}'),
+      );
+      if (!mounted) return;
+      setState(() {
+        _categories = parsed;
+        _isLoadingCategories = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _categories = [];
+        _isLoadingCategories = false;
+        _categoriesLoadingError = e.toString();
+      });
+    }
+  }
+
+  // ==================== Manual Item Dialog ====================
+  Future<void> _showManualItemDialog() async {
+    if (!_settingsProvider.allowManualInvoiceItems) {
+      _showError(
+        'هذه الميزة معطلة من الإعدادات. فعّل خيار "السماح بإضافة صنف يدوي" أولاً.',
+      );
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController();
+    final barcodeController = TextEditingController();
+    final countController = TextEditingController(text: '1');
+    final weightController = TextEditingController(text: '1.0');
+    final wageController = TextEditingController(text: '0');
+    final totalController = TextEditingController();
+    final barcodeFocusNode = FocusNode();
+    final countFocusNode = FocusNode();
+    final weightFocusNode = FocusNode();
+    final wageFocusNode = FocusNode();
+    final totalFocusNode = FocusNode();
+
+    int selectedKarat = _settingsProvider.mainKarat;
+
+    double? tryParseOptionalDouble(String value) {
+      final normalized = value.trim().replaceAll(',', '.');
+      if (normalized.isEmpty) return null;
+      return double.tryParse(normalized);
+    }
+
+    void focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+      focusNode.requestFocus();
+      controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: controller.text.length,
+      );
+    }
+
+    if (!mounted) {
+      nameController.dispose();
+      barcodeController.dispose();
+      weightController.dispose();
+      wageController.dispose();
+      totalController.dispose();
+      return;
+    }
+
+    final manualData = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void submit() {
+              if (!(formKey.currentState?.validate() ?? false)) return;
+              final weight = tryParseOptionalDouble(weightController.text) ?? 0;
+              final wage = tryParseOptionalDouble(wageController.text) ?? 0;
+              final count = int.tryParse(countController.text) ?? 1;
+              final manualTotal = tryParseOptionalDouble(totalController.text);
+              Navigator.pop(dialogContext, {
+                'name': nameController.text.trim(),
+                'barcode': barcodeController.text.trim(),
+                'count': count,
+                'karat': selectedKarat.toDouble(),
+                'weight': weight,
+                'wage': wage,
+                'total_with_tax': manualTotal,
+              });
+            }
+
+            return AlertDialog(
+              title: const Text('إضافة صنف يدوي'),
+              content: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: nameController,
+                        textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(barcodeFocusNode, barcodeController),
+                        decoration: const InputDecoration(
+                          labelText: 'اسم الصنف',
+                          prefixIcon: Icon(Icons.label_outline),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'يرجى إدخال اسم الصنف';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: barcodeController,
+                        focusNode: barcodeFocusNode,
+                        textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(countFocusNode, countController),
+                        decoration: const InputDecoration(
+                          labelText: 'الباركود / رقم الصنف (اختياري)',
+                          prefixIcon: Icon(Icons.qr_code_2),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: countController,
+                        focusNode: countFocusNode,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(weightFocusNode, weightController),
+                        onTap: () => countController.selection = TextSelection(
+                          baseOffset: 0,
+                          extentOffset: countController.text.length,
+                        ),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'العدد (الكمية)',
+                          prefixIcon: Icon(Icons.numbers),
+                        ),
+                        validator: (value) {
+                          final count = int.tryParse(value ?? '');
+                          if (count == null || count < 1) {
+                            return 'أدخل عدداً صحيحاً أكبر من صفر';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedKarat,
+                        decoration: const InputDecoration(
+                          labelText: 'العيار',
+                          prefixIcon: Icon(Icons.diamond_outlined),
+                        ),
+                        items: const [18, 21, 22, 24]
+                            .map(
+                              (karat) => DropdownMenuItem<int>(
+                                value: karat,
+                                child: Text('عيار $karat'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() => selectedKarat = value);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: weightController,
+                        focusNode: weightFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(wageFocusNode, wageController),
+                        onTap: () => weightController.selection = TextSelection(
+                          baseOffset: 0,
+                          extentOffset: weightController.text.length,
+                        ),
+                        inputFormatters: [
+                          ArabicNumberTextInputFormatter(
+                            allowDecimal: true,
+                            allowNegative: false,
+                          ),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'الوزن بالجرام',
+                          prefixIcon: Icon(Icons.scale),
+                        ),
+                        validator: (value) {
+                          final parsed = double.tryParse(
+                            (value ?? '').trim().replaceAll(',', '.'),
+                          );
+                          if (parsed == null || parsed <= 0) {
+                            return 'أدخل وزناً صحيحاً أكبر من صفر';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: wageController,
+                        focusNode: wageFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        onFieldSubmitted: (_) =>
+                            focusAndSelect(totalFocusNode, totalController),
+                        onTap: () => wageController.selection = TextSelection(
+                          baseOffset: 0,
+                          extentOffset: wageController.text.length,
+                        ),
+                        inputFormatters: [
+                          ArabicNumberTextInputFormatter(
+                            allowDecimal: true,
+                            allowNegative: false,
+                          ),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'أجرة المصنعية للجرام (اختياري)',
+                          prefixIcon: Icon(Icons.handyman_outlined),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: totalController,
+                        focusNode: totalFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.done,
+                        onFieldSubmitted: (_) => submit(),
+                        onTap: () => totalController.selection = TextSelection(
+                          baseOffset: 0,
+                          extentOffset: totalController.text.length,
+                        ),
+                        inputFormatters: [
+                          ArabicNumberTextInputFormatter(
+                            allowDecimal: true,
+                            allowNegative: false,
+                          ),
+                        ],
+                        decoration: InputDecoration(
+                          labelText: 'الإجمالي مع الضريبة (اختياري)',
+                          prefixIcon: const Icon(Icons.attach_money),
+                          helperText:
+                              'اترك الحقل فارغاً ليتم احتساب السعر تلقائياً',
+                          suffixText: _settingsProvider.currencySymbol,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('إضافة'),
+                  onPressed: submit,
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    barcodeFocusNode.dispose();
+    countFocusNode.dispose();
+    weightFocusNode.dispose();
+    wageFocusNode.dispose();
+    totalFocusNode.dispose();
+
+    if (manualData == null) return;
+
+    final manualItem = InvoiceItem(
+      id: null,
+      name: manualData['name'] as String? ?? 'صنف يدوي',
+      barcode: manualData['barcode'] as String? ?? '',
+      karat: _parseDouble(manualData['karat']),
+      weight: _parseDouble(manualData['weight']),
+      wage: _parseDouble(manualData['wage']),
+      count: manualData['count'] as int? ?? 1,
+      goldPrice24k: _goldPrice24k,
+      mainKarat: _settingsProvider.mainKarat,
+      taxRate: _uiDisableVat
+          ? 0.0
+          : _settingsProvider.taxRateForKarat(
+              _parseDouble(manualData['karat']),
+            ),
+    );
+
+    final manualTotal = manualData['total_with_tax'];
+    if (manualTotal is num && manualTotal > 0) {
+      manualItem.setManualTotal(manualTotal.toDouble());
+    }
+
+    setState(() {
+      _items.add(manualItem);
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ تمت إضافة صنف يدوي إلى الفاتورة'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    }
+  }
+
+  // ==================== Category Line Dialog ====================
+  Future<void> _showCategoryLineDialog() async {
+    await _ensureCategoriesLoaded();
+    if (!mounted) return;
+
+    if (_categories.isEmpty) {
+      _showError(
+        _categoriesLoadingError ??
+            'لا توجد تصنيفات. أنشئ تصنيفاً أولاً من شاشة الأصناف.',
+      );
+      return;
+    }
+
+    final result = await showDialog<_ScrapSaleCategoryLineResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CategoryLineDialog(
+        categories: _categories,
+        mainKarat: _settingsProvider.mainKarat,
+        currencySymbol: _settingsProvider.currencySymbol,
+      ),
+    );
+
+    if (result == null || !mounted) return;
+
+    setState(() {
+      final item = InvoiceItem(
+        id: null,
+        name: result.categoryName.isNotEmpty ? result.categoryName : 'تصنيف',
+        barcode: '',
+        karat: result.karat,
+        weight: result.weight,
+        wage: result.wage,
+        count: result.count,
+        goldPrice24k: _goldPrice24k,
+        mainKarat: _settingsProvider.mainKarat,
+        taxRate: _uiDisableVat
+            ? 0.0
+            : _settingsProvider.taxRateForKarat(result.karat),
+      );
+      if (result.amount > 0) item.setManualTotal(result.amount);
+      _items.add(item);
+    });
+  }
+
+  // ==================== Manual Item Feature Guide ====================
+  Future<void> _showManualItemFeatureGuide() async {
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final shouldOpenSettings =
+        await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.info_outline, color: colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'تفعيل الصنف اليدوي',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              content: const Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'لإضافة صنف يدوي يجب تفعيل الخيار من شاشة الإعدادات > الشركة والفواتير.',
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'بعد التفعيل سيظهر زر "صنف يدوي" دائماً داخل شاشة الفاتورة.',
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('لاحقاً'),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.settings),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  label: const Text('فتح الإعدادات'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!shouldOpenSettings || !mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const SettingsScreenEnhanced(initialTabIndex: 1),
+      ),
+    );
   }
 
   // ==================== Item Actions ====================
@@ -1921,6 +2345,32 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                 AppColors.success,
                 'قائمة',
                 _showItemSelectionDialog,
+              ),
+              const SizedBox(width: 8),
+              _buildQuickButton(
+                Icons.edit_note,
+                _settingsProvider.allowManualInvoiceItems
+                    ? AppColors.warning
+                    : theme.disabledColor,
+                _settingsProvider.allowManualInvoiceItems
+                    ? 'إضافة صنف يدوي'
+                    : 'فعّل من الإعدادات لإضافة صنف يدوي',
+                _settingsProvider.allowManualInvoiceItems
+                    ? _showManualItemDialog
+                    : _showManualItemFeatureGuide,
+              ),
+              const SizedBox(width: 8),
+              _buildQuickButton(
+                Icons.category,
+                _settingsProvider.allowManualInvoiceItems
+                    ? AppColors.primaryGold
+                    : theme.disabledColor,
+                _settingsProvider.allowManualInvoiceItems
+                    ? 'سطر تصنيف'
+                    : 'فعّل من الإعدادات لإضافة سطر تصنيف',
+                _settingsProvider.allowManualInvoiceItems
+                    ? _showCategoryLineDialog
+                    : _showManualItemFeatureGuide,
               ),
             ],
           ),
@@ -3409,9 +3859,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
 // ==================== Invoice Item Model ====================
 class InvoiceItem {
-  final int id;
+  final int? id;
   final String name;
   final String barcode;
+  int count;
   double karat;
   double weight;
   double wage; // أجور المصنعية للجرام الواحد
@@ -3427,9 +3878,10 @@ class InvoiceItem {
   double? _targetTotal;
 
   InvoiceItem({
-    required this.id,
+    this.id,
     required this.name,
     required this.barcode,
+    this.count = 1,
     required this.karat,
     required this.weight,
     required this.wage,
@@ -3648,5 +4100,646 @@ class PaymentEntry {
       'net_amount': netAmount,
       'notes': notes,
     };
+  }
+}
+
+// ==================== Category Line Dialog (name-only catalog) ====================
+class _ScrapSaleCategoryLineResult {
+  final String categoryName;
+  final double amount;
+  final double karat;
+  final double weight;
+  final double wage;
+  final int count;
+
+  const _ScrapSaleCategoryLineResult({
+    required this.categoryName,
+    required this.amount,
+    required this.karat,
+    required this.weight,
+    required this.wage,
+    required this.count,
+  });
+}
+
+class _CategoryLineDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> categories;
+  final int mainKarat;
+  final String currencySymbol;
+
+  const _CategoryLineDialog({
+    required this.categories,
+    required this.mainKarat,
+    required this.currencySymbol,
+  });
+
+  @override
+  State<_CategoryLineDialog> createState() => _CategoryLineDialogState();
+}
+
+class _CategoryLineDialogState extends State<_CategoryLineDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _categorySearchController = TextEditingController();
+  final _weightController = TextEditingController(text: '1.0');
+  final _wageController = TextEditingController(text: '0');
+  final _countController = TextEditingController(text: '1');
+  final _amountController = TextEditingController();
+
+  final _categorySearchFocusNode = FocusNode();
+  final _weightFocusNode = FocusNode();
+  final _wageFocusNode = FocusNode();
+  final _countFocusNode = FocusNode();
+  final _amountFocusNode = FocusNode();
+
+  Map<String, dynamic>? _selectedCategory;
+  late int _selectedKarat;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedKarat = widget.mainKarat;
+    for (final c in [_weightController, _wageController, _countController]) {
+      c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
+    }
+  }
+
+  @override
+  void dispose() {
+    _categorySearchController.dispose();
+    _weightController.dispose();
+    _wageController.dispose();
+    _countController.dispose();
+    _amountController.dispose();
+    _categorySearchFocusNode.dispose();
+    _weightFocusNode.dispose();
+    _wageFocusNode.dispose();
+    _countFocusNode.dispose();
+    _amountFocusNode.dispose();
+    super.dispose();
+  }
+
+  double _tryParseDouble(String value, double fallback) {
+    final normalized = value.trim().replaceAll(',', '.');
+    return double.tryParse(normalized) ?? fallback;
+  }
+
+  void _focusAndSelect(FocusNode focusNode, TextEditingController controller) {
+    focusNode.requestFocus();
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+  }
+
+  void _selectFirstMatchingCategory(List<Map<String, dynamic>> options) {
+    if (options.isEmpty) return;
+    final first = options.first;
+    final categoryKarat = _tryParseCategoryKarat(first);
+    setState(() {
+      _selectedCategory = first;
+      if (categoryKarat != null) _selectedKarat = categoryKarat;
+    });
+  }
+
+  int? _tryParseCategoryKarat(Map<String, dynamic> category) {
+    final raw = category['karat'];
+    final parsed = int.tryParse('${raw ?? ''}');
+    if (parsed == null) return null;
+    if (const [18, 21, 22, 24].contains(parsed)) return parsed;
+    return null;
+  }
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    final categoryName = (_selectedCategory?['name'] ?? '').toString().trim();
+    final weight = _tryParseDouble(_weightController.text, 0);
+    final wage = _tryParseDouble(_wageController.text, 0);
+    final count = int.tryParse(_countController.text.trim()) ?? 0;
+    final amount = _tryParseDouble(_amountController.text, 0);
+
+    if (count < 1) {
+      _focusAndSelect(_countFocusNode, _countController);
+      return;
+    }
+    if (categoryName.isEmpty || weight <= 0) return;
+
+    Navigator.pop(
+      context,
+      _ScrapSaleCategoryLineResult(
+        categoryName: categoryName,
+        amount: amount,
+        karat: _selectedKarat.toDouble(),
+        weight: weight,
+        wage: wage,
+        count: count,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final filtered = _searchQuery.isEmpty
+        ? widget.categories
+        : widget.categories.where((c) {
+            final name = (c['name'] ?? '').toString().trim().toLowerCase();
+            return name.contains(_searchQuery);
+          }).toList();
+    final limited = filtered.take(100).toList();
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 550, maxHeight: 680),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFFD4AF37).withValues(alpha: 0.15),
+                      const Color(0xFFD4AF37).withValues(alpha: 0.05),
+                    ],
+                    begin: Alignment.topRight,
+                    end: Alignment.bottomLeft,
+                  ),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD4AF37),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.category,
+                        color: Colors.white,
+                        size: 26,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'إضافة سطر تصنيف',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'اختر تصنيفاً وحدد التفاصيل',
+                          style: TextStyle(fontSize: 13, color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Content
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextFormField(
+                        controller: _categorySearchController,
+                        autofocus: true,
+                        focusNode: _categorySearchFocusNode,
+                        textInputAction: TextInputAction.next,
+                        decoration: InputDecoration(
+                          labelText: 'ابحث عن التصنيف',
+                          hintText: 'اكتب لتصفية النتائج...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          prefixIcon: const Icon(Icons.search, size: 22),
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                        ),
+                        onChanged: (v) {
+                          setState(() => _searchQuery = v.trim().toLowerCase());
+                        },
+                        onFieldSubmitted: (_) {
+                          if (_selectedCategory == null) {
+                            _selectFirstMatchingCategory(limited);
+                          }
+                          if (_selectedCategory != null) {
+                            _focusAndSelect(_weightFocusNode, _weightController);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      FormField<int>(
+                        validator: (_) => _selectedCategory == null
+                            ? 'الرجاء اختيار تصنيف'
+                            : null,
+                        builder: (state) {
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                'التصنيفات المتاحة (${limited.length})',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                height: 220,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.surface,
+                                  border: Border.all(
+                                    color: state.hasError
+                                        ? theme.colorScheme.error
+                                        : theme.dividerColor
+                                              .withValues(alpha: 0.3),
+                                    width: 1.5,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: limited.isEmpty
+                                    ? Center(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.search_off,
+                                              size: 56,
+                                              color: theme.disabledColor,
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              'لا توجد نتائج',
+                                              style: theme.textTheme.titleMedium
+                                                  ?.copyWith(
+                                                    color: theme.disabledColor,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        padding: const EdgeInsets.all(8),
+                                        itemCount: limited.length,
+                                        itemBuilder: (_, index) {
+                                          final opt = limited[index];
+                                          final id = (opt['id'] is num)
+                                              ? (opt['id'] as num).toInt()
+                                              : int.tryParse('${opt['id']}');
+                                          final name = (opt['name'] ?? '')
+                                              .toString();
+                                          final isSelected =
+                                              _selectedCategory != null &&
+                                              id != null &&
+                                              ((_selectedCategory!['id'] is num)
+                                                  ? (_selectedCategory!['id']
+                                                                as num)
+                                                            .toInt() ==
+                                                        id
+                                                  : int.tryParse(
+                                                          '${_selectedCategory!['id']}',
+                                                        ) ==
+                                                        id);
+
+                                          return Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 6,
+                                            ),
+                                            child: InkWell(
+                                              onTap: () {
+                                                setState(() {
+                                                  _selectedCategory = opt;
+                                                  final k =
+                                                      _tryParseCategoryKarat(
+                                                        opt,
+                                                      );
+                                                  if (k != null) {
+                                                    _selectedKarat = k;
+                                                  }
+                                                });
+                                                state.didChange(id);
+                                              },
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              child: AnimatedContainer(
+                                                duration: const Duration(
+                                                  milliseconds: 200,
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 14,
+                                                      vertical: 14,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: isSelected
+                                                      ? const Color(
+                                                          0xFFD4AF37,
+                                                        ).withValues(alpha: 0.2)
+                                                      : theme
+                                                            .colorScheme
+                                                            .surfaceContainerHighest
+                                                            .withValues(
+                                                              alpha: 0.3,
+                                                            ),
+                                                  border: Border.all(
+                                                    color: isSelected
+                                                        ? const Color(
+                                                            0xFFD4AF37,
+                                                          )
+                                                        : Colors.transparent,
+                                                    width: 2,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.label,
+                                                      size: 18,
+                                                      color: isSelected
+                                                          ? const Color(
+                                                              0xFFD4AF37,
+                                                            )
+                                                          : theme.iconTheme.color,
+                                                    ),
+                                                    const SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Text(
+                                                        name,
+                                                        style: TextStyle(
+                                                          fontSize: 15,
+                                                          fontWeight: isSelected
+                                                              ? FontWeight.bold
+                                                              : FontWeight.w500,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    if (isSelected)
+                                                      const Icon(
+                                                        Icons.check_circle,
+                                                        color:
+                                                            Color(0xFFD4AF37),
+                                                        size: 20,
+                                                      ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                              ),
+                              if (state.hasError) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  state.errorText!,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.error,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'تفاصيل الصنف',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        value: _selectedKarat,
+                        decoration: InputDecoration(
+                          labelText: 'العيار',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          prefixIcon: const Icon(Icons.diamond, size: 20),
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                        ),
+                        items: const [18, 21, 22, 24]
+                            .map(
+                              (k) => DropdownMenuItem<int>(
+                                value: k,
+                                child: Text('عيار $k'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) =>
+                            setState(() => _selectedKarat = v ?? _selectedKarat),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _weightController,
+                              focusNode: _weightFocusNode,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              onFieldSubmitted: (_) => _focusAndSelect(
+                                _wageFocusNode,
+                                _wageController,
+                              ),
+                              onTap: () =>
+                                  _weightController.selection = TextSelection(
+                                    baseOffset: 0,
+                                    extentOffset: _weightController.text.length,
+                                  ),
+                              decoration: InputDecoration(
+                                labelText: 'الوزن (جم)',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                prefixIcon: const Icon(Icons.scale, size: 20),
+                                filled: true,
+                                fillColor: theme.colorScheme.surface,
+                              ),
+                              validator: (v) {
+                                final val = _tryParseDouble(v ?? '', 0);
+                                if (val <= 0) return 'وزن غير صحيح';
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _wageController,
+                              focusNode: _wageFocusNode,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              onFieldSubmitted: (_) => _focusAndSelect(
+                                _countFocusNode,
+                                _countController,
+                              ),
+                              onTap: () =>
+                                  _wageController.selection = TextSelection(
+                                    baseOffset: 0,
+                                    extentOffset: _wageController.text.length,
+                                  ),
+                              decoration: InputDecoration(
+                                labelText: 'المصنعية/جم',
+                                hintText: '0',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                prefixIcon: const Icon(Icons.build, size: 20),
+                                filled: true,
+                                fillColor: theme.colorScheme.surface,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _countController,
+                              focusNode: _countFocusNode,
+                              keyboardType: TextInputType.number,
+                              textInputAction: TextInputAction.next,
+                              onFieldSubmitted: (_) => _focusAndSelect(
+                                _amountFocusNode,
+                                _amountController,
+                              ),
+                              onTap: () =>
+                                  _countController.selection = TextSelection(
+                                    baseOffset: 0,
+                                    extentOffset: _countController.text.length,
+                                  ),
+                              decoration: InputDecoration(
+                                labelText: 'العدد',
+                                hintText: '1',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                prefixIcon:
+                                    const Icon(Icons.numbers, size: 20),
+                                filled: true,
+                                fillColor: theme.colorScheme.surface,
+                              ),
+                              validator: (v) {
+                                final val = int.tryParse(v?.trim() ?? '');
+                                if (val == null || val < 1) return 'عدد ≥ 1';
+                                return null;
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _amountController,
+                        focusNode: _amountFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.done,
+                        inputFormatters: const [
+                          ArabicNumberTextInputFormatter(allowDecimal: true),
+                        ],
+                        onFieldSubmitted: (_) => _submit(),
+                        onTap: () =>
+                            _amountController.selection = TextSelection(
+                              baseOffset: 0,
+                              extentOffset: _amountController.text.length,
+                            ),
+                        decoration: InputDecoration(
+                          labelText: 'المبلغ (اختياري)',
+                          hintText: 'اتركه فارغاً للحساب التلقائي',
+                          suffixText: widget.currencySymbol,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.payments_outlined,
+                            size: 20,
+                          ),
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Actions
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface.withValues(alpha: 0.5),
+                  borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(20),
+                  ),
+                  border: Border(
+                    top: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.2),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close, size: 18),
+                      label: const Text('إلغاء'),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: _submit,
+                      icon: const Icon(Icons.check, size: 20),
+                      label: const Text('إضافة السطر'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD4AF37),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
