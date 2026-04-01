@@ -8,12 +8,29 @@ from code_generator import generate_supplier_code
 from office_account_service import ensure_office_parent_account
 
 
+def _sync_supplier_account_with_office(supplier: Supplier, office: Office) -> None:
+    """Ensure supplier.account_id points to the same account as office.account_category_id.
+
+    This prevents a second account from being silently created by ensure_supplier_accounts()
+    when a payment voucher targets the supplier directly (instead of via the reservation flow).
+    """
+    office_account_id = getattr(office, 'account_category_id', None) or None
+    if not office_account_id:
+        return
+    if getattr(supplier, 'account_id', None) != int(office_account_id):
+        supplier.account_id = int(office_account_id)
+        db.session.add(supplier)
+        db.session.flush()
+
+
 def ensure_office_supplier(office: Office, *, auto_commit: bool = False) -> Supplier:
     """Ensure the given office has a dedicated supplier record and return it."""
     if not office:
         raise ValueError('office is required to ensure supplier linkage')
 
     if office.supplier:
+        # Sync: if the office account was created after the supplier, backfill account_id.
+        _sync_supplier_account_with_office(office.supplier, office)
         return office.supplier
 
     # Supplier.account_category_id is a category/root (e.g. 2200/2100), not the office posting account.
@@ -23,12 +40,19 @@ def ensure_office_supplier(office: Office, *, auto_commit: bool = False) -> Supp
     except Exception:
         supplier_category_id = None
 
+    # If the office already has a dedicated posting account (account_category_id), we reuse it
+    # as the supplier's financial account so that ALL payment flows (reservation + manual vouchers)
+    # post to exactly ONE account.  Without this link, ensure_supplier_accounts() would later
+    # allocate a SECOND account for the same office, causing irreconcilable balance splits.
+    office_account_id = getattr(office, 'account_category_id', None) or None
+
     supplier = Supplier(
         supplier_code=generate_supplier_code(),
         name=office.name,
         phone=office.phone,
         email=office.email,
         account_category_id=supplier_category_id,
+        account_id=int(office_account_id) if office_account_id else None,
         notes=f'مورد مرتبط بالمكتب {office.office_code}',
         active=office.active,
         balance_cash=0.0,
