@@ -437,7 +437,12 @@ def create_office():
         if data.get('create_account', True) and not explicit_account_set:
             ensure_office_account(office)
 
-        supplier_link_mode = str(data.get('supplier_link_mode') or data.get('supplier_mode') or 'new').strip().lower()
+        # Auto-detect link mode: if supplier_id is provided without explicit mode, default to 'existing'
+        _provided_supplier_id = _to_int_or_none(data.get('supplier_id') or data.get('existing_supplier_id'))
+        supplier_link_mode = str(
+            data.get('supplier_link_mode') or data.get('supplier_mode') or
+            ('existing' if _provided_supplier_id else 'new')
+        ).strip().lower()
         supplier = None
 
         if supplier_link_mode in ('existing', 'link', 'existing_supplier'):
