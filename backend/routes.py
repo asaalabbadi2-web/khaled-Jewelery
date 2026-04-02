@@ -12552,7 +12552,6 @@ def add_invoice():
             _sales_scrap_acc_id = get_account_id_for_mapping('بيع', 'sales_gold_scrap') or _sales_new_acc_id
             # اختر حساب المبيعات حسب نوع الذهب
             sales_gold_new_acc_id = _sales_scrap_acc_id if gold_type == 'scrap' else _sales_new_acc_id
-            cost_of_sales_acc_id = get_account_id_for_mapping('بيع', 'cost_of_sales')
             vat_payable_acc_id = get_account_id_for_mapping('بيع', 'vat_payable')
             commission_acc_id = get_account_id_for_mapping('بيع', 'commission')
             commission_vat_acc_id = get_account_id_for_mapping('بيع', 'commission_vat')
@@ -12572,8 +12571,6 @@ def add_invoice():
             missing = []
             if not sales_gold_new_acc_id:
                 missing.append({'mapping': 'sales_gold_new/revenue', 'operation_type': 'بيع'})
-            if not cost_of_sales_acc_id:
-                missing.append({'mapping': 'cost_of_sales', 'operation_type': 'بيع'})
 
             # If VAT exists on items, VAT payable mapping is required to keep JE balanced.
             try:
@@ -12637,779 +12634,219 @@ def add_invoice():
                     'resolved': {
                         'cash_acc_id': cash_acc_id,
                         'sales_gold_new_acc_id': sales_gold_new_acc_id,
-                        'cost_of_sales_acc_id': cost_of_sales_acc_id,
                         'inventory_accounts': inventory_accounts,
                     },
                 }), 400
             
-            # ============================================
-            # القيد الأول: إثبات الإيراد (المبلغ الكامل)
-            # من حـ/ النقدية → إلى حـ/ مبيعات الذهب الجديد
-            # ============================================
+            # ─── حساب الضريبة من العناصر ───
+            _total_tax_for_je = sum(
+                _to_float(
+                    item_data.get('tax_amount', item_data.get('tax', 0.0)),
+                    0.0,
+                )
+                for item_data in data.get('items', [])
+            )
+            if _total_tax_for_je < 0:
+                _total_tax_for_je = abs(_total_tax_for_je)
 
+            # ─── مجموع المدفوع + العمولات (تُخصم من مبلغ الذمم لتوازن القيد) ───
             paid_amount_total = 0.0
-            
-            # 🆕 دعم وسائل دفع متعددة
+            _total_commission_je = 0.0   # إجمالي العمولات المُدرجة في قيد الفاتورة
+
             if payments_data and len(payments_data) > 0:
                 for payment in payments_data:
                     pm_obj = PaymentMethod.query.get(payment['payment_method_id'])
                     pm_amount = _to_float(payment.get('amount', 0.0))
-
-                    # Respect commission timing policy:
-                    # - settlement: do not record commission at invoice time and do not reduce the debit.
-                    # This prevents imbalanced JEs when the client still sends net/commission fields.
+                    paid_amount_total += pm_amount
                     try:
-                        pm_commission_timing = str(getattr(pm_obj, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+                        pm_commission_timing = str(
+                            getattr(pm_obj, 'commission_timing', 'invoice') or 'invoice'
+                        ).strip().lower()
                     except Exception:
                         pm_commission_timing = 'invoice'
 
                     if pm_commission_timing == 'settlement':
                         pm_commission = 0.0
                         pm_commission_vat = 0.0
-                        pm_net = pm_amount
                     else:
                         pm_commission = _to_float(payment.get('commission_amount', 0.0))
                         pm_commission_vat = _to_float(payment.get('commission_vat', 0.0))
-                        pm_net = _to_float(payment.get('net_amount', pm_amount - pm_commission - pm_commission_vat))
 
-                    paid_amount_total += pm_amount
-                    
-                    # 🆕 الحصول على الحساب من الخزينة (وليس من وسيلة الدفع مباشرة)
-                    safe_box = None
-                    safe_box_id = payment.get('safe_box_id')
-                    if safe_box_id:
-                        safe_box = SafeBox.query.get(safe_box_id)
-                    elif pm_obj and pm_obj.default_safe_box:
-                        safe_box = pm_obj.default_safe_box
-
-                    # Fallback: use the same resolution chain as Phase 1 when
-                    # neither the payload nor the payment method carries a safe box.
-                    if not safe_box:
-                        _fb_id = None
-                        if _is_cash_payment_method(pm_obj):
-                            _fb_id = _fallback_cash_safe_box_id()
-                        else:
-                            _fb_id = _fallback_non_cash_safe_box_id(pm_obj)
-                        if _fb_id is None:
-                            _fb_id = _fallback_cash_safe_box_id()
-                        if _fb_id is not None:
-                            safe_box = SafeBox.query.get(_fb_id)
-
-                    if not safe_box:
-                        return jsonify({
-                            'error': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
-                            'payment_method_id': payment.get('payment_method_id'),
-                            'payment_method_name': pm_obj.name if pm_obj else None,
-                        }), 400
-
-                    # ✅ توافق وسيلة الدفع مع نوع الخزينة
-                    pm_type = (pm_obj.payment_type or '').strip().lower() if pm_obj else ''
-                    sb_type = (safe_box.safe_type or '').strip().lower() if safe_box else ''
-                    if pm_type == 'cash' and sb_type != 'cash':
-                        return jsonify({
-                            'error': 'الخزينة المختارة غير متوافقة مع وسيلة الدفع (نقداً يتطلب خزينة نقدية)',
-                            'payment_method_id': payment.get('payment_method_id'),
-                            'payment_method_type': pm_type,
-                            'safe_box_id': safe_box.id,
-                            'safe_box_type': sb_type,
-                        }), 400
-                    if pm_type != 'cash':
-                        # Non-cash methods (cards/wallets/transfers/BNPL) often settle via clearing.
-                        # Checks are handled explicitly.
-                        if pm_type == 'check':
-                            allowed = {'bank', 'check'}
-                        else:
-                            allowed = {'bank', 'clearing'}
-
-                        if sb_type not in allowed:
-                            return jsonify({
-                                'error': 'الخزينة المختارة غير متوافقة مع وسيلة الدفع (يتطلب خزينة بنكية/شيكات حسب النوع)',
-                                'payment_method_id': payment.get('payment_method_id'),
-                                'payment_method_type': pm_type,
-                                'safe_box_id': safe_box.id,
-                                'safe_box_type': sb_type,
-                            }), 400
-                    
-                    # ================================================================
-                    # قيد الفاتورة: مدين ذمم العميل (AR) وليس الخزينة مباشرةً.
-                    # السبب: سند القبض المُنشأ أعلاه (Phase 1) يُمدن الخزينة ويُدين
-                    # ذمم العميل ← الذمم تصفر والخزينة تُمدن مرة واحدة فقط.
-                    # ملاحظة: حتى في وضع غير مُرحّل (unposted_mode) نُبقي القيد على الذمم
-                    # لتفادي تكرار أثر الخزينة عند الترحيل لاحقاً.
-                    # ================================================================
-                    _ar_debit_id = party_account.id if party_account else None
-                    if _ar_debit_id:
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=_ar_debit_id,
-                            cash_debit=pm_net,
-                            description=f"ذمم عميل - دفعة عبر {pm_obj.name if pm_obj else 'وسيلة دفع'}",
-                            apply_golden_rule=False
-                        )
-                    elif safe_box and safe_box.account:
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=safe_box.account.id,
-                            cash_debit=pm_net,
-                            description=f"استلام دفعة عبر {pm_obj.name} - {safe_box.name}",
-                            apply_golden_rule=False
-                        )
-                    else:
-                        acc_id = cash_acc_id or (cash_account.id if cash_account else None)
-                        if not acc_id:
-                            db.session.rollback()
-                            return jsonify({
-                                'error': 'cash_account_missing',
-                                'message': 'لا يوجد حساب نقدية افتراضي. الرجاء ضبط ربط حسابات (cash) أو إنشاء حساب "صندوق النقدية" أو تحديد خزينة للدفع.',
-                            }), 400
-                        if not Account.query.get(acc_id):
-                            db.session.rollback()
-                            return jsonify({
-                                'error': 'account_not_found',
-                                'message': 'حساب النقدية غير موجود في شجرة الحسابات',
-                                'account_id': acc_id,
-                            }), 400
-                        pm_name = pm_obj.name if pm_obj else "وسيلة دفع"
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=acc_id,
-                            cash_debit=pm_net,
-                            description=f"استلام دفعة عبر {pm_name} (بدون خزينة محددة)",
-                            apply_golden_rule=False
-                        )
-                    
-                    # قيد العمولة وضريبتها
                     if pm_commission > 0 and commission_acc_id:
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,
                             account_id=commission_acc_id,
                             cash_debit=pm_commission,
-                            description=f"عمولة {pm_obj.name}",
-                            apply_golden_rule=False
+                            description=f"عمولة {pm_obj.name if pm_obj else ''}",
+                            apply_golden_rule=False,
                         )
-                    
-                    vat_debit_acc_id = commission_vat_acc_id or commission_acc_id
-                    if pm_commission_vat > 0 and vat_debit_acc_id:
+                        _total_commission_je += pm_commission
+                    _vat_debit_pm = commission_vat_acc_id or commission_acc_id
+                    if pm_commission_vat > 0 and _vat_debit_pm:
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,
-                            account_id=vat_debit_acc_id,
+                            account_id=_vat_debit_pm,
                             cash_debit=pm_commission_vat,
-                            description=(
-                                f"ضريبة عمولة {pm_obj.name}"
-                                if commission_vat_acc_id
-                                else f"ضريبة عمولة {pm_obj.name} (ضمن حساب العمولة)"
-                            ),
-                            apply_golden_rule=False
+                            description=f"ضريبة عمولة {pm_obj.name if pm_obj else ''}",
+                            apply_golden_rule=False,
                         )
-            
-            # وسيلة دفع واحدة
+                        _total_commission_je += pm_commission_vat
+
             elif payment_method_id:
-                # Commission timing guard:
-                # If the payment method settles fees later, we must record the *gross* receipt now.
-                # Ignore any client-provided net/commission fields to avoid JE cash imbalance.
                 try:
-                    pm_commission_timing = str(getattr(payment_method_obj, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+                    pm_commission_timing = str(
+                        getattr(payment_method_obj, 'commission_timing', 'invoice') or 'invoice'
+                    ).strip().lower()
                 except Exception:
                     pm_commission_timing = 'invoice'
 
                 if pm_commission_timing == 'settlement':
-                    try:
-                        net_amount = float(total_cash or 0.0)
-                    except Exception:
-                        net_amount = total_cash
                     commission_amount = 0.0
                     commission_vat_total = 0.0
 
-                actual_debit_amount = net_amount if commission_amount > 0 else total_cash
                 paid_amount_total = total_cash
-                
-                # 🆕 الحصول على الحساب من الخزينة
-                safe_box = None
-                if safe_box_id:
-                    safe_box = SafeBox.query.get(safe_box_id)
-                elif payment_method_obj and payment_method_obj.default_safe_box:
-                    safe_box = payment_method_obj.default_safe_box
 
-                # Fallback: use the same resolution chain as Phase 1.
-                if not safe_box:
-                    _fb_id = None
-                    if _is_cash_payment_method(payment_method_obj):
-                        _fb_id = _fallback_cash_safe_box_id()
-                    else:
-                        _fb_id = _fallback_non_cash_safe_box_id(payment_method_obj)
-                    if _fb_id is None:
-                        _fb_id = _fallback_cash_safe_box_id()
-                    if _fb_id is not None:
-                        safe_box = SafeBox.query.get(_fb_id)
-
-                if not safe_box:
-                    return jsonify({
-                        'error': 'يجب تحديد خزينة (SafeBox) لوسيلة الدفع أو ضبط خزينة افتراضية لها',
-                        'payment_method_id': payment_method_id,
-                        'payment_method_name': payment_method_obj.name if payment_method_obj else None,
-                    }), 400
-
-                # ✅ توافق وسيلة الدفع مع نوع الخزينة
-                pm_type = (payment_method_obj.payment_type or '').strip().lower() if payment_method_obj else ''
-                sb_type = (safe_box.safe_type or '').strip().lower() if safe_box else ''
-                if pm_type == 'cash' and sb_type != 'cash':
-                    return jsonify({
-                        'error': 'الخزينة المختارة غير متوافقة مع وسيلة الدفع (نقداً يتطلب خزينة نقدية)',
-                        'payment_method_id': payment_method_id,
-                        'payment_method_type': pm_type,
-                        'safe_box_id': safe_box.id,
-                        'safe_box_type': sb_type,
-                    }), 400
-                if pm_type != 'cash':
-                    # Non-cash methods (cards/wallets/transfers/BNPL) often settle via clearing.
-                    # Checks are handled explicitly.
-                    if pm_type == 'check':
-                        allowed = {'bank', 'check'}
-                    else:
-                        allowed = {'bank', 'clearing'}
-
-                    if sb_type not in allowed:
-                        return jsonify({
-                            'error': 'الخزينة المختارة غير متوافقة مع وسيلة الدفع (يتطلب خزينة بنكية/شيكات حسب النوع)',
-                            'payment_method_id': payment_method_id,
-                            'payment_method_type': pm_type,
-                            'safe_box_id': safe_box.id,
-                            'safe_box_type': sb_type,
-                        }), 400
-                
-                # ================================================================
-                # قيد الفاتورة: مدين ذمم العميل (AR) وليس الخزينة مباشرةً.
-                # السبب: سند القبض المُنشأ أعلاه (Phase 1) يُمدن الخزينة ويُدين
-                # ذمم العميل ← الذمم تصفر والخزينة تُمدن مرة واحدة فقط.
-                # ملاحظة: حتى في وضع غير مُرحّل (unposted_mode) نُبقي القيد على الذمم
-                # لتفادي تكرار أثر الخزينة عند الترحيل لاحقاً.
-                # ================================================================
-                _ar_debit_id_single = party_account.id if party_account else None
-                if _ar_debit_id_single:
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=_ar_debit_id_single,
-                        cash_debit=actual_debit_amount,
-                        description=f"ذمم عميل - دفعة عبر {payment_method_obj.name if payment_method_obj else 'وسيلة دفع'}",
-                        apply_golden_rule=False
-                    )
-                elif safe_box and safe_box.account:
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=safe_box.account.id,
-                        cash_debit=actual_debit_amount,
-                        description=f"استلام دفعة عبر {payment_method_obj.name} - {safe_box.name}",
-                        apply_golden_rule=False
-                    )
-                else:
-                    acc_id = cash_acc_id or (cash_account.id if cash_account else None)
-                    if not acc_id:
-                        db.session.rollback()
-                        return jsonify({
-                            'error': 'cash_account_missing',
-                            'message': 'لا يوجد حساب نقدية افتراضي. الرجاء ضبط ربط حسابات (cash) أو إنشاء حساب "صندوق النقدية" أو تحديد خزينة للدفع.',
-                        }), 400
-                    if not Account.query.get(acc_id):
-                        db.session.rollback()
-                        return jsonify({
-                            'error': 'account_not_found',
-                            'message': 'حساب النقدية غير موجود في شجرة الحسابات',
-                            'account_id': acc_id,
-                        }), 400
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=acc_id,
-                        cash_debit=actual_debit_amount,
-                        description="استلام نقدي",
-                        apply_golden_rule=False
-                    )
-                
-                # قيد العمولة
                 if commission_amount > 0 and commission_acc_id:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
                         account_id=commission_acc_id,
                         cash_debit=commission_amount,
                         description="عمولة الدفع",
-                        apply_golden_rule=False  # تبقى نقدية ولا تتحول لوزن
+                        apply_golden_rule=False,
                     )
-
-                # 🆕 قيد ضريبة العمولة (VAT) - كان مفقوداً في مسار الدفع الواحد
-                vat_debit_acc_id = commission_vat_acc_id or commission_acc_id
-                if commission_vat_total > 0 and vat_debit_acc_id:
+                    _total_commission_je += commission_amount
+                _vat_debit_single = commission_vat_acc_id or commission_acc_id
+                if commission_vat_total > 0 and _vat_debit_single:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
-                        account_id=vat_debit_acc_id,
+                        account_id=_vat_debit_single,
                         cash_debit=commission_vat_total,
-                        description=(
-                            "ضريبة عمولة الدفع"
-                            if commission_vat_acc_id
-                            else "ضريبة عمولة الدفع (ضمن حساب العمولة)"
-                        ),
-                        apply_golden_rule=False
+                        description="ضريبة عمولة الدفع",
+                        apply_golden_rule=False,
                     )
-            
-            # لا توجد وسيلة دفع - استخدام الصندوق
+                    _total_commission_je += commission_vat_total
             else:
-                # If this sale uses barter offset (or is a deferred sale with partial payments enabled),
-                # do NOT assume cash was received.
-                try:
-                    barter_total_for_sale = _to_float_request(data.get('barter_total', 0.0))
-                except Exception:
-                    barter_total_for_sale = 0.0
-                try:
-                    amount_paid_body = _to_float_request(data.get('amount_paid', 0.0))
-                except Exception:
-                    amount_paid_body = 0.0
+                paid_amount_total = total_cash
 
-                is_deferred_or_barter = (
-                    (barter_total_for_sale and barter_total_for_sale > 0.01)
-                    or (allow_partial_payments and amount_paid_body <= 0.01)
+            # ─── je_engine_v2: قيد البيع الكامل ───
+            # (ذمم العميل + مبيعات + ضريبة + مخزون وزني + وزن العميل)
+            # الذمم = total_cash − العمولات المُدرجة أعلاه (لتوازن القيد)
+            import je_adapter as _je_adapter  # noqa: local import
+
+            _je_party = (
+                party_account
+                or (Account.query.get(customer_account_id) if customer_account_id else None)
+                or (Account.query.get(default_memo_cash_account_id) if default_memo_cash_account_id else None)
+            )
+            _ar_cash_for_je = round(total_cash - _total_commission_je, 2)
+
+            if _je_party:
+                _je_adapter.sale_je_for_invoice(
+                    journal_entry_id=journal_entry.id,
+                    invoice_type=invoice_type,
+                    gold_type=gold_type,
+                    get_mapping_fn=get_account_id_for_mapping,
+                    inventory_accounts=inventory_accounts,
+                    gold_by_karat=gold_by_karat,
+                    sales_account_id=sales_gold_new_acc_id,
+                    vat_payable_account_id=vat_payable_acc_id,
+                    ar_account_id=_je_party.id,
+                    customer_account_obj=_je_party,
+                    total_cash=_ar_cash_for_je,
+                    total_tax=_total_tax_for_je,
+                    customer_id=new_invoice.customer_id,
                 )
-
-                if is_deferred_or_barter:
-                    paid_amount_total = 0.0
-                else:
-                    acc_id = cash_acc_id or (cash_account.id if cash_account else None)
-                    if not acc_id:
-                        db.session.rollback()
-                        return jsonify({
-                            'error': 'cash_account_missing',
-                            'message': 'لا يوجد حساب نقدية افتراضي. الرجاء ضبط ربط حسابات (cash) أو إنشاء حساب "صندوق النقدية".',
-                        }), 400
-                    if not Account.query.get(acc_id):
-                        db.session.rollback()
-                        return jsonify({
-                            'error': 'account_not_found',
-                            'message': 'حساب النقدية غير موجود في شجرة الحسابات',
-                            'account_id': acc_id,
-                        }), 400
+            else:
+                # Fallback: لا يوجد حساب عميل — ندين الصندوق مباشرة
+                _fb_cash = cash_acc_id or (cash_account.id if cash_account else None)
+                if _fb_cash:
+                    _sales_amt_fb = total_cash - _total_tax_for_je
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
-                        account_id=acc_id,
+                        account_id=_fb_cash,
                         cash_debit=total_cash,
-                        description="استلام نقدي",
-                        apply_golden_rule=False
+                        description="استلام نقدي (بدون حساب عميل)",
+                        apply_golden_rule=False,
                     )
+                    if sales_gold_new_acc_id:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=sales_gold_new_acc_id,
+                            cash_credit=_sales_amt_fb,
+                            description="مبيعات ذهب",
+                            apply_golden_rule=False,
+                        )
+                    if _total_tax_for_je > 0 and vat_payable_acc_id:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=vat_payable_acc_id,
+                            cash_credit=_total_tax_for_je,
+                            description="ضريبة القيمة المضافة",
+                            apply_golden_rule=False,
+                        )
 
-                    paid_amount_total = total_cash
-
-            # 🆕 إن كان هناك فرق (بيع آجل/جزئي/مقايضة) نُثبته على حساب العميل لتوازن القيود.
-            try:
-                remaining_receivable = round(float(total_cash or 0.0) - float(paid_amount_total or 0.0), 2)
-            except Exception:
-                remaining_receivable = 0.0
-
-            if remaining_receivable > 0.009:
-                ar_account_id = None
-                if party_account:
-                    ar_account_id = party_account.id
-                else:
-                    ar_account_id = cash_acc_id or (cash_account.id if cash_account else None)
-
-                if not ar_account_id:
-                    db.session.rollback()
-                    return jsonify({
-                        'error': 'customer_account_missing',
-                        'message': 'لا يوجد حساب عميل لتسجيل الفرق (البيع الآجل/المقايضة).',
-                    }), 400
-
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry.id,
-                    account_id=ar_account_id,
-                    cash_debit=remaining_receivable,
-                    description="ذمم عميل (فرق غير مدفوع/مقايضة)",
-                    apply_golden_rule=False,
+            # ─── المصنعية: استهلاك منفصل ───
+            _wage_cash_sale = 0.0
+            for _wd in data.get('items', []):
+                _wage_cash_sale += (
+                    _to_float(_wd.get('wage', 0), 0.0)
+                    * _to_float(_wd.get('quantity', 1), 1.0)
                 )
-            
-            # ✅ دائن حساب المبيعات (الإيراد بدون الضريبة)
-            # ✅ دائن حساب الضريبة (قيمة الضريبة منفصلة)
-            
-            # حساب إجمالي الضريبة من بيانات الطلب (data) وليس من new_invoice.items
-            # لأن items قد لا تكون محملة بعد flush()
-            # ✅ دعم كل من 'tax' و 'tax_amount'
-            total_tax = sum(
-                _to_float(
-                    item_data.get('tax_amount', item_data.get('tax', 0.0)),
-                    0.0
-                )
-                for item_data in data.get('items', [])
-            )
-            # تحويل القيم السالبة إلى موجبة
-            if total_tax < 0:
-                total_tax = abs(total_tax)
-            
-            sales_amount = total_cash - total_tax  # المبيعات = الإجمالي - الضريبة
-            
-            print(f"💰 Tax calculation: total_cash={total_cash}, total_tax={total_tax}, sales_amount={sales_amount}")
-            print(f"📋 Items from data: {len(data.get('items', []))}")
-            print(f"🏦 VAT account ID: {vat_payable_acc_id}")
-            
-            # قيد المبيعات (بدون الضريبة)
-            create_dual_journal_entry(
-                journal_entry_id=journal_entry.id,
-                account_id=sales_gold_new_acc_id,
-                cash_credit=sales_amount,
-                description="مبيعات ذهب كسر (بدون ضريبة)" if gold_type == 'scrap' else "مبيعات ذهب (بدون ضريبة)",
-                apply_golden_rule=False
-            )
-            
-            # قيد الضريبة (إن وجدت)
-            if total_tax > 0 and vat_payable_acc_id:
-                print(f"✅ Adding VAT entry: {total_tax}")
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry.id,
-                    account_id=vat_payable_acc_id,
-                    cash_credit=total_tax,
-                    description="ضريبة القيمة المضافة",
-                    apply_golden_rule=False
-                )
-            else:
-                print(f"⚠️ Skipping VAT entry: total_tax={total_tax}, vat_payable_acc_id={vat_payable_acc_id}")
-            
-            # ============================================
-            # القيد الثاني: إثبات التكلفة (متوسط المخزون + المصنعية)
-            # من حـ/ تكلفة المبيعات → إلى حـ/ المخزون
-            # نسجل النقد فقط في الحسابات الأساسية
-            # الأوزان تُسجل في حسابات المذكرة الوزنية فقط
-            # ============================================
-            
-            total_cost_cash = 0.0  # إجمالي التكلفة النقدية
-            total_weight_sold = sum(weight for karat, weight in gold_by_karat.items() if weight > 0)
-
-            # حساب إجمالي المصنعية من items و karat_lines
-            total_wage_cash_for_cost = 0.0
-
-            # المصنعية من items
-            for item_data in data.get('items', []):
-                item_wage = _to_float(item_data.get('wage', 0), 0.0)
-                quantity = _to_float(item_data.get('quantity', 1), 1.0)
-                total_wage_cash_for_cost += item_wage * quantity
-
-            # المصنعية من karat_lines (القيمة المرسلة للجرام الواحد ➜ نضرب في الوزن)
             if karat_lines_data and isinstance(karat_lines_data, list):
-                for line_data in karat_lines_data:
-                    wage_rate = _to_float(line_data.get('manufacturing_wage_cash', 0), 0.0)
-                    weight_val = _to_float(line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight'))), 0.0)
-                    total_wage_cash_for_cost += wage_rate * weight_val
+                for _kl in karat_lines_data:
+                    _wr = _to_float(_kl.get('manufacturing_wage_cash', 0), 0.0)
+                    _ww = _to_float(
+                        _kl.get('weight_grams', _kl.get('weight', _kl.get('total_weight'))), 0.0
+                    )
+                    _wage_cash_sale += _wr * _ww
 
-            print(f"💰 Total manufacturing wage for sale: {total_wage_cash_for_cost} SAR")
-
-            # تكلفة الفاتورة = (سعر الذهب المباشر للعيار + أجر المصنعية/جم) × الوزن
-            price_per_gram_24k = gold_price_data.get('price_per_gram_24k', 0.0) or 0.0
-            wage_per_gram = (total_wage_cash_for_cost / total_weight_sold) if total_weight_sold > 0 else 0.0
-
-            for karat, weight in gold_by_karat.items():
-                if weight > 0 and karat in inventory_accounts:
-                    # سعر العيار المباشر من سعر 24k
-                    karat_value = _to_float(karat, 0.0)
-                    direct_price_per_gram = price_per_gram_24k * (karat_value / 24.0) if karat_value > 0 else 0.0
-                    cost_per_gram = direct_price_per_gram + wage_per_gram
-                    item_cost_cash = round(weight * cost_per_gram, 2)
-                    total_cost_cash += item_cost_cash
-
-                    # 3. مدين تكلفة المبيعات (نقد فقط)
+            if _wage_cash_sale > 0:
+                _wage_inv_acc = (
+                    _get_manufacturing_wage_inventory_account_id()
+                    or get_account_id_by_number('1320')
+                    or get_account_id_by_number('1350')
+                )
+                _wage_exp_acc = (
+                    get_account_id_for_mapping('بيع', 'manufacturing_wage')
+                    or _ensure_manufacturing_wage_expense_account()
+                    or get_account_id_for_mapping('بيع', 'operating_expenses')
+                    or get_account_id_by_number('51')
+                )
+                if _wage_inv_acc and _wage_exp_acc:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
-                        account_id=cost_of_sales_acc_id,
-                        cash_debit=item_cost_cash,
-                        description=f"تكلفة المبيعات عيار {karat}",
-                        apply_golden_rule=False
-                    )
-
-                    # 4. دائن المخزون (نقد فقط في الحسابات الأساسية)
-                    # الوزن سيُسجل في حسابات المذكرة الوزنية أدناه
-                    inv_acc_id = inventory_accounts.get(karat)
-                    if not inv_acc_id:
-                        raise ValueError(f"No inventory account configured for karat {karat}")
-
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=inv_acc_id,
-                        cash_credit=item_cost_cash,
-                        description=f"خصم من مخزون عيار {karat}",
-                        apply_golden_rule=False
-                    )
-
-            # 🆕 Fallback: إذا كان سعر الذهب صفراً نستخدم متوسط التكلفة المتحرك
-            if total_cost_cash == 0 and total_weight_sold > 0:
-                snapshot = GoldCostingService.snapshot()
-                fallback_avg = snapshot.avg_total or 0.0
-                if fallback_avg > 0:
-                    total_cost_cash = round(fallback_avg * total_weight_sold, 2)
-                    new_invoice.avg_cost_per_gram_snapshot = fallback_avg
-                    print(f"ℹ️ Applied fallback average cost {fallback_avg} SAR/g for total {total_weight_sold}g")
-
-            # ============================================
-            # 🆕 ملاحظة الهامة: نظام المصنعية الجديد
-            # - في الشراء: المصنعية تُضاف لحساب 1340 (مخزون أجور المصنعية)
-            # - في البيع: المصنعية تُستهلك من 1340 وتُعترف كمصروف (وليس كجزء من تكلفة المبيعات)
-            # - لا تُضاف للمبلغ المستخدم لحساب تكلفة المبيعات النقدية
-            # - الهدف: فصل المصنعية عن تكلفة المشتريات والحفاظ على شفافية التكاليف
-            # ============================================
-
-            # 🆕 استهلاك المصنعية من مخزون أجور المصنعية
-            wage_inventory_account_id = (
-                _get_manufacturing_wage_inventory_account_id()
-                or get_account_id_by_number('1320')
-                or get_account_id_by_number('1350')
-            )
-
-            if total_wage_cash_for_cost > 0:
-                if not wage_inventory_account_id:
-                    # تحذير: إذا لم يكن الحساب موجوداً
-                    print("⚠️ حساب مخزون أجور المصنعية غير موجود")
-                else:
-                    # بدلًا من إثبات المصنعية ضمن تكلفة المبيعات، نثبتها كمصروف تشغيلى
-                    # نحاول الحصول على حساب مصروف المصنعية المخصص، وإلا نستخدم حساب المصروفات التشغيلية العام (51)
-                    manufacturing_wage_expense_acc_id = (
-                        get_account_id_for_mapping('بيع', 'manufacturing_wage')
-                        or _ensure_manufacturing_wage_expense_account()
-                        or get_account_id_for_mapping('بيع', 'operating_expenses')
-                        or get_account_id_by_number('51')
-                    )
-
-                    if not manufacturing_wage_expense_acc_id:
-                        # إذا لم نجد حساب مصروفات، نستخدم حساب تكلفة المبيعات كحل احترازي لكن بدون إضافة للمجموع
-                        manufacturing_wage_expense_acc_id = cost_of_sales_acc_id
-
-                    # القيد: من حـ/ مصروفات أجور المصنعية → إلى حـ/ مخزون أجور المصنعية
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=manufacturing_wage_expense_acc_id,
-                        cash_debit=round(total_wage_cash_for_cost, 2),
+                        account_id=_wage_exp_acc,
+                        cash_debit=round(_wage_cash_sale, 2),
                         description="استهلاك أجور المصنعية - مصروفات",
-                        apply_golden_rule=False
+                        apply_golden_rule=False,
                     )
-
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
-                        account_id=wage_inventory_account_id,
-                        cash_credit=round(total_wage_cash_for_cost, 2),
+                        account_id=_wage_inv_acc,
+                        cash_credit=round(_wage_cash_sale, 2),
                         description="خصم من مخزون أجور المصنعية",
-                        apply_golden_rule=False
+                        apply_golden_rule=False,
                     )
 
-                    # ملاحظة: لا نضيف قيمة المصنعية إلى total_cost_cash - لأنها تُعامل كمصروف منفصل
-                    print(f"✅ Wage inventory consumed and expensed: {total_wage_cash_for_cost} SAR")
-            
-            # ============================================
-            # 🆕 قيود المذكرة الوزنية (Weight Ledger System)
-            # القاعدة الذهبية: كل المبالغ تُحول إلى وزن ÷ السعر المباشر
-            # الاستثناء: المخزون يُسجل بالوزن الفعلي فقط
-            # ============================================
-            
-            # ✅ الحصول على السعر المباشر للذهب من السوق (وليس من سعر البيع!)
-            gold_price_data = get_current_gold_price()
-            # 🔧 FIXED: استخدام سعر العيار الرئيسي بدلاً من 24k
-            direct_gold_price_main = gold_price_data.get('price_per_gram_main_karat', 
-                                                         gold_price_data.get('price_main_karat', 350.0))
-            
-            print(f"💰 Direct gold price (main karat): {direct_gold_price_main} SAR/gram")
-            print(f"📊 Sale total: {total_cash} SAR for {total_weight_sold} grams")
-            
-            # ============================================
-            # A) القيد الوزني للنقدية والإيرادات (الوزن الفعلي فقط)
-            # ============================================
-            
-            # 1) مدين: الصندوق الوزني (الوزن الفعلي المباع فقط)
-            # 🔧 FIX: استخدام الوزن الفعلي بدلاً من التحويل من المبلغ النقدي
-            # القاعدة: كل جرام مباع = جرام واحد في الصندوق الوزني
-            # ❌ لا تحويل من نقد إلى وزن في البيع
-            # ✅ الوزن الفعلي فقط
-            
-            print(f"⚖️ Recording actual weight sold: {total_weight_sold} grams (no cash conversion)")
-            
-            memo_cash_account_id = customer_account_id or default_memo_cash_account_id
-            memo_cash_entries_created = False
-
-            if not memo_cash_account_id:
-                print("⚠️ Skipping memo cash weight entries: no memo cash account available")
-            else:
-                # استخدام الوزن الفعلي لكل عيار
-                for karat, weight in gold_by_karat.items():
-                    if weight > 0:
-                        weight_params = {}
-                        weight_params[f'weight_{karat}k_debit'] = weight  # ✅ الوزن الفعلي
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=memo_cash_account_id,
-                            **weight_params,
-                            description=f"صندوق وزني - وزن فعلي عيار {karat}"
-                        )
-                        memo_cash_entries_created = True
-            
-            # 2) دائن: الإيرادات الوزنية (الوزن الفعلي المباع - لا تحويل!)
-            # 
-            # ⚠️ القاعدة الذهبية الحاسمة:
-            # الإيراد الوزني = الوزن الفعلي المباع فقط (10 جرام = 10 جرام)
-            # ❌ لا تحويل من النقد إلى وزن
-            # ❌ المصنعية لا تدخل في الإيراد الوزني أبداً
-            # ✅ الوزن الفعلي فقط، بدون أي إضافات أو تحويلات
-            # 
-            sales_account = db.session.query(Account).get(sales_gold_new_acc_id)
-            if not memo_cash_entries_created:
-                print("⚠️ Skipping memo sales weight entries: no matching memo cash entry was recorded")
-            elif sales_account and sales_account.memo_account_id:
-                for karat, weight in gold_by_karat.items():
-                    if weight > 0:
-                        # ✅ الوزن الفعلي المباع فقط (بدون أي تحويل أو إضافة)
-                        karat_revenue_weight = weight
-                        
-                        weight_params = {}
-                        weight_params[f'weight_{karat}k_credit'] = karat_revenue_weight
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=sales_account.memo_account_id,
-                            **weight_params,
-                            description=f"إيرادات وزنية (وزن فعلي) - مبيعات عيار {karat}"
-                        )
-            else:
-                print(f"⚠️ No memo account for sales revenue (account {sales_gold_new_acc_id})")
-            
-            # ============================================
-            # B) القيد الوزني للمخزون (استثناء - وزن فعلي وليس تحويل)
-            # ============================================
-            
-            # 1) دائن: المخزون الوزني (الوزن الفعلي المباع)
-            # يجب تسجيله في حساب المذكرة الخاص بالمخزون
-            for karat, weight in gold_by_karat.items():
-                if weight > 0 and karat in inventory_accounts:
-                    inv_acc_id = inventory_accounts[karat]
-                    
-                    # الحصول على حساب المذكرة للمخزون
-                    inv_account = db.session.query(Account).get(inv_acc_id)
-                    if inv_account and inv_account.memo_account_id:
-                        # إنشاء قيد وزني في حساب مذكرة المخزون
-                        weight_params = {}
-                        weight_params[f'weight_{karat}k_credit'] = weight  # ✅ الوزن الفعلي (استثناء)
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=inv_account.memo_account_id,
-                            **weight_params,
-                            description=f"خصم مخزون وزني فعلي - عيار {karat}"
-                        )
-                    else:
-                        print(f"⚠️ No memo account for inventory {karat}k (account {inv_acc_id})")
-            
-            # ============================================
-            # 🆕 2) مدين: تكلفة المبيعات الوزنية (الوزن + المصنعية)
-            # القاعدة: تكلفة = الوزن الفعلي + (المصنعية ÷ السعر المباشر)
-            # ============================================
-            
-            # حساب إجمالي المصنعية من items و karat_lines
-            total_wage_cash = 0.0
-            
-            # المصنعية من items
-            for item_data in data.get('items', []):
-                item_wage = _to_float(item_data.get('wage', 0), 0.0)
-                quantity = _to_float(item_data.get('quantity', 1), 1.0)
-                total_wage_cash += item_wage * quantity
-            
-            # المصنعية من karat_lines (سعر للجرام ➜ إجمالي = السعر × الوزن)
-            if karat_lines_data and isinstance(karat_lines_data, list):
-                for line_data in karat_lines_data:
-                    wage_rate = _to_float(line_data.get('manufacturing_wage_cash', 0), 0.0)
-                    weight_val = _to_float(line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight'))), 0.0)
-                    total_wage_cash += wage_rate * weight_val
-            
-            print(f"💰 Total manufacturing wage: {total_wage_cash} SAR")
-            
-            # تحويل المصنعية إلى وزن (مذكرة فقط)
-            wage_weight_equivalent = (
-                total_wage_cash / direct_gold_price_main
-                if (direct_gold_price_main and direct_gold_price_main > 0)
-                else 0
+            # ─── حساب الربح + تسكير الوزن ───
+            _gold_price_now = get_current_gold_price()
+            _direct_price_main = _gold_price_now.get(
+                'price_per_gram_main_karat',
+                _gold_price_now.get('price_main_karat', 350.0),
             )
-            print(f"⚖️ Wage weight equivalent (memo): {wage_weight_equivalent} grams at {direct_gold_price_main} SAR/gram")
-
-            # حساب حساب المذكرة لمخزون الأجور (7340)
-            wage_memo_account_id = None
-            wage_fin_acc_id = _get_manufacturing_wage_inventory_account_id()
-            if wage_fin_acc_id:
-                wage_account = db.session.query(Account).get(wage_fin_acc_id)
-                if not wage_account or not wage_account.memo_account_id:
-                    # حاول إنشاء/ربط الحسابات الوزنية المفقودة
-                    ensure_weight_closing_support_accounts()
-                    wage_account = db.session.query(Account).get(wage_fin_acc_id)
-                if wage_account:
-                    _ensure_weight_tracking_account(wage_account.id)
-                    wage_memo_account_id = wage_account.memo_account_id
-            if wage_weight_equivalent > 0 and not wage_memo_account_id:
-                print("⚠️ Wage memo account not available; skipping wage-to-weight to keep memo balance.")
-                wage_weight_equivalent = 0
-            
-            # إضافة قيد تكلفة المبيعات الوزنية
-            cost_account = db.session.query(Account).get(cost_of_sales_acc_id)
-            if cost_account and cost_account.memo_account_id:
-                for karat, weight in gold_by_karat.items():
-                    if weight > 0 and total_weight_sold > 0:
-                        # حساب نسبة هذا العيار من الوزن الإجمالي
-                        karat_proportion = weight / total_weight_sold
-                        
-                        # ✅ FIX: التكلفة الوزنية = الوزن الفعلي فقط (بدون المصنعية)
-                        # المصنعية تُضاف تحليلياً في قائمة الدخل فقط، لا في القيود
-                        karat_weight_cost = weight
-                        
-                        weight_params = {}
-                        weight_params[f'weight_{karat}k_debit'] = karat_weight_cost
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=cost_account.memo_account_id,
-                            **weight_params,
-                            description=f"تكلفة مبيعات وزنية (وزن فعلي فقط) - عيار {karat}"
-                        )
-            else:
-                print("⚠️ Memo cost account 7500 not found. Skipping weight cost entry.")
-
-            # ============================================
-            # 🔧 FIX: تعطيل قيد المصنعية الوزني
-            # المصنعية نقدية فقط ولا تُسجل في الحسابات الوزنية
-                # القيد النقدي للمصنعية موجود أعلاه (5105 -> 1350)
-            # ============================================
-            # الكود القديم معطل:
-            # if wage_memo_account_id and wage_weight_equivalent > 0:
-            #     for karat, weight in gold_by_karat.items():
-            #         if weight > 0 and total_weight_sold > 0:
-            #             karat_proportion = weight / total_weight_sold
-            #             wage_weight_share_main = wage_weight_equivalent * karat_proportion
-            #             karat_wage_weight = convert_from_main_karat(wage_weight_share_main, karat)
-            #             weight_params = {}
-            #             weight_params[f'weight_{karat}k_credit'] = karat_wage_weight
-            #             create_dual_journal_entry(
-            #                 journal_entry_id=journal_entry.id,
-            #                 account_id=wage_memo_account_id,
-            #                 **weight_params,
-            #                 description=f"إخراج مصنعية وزني - عيار {karat}"
-            #             )
-            
-            # ============================================
-            # 🆕 حساب الربح بالذهب وإضافته للفاتورة
-            # المعادلة: الربح = الإجمالي - الضريبة - التكلفة - العمولة
-            # ============================================
-            total_weight_sold = sum(gold_by_karat.values())
-            
-            # 🆕 استخدام total_cost المُرسل من الطلب إن وُجد، وإلا نستخدم المحسوب
-            final_total_cost = new_invoice.total_cost if (new_invoice.total_cost and new_invoice.total_cost > 0) else total_cost_cash
-            
-            # الربح النقدي = الإجمالي - الضريبة - التكلفة - العمولة
+            total_weight_sold = sum(w for w in gold_by_karat.values() if w > 0)
             invoice_total_tax = new_invoice.total_tax or 0.0
-            profit_cash = new_invoice.total - invoice_total_tax - final_total_cost - commission_amount
-            
-            # ✅ الربح الوزني: تحويل الربح النقدي إلى وزن باستخدام السعر المباشر (العيار الرئيسي)
-            profit_gold = (
-                profit_cash / direct_gold_price_main
-                if direct_gold_price_main > 0 else 0
+            profit_cash = (
+                new_invoice.total
+                - invoice_total_tax
+                - (new_invoice.total_cost or 0.0)
+                - (commission_amount or 0.0)
             )
-            
+            profit_gold = (profit_cash / _direct_price_main) if _direct_price_main > 0 else 0
             new_invoice.profit_cash = round(profit_cash, 2)
             new_invoice.profit_gold = round(profit_gold, 3)
-            # ✅ حفظ السعر المباشر المستخدم في الحساب (العيار الرئيسي)
-            new_invoice.profit_weight_price_per_gram = round(direct_gold_price_main, 4)
-            # ✅ حفظ التكلفة النهائية (المُرسلة أو المحسوبة)
-            new_invoice.total_cost = round(final_total_cost, 2)
+            new_invoice.profit_weight_price_per_gram = round(_direct_price_main, 4)
 
-            # إنشاء أمر تسكير الوزن فوراً بعد البيع
             try:
                 closing_price = _coerce_float(
                     data.get('weight_closing_price')
@@ -13420,7 +12857,6 @@ def add_invoice():
                 if closing_price <= 0:
                     price_snapshot = get_current_gold_price()
                     closing_price = price_snapshot.get('price_per_gram_24k', 0.0)
-
                 if closing_price > 0:
                     _upsert_weight_closing_order(
                         new_invoice,
@@ -13532,145 +12968,53 @@ def add_invoice():
                 description=("تقاص/مقايضة شراء ذهب" if is_offset_settlement else "ذمم عميل - مستحق الدفع مقابل شراء الكسر")
             )
             
-            # ============================================
-            # B) القيود الوزنية (وزن فقط)
-            # ============================================
-            
-            # 1) مدين: حساب عهدة الموظف الذهبي وزناً (إذا توفر) ← الذهب يدخل عهدة الموظف.
-            # Fallback: مذكرة المخزون (inv_account.memo_account_id) ثم 7521.
-            for karat, weight in gold_by_karat.items():
-                if weight <= 0:
-                    continue
+            # ─── قيود الوزن (je_engine_v2) ───
+            # مدين: حسابات المخزون الوزنية (ذهب يدخل المخزون)
+            # دائن: حساب وزن العميل (ذهب يخرج من العميل)
+            import je_adapter as _je_adapter  # noqa: local import
 
-                inv_acc_id = inventory_accounts.get(karat) if isinstance(inventory_accounts, dict) else None
-                inv_account = db.session.query(Account).get(inv_acc_id) if inv_acc_id else None
-
-                # الأولوية 1: حساب الخزينة الذهبية للموظف (عهدة وزنية)
-                # scrap_purchase_gold_safe_account_id = حساب الخزينة الذهبية المستهدفة (713100011 مثلاً)
-                target_weight_account_id = None
-                if scrap_purchase_gold_safe_account_id:
-                    target_weight_account_id = scrap_purchase_gold_safe_account_id
-                # الأولوية 2: مذكرة المخزون المرتبطة بحساب المخزون
-                if not target_weight_account_id and inv_account and inv_account.memo_account_id:
-                    target_weight_account_id = inv_account.memo_account_id
-                # الأولوية 3: حساب مذكرة افتراضي
-                if not target_weight_account_id:
-                    target_weight_account_id = get_account_id_by_number('7521') or inv_acc_id
-
-                if target_weight_account_id:
-                    weight_params = {}
-                    weight_params[f'weight_{karat}k_debit'] = weight  # ✅ الوزن الفعلي
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=target_weight_account_id,
-                        **weight_params,
-                        description=f"شراء ذهب عيار {karat} — دخول عهدة"
-                    )
-                else:
-                    print(f"⚠️ No weight target account for scrap purchase karat {karat} (inv account {inv_acc_id})")
-            
-            # 2) دائن: النقدية الوزنية (تحويل المبلغ المدفوع إلى وزن)
-            # ✅ تطبيق القاعدة: النقد ÷ السعر المباشر (العيار الرئيسي)
-            cash_weight_equivalent = (total_cash / direct_gold_price_main) if direct_gold_price_main > 0 else 0
-            
-            print(f"⚖️ Cash weight equivalent (purchase): {cash_weight_equivalent} grams")
-            
-            # الحصول على حساب المذكرة الخاص بالطرف الدائن وزناً
-            # الأولوية: حساب مذكرة العميل (إن وُجد مربوط بحسابه المالي)،
-            # ثم حساب مذكرة النقدية الافتراضي (71100) كبديل عند غياب مذكرة العميل.
-            cash_account = db.session.query(Account).get(acc_id)
-            memo_cash_credit_account_id = None
-            try:
-                memo_cash_credit_account_id = (
-                    customer_account_id
-                    or default_memo_cash_account_id
+            _je_party_purchase = (
+                party_account
+                or (Account.query.get(customer_account_id) if customer_account_id else None)
+            )
+            if _je_party_purchase:
+                _je_adapter.weight_entries_for_party(
+                    journal_entry_id=journal_entry.id,
+                    gold_by_karat=gold_by_karat,
+                    inventory_accounts=inventory_accounts,
+                    party_account_obj=_je_party_purchase,
+                    direction='purchase',
+                    customer_id=new_invoice.customer_id,
+                    scrap_purchase_gold_safe_account_id=scrap_purchase_gold_safe_account_id,
                 )
-            except Exception:
-                memo_cash_credit_account_id = customer_account_id or default_memo_cash_account_id
-
-            if cash_account and memo_cash_credit_account_id:
-                settlement_method_raw_w = (
-                    (getattr(new_invoice, 'settlement_method', None) or data.get('settlement_method') or '')
-                )
-                settlement_method_key_w = str(settlement_method_raw_w).strip().lower()
-                barter_sale_id_w = (
-                    getattr(new_invoice, 'barter_sale_invoice_id', None)
-                    or data.get('barter_sale_invoice_id')
-                )
-                is_offset_settlement_w = (
-                    settlement_method_key_w in ('offset', 'barter', 'trade', 'swap')
-                    or barter_sale_id_w not in (None, '', False)
-                )
-
-                if is_offset_settlement_w:
-                    # In offset/barter settlement there is no real cash movement.
-                    # To keep the weight journal balanced, credit the counterparty's memo
-                    # with the same physical weights received into inventory.
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=memo_cash_credit_account_id,
-                        **_weight_kwargs_from_map(gold_by_karat, 'credit'),
-                        apply_golden_rule=False,
-                        description="تقاص وزني - شراء ذهب (مقايضة)"
-                    )
-                else:
-                    main_karat_value = get_main_karat() or 21
-
-                    # Prefer an invoice-implied price to avoid large imbalances when the live price differs.
-                    # Compute main-equivalent weights per karat, then allocate exactly.
-                    main_weight_by_karat = {}
-                    total_main_weight = 0.0
-                    for karat, weight in gold_by_karat.items():
-                        if weight and weight > 0:
-                            try:
-                                karat_int_tmp = int(round(float(karat)))
-                            except Exception:
-                                karat_int_tmp = int(main_karat_value)
-                            try:
-                                main_w = float(convert_to_main_karat(weight, karat_int_tmp))
-                            except Exception:
-                                main_w = float(weight) * (karat_int_tmp / float(main_karat_value)) if main_karat_value else float(weight)
-                            main_weight_by_karat[karat] = main_w
-                            total_main_weight += main_w
-
-                    # If we have physical weights, we can make the cash weight equivalent match exactly.
-                    # Otherwise, fall back to the live price conversion already computed.
-                    if total_main_weight > 0:
-                        cash_weight_equivalent_main = total_main_weight
-                    else:
-                        cash_weight_equivalent_main = float(cash_weight_equivalent or 0.0)
-
-                    for karat, weight in gold_by_karat.items():
-                        if weight and weight > 0 and cash_weight_equivalent_main > 0 and total_main_weight > 0:
-                            try:
-                                karat_int = int(round(float(karat)))
-                            except Exception:
-                                karat_int = int(main_karat_value)
-
-                            karat_main_share = cash_weight_equivalent_main * (main_weight_by_karat.get(karat, 0.0) / total_main_weight)
-                            karat_cash_weight = convert_from_main_karat(karat_main_share, karat_int)
-
-                            weight_params = {}
-                            weight_params[f'weight_{karat}k_credit'] = karat_cash_weight
+            else:
+                # Fallback: لا يوجد حساب عميل — قيود وزنية مباشرة
+                for _karat, _w in gold_by_karat.items():
+                    if _w > 0 and _karat in inventory_accounts:
+                        _inv_id = inventory_accounts[_karat]
+                        _target = (
+                            scrap_purchase_gold_safe_account_id
+                            or get_account_id_by_number('7521')
+                            or _inv_id
+                        )
+                        if _target:
                             create_dual_journal_entry(
                                 journal_entry_id=journal_entry.id,
-                                account_id=memo_cash_credit_account_id,
-                                **weight_params,
-                                description=f"دفع وزني - شراء عيار {karat}"
+                                account_id=_target,
+                                **{f'weight_{_karat}k_debit': _w},
+                                description=f"دخول وزني عيار {_karat}",
+                                apply_golden_rule=False,
                             )
-            else:
-                print(f"⚠️ No memo cash account available for purchase weight credit (account {acc_id})")
-            
-            # ============================================
+
             # قيد ضريبة القيمة المضافة (إن وجدت)
-            # ============================================
-            total_vat = data.get('total_tax', 0)
-            if total_vat > 0 and vat_receivable_acc_id:
+            _total_vat = data.get('total_tax', 0)
+            if _total_vat and float(_total_vat) > 0 and vat_receivable_acc_id:
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
                     account_id=vat_receivable_acc_id,
-                    cash_debit=total_vat,
-                    description="ضريبة القيمة المضافة"
+                    cash_debit=float(_total_vat),
+                    description="ضريبة القيمة المضافة",
+                    apply_golden_rule=False,
                 )
         
         elif invoice_type == 'مرتجع بيع':
@@ -13780,20 +13124,21 @@ def add_invoice():
                 description="استرداد نقدي للعميل"
             )
 
-            # Weight memo counterpart: credit physical weight to customer's memo weight account
-            customer_fin_acc_id = customers_acc_id or (party_account.id if party_account else None)
-            customer_fin_acc = Account.query.get(customer_fin_acc_id) if customer_fin_acc_id else None
-            memo_customer_id = customer_fin_acc.memo_account_id if customer_fin_acc else None
-            if memo_customer_id:
-                create_dual_journal_entry(
+            # قيود الوزن (je_engine_v2) — دخول مخزون وزني + رجوع وزن العميل
+            import je_adapter as _je_adapter  # noqa: local import
+            _je_party_sale_ret = (
+                party_account
+                or (Account.query.get(customers_acc_id) if customers_acc_id else None)
+            )
+            if _je_party_sale_ret and inventory_accounts:
+                _je_adapter.weight_entries_for_party(
                     journal_entry_id=journal_entry.id,
-                    account_id=memo_customer_id,
-                    **_weight_kwargs_from_map(gold_by_karat, 'credit'),
-                    apply_golden_rule=False,
-                    description="مرتجع وزني - رصيد العميل"
+                    gold_by_karat=gold_by_karat,
+                    inventory_accounts=inventory_accounts,
+                    party_account_obj=_je_party_sale_ret,
+                    direction='purchase',   # مرتجع بيع = ذهب يعود للمخزون (مدين مخزون)
+                    customer_id=new_invoice.customer_id,
                 )
-            else:
-                print("⚠️ No memo account for customer; skipping customer weight entry.")
         
         elif invoice_type == 'مرتجع شراء':
             # 4. مرتجع شراء كسر (عكس الشراء من عميل)
@@ -13816,63 +13161,58 @@ def add_invoice():
                         inventory_acc_id = inv_acc_id
                         break
             
-            # Line 1: مدين العميل/الصندوق
+            # Line 1: مدين العميل/الصندوق (نقد فقط — الوزن عبر je_engine_v2 أدناه)
             acc_id = customers_acc_id or cash_acc_id or party_account.id
-            purchase_return_debit = _weight_kwargs_from_map(gold_by_karat, 'debit')
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
                 account_id=acc_id,
                 cash_debit=total_cash,
-                **purchase_return_debit,
+                apply_golden_rule=False,
                 description="استلام نقدي من مرتجع شراء"
             )
-            
-            # Line 2: دائن المخزون
+
+            # Line 2: دائن المخزون (نقد فقط)
             if inventory_acc_id:
-                purchase_return_credit = _weight_kwargs_from_map(gold_by_karat, 'credit')
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=inventory_acc_id,
+                    cash_credit=total_cash,
+                    apply_golden_rule=False,
+                    description="خصم من المخزون (قيمة) - مرتجع شراء"
+                )
 
-                # For customer scrap returns, remove the physical weights from the same
-                # scrap gold safe account used for customer scrap purchases.
-                is_scrap_return = False
-                try:
-                    is_scrap_return = (
-                        (invoice_type == 'مرتجع شراء')
-                        and (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower() == 'scrap')
-                    )
-                except Exception:
-                    is_scrap_return = False
+            # قيود الوزن (je_engine_v2): خروج وزن من المخزون + عودة وزن العميل
+            import je_adapter as _je_adapter  # noqa: local import
+            _inv_accounts_ret = {}
+            if inventory_acc_id:
+                for _k in ['18', '21', '22', '24']:
+                    _inv_accounts_ret[_k] = inventory_acc_id
+            # if scrap return, use scrap safe account for weight
+            _is_scrap_ret = (
+                str(getattr(new_invoice, 'gold_type', '') or '').strip().lower() == 'scrap'
+                and scrap_purchase_gold_safe_account_id not in (None, 0)
+            )
+            if _is_scrap_ret:
+                for _k in _inv_accounts_ret:
+                    _inv_accounts_ret[_k] = int(scrap_purchase_gold_safe_account_id)
 
-                weight_credit_account_id = None
-                if is_scrap_return and scrap_purchase_gold_safe_account_id not in (None, 0):
-                    weight_credit_account_id = int(scrap_purchase_gold_safe_account_id)
-                else:
-                    weight_credit_account_id = int(inventory_acc_id)
-
-                if weight_credit_account_id == int(inventory_acc_id):
-                    # Default behavior: cash + weight credit on inventory
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=inventory_acc_id,
-                        cash_credit=total_cash,
-                        **purchase_return_credit,
-                        description="خصم من المخزون (مرتجع)"
-                    )
-                else:
-                    # Split: cash valuation to inventory, physical weight out of gold safe
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=inventory_acc_id,
-                        cash_credit=total_cash,
-                        apply_golden_rule=False,
-                        description="خصم من المخزون (قيمة) - مرتجع شراء"
-                    )
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=weight_credit_account_id,
-                        **purchase_return_credit,
-                        apply_golden_rule=False,
-                        description="خصم وزني من خزنة الكسر (مرتجع شراء)"
-                    )
+            _je_party_ret = (
+                party_account
+                or (Account.query.get(acc_id) if acc_id else None)
+            )
+            if _je_party_ret and _inv_accounts_ret:
+                _je_adapter.weight_entries_for_party(
+                    journal_entry_id=journal_entry.id,
+                    gold_by_karat=gold_by_karat,
+                    inventory_accounts=_inv_accounts_ret,
+                    party_account_obj=_je_party_ret,
+                    direction='sale',   # مرتجع شراء = ذهب يخرج من المخزون للعميل
+                    customer_id=new_invoice.customer_id,
+                    scrap_purchase_gold_safe_account_id=(
+                        int(scrap_purchase_gold_safe_account_id)
+                        if _is_scrap_ret else None
+                    ),
+                )
         
         elif invoice_type == 'شراء':
             # 5. شراء (مورد)
