@@ -25,6 +25,7 @@ from je_engine_v2 import (
     build_sale_je,
     build_purchase_je,
     build_supplier_purchase_je,
+    build_send_to_supplier_je,
     build_sale_return_je,
     build_purchase_return_je,
 )
@@ -517,6 +518,33 @@ def purchase_return_je_for_invoice(
         weights=weights,
         cash_received_back=_d(cash_received_back),
         description="مرتجع شراء من مورد",
+    )
+
+    apply_je_to_db(je, journal_entry_id, supplier_id=supplier_id)
+
+
+def send_to_supplier_je(
+    *,
+    journal_entry_id: int,
+    supplier_account_obj,          # كائن Account للمورد (المالي / الوزني)
+    gold_by_karat: Dict,           # {karat_str: weight_float}
+    inventory_account_id: int,     # حساب المخزون الوزني المصدر
+    supplier_id: Optional[int] = None,
+):
+    """
+    قيد إرسال ذهب للمورد (للتصنيع):
+      مدين: مورد وزني   [72200-x]   grams
+      دائن: مخزون وزني  [71310/...]  grams
+    وزني بحت — لا ريال.
+    """
+    supplier = _build_party_accounts(supplier_account_obj)
+    weights = _weights_from_gold_by_karat(gold_by_karat)
+
+    je = build_send_to_supplier_je(
+        supplier=supplier,
+        weights=weights,
+        inventory_account_id=int(inventory_account_id),
+        description="إرسال ذهب للمصنع",
     )
 
     apply_je_to_db(je, journal_entry_id, supplier_id=supplier_id)

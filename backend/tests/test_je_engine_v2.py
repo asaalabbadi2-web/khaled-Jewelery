@@ -19,6 +19,7 @@ from je_engine_v2 import (
     JELine,
     build_purchase_je,
     build_supplier_purchase_je,
+    build_send_to_supplier_je,
     build_sale_je,
     build_sale_return_je,
     build_purchase_return_je,
@@ -419,6 +420,60 @@ class TestPurchaseReturnJE:
 
 
 # ─────────────────────────────────────────────
+# Tests: إرسال ذهب للمورد
+# ─────────────────────────────────────────────
+
+class TestSendToSupplierJE:
+    def test_balanced(self, supplier, weights_21):
+        je = build_send_to_supplier_je(
+            supplier=supplier,
+            weights=weights_21,
+            inventory_account_id=71310,
+        )
+        assert je.is_balanced()
+
+    def test_weight_only_no_cash(self, supplier, weights_21):
+        """القيد وزني بحت — لا يجب أن يحمل أي ريال."""
+        je = build_send_to_supplier_je(
+            supplier=supplier,
+            weights=weights_21,
+            inventory_account_id=71310,
+        )
+        for line in je.lines:
+            assert line.cash_debit == 0, f"حساب {line.account_id} يحمل ريالاً مديناً"
+            assert line.cash_credit == 0, f"حساب {line.account_id} يحمل ريالاً دائناً"
+
+    def test_supplier_weight_debited(self, supplier, weights_21):
+        """المورد الوزني يُشحن (مدين) بالوزن المُرسَل."""
+        je = build_send_to_supplier_je(
+            supplier=supplier,
+            weights=weights_21,
+            inventory_account_id=71310,
+        )
+        supplier_line = next(l for l in je.lines if l.account_id == supplier.weight_account_id)
+        assert supplier_line.weight_debit_21k == weights_21.k21
+
+    def test_inventory_weight_credited(self, supplier, weights_21):
+        """المخزون الوزني يُخصم (دائن) بنفس الوزن."""
+        je = build_send_to_supplier_je(
+            supplier=supplier,
+            weights=weights_21,
+            inventory_account_id=71310,
+        )
+        inv_line = next(l for l in je.lines if l.account_id == 71310)
+        assert inv_line.weight_credit_21k == weights_21.k21
+
+    def test_empty_weights_raises(self, supplier):
+        """أوزان فارغة يجب أن ترفع ValueError."""
+        with pytest.raises(ValueError):
+            build_send_to_supplier_je(
+                supplier=supplier,
+                weights=WeightByKarat(),
+                inventory_account_id=71310,
+            )
+
+
+# ─────────────────────────────────────────────
 # Tests: سداد مورد بذهب
 # ─────────────────────────────────────────────
 
@@ -468,6 +523,9 @@ class TestCoreInvariant:
             build_gold_settlement_je(accounts=accounts, supplier=supplier,
                                       weights=weights_21, cash_equivalent=Decimal("5250"),
                                       gold_safe_weight_account_id=79000),
+            build_send_to_supplier_je(supplier=supplier,
+                                      weights=weights_21,
+                                      inventory_account_id=71310),
         ]
 
     def test_all_jes_balanced(self, accounts, supplier, customer,

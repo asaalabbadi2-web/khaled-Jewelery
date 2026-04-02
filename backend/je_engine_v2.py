@@ -430,6 +430,43 @@ def build_supplier_purchase_je(
 
 
 # ─────────────────────────────────────────────
+# 2.5 إرسال ذهب للمورد (Send to Supplier / Manufacturing)
+# ─────────────────────────────────────────────
+
+def build_send_to_supplier_je(
+    *,
+    supplier: PartyAccounts,
+    weights: WeightByKarat,          # الوزن المُرسَل للمورد
+    inventory_account_id: int,       # حساب المخزون الوزني المصدر (عيار المُرسَل)
+    description: str = "إرسال ذهب للمورد",
+) -> JournalEntry:
+    """
+    قيد إرسال الذهب للمورد (للتصنيع أو المقايضة):
+
+        مدين: مورد وزني  [72200-x]    grams +  ← الجسر يُشحن (المورد مدين بالوزن)
+        دائن: مخزون وزني [71310/...]   grams -  ← الذهب يغادر مخزوننا
+
+    قيد وزني بحت — لا قيود مالية.
+    يُسوَّى لاحقاً عبر build_supplier_purchase_je عند استلام المصنوعات.
+    """
+    je = JournalEntry(description=description)
+
+    if weights.is_empty():
+        raise ValueError("لا يمكن إنشاء قيد إرسال بدون أوزان")
+
+    # ── مدين: مورد وزني (الجسر يُشحن) ──
+    je.add(_weight_debit(supplier.weight_account_id, weights,
+                         f"{description} - ذهب يُرسل للمورد [{supplier.party_name}]"))
+
+    # ── دائن: مخزون وزني (يغادر المخزون) ──
+    je.add(_weight_credit(inventory_account_id, weights,
+                          f"{description} - ذهب يخرج من المخزون للمورد"))
+
+    je.assert_balanced()
+    return je
+
+
+# ─────────────────────────────────────────────
 # 3. بيع
 # ─────────────────────────────────────────────
 

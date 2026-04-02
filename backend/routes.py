@@ -6222,6 +6222,104 @@ def get_supplier_weight_summary(supplier_id):
     })
 
 
+@api.route('/suppliers/<int:supplier_id>/send-gold', methods=['POST'])
+@require_permission('suppliers.edit')
+def supplier_send_gold(supplier_id):
+    """
+    إرسال ذهب من المخزون للمورد (للتصنيع).
+
+    Body:
+    {
+        "weights": {"21": 10.5},      // أوزان مقسّمة بالعيار
+        "inventory_account_id": 71310, // حساب المخزون الوزني المصدر
+        "date": "2026-04-03",          // تاريخ الإرسال (اختياري)
+        "notes": "إرسال للمصنع"        // ملاحظات (اختياري)
+    }
+
+    القيد الناتج:
+        مدين: مورد وزني  [72200-x]   grams  ← الجسر يُشحن
+        دائن: مخزون وزني [71310/...]  grams  ← يغادر المخزون
+    """
+    from je_adapter import send_to_supplier_je
+
+    supplier = Supplier.query.get_or_404(supplier_id)
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    weights_raw = data.get('weights') or {}
+    if not weights_raw or not any(float(v or 0) > 0 for v in weights_raw.values()):
+        return jsonify({'error': 'يجب تحديد أوزان صحيحة (weights)'}), 400
+
+    inventory_account_id = data.get('inventory_account_id')
+    if not inventory_account_id:
+        # fallback: حساب مخزون 21k الافتراضي
+        inventory_account_id = get_account_id_by_number('71310')
+    if not inventory_account_id:
+        return jsonify({'error': 'لم يُحدَّد حساب المخزون الوزني المصدر'}), 400
+
+    # حساب المورد الوزني (memo_account)
+    supplier_financial_account = Account.query.get(supplier.account_id) if supplier.account_id else None
+    if not supplier_financial_account:
+        return jsonify({'error': 'لا يوجد حساب محاسبي مرتبط بالمورد'}), 400
+
+    raw_date = data.get('date')
+    try:
+        entry_date = datetime.strptime(raw_date, '%Y-%m-%d') if raw_date else datetime.utcnow()
+    except ValueError:
+        entry_date = datetime.utcnow()
+
+    notes = str(data.get('notes') or 'إرسال ذهب للمصنع')
+    entry_number = _generate_journal_entry_number(entry_date=entry_date)
+
+    try:
+        journal_entry = JournalEntry(
+            entry_number=entry_number,
+            date=entry_date,
+            description=f"{notes} - {supplier.name}",
+            entry_type='عادي',
+            reference_type='supplier_send_gold',
+            reference_id=supplier_id,
+            created_by='system',
+        )
+        db.session.add(journal_entry)
+        db.session.flush()
+
+        send_to_supplier_je(
+            journal_entry_id=journal_entry.id,
+            supplier_account_obj=supplier_financial_account,
+            gold_by_karat=weights_raw,
+            inventory_account_id=int(inventory_account_id),
+            supplier_id=supplier_id,
+        )
+
+        # تسجيل الحركة في SupplierGoldTransaction
+        total_weight = sum(float(v or 0) for v in weights_raw.values())
+        txn = SupplierGoldTransaction(
+            supplier_id=supplier_id,
+            journal_entry_id=journal_entry.id,
+            transaction_type='إرسال للمصنع',
+            gold_weight=round(total_weight, 3),
+            price_per_gram=0.0,
+            cash_amount=0.0,
+            notes=notes,
+            transaction_date=entry_date,
+        )
+        db.session.add(txn)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'journal_entry_id': journal_entry.id,
+            'entry_number': entry_number,
+            'total_weight': round(total_weight, 3),
+            'weights': weights_raw,
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
 # Items CRUD
 @api.route('/items/<int:id>', methods=['PUT'])
 @require_permission('items.edit')
