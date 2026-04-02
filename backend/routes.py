@@ -9344,12 +9344,17 @@ def get_account_id_for_mapping(operation_type, account_type):
         'sales_gold_new': ['400', '40'],
         'sales_gold_scrap': ['401'],          # مبيعات ذهب كسر
         'sales_wage': ['41'],
-        'sales_returns': ['40'],
+        'sales_returns': ['420', '400', '40'],  # مردودات مبيعات
+
+        # المشتريات
+        'purchases_gold': ['511', '512', '510', '51'],
+        'purchases_gold_new': ['511', '510', '51'],
+        'purchases_gold_scrap': ['512', '511', '510'],
 
         # التكاليف
         'cost': ['521', '50'],
         'cost_of_sales': ['521', '50'],
-        'purchase_returns': ['50'],
+        'purchase_returns': ['513', '512', '511', '50'],  # مردودات مشتريات
 
         # الضرائب والعمولات
         'vat_payable': ['2210'],
@@ -12850,16 +12855,29 @@ def add_invoice():
             # ============================================
             # 2. شراء كسر من عميل - تطبيق القاعدة الذهبية
             # ============================================
-            # القاعدة: 
-            # - المخزون: نقد + وزن فعلي (استثناء)
-            # - النقدية: تحويل لوزن باستخدام السعر المباشر
+            # القاعدة:
+            # - المشتريات: مدين بالقيمة النقدية (حساب مشتريات)
+            # - العميل/الصندوق: دائن بالقيمة النقدية
+            # - المخزون الوزني: مدين بالجرام (حساب وزني)
+            # - وزن العميل: دائن بالجرام (حساب وزني العميل)
             # ============================================
-            
+
             # الحصول على الحسابات
             cash_acc_id = get_account_id_for_mapping('شراء من عميل', 'cash')
             vat_receivable_acc_id = get_account_id_for_mapping('شراء من عميل', 'vat_receivable')
-            
-            # حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
+
+            # حساب المشتريات (مدين نقداً) — 512 كسر / 511 جديد
+            # ملاحظة: لا نستخدم 510 فهو أجور مصنعية وليس مشتريات
+            _purchases_key = 'purchases_gold_scrap' if gold_type == 'scrap' else 'purchases_gold_new'
+            purchases_acc_id = (
+                get_account_id_for_mapping('شراء من عميل', _purchases_key)
+                or get_account_id_for_mapping('شراء من عميل', 'purchases_gold')
+                or get_account_id_for_mapping('شراء من عميل', 'purchases')
+                or get_account_id_by_number('512' if gold_type == 'scrap' else '511')
+                or get_account_id_by_number('511')
+            )
+
+            # حسابات المخزون الوزني: دعم التوحيد (حساب واحد لكل العيارات)
             inventory_accounts = {}
             unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
             if unified_inventory_acc_id:
@@ -12879,26 +12897,16 @@ def add_invoice():
             # A) القيود المالية (نقد فقط)
             # ============================================
             
-            # 1. مدين المخزون (نقد فقط - الوزن في حساب المذكرة)
-            total_weight_purchased = 0.0
-            for karat, weight in gold_by_karat.items():
-                if weight > 0 and karat in inventory_accounts:
-                    total_weight_purchased += weight
-                    inv_acc_id = inventory_accounts[karat]
-                    
-                    # حساب نسبة التكلفة لهذا العيار من الإجمالي
-                    total_weight_all_karats = sum(gold_by_karat.values())
-                    karat_proportion = weight / total_weight_all_karats if total_weight_all_karats > 0 else 0
-                    karat_cash = round(total_cash * karat_proportion, 2)
-                    
-                    # ✅ القيد المالي فقط (بدون أوزان)
-                    create_dual_journal_entry(
-                        journal_entry_id=journal_entry.id,
-                        account_id=inv_acc_id,
-                        cash_debit=karat_cash,
-                        apply_golden_rule=False,
-                        description=f"شراء ذهب عيار {karat} (قيمة)"
-                    )
+            # 1. مدين المشتريات (نقد فقط - الوزن في حساب المذكرة الوزنية)
+            _purchase_cash_acc = purchases_acc_id or unified_inventory_acc_id
+            if _purchase_cash_acc:
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=_purchase_cash_acc,
+                    cash_debit=total_cash,
+                    apply_golden_rule=False,
+                    description=f"شراء ذهب {'كسر' if gold_type == 'scrap' else 'جديد'} من عميل"
+                )
             
             # 2. دائن حساب النقدية (من الخزينة)
             # Resolve payment credit account.
@@ -13005,10 +13013,11 @@ def add_invoice():
             cash_acc_id = get_account_id_for_mapping('مرتجع بيع', 'cash')
             customers_acc_id = get_account_id_for_mapping('مرتجع بيع', 'customers')
             sales_returns_acc_id = get_account_id_for_mapping('مرتجع بيع', 'sales_returns')
-            # Fallback: if no dedicated returns account, debit the revenue/sales account
+            # Fallback: مردودات مبيعات (420) ← ثم إيرادات المبيعات (400)
             if not sales_returns_acc_id:
                 sales_returns_acc_id = (
-                    get_account_id_for_mapping('بيع', 'revenue')
+                    get_account_id_by_number('420')
+                    or get_account_id_for_mapping('بيع', 'revenue')
                     or get_account_id_for_mapping('بيع', 'sales_gold_new')
                 )
             
@@ -13074,8 +13083,13 @@ def add_invoice():
             # 🔥 استخدام الربط المحاسبي
             cash_acc_id = get_account_id_for_mapping('مرتجع شراء', 'cash')
             customers_acc_id = get_account_id_for_mapping('مرتجع شراء', 'customers')
-            purchase_returns_acc_id = get_account_id_for_mapping('مرتجع شراء', 'purchase_returns')
-            
+            purchase_returns_acc_id = (
+                get_account_id_for_mapping('مرتجع شراء', 'purchase_returns')
+                or get_account_id_by_number('513')
+                or get_account_id_by_number('512')
+                or get_account_id_by_number('511')
+            )
+
             # حسابات المخزون — يجب أن تكون مدركة لـ gold_type
             # (كسر → 1310، جديد → 1300) مثل سائر أنواع الفواتير الأخرى.
             inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
@@ -13097,14 +13111,15 @@ def add_invoice():
                 description="استلام نقدي من مرتجع شراء"
             )
 
-            # Line 2: دائن المخزون (نقد فقط)
-            if inventory_acc_id:
+            # Line 2: دائن مردودات المشتريات (أو المخزون عند غياب الحساب)
+            _pr_credit_acc = purchase_returns_acc_id or inventory_acc_id
+            if _pr_credit_acc:
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
-                    account_id=inventory_acc_id,
+                    account_id=_pr_credit_acc,
                     cash_credit=total_cash,
                     apply_golden_rule=False,
-                    description="خصم من المخزون (قيمة) - مرتجع شراء"
+                    description="مردودات مشتريات - مرتجع شراء"
                 )
 
             # قيود الوزن (je_engine_v2): خروج وزن من المخزون + عودة وزن العميل
