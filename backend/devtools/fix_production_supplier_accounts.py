@@ -275,8 +275,7 @@ with app.app_context():
     supplier_fin_ids = {s.account_id for s in Supplier.query.all() if s.account_id}
     supplier_cat_ids = {s.account_category_id for s in Supplier.query.all() if s.account_category_id}
     safe_ids         = {sb.account_id for sb in SafeBox.query.all() if sb.account_id}
-    office_acc_ids   = {o.account_category_id for o in Office.query.all() if o.account_category_id}
-    protected        = supplier_fin_ids | supplier_cat_ids | safe_ids | office_acc_ids
+    protected        = supplier_fin_ids | supplier_cat_ids | safe_ids
 
     children = {}
     for a in Account.query.all():
@@ -316,21 +315,12 @@ with app.app_context():
     # ════════════════════════════════════════════
     header('PHASE 4 — Align supplier.account_id with office.account_category_id')
     # ════════════════════════════════════════════
-    # The canonical (correct) account for each office-supplier pair is the one in
-    # the manufactured-gold group (2100x).  office.account_category_id may itself
-    # point to a 2200x (raw-gold) account — in that case the supplier's account
-    # (usually already under 2100x) is the canonical one.  We always merge FROM
-    # the wrong (2200x) account INTO the canonical (2100x) account, then update
-    # BOTH office.account_category_id AND supplier.account_id to the canonical id.
-    #
-    # ⚠️  DRY-RUN vs APPLY note for accounts also touched by Phase 2:
-    #   In dry-run, Phase 2 does NOT flush, so an account being renamed 22000020→21000020
-    #   still has its old number/parent when Phase 4 runs.  _is_mfg() will incorrectly
-    #   classify it as raw-gold, causing the merge direction to appear reversed.
-    #   In APPLY mode this is harmless: by_id is reloaded from the DB after Phase 2/3
-    #   flushes, so parent_id is already updated and _is_mfg() returns the correct result.
+    # When ensure_supplier_accounts() received a 'both' account it fell through and
+    # created a separate cash account.  Now that Phase 0 corrected the account type
+    # we must point supplier.account_id back to the office account and clean up the
+    # orphan duplicate.
     if APPLY:
-        db.session.flush()          # ensure all Phase 2+3 renames/reparents are visible
+        db.session.flush()
         accs   = Account.query.all()
         by_id  = {a.id: a for a in accs}
 
@@ -339,26 +329,10 @@ with app.app_context():
     phase4_delete = 0
     phase4_merge  = 0
 
-    def _is_mfg(acc):
-        """True if account belongs to the manufactured-gold financial group (21xx).
-
-        In APPLY mode, parent_id is always up-to-date after the Phase-2 flush.
-        In DRY-RUN mode, an account being renamed by Phase 2 (e.g. 22000020→21000020)
-        still carries its old number/parent here — both checks below will return False
-        for it, causing the else-branch to fire with a [NOTE] advisory.
-        """
-        if not acc:
-            return False
-        # In apply mode: parent_id is the most reliable indicator (updated by Phase 2 flush)
-        if acc.parent_id == mfg_fin.id:
-            return True
-        # Fallback: account-number prefix (correct for accounts NOT touched by Phase 2)
-        return digits(acc.account_number).startswith('21')
-
     for o in offices:
         if not o.account_category_id or not o.supplier_id:
             continue
-        supplier = db.session.get(Supplier, o.supplier_id)
+        supplier = Supplier.query.get(o.supplier_id)
         if not supplier:
             continue
 
@@ -369,85 +343,50 @@ with app.app_context():
             continue  # already aligned
 
         office_acc = by_id.get(office_acc_id)
-        sup_acc    = by_id.get(sup_acc_id) if sup_acc_id else None
+        dup_acc    = by_id.get(sup_acc_id) if sup_acc_id else None
 
         if not office_acc:
             print(f'  [WARN] office {o.id} {o.name[:30]}: office account id={office_acc_id} not found, skip')
             continue
 
-        # Determine which account is canonical (2100x) vs wrong (2200x).
-        # If supplier's account is in mfg group but office's is not → supplier wins.
-        # Otherwise default to office account as canonical.
-        if _is_mfg(sup_acc) and not _is_mfg(office_acc):
-            canonical_id  = sup_acc_id
-            canonical_acc = sup_acc
-            wrong_id      = office_acc_id
-            wrong_acc     = office_acc
-        else:
-            canonical_id  = office_acc_id
-            canonical_acc = office_acc
-            wrong_id      = sup_acc_id
-            wrong_acc     = sup_acc
-            # In dry-run: if BOTH accounts appear raw (22xx), the supplier account may be
-            # one that Phase 2 will rename to 21xx.  In --apply the by_id reload after
-            # Phase 2 flush makes _is_mfg() return True for it, so the direction is correct.
-            if not APPLY and wrong_acc and digits(wrong_acc.account_number).startswith('22'):
-                print(f'  [NOTE] office {o.id:3} {o.name[:30]}:'
-                      f' dry-run cannot resolve canonical yet'
-                      f' ({wrong_acc.account_number} will be renamed by Phase 2);'
-                      f' direction will be correct in --apply')
+        # Count lines on the duplicate account
+        dup_lines = JournalEntryLine.query.filter_by(account_id=sup_acc_id).count() if sup_acc_id else 0
 
-        if canonical_acc is None:
-            print(f'  [WARN] office {o.id} {o.name[:30]}: cannot determine canonical account, skip')
-            continue
-
-        # Handle the wrong/duplicate account
-        wrong_lines = JournalEntryLine.query.filter_by(account_id=wrong_id).count() if wrong_id else 0
-
-        if wrong_acc and wrong_lines > 0:
+        if dup_acc and dup_lines > 0:
+            # Merge: move lines from duplicate to office account
             action(f'[ALN] office {o.id:3} {o.name[:30]}  '
-                   f'MERGE {wrong_lines} lines: {wrong_acc.account_number} → {canonical_acc.account_number}')
+                   f'MERGE {dup_lines} lines: {dup_acc.account_number} → {office_acc.account_number}')
             if APPLY:
-                JournalEntryLine.query.filter_by(account_id=wrong_id).update(
-                    {'account_id': canonical_id}, synchronize_session=False)
+                JournalEntryLine.query.filter_by(account_id=sup_acc_id).update(
+                    {'account_id': office_acc_id}, synchronize_session=False)
                 db.session.flush()
             phase4_merge += 1
-        elif wrong_acc:
+        elif dup_acc:
+            # Delete the empty duplicate
             action(f'[ALN] office {o.id:3} {o.name[:30]}  '
-                   f'DELETE empty wrong acc {wrong_acc.account_number} (0 lines)')
+                   f'DELETE empty dup {dup_acc.account_number} (0 lines)')
             if APPLY:
                 # Also delete its memo if it has one and it's empty
-                dup_memo_id = getattr(wrong_acc, 'memo_account_id', None)
-                dup_memo    = by_id.get(dup_memo_id) if dup_memo_id else None
+                dup_memo_id = getattr(dup_acc, 'memo_account_id', None)
+                dup_memo = by_id.get(dup_memo_id) if dup_memo_id else None
                 if dup_memo:
                     dup_memo_lines = JournalEntryLine.query.filter_by(account_id=dup_memo.id).count()
                     if dup_memo_lines == 0:
                         db.session.delete(dup_memo)
                         db.session.flush()
                         by_id.pop(dup_memo_id, None)
-                db.session.delete(wrong_acc)
+                db.session.delete(dup_acc)
                 db.session.flush()
-                by_id.pop(wrong_id, None)
+                by_id.pop(sup_acc_id, None)
             phase4_delete += 1
 
-        # Update office.account_category_id if it pointed to the wrong account
-        if office_acc_id != canonical_id:
-            action(f'[ALN] office {o.id:3} {o.name[:30]}  '
-                   f'office.account_category_id: {office_acc_id} → {canonical_id}')
-            if APPLY:
-                o.account_category_id = canonical_id
-                db.session.add(o)
-                db.session.flush()
-
-        # Update supplier.account_id if it pointed to the wrong account
-        if (supplier.account_id or 0) != canonical_id:
-            action(f'[ALN] office {o.id:3} {o.name[:30]}  '
-                   f'supplier.account_id: {sup_acc_id} → {canonical_id}')
-            if APPLY:
-                supplier.account_id = canonical_id
-                db.session.add(supplier)
-                db.session.flush()
-
+        # Point supplier to the office account
+        action(f'[ALN] office {o.id:3} {o.name[:30]}  '
+               f'supplier.account_id: {sup_acc_id} → {office_acc_id}')
+        if APPLY:
+            supplier.account_id = office_acc_id
+            db.session.add(supplier)
+            db.session.flush()
         phase4_align += 1
 
     print(f'\n  → {phase4_align} supplier(s) realigned, '
@@ -459,12 +398,10 @@ with app.app_context():
     header('FINAL SUMMARY')
     # ════════════════════════════════════════════
     print(f'  Mode              : {mode_label}')
-    print(f'  Phase 0 (office type): {phase0} account(s)')
     print(f'  Phase 1 (category): {phase1} supplier(s)')
     print(f'  Phase 2 fin       : {phase2_fin} account(s)')
     print(f'  Phase 2 memo      : {phase2_memo} account(s)')
     print(f'  Phase 3 (cleanup) : {len(orphans)} account(s)')
-    print(f'  Phase 4 align     : {phase4_align} supplier(s), {phase4_delete} deleted, {phase4_merge} merged')
     print(f'  Total changes     : {total_changes}')
 
     if total_changes == 0:

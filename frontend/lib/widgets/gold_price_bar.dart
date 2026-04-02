@@ -1,13 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
-/// A compact, always-dark horizontal gold price strip.
-///
-/// Designed to sit directly below any AppBar and display live spot price,
-/// per-karat sell/buy grid, change badge, and relative timestamp.
-///
-/// Colors are fixed dark (#1a1200) regardless of the app theme because
-/// a dark ticker is the standard gold-market convention.
+import '../theme/app_theme.dart';
+
 class GoldPriceBar extends StatelessWidget {
   final double? goldPrice;
   final double? goldPriceOpening;
@@ -17,25 +12,7 @@ class GoldPriceBar extends StatelessWidget {
   final bool isUpdating;
   final VoidCallback? onRefresh;
 
-  static const _karats = [24, 22, 21, 18];
-
-  // ── Palette ────────────────────────────────────────────────────────
-  static const _bg = Color(0xFF1A1200);
-  static const _gold = Color(0xFFF5C842);
-  static const _white55 = Color(0x8CFFFFFF); // 55%
-  static const _white45 = Color(0x73FFFFFF); // 45%
-  static const _white35 = Color(0x59FFFFFF); // 35%
-  static const _white25 = Color(0x40FFFFFF); // 25%
-  static const _white10 = Color(0x1AFFFFFF); // 10%
-  static const _borderBottom = Color(0x26F5C842); // rgba(245,200,66,0.15)
-  static const _colDivider = Color(0x0FFFFFFF); // rgba(255,255,255,0.06)
-  static const _upGreen = Color(0xFF5DCAA5);
-  static const _upBg = Color(0x261D9E75); // rgba(29,158,117,0.15)
-  static const _dnRed = Color(0xFFF09595);
-  static const _dnBg = Color(0x26E24B4A); // rgba(226,75,74,0.15)
-  static const _dnBorder = Color(0x4DE24B4A); // rgba(226,75,74,0.30)
-  static const _upBorder = Color(0x4D1D9E75);
-  static const _k21Tint = Color(0x0FF5C842); // rgba(245,200,66,0.06)
+  static const _baseKarats = [24, 22, 21, 18];
 
   const GoldPriceBar({
     super.key,
@@ -48,221 +25,267 @@ class GoldPriceBar extends StatelessWidget {
     this.onRefresh,
   });
 
-  // ── Helpers ─────────────────────────────────────────────────────────
-  double _gramPrice(double oz, int k) =>
-      (oz / 31.1035) * (k / 24.0) * exchangeRate;
+  double _gramPrice(double ouncePrice, int karat) =>
+      (ouncePrice / 31.1035) * (karat / 24.0) * exchangeRate;
 
-  String _fmt(double v) => NumberFormat('#,##0.##', 'en').format(v);
+  String _formatOunce(double value) =>
+      NumberFormat('#,##0.00', 'en').format(value);
 
-  String _sinceLabel() {
+  String _formatPrice(double value) =>
+      NumberFormat('#,##0.00', 'en').format(value);
+
+  String _relativeTimeLabel() {
     if (goldPriceDate == null) return '';
+
     final diff = DateTime.now().difference(goldPriceDate!);
-    if (diff.inMinutes < 1) return 'الآن';
-    if (diff.inHours < 1) return 'منذ ${diff.inMinutes} د';
-    if (diff.inHours < 24) return 'منذ ${diff.inHours} س';
+    if (diff.inMinutes < 1) return 'منذ لحظات';
+    if (diff.inHours < 1) return 'منذ ${diff.inMinutes} دقيقة';
+    if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
     return DateFormat('dd/MM HH:mm', 'en').format(goldPriceDate!);
+  }
+
+  List<int> _displayKarats() {
+    final karats = {..._baseKarats, mainKarat}.toList()
+      ..sort((a, b) => b.compareTo(a));
+    return karats;
   }
 
   @override
   Widget build(BuildContext context) {
-    final oz = goldPrice;
-    final opening = goldPriceOpening;
+    final palette = _GoldPriceBarPalette.forBrightness(
+      Theme.of(context).brightness == Brightness.dark,
+    );
 
-    // ── Change ──────────────────────────────────────────────────────
-    double? changeAbs;
-    double? changePct;
-    bool priceUp = true;
-    if (oz != null && opening != null && opening > 0) {
-      changeAbs = oz - opening;
-      changePct = (changeAbs / opening) * 100.0;
-      priceUp = changeAbs >= 0;
+    final ouncePrice = goldPrice;
+    final openingPrice = goldPriceOpening;
+    final displayKarats = _displayKarats();
+
+    double? changeAmount;
+    double? changePercent;
+    var priceUp = true;
+    if (ouncePrice != null && openingPrice != null && openingPrice > 0) {
+      changeAmount = ouncePrice - openingPrice;
+      changePercent = (changeAmount / openingPrice) * 100.0;
+      priceUp = changeAmount >= 0;
     }
-    final bigChange = changePct != null && changePct.abs() >= 1.0;
 
-    // SAR per gram for main karat
-    final sarPerGram = oz != null ? _gramPrice(oz, mainKarat) : null;
+    final showAlert = changePercent != null && changePercent.abs() >= 1.0;
+    final sarPerGramMain = ouncePrice != null
+        ? _gramPrice(ouncePrice, mainKarat)
+        : null;
 
     return Directionality(
-      textDirection: TextDirection.ltr, // fixed layout regardless of locale
-      child: Container(
-        decoration: const BoxDecoration(
-          color: _bg,
-          border: Border(
-            bottom: BorderSide(color: _borderBottom, width: 0.5),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // ── Ounce price block ─────────────────────────────────
-            _OunceBlock(
-              oz: oz,
-              sarPerGram: sarPerGram,
-              mainKarat: mainKarat,
-              changeAbs: changeAbs,
-              changePct: changePct,
-              priceUp: priceUp,
-              fmt: _fmt,
-              isUpdating: isUpdating,
-              onRefresh: onRefresh,
-            ),
+      textDirection: TextDirection.rtl,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final minContentWidth = displayKarats.length > 4 ? 920.0 : 840.0;
+          final contentWidth = constraints.maxWidth < minContentWidth
+              ? minContentWidth
+              : constraints.maxWidth;
 
-            // ── Karat grid ────────────────────────────────────────
-            Expanded(
-              child: _KaratGrid(
-                oz: oz,
-                karats: _karats,
-                mainKarat: mainKarat,
-                gramPrice: _gramPrice,
-                fmt: _fmt,
+          return Container(
+            decoration: BoxDecoration(
+              color: palette.background,
+              border: Border(
+                bottom: BorderSide(color: palette.bottomBorder, width: 0.5),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: palette.shadow,
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: contentWidth,
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _OunceBlock(
+                        palette: palette,
+                        ouncePrice: ouncePrice,
+                        sarPerGramMain: sarPerGramMain,
+                        mainKarat: mainKarat,
+                        changeAmount: changeAmount,
+                        changePercent: changePercent,
+                        priceUp: priceUp,
+                        formatOunce: _formatOunce,
+                        formatPrice: _formatPrice,
+                        isUpdating: isUpdating,
+                        onRefresh: onRefresh,
+                      ),
+                      Expanded(
+                        child: _KaratGrid(
+                          palette: palette,
+                          ouncePrice: ouncePrice,
+                          karats: displayKarats,
+                          mainKarat: mainKarat,
+                          gramPrice: _gramPrice,
+                          formatPrice: _formatPrice,
+                        ),
+                      ),
+                      _MetaBlock(
+                        palette: palette,
+                        relativeTimeLabel: _relativeTimeLabel(),
+                        showAlert: showAlert,
+                        changePercent: changePercent,
+                        priceUp: priceUp,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-
-            // ── Right: timestamp + alert ──────────────────────────
-            _RightBlock(
-              sinceLabel: _sinceLabel(),
-              bigChange: bigChange,
-              changePct: changePct,
-              priceUp: priceUp,
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 }
 
-// ── Sub-widgets ─────────────────────────────────────────────────────────
-
 class _OunceBlock extends StatelessWidget {
-  final double? oz;
-  final double? sarPerGram;
+  final _GoldPriceBarPalette palette;
+  final double? ouncePrice;
+  final double? sarPerGramMain;
   final int mainKarat;
-  final double? changeAbs;
-  final double? changePct;
+  final double? changeAmount;
+  final double? changePercent;
   final bool priceUp;
-  final String Function(double) fmt;
+  final String Function(double) formatOunce;
+  final String Function(double) formatPrice;
   final bool isUpdating;
   final VoidCallback? onRefresh;
 
   const _OunceBlock({
-    required this.oz,
-    required this.sarPerGram,
+    required this.palette,
+    required this.ouncePrice,
+    required this.sarPerGramMain,
     required this.mainKarat,
-    required this.changeAbs,
-    required this.changePct,
+    required this.changeAmount,
+    required this.changePercent,
     required this.priceUp,
-    required this.fmt,
+    required this.formatOunce,
+    required this.formatPrice,
     required this.isUpdating,
     required this.onRefresh,
   });
 
   @override
   Widget build(BuildContext context) {
-    final upC = GoldPriceBar._upGreen;
-    final dnC = GoldPriceBar._dnRed;
-    final changeC = changePct == null ? GoldPriceBar._white35 : (priceUp ? upC : dnC);
-    final changeBg = changePct == null
-        ? Colors.transparent
-        : (priceUp ? GoldPriceBar._upBg : GoldPriceBar._dnBg);
-    final changeBorder = changePct == null
-        ? Colors.transparent
-        : (priceUp ? GoldPriceBar._upBorder : GoldPriceBar._dnBorder);
+    final changeColor = priceUp
+        ? GoldPriceBarColors.upText
+        : GoldPriceBarColors.downText;
+    final changeBg = priceUp
+        ? GoldPriceBarColors.upBg
+        : GoldPriceBarColors.downBg;
+    final changeBorder = priceUp
+        ? GoldPriceBarColors.upBorder
+        : GoldPriceBarColors.downBorder;
 
-    final absStr = changeAbs != null
-        ? '${priceUp ? '+' : ''}${fmt(changeAbs!)}'
-        : null;
-    final pctStr = changePct != null
-        ? '(${priceUp ? '+' : ''}${changePct!.toStringAsFixed(2)}%)'
-        : null;
+    final amountText = changeAmount == null
+        ? null
+        : '${priceUp ? '+' : ''}${changeAmount!.toStringAsFixed(2)}';
+    final percentText = changePercent == null
+        ? null
+        : '(${priceUp ? '+' : ''}${changePercent!.toStringAsFixed(2)}%)';
 
     return Container(
-      constraints: const BoxConstraints(minWidth: 160),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
+      constraints: const BoxConstraints(minWidth: 210),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+      decoration: BoxDecoration(
         border: Border(
-          right: BorderSide(color: GoldPriceBar._white10, width: 0.5),
+          left: BorderSide(color: palette.line, width: 0.5),
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // USD price
+          Text(
+            'سعر الأونصة',
+            style: TextStyle(
+              color: palette.textMuted,
+              fontSize: 10,
+              fontFamily: 'Cairo',
+            ),
+          ),
+          const SizedBox(height: 2),
           Row(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Text(
-                oz != null ? '\$${fmt(oz!)}' : '—',
-                style: const TextStyle(
-                  color: GoldPriceBar._gold,
+                ouncePrice != null ? '\$${formatOunce(ouncePrice!)}' : '—',
+                style: TextStyle(
+                  color: palette.gold,
                   fontSize: 22,
                   fontWeight: FontWeight.w500,
                   fontFamily: 'Cairo',
-                  letterSpacing: -0.3,
+                  letterSpacing: -0.25,
                 ),
               ),
               const SizedBox(width: 8),
-              // Refresh icon
               isUpdating
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(
                         strokeWidth: 1.5,
-                        valueColor: AlwaysStoppedAnimation(GoldPriceBar._gold),
+                        valueColor: AlwaysStoppedAnimation<Color>(palette.gold),
                       ),
                     )
-                  : GestureDetector(
+                  : InkWell(
                       onTap: onRefresh,
-                      child: const Icon(
-                        Icons.refresh_rounded,
-                        color: GoldPriceBar._white35,
-                        size: 14,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(2),
+                        child: Icon(
+                          Icons.refresh_rounded,
+                          color: palette.textMuted,
+                          size: 15,
+                        ),
                       ),
                     ),
             ],
           ),
-          // SAR per gram
-          if (sarPerGram != null) ...[
-            const SizedBox(height: 1),
-            Directionality(
-              textDirection: TextDirection.rtl,
-              child: Text(
-                '${fmt(sarPerGram!)} ر.س/جم $mainKarat',
-                style: const TextStyle(
-                  color: GoldPriceBar._white55,
-                  fontSize: 11,
-                  fontFamily: 'Cairo',
-                ),
+          if (sarPerGramMain != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              '${formatPrice(sarPerGramMain!)} ر.س/جم عيار $mainKarat',
+              style: TextStyle(
+                color: palette.textSoft,
+                fontSize: 11,
+                fontFamily: 'Cairo',
               ),
             ),
           ],
-          // Change badge
-          if (absStr != null && pctStr != null) ...[
-            const SizedBox(height: 5),
+          if (amountText != null && percentText != null) ...[
+            const SizedBox(height: 6),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
               decoration: BoxDecoration(
                 color: changeBg,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: changeBorder, width: 0.5),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    priceUp ? Icons.arrow_upward : Icons.arrow_downward,
-                    color: changeC,
-                    size: 10,
+                    priceUp
+                        ? Icons.arrow_upward_rounded
+                        : Icons.arrow_downward_rounded,
+                    color: changeColor,
+                    size: 11,
                   ),
                   const SizedBox(width: 3),
                   Text(
-                    '$absStr  $pctStr',
+                    '$amountText $percentText',
                     style: TextStyle(
-                      color: changeC,
+                      color: changeColor,
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
                       fontFamily: 'Cairo',
@@ -279,80 +302,124 @@ class _OunceBlock extends StatelessWidget {
 }
 
 class _KaratGrid extends StatelessWidget {
-  final double? oz;
+  final _GoldPriceBarPalette palette;
+  final double? ouncePrice;
   final List<int> karats;
   final int mainKarat;
   final double Function(double, int) gramPrice;
-  final String Function(double) fmt;
+  final String Function(double) formatPrice;
 
   const _KaratGrid({
-    required this.oz,
+    required this.palette,
+    required this.ouncePrice,
     required this.karats,
     required this.mainKarat,
     required this.gramPrice,
-    required this.fmt,
+    required this.formatPrice,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: karats.asMap().entries.map((entry) {
-          final idx = entry.key;
-          final k = entry.value;
-          final isMain = k == mainKarat;
-          final sell = oz != null ? gramPrice(oz!, k) : null;
-          final buy = sell != null ? sell * 0.98 : null;
+          final index = entry.key;
+          final karat = entry.value;
+          final isMain = karat == mainKarat;
+          final sellPrice = ouncePrice != null
+              ? gramPrice(ouncePrice!, karat)
+              : null;
+          final buyPrice = sellPrice != null ? sellPrice * 0.98 : null;
 
           return Expanded(
             child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 1.5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: isMain ? GoldPriceBar._k21Tint : Colors.transparent,
-                border: idx > 0
-                    ? const Border(
-                        left: BorderSide(
-                          color: GoldPriceBar._colDivider,
-                          width: 0.5,
-                        ),
-                      )
-                    : null,
-                borderRadius: isMain ? BorderRadius.circular(6) : null,
+                color: isMain ? palette.goldSoft : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                border: isMain
+                    ? Border.all(color: palette.goldBorder, width: 0.5)
+                    : index > 0
+                        ? Border(
+                            right: BorderSide(color: palette.lineSoft, width: 0.5),
+                          )
+                        : null,
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Karat label
                   Text(
-                    '$k',
+                    'عيار $karat',
                     style: TextStyle(
-                      color: isMain ? GoldPriceBar._gold : GoldPriceBar._white35,
-                      fontSize: 9.5,
-                      fontWeight: isMain ? FontWeight.w700 : FontWeight.w400,
+                      color: isMain ? palette.gold : palette.textMuted,
+                      fontSize: 10,
+                      fontWeight: isMain ? FontWeight.w700 : FontWeight.w500,
+                      fontFamily: 'Cairo',
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  if (isMain) ...[
+                    const SizedBox(height: 3),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: palette.goldSoft,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        'الرئيسي',
+                        style: TextStyle(
+                          color: palette.gold,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          fontFamily: 'Cairo',
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 5),
+                  Text(
+                    'بيع',
+                    style: TextStyle(
+                      color: palette.textMuted,
+                      fontSize: 9,
                       fontFamily: 'Cairo',
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  // Sell price
+                  const SizedBox(height: 1),
                   Text(
-                    sell != null ? fmt(sell) : '—',
+                    sellPrice != null ? formatPrice(sellPrice) : '—',
                     style: TextStyle(
-                      color: isMain ? GoldPriceBar._gold : Colors.white,
-                      fontSize: 12.5,
+                      color: isMain ? palette.gold : palette.text,
+                      fontSize: 13,
                       fontWeight: FontWeight.w500,
                       fontFamily: 'Cairo',
                     ),
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  // Buy price (dimmer)
+                  const SizedBox(height: 4),
                   Text(
-                    buy != null ? fmt(buy) : '—',
-                    style: const TextStyle(
-                      color: GoldPriceBar._white45,
-                      fontSize: 10.5,
+                    'شراء',
+                    style: TextStyle(
+                      color: palette.textMuted,
+                      fontSize: 9,
+                      fontFamily: 'Cairo',
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    buyPrice != null ? formatPrice(buyPrice) : '—',
+                    style: TextStyle(
+                      color: palette.textSoft,
+                      fontSize: 11,
+                      fontWeight: isMain ? FontWeight.w500 : FontWeight.w400,
                       fontFamily: 'Cairo',
                     ),
                     textAlign: TextAlign.center,
@@ -368,81 +435,150 @@ class _KaratGrid extends StatelessWidget {
   }
 }
 
-class _RightBlock extends StatelessWidget {
-  final String sinceLabel;
-  final bool bigChange;
-  final double? changePct;
+class _MetaBlock extends StatelessWidget {
+  final _GoldPriceBarPalette palette;
+  final String relativeTimeLabel;
+  final bool showAlert;
+  final double? changePercent;
   final bool priceUp;
 
-  const _RightBlock({
-    required this.sinceLabel,
-    required this.bigChange,
-    required this.changePct,
+  const _MetaBlock({
+    required this.palette,
+    required this.relativeTimeLabel,
+    required this.showAlert,
+    required this.changePercent,
     required this.priceUp,
   });
 
   @override
   Widget build(BuildContext context) {
+    final alertColor = priceUp
+        ? GoldPriceBarColors.upText
+        : GoldPriceBarColors.downText;
+    final alertBg = priceUp
+        ? GoldPriceBarColors.upBg
+        : GoldPriceBarColors.downBg;
+    final alertBorder = priceUp
+        ? GoldPriceBarColors.upBorder
+        : GoldPriceBarColors.downBorder;
+
     return Container(
-      constraints: const BoxConstraints(maxWidth: 130),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: const BoxDecoration(
+      constraints: const BoxConstraints(minWidth: 168, maxWidth: 190),
+      padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
+      decoration: BoxDecoration(
         border: Border(
-          left: BorderSide(color: GoldPriceBar._white10, width: 0.5),
+          right: BorderSide(color: palette.line, width: 0.5),
         ),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Smart alert — only when |change| >= 1%
-          if (bigChange && changePct != null) ...[
+          if (showAlert && changePercent != null) ...[
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
               decoration: BoxDecoration(
-                color: priceUp ? GoldPriceBar._upBg : GoldPriceBar._dnBg,
+                color: alertBg,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: priceUp ? GoldPriceBar._upBorder : GoldPriceBar._dnBorder,
-                  width: 0.5,
-                ),
+                border: Border.all(color: alertBorder, width: 0.5),
               ),
-              child: Directionality(
-                textDirection: TextDirection.rtl,
-                child: Text(
-                  priceUp
-                      ? 'ارتفع ${changePct!.abs().toStringAsFixed(1)}%\nراجع أسعار البيع'
-                      : 'انخفض ${changePct!.abs().toStringAsFixed(1)}%\nراجع أسعار الشراء',
-                  style: TextStyle(
-                    color: priceUp ? GoldPriceBar._upGreen : GoldPriceBar._dnRed,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'Cairo',
-                    height: 1.4,
-                  ),
-                  textAlign: TextAlign.right,
-                ),
-              ),
-            ),
-            const SizedBox(height: 5),
-          ],
-          // Relative timestamp
-          if (sinceLabel.isNotEmpty)
-            Directionality(
-              textDirection: TextDirection.rtl,
               child: Text(
-                sinceLabel,
-                style: const TextStyle(
-                  color: GoldPriceBar._white25,
+                priceUp
+                    ? 'السعر ارتفع ${changePercent!.abs().toStringAsFixed(2)}% - راجع أسعار البيع'
+                    : 'السعر انخفض ${changePercent!.abs().toStringAsFixed(2)}% - راجع أسعار الشراء',
+                style: TextStyle(
+                  color: alertColor,
                   fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
                   fontFamily: 'Cairo',
+                  height: 1.35,
                 ),
                 textAlign: TextAlign.right,
               ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          if (relativeTimeLabel.isNotEmpty)
+            Text(
+              relativeTimeLabel,
+              style: TextStyle(
+                color: palette.textMuted,
+                fontSize: 10,
+                fontFamily: 'Cairo',
+              ),
+              textAlign: TextAlign.right,
             ),
         ],
       ),
     );
   }
+}
+
+class _GoldPriceBarPalette {
+  final Color background;
+  final Color gold;
+  final Color goldSoft;
+  final Color goldBorder;
+  final Color text;
+  final Color textSoft;
+  final Color textMuted;
+  final Color line;
+  final Color lineSoft;
+  final Color bottomBorder;
+  final Color shadow;
+
+  const _GoldPriceBarPalette({
+    required this.background,
+    required this.gold,
+    required this.goldSoft,
+    required this.goldBorder,
+    required this.text,
+    required this.textSoft,
+    required this.textMuted,
+    required this.line,
+    required this.lineSoft,
+    required this.bottomBorder,
+    required this.shadow,
+  });
+
+  factory _GoldPriceBarPalette.forBrightness(bool isDark) {
+    if (isDark) {
+      return const _GoldPriceBarPalette(
+        background: Color(0xFF1A1200),
+        gold: Color(0xFFF5C842),
+        goldSoft: Color(0x1AF5C842),
+        goldBorder: Color(0x33F5C842),
+        text: Colors.white,
+        textSoft: Color(0xFFD8BC7A),
+        textMuted: Color(0x99FFFFFF),
+        line: Color(0x1FFFFFFF),
+        lineSoft: Color(0x12FFFFFF),
+        bottomBorder: Color(0x26F5C842),
+        shadow: Color(0x14000000),
+      );
+    }
+
+    return const _GoldPriceBarPalette(
+      background: Color(0xFFFDFBF6),
+      gold: AppColors.deepGold,
+      goldSoft: Color(0x10D4AF37),
+      goldBorder: Color(0x1FD4AF37),
+      text: Color(0xFF4E3A12),
+      textSoft: Color(0xFF7C6328),
+      textMuted: Color(0xFFA88B53),
+      line: Color(0x14D4AF37),
+      lineSoft: Color(0x0FD4AF37),
+      bottomBorder: Color(0x1FD4AF37),
+      shadow: Color(0x08D4AF37),
+    );
+  }
+}
+
+class GoldPriceBarColors {
+  static const upText = Color(0xFF5DCAA5);
+  static const upBg = Color(0x261D9E75);
+  static const upBorder = Color(0x4D1D9E75);
+  static const downText = Color(0xFFF09595);
+  static const downBg = Color(0x26E24B4A);
+  static const downBorder = Color(0x4DE24B4A);
 }
