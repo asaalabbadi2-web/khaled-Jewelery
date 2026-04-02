@@ -40,10 +40,14 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
   // Controllers
   final _weightController = TextEditingController();
   final _priceController = TextEditingController();
+  final _totalAmountController = TextEditingController();
   final _notesController = TextEditingController();
   final _contactPersonController = TextEditingController();
   final _contactPhoneController = TextEditingController();
   final _paidAmountController = TextEditingController();
+
+  // Prevent circular listener updates
+  bool _updatingFields = false;
 
   // بيانات
   List<Map<String, dynamic>> _offices = []; // قائمة المكاتب
@@ -57,8 +61,9 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
   void initState() {
     super.initState();
     _loadInitialData();
-    _weightController.addListener(_calculateTotal);
-    _priceController.addListener(_calculateTotal);
+    _weightController.addListener(_onWeightChanged);
+    _priceController.addListener(_onPriceChanged);
+    _totalAmountController.addListener(_onTotalChanged);
     _paidAmountController.addListener(_updatePaymentStatus);
   }
 
@@ -66,6 +71,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
   void dispose() {
     _weightController.dispose();
     _priceController.dispose();
+    _totalAmountController.dispose();
     _notesController.dispose();
     _contactPersonController.dispose();
     _contactPhoneController.dispose();
@@ -150,13 +156,53 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
     setState(() => _paymentSafeBoxId = chosen.id);
   }
 
-  void _calculateTotal() {
+  // Weight changed → recompute total from price (price is the source of truth)
+  void _onWeightChanged() {
+    if (_updatingFields) return;
     final weight = double.tryParse(_weightController.text) ?? 0.0;
     final price = double.tryParse(_priceController.text) ?? 0.0;
+    final total = weight * price;
+    _updatingFields = true;
+    _totalAmountController.text =
+        total > 0 ? total.toStringAsFixed(2) : '';
+    _updatingFields = false;
     setState(() {
       _weight = weight;
       _pricePerGram = price;
-      _totalAmount = weight * price;
+      _totalAmount = total;
+    });
+  }
+
+  // Price per gram changed → recompute total
+  void _onPriceChanged() {
+    if (_updatingFields) return;
+    final weight = double.tryParse(_weightController.text) ?? 0.0;
+    final price = double.tryParse(_priceController.text) ?? 0.0;
+    final total = weight * price;
+    _updatingFields = true;
+    _totalAmountController.text =
+        total > 0 ? total.toStringAsFixed(2) : '';
+    _updatingFields = false;
+    setState(() {
+      _weight = weight;
+      _pricePerGram = price;
+      _totalAmount = total;
+    });
+  }
+
+  // Total amount changed → back-calculate price per gram
+  void _onTotalChanged() {
+    if (_updatingFields) return;
+    final weight = double.tryParse(_weightController.text) ?? 0.0;
+    final total = double.tryParse(_totalAmountController.text) ?? 0.0;
+    final price = (weight > 0 && total > 0) ? total / weight : 0.0;
+    _updatingFields = true;
+    _priceController.text = price > 0 ? price.toStringAsFixed(2) : '';
+    _updatingFields = false;
+    setState(() {
+      _weight = weight;
+      _pricePerGram = price;
+      _totalAmount = total;
     });
   }
 
@@ -640,36 +686,29 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                               style: theme.textTheme.titleMedium,
                             ),
                             const SizedBox(height: 16),
-                            // المبلغ الإجمالي
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: AppColors.lightGold.withValues(
-                                  alpha: 0.35,
-                                ),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: AppColors.mediumGold.withValues(
-                                    alpha: 0.5,
-                                  ),
+                            // المبلغ الإجمالي — قابل للإدخال (يولّد سعر الجرام تلقائياً)
+                            TextFormField(
+                              controller: _totalAmountController,
+                              decoration: InputDecoration(
+                                labelText: isAr
+                                    ? 'المبلغ الإجمالي (ر.س)'
+                                    : 'Total Amount (SAR)',
+                                border: const OutlineInputBorder(),
+                                prefixIcon: const Icon(Icons.calculate_outlined),
+                                suffixText: isAr ? 'ر.س' : 'SAR',
+                                filled: true,
+                                fillColor: AppColors.lightGold.withValues(
+                                  alpha: 0.25,
                                 ),
                               ),
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    isAr ? 'المبلغ الإجمالي' : 'Total Amount',
-                                    style: theme.textTheme.titleMedium,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
                                   ),
-                                  Text(
-                                    '${_totalAmount.toStringAsFixed(2)} ${isAr ? "ر.س" : "SAR"}',
-                                    style: theme.textTheme.titleLarge?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.mediumGold,
-                                    ),
-                                  ),
-                                ],
+                              inputFormatters: [NormalizeNumberFormatter()],
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.mediumGold,
                               ),
                             ),
                             const SizedBox(height: 12),
