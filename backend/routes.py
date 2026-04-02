@@ -14227,10 +14227,7 @@ def add_invoice():
                             if not weight_inventory_memo_acc_id:
                                 weight_inventory_memo_acc_id = get_account_id_by_number('7521')
 
-                            # آخر fallback: استخدم نفس حساب المخزون المالي (أفضل من فشل الحفظ بسبب عدم توازن الوزن)
-                            if not weight_inventory_memo_acc_id:
-                                weight_inventory_memo_acc_id = inv_account_id
-
+                            # لا نسقط على الحساب المالي — الأوزان يجب أن تذهب لحسابات مذكرة فقط.
                             if weight_inventory_memo_acc_id:
                                 print(f"🟢 DEBUG Posting memo weight debit to account {weight_inventory_memo_acc_id} for karat {karat}: {actual_weight_for_karat}")
                                 create_dual_journal_entry(
@@ -14283,9 +14280,9 @@ def add_invoice():
                     if not weight_target_acc_id:
                         weight_target_acc_id = get_account_id_by_number('7521')
 
-                    # Last fallback: any available inventory account (financial) or the mapped one.
+                    # لا نسقط على الحساب المالي — الأوزان يجب أن تذهب لحسابات مذكرة فقط.
                     if not weight_target_acc_id:
-                        weight_target_acc_id = inv_for_karat or (next(iter(inventory_accounts.values())) if inventory_accounts else None)
+                        print(f"⚠️ No memo account for weight safety-net posting (karat {karat_str}). Skipping.")
 
                     if weight_target_acc_id:
                         weight_kwargs = _weight_kwargs_for_karat(karat_str, round(float(weight_val), 3), 'debit')
@@ -28226,12 +28223,26 @@ def _auto_consume_weight_closing(
                 karat_debit = f'debit_{execution_karat}k'
                 karat_credit = f'credit_{execution_karat}k'
 
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry_id,
-                    account_id=inventory_account_id,
-                    description=f'تنفيذ تسكير عيار {execution_karat}',
-                    **{karat_debit: weight_in_karat}
-                )
+                # الوزن يجب أن يذهب لحساب المذكرة (7xxxx)، لا للحساب المالي (1xxx).
+                inventory_memo_acc_id = None
+                try:
+                    inv_obj = Account.query.get(inventory_account_id)
+                    if inv_obj and inv_obj.memo_account_id:
+                        inventory_memo_acc_id = inv_obj.memo_account_id
+                except Exception:
+                    inventory_memo_acc_id = None
+                if not inventory_memo_acc_id:
+                    inventory_memo_acc_id = get_account_id_by_number('7521')
+
+                if inventory_memo_acc_id:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry_id,
+                        account_id=inventory_memo_acc_id,
+                        description=f'تنفيذ تسكير عيار {execution_karat}',
+                        **{karat_debit: weight_in_karat}
+                    )
+                else:
+                    print(f"⚠️ Skipping weight debit in weight closing: no memo account for inventory {inventory_account_id}")
 
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry_id,
@@ -28919,10 +28930,31 @@ def settle_office_reservation(reservation_id: int):
         karat_debit = f'debit_{karat}k'
         karat_credit = f'credit_{karat}k'
 
+        # الوزن يجب أن يذهب لحساب المذكرة (7xxxx) لا الحساب المالي (1xxx).
+        inventory_memo_acc_id = None
+        try:
+            inv_acc_obj = Account.query.get(inventory_account_id)
+            if inv_acc_obj and inv_acc_obj.memo_account_id:
+                inventory_memo_acc_id = inv_acc_obj.memo_account_id
+        except Exception:
+            inventory_memo_acc_id = None
+        if not inventory_memo_acc_id:
+            inventory_memo_acc_id = get_account_id_by_number('7521')
+        if not inventory_memo_acc_id:
+            db.session.rollback()
+            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمخزون الذهب عند التسكير'}), 500
+
+        # القيد النقدي على الحساب المالي فقط
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=inventory_account_id,
             cash_debit=total_amount,
+            description=f'تسليم ذهب للتسكير عيار {karat} - قيمة نقدية',
+        )
+        # القيد الوزني على حساب المذكرة فقط
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=inventory_memo_acc_id,
             description=f'تسليم ذهب للتسكير عيار {karat} - إخراج وزن من المخزون',
             **{karat_credit: weight_grams},
         )
