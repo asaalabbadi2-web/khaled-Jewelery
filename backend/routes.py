@@ -9625,9 +9625,6 @@ def calculate_profit_in_gold(items_sold):
 @api.route('/invoices', methods=['POST'])
 def add_invoice():
     data = request.get_json(silent=True)
-    print(f"\n=== 📝 Invoice Creation Request ===")
-    print(f"Received data: {data}")
-    
     if not isinstance(data, dict):
         return jsonify({'error': 'Invalid or missing JSON body'}), 400
 
@@ -10339,10 +10336,8 @@ def add_invoice():
                 net_amount = data_total - commission_amount - commission_vat_total
     
     wage_mode_snapshot = _get_manufacturing_wage_mode()
-    print(f"🔴 ENTERING try block for invoice creation, invoice_type={invoice_type}")
     try:
         # --- 1. Create Invoice and Items ---
-        print(f"🟢 Step 1: Creating invoice...")
         next_invoice_type_id = _next_invoice_type_id([invoice_type])
 
         def _extract_float(key, default=0.0):
@@ -10553,8 +10548,6 @@ def add_invoice():
             large_discount_pct_threshold = 10.0
 
         for item_data in data.get('items', []):
-            print(f"\n📦 DEBUG - item_data: {item_data}")  # 🔍 Debug logging
-
             item_id = item_data.get('item_id')
             item = Item.query.get(item_id) if item_id else None
 
@@ -10618,8 +10611,7 @@ def add_invoice():
             print(f"   💵 selling_price={selling_price_val}, tax_amount={tax_amount_val}, discount={discount_amount_val}")
 
             if tax_amount_val < 0:
-                print(f"⚠️ WARNING: Negative tax received for purchase item '{item_name}': {tax_amount_val}")
-                tax_amount_val = abs(tax_amount_val)
+                    tax_amount_val = abs(tax_amount_val)
 
             net_price = selling_price_val - tax_amount_val - discount_amount_val
             total_price = selling_price_val
@@ -10668,8 +10660,6 @@ def add_invoice():
                 quantity=quantity_int
             ))
 
-        print(f"🟢 Step 1.5: Adding invoice items complete")
-
         if invoice_type == 'شراء من عميل':
             new_invoice.profit_cash = round(_to_float(purchase_profit_cash, 0.0), 2)
 
@@ -10678,7 +10668,6 @@ def add_invoice():
         enforced_gold_tax_total = 0.0
         enforced_wage_tax_total = 0.0
         if karat_lines_data and isinstance(karat_lines_data, list):
-            print("🆕 Step 1.6: Creating karat lines from request...")
             for idx, line_data in enumerate(karat_lines_data, start=1):
                 karat_value = _to_float(line_data.get('karat'))
                 weight_value = _to_float(
@@ -10688,7 +10677,6 @@ def add_invoice():
                 )
 
                 if karat_value <= 0 or weight_value <= 0:
-                    print(f"⚠️ Skipping karat line #{idx}: invalid karat/weight = ({line_data.get('karat')}, {line_data.get('weight_grams') or line_data.get('weight')})")
                     continue
 
                 gold_value_cash = _to_float(line_data.get('gold_value_cash', line_data.get('gold_value')))
@@ -10772,8 +10760,6 @@ def add_invoice():
                 computed_total_weight += weight_value
                 processed_karat_lines += 1
 
-            print(f"🟢 Step 1.7: Added {processed_karat_lines} karat lines")
-
             # Override invoice tax totals from enforced karat-line calculation.
             try:
                 new_invoice.gold_tax_total = round(enforced_gold_tax_total, 2)
@@ -10782,12 +10768,11 @@ def add_invoice():
             except Exception:
                 pass
         else:
-            print("🟡 Step 1.6: No karat lines supplied with invoice")
+            pass  # no karat lines
 
         if computed_total_weight > 0:
             new_invoice.total_weight = round(computed_total_weight, 4)
         elif data.get('items'):
-            print("⚠️ Invoice contains items but computed_total_weight=0. Injecting fallback weight.")
             fallback_weight = sum(
                 _to_float(item.get('weight'))
                 or _to_float(item.get('total_weight'))
@@ -10799,7 +10784,6 @@ def add_invoice():
         new_invoice.manufacturing_wage_mode_snapshot = wage_mode_snapshot
         db.session.add(new_invoice)
         db.session.flush()
-        print(f"🟢 Invoice #{new_invoice.id} created successfully!")
 
         # --- Approval gates (sales) ---
         # Allow saving but prevent posting/safebox effects until approved.
@@ -11026,7 +11010,6 @@ def add_invoice():
                 pass
 
         # 🆕 --- 1.5. Create Invoice Payments (وسائل دفع متعددة) ---
-        print(f"🟢 Step 2: Creating invoice payments (if any)...")
 
         def _is_cash_payment_method(pm) -> bool:
             """Best-effort check whether a PaymentMethod represents cash."""
@@ -12527,9 +12510,6 @@ def add_invoice():
         # 🆕 الحصول على سعر الذهب الحالي (يلزم لجميع أنواع الفواتير)
         gold_price_data = get_current_gold_price()
         
-        print(f"📊 Processing invoice type: '{invoice_type}'")
-        print(f"📊 Checking condition: invoice_type == 'بيع' => {invoice_type == 'بيع'}")
-        
         if invoice_type == 'بيع':
             # ============================================
             # 1. فاتورة بيع - النظام المحاسبي الصحيح
@@ -12895,8 +12875,6 @@ def add_invoice():
             direct_gold_price_main = gold_price_data.get('price_per_gram_main_karat', 
                                                          gold_price_data.get('price_main_karat', 350.0))
             
-            print(f"💰 Direct gold price (main karat): {direct_gold_price_main} SAR/gram (Purchase)")
-            
             # ============================================
             # A) القيود المالية (نقد فقط)
             # ============================================
@@ -13166,15 +13144,6 @@ def add_invoice():
             # 5. شراء (مورد)
             # السيناريو الجديد: المخزون يُثبت بالوزن والقيمة، المورد دائن بالذهب،
             # ويتم تسجيل التقييم النقدي على حساب جسر مستقل.
-            
-            print("\n" + "="*80)
-            print("🔍 DEBUGGING: شراء (مورد) - START")
-            print("="*80)
-            print(f"📋 gold_by_karat (from karat_lines/items) = {gold_by_karat}")
-            print(f"💰 wage_cash = {data.get('manufacturing_wage_cash')}")
-            print(f"💵 gold_subtotal = {data.get('gold_subtotal')}")
-            print(f"📦 karat_lines = {data.get('karat_lines')}")
-            print("="*80 + "\n")
 
             # محاولة الحصول على حساب الجسر من الطلب أو إعدادات الربط
             bridge_acc_id = (
@@ -13308,9 +13277,6 @@ def add_invoice():
                 if not supplier_gold_by_karat:
                     # استخدام الأوزان الفعلية من karat_lines
                     supplier_gold_by_karat = {k: v for k, v in gold_by_karat.items() if v > 0}
-                    print(f"📦 supplier_gold_by_karat set from gold_by_karat = {supplier_gold_by_karat}")
-                else:
-                    print(f"📦 supplier_gold_by_karat received from client = {supplier_gold_by_karat}")
 
                 # حفظ إجمالي الذهب (عيار رئيسي) في الفاتورة للرجوع إليه لاحقاً
                 supplier_gold_main = sum(
@@ -13424,15 +13390,12 @@ def add_invoice():
                         if k and w > 0:
                             actual_gold_weights_for_memo[k] = actual_gold_weights_for_memo.get(k, 0.0) + w
                 
-                print(f"✅ DEBUG: actual_gold_weights_for_memo (physical gold only) = {actual_gold_weights_for_memo}")
-
                 # Weight source used for posting physical gold purchase lines.
                 # Some clients do not send `karat_lines` for supplier purchases; in that case,
                 # fall back to supplier_gold_by_karat derived from items/request.
                 physical_gold_weights_for_posting = dict(actual_gold_weights_for_memo or {})
                 if not physical_gold_weights_for_posting:
                     physical_gold_weights_for_posting = dict(supplier_gold_by_karat or {})
-                print(f"✅ DEBUG: physical_gold_weights_for_posting = {physical_gold_weights_for_posting}")
 
                 # Track which karats had an inventory weight debit posted.
                 posted_weight_debits = set()
@@ -13517,7 +13480,6 @@ def add_invoice():
 
                             # لا نسقط على الحساب المالي — الأوزان يجب أن تذهب لحسابات مذكرة فقط.
                             if weight_inventory_memo_acc_id:
-                                print(f"🟢 DEBUG Posting memo weight debit to account {weight_inventory_memo_acc_id} for karat {karat}: {actual_weight_for_karat}")
                                 create_dual_journal_entry(
                                     journal_entry_id=journal_entry.id,
                                     account_id=weight_inventory_memo_acc_id,
@@ -13526,8 +13488,6 @@ def add_invoice():
                                     description=f"شراء وزني (مورد) - عيار {karat}"
                                 )
                                 posted_weight_debits.add(str(karat))
-                            else:
-                                print("⚠️ Memo inventory account not found. Skipping supplier weight entry.")
 
                         cash_debit_booked = round(cash_debit_booked + max(cash_share, 0), 2)
 
@@ -13732,19 +13692,11 @@ def add_invoice():
                     }), 400
 
                 if supplier_memo_account_id and supplier_gold_by_karat:
-                    # 🆕 استخدام الأوزان الفعلية (بدون المصنعية) لقيد المورد الوزني
-                    print(f"🟢 DEBUG supplier_weight_kwargs calculation:")
-                    print(f"   physical_gold_weights_for_posting = {physical_gold_weights_for_posting}")
-                    print(f"   supplier_gold_by_karat (request/fallback) = {supplier_gold_by_karat}")
-                    print(f"   dual_entry_params = {list(dual_entry_params)}")
-                    
                     supplier_weight_kwargs = {
                         f'weight_{karat}k_credit': round(weight, 3)
                         for karat, weight in physical_gold_weights_for_posting.items()  # ← أوزان الذهب الفعلية
                         if weight > 0 and f'weight_{karat}k_credit' in dual_entry_params
                     }
-                    
-                    print(f"   supplier_weight_kwargs (before unsupported) = {supplier_weight_kwargs}")
 
                     # إن لم تُطابق أسماء الوسائط (عيار غير مدعوم)، نحاول تحويله إلى العيار الرئيسي
                     unsupported_karats = [
@@ -13764,8 +13716,6 @@ def add_invoice():
                         )
 
                     if supplier_weight_kwargs:
-                        print(f"   supplier_weight_kwargs (final) = {supplier_weight_kwargs}")
-
                         # سطر التزام المورد (ذهب)
                         create_dual_journal_entry(
                             journal_entry_id=journal_entry.id,

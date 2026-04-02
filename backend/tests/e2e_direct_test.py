@@ -195,6 +195,60 @@ with flask_app.app.test_client() as c:
     else:
         print("  ⏭  Skipped (no cust-buy invoice)")
 
+    # ─── TEST 5: شراء (مورد) ────────────────────────────────────────────────
+    section("TEST 5: شراء (مورد - لازوردي)")
+    supp_weight = 10.0  # 10g 21k
+    supp_gold_val = round(gp * supp_weight, 2)
+    r5 = c.post('/api/invoices', json={
+        "invoice_type": "شراء",
+        "supplier_id": 1,
+        "gold_price": gp,
+        "gold_type": "new",
+        "karat_lines": [{"karat": 21, "weight_grams": supp_weight, "gold_value_cash": supp_gold_val}],
+        "gold_subtotal": supp_gold_val,
+        "total": supp_gold_val,
+    })
+    d5 = json.loads(r5.data)
+    if r5.status_code in (200, 201):
+        inv_id5 = d5.get("id")
+        ok(f"Invoice created: ID={inv_id5} total={supp_gold_val}")
+        je5 = JournalEntry.query.filter_by(reference_type='invoice', reference_id=inv_id5).first()
+        if je5:
+            check_je_balance(je5.id, "شراء (مورد)")
+        else:
+            fail("JE not found for supplier purchase")
+        SUPP_INV_ID = inv_id5
+    else:
+        fail(f"شراء (مورد) failed: {r5.status_code} {json.dumps(d5, ensure_ascii=False)[:400]}")
+        SUPP_INV_ID = None
+
+    # ─── TEST 6: مرتجع شراء (مورد) ──────────────────────────────────────────
+    section("TEST 6: مرتجع شراء (مورد - لازوردي)")
+    if SUPP_INV_ID:
+        r6 = c.post('/api/invoices', json={
+            "invoice_type": "مرتجع شراء (مورد)",
+            "supplier_id": 1,
+            "original_invoice_id": SUPP_INV_ID,
+            "gold_price": gp,
+            "gold_type": "new",
+            "karat_lines": [{"karat": 21, "weight_grams": supp_weight, "gold_value_cash": supp_gold_val}],
+            "gold_subtotal": supp_gold_val,
+            "total": supp_gold_val,
+        })
+        d6 = json.loads(r6.data)
+        if r6.status_code in (200, 201):
+            inv_id6 = d6.get("id")
+            ok(f"Invoice created: ID={inv_id6}")
+            je6 = JournalEntry.query.filter_by(reference_type='invoice', reference_id=inv_id6).first()
+            if je6:
+                check_je_balance(je6.id, "مرتجع شراء (مورد)")
+            else:
+                fail("JE not found for supplier return")
+        else:
+            fail(f"مرتجع شراء (مورد) failed: {r6.status_code} {json.dumps(d6, ensure_ascii=False)[:400]}")
+    else:
+        print("  ⏭  Skipped (no supplier invoice)")
+
 # ─── SUMMARY ────────────────────────────────────────────────────────────────
 section("SUMMARY")
 if not errors:
