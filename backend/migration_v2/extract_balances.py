@@ -304,7 +304,7 @@ class V1PostgresReader:
         rows = self._q("""
             SELECT a.id, a.account_number, a.name
             FROM account a
-            WHERE a.account_number LIKE '7130%'
+            WHERE a.account_number LIKE '7130%%'
             ORDER BY a.account_number
         """)
         karat_map = {
