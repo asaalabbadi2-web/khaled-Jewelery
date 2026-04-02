@@ -565,23 +565,40 @@ class OpeningEntryBuilder:
                 total_cash_debit += abs(balancing_amount)
 
         # ───────────────────────────────────
+        # 7. تسوية الفوارق الوزنية لكل عيار
+        # (النظام القديم لم يكن يوازن الوزن بدقة لكل عيار على حدة)
+        # ───────────────────────────────────
+        eq_acc = self.V2_ACCOUNTS["equity_opening"]
+        for karat in (18, 21, 22, 24):
+            fd = f"weight_{karat}k"
+            wd = sum(getattr(l, fd) for l in entry.lines if l.is_weight_account and l.side == "debit")
+            wc = sum(getattr(l, fd) for l in entry.lines if l.is_weight_account and l.side == "credit")
+            diff = wd - wc
+            if abs(diff) >= Decimal("0.001"):
+                side = "credit" if diff > 0 else "debit"
+                w_kwargs = self._weight_kwargs(karat, abs(diff))
+                entry.lines.append(OpeningEntryLine(
+                    account_id=None,
+                    account_number=eq_acc["number"],
+                    account_name=eq_acc["name"],
+                    is_weight_account=True,
+                    side=side,
+                    amount_sar=Decimal("0"),
+                    **w_kwargs,
+                    description=f"تسوية وزنية افتتاح عيار {karat} — فارق النظام القديم",
+                ))
+
+        # ───────────────────────────────────
         # إحصائيات التوازن
         # ───────────────────────────────────
         entry.total_cash_debit = total_cash_debit
         entry.total_cash_credit = total_cash_credit
         entry.is_cash_balanced = abs(total_cash_debit - total_cash_credit) < Decimal("0.01")
 
-        # توازن وزني
         for karat in (18, 21, 22, 24):
             fd = f"weight_{karat}k"
-            wd = sum(
-                getattr(l, fd) for l in entry.lines
-                if l.is_weight_account and l.side == "debit"
-            )
-            wc = sum(
-                getattr(l, fd) for l in entry.lines
-                if l.is_weight_account and l.side == "credit"
-            )
+            wd = sum(getattr(l, fd) for l in entry.lines if l.is_weight_account and l.side == "debit")
+            wc = sum(getattr(l, fd) for l in entry.lines if l.is_weight_account and l.side == "credit")
             if karat == 21:
                 entry.total_weight_debit_21k = wd
                 entry.total_weight_credit_21k = wc
