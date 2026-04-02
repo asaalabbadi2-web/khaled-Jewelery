@@ -10493,7 +10493,7 @@ def add_invoice():
             employee_id=employee_id_for_invoice,
             branch_id=branch_id,
             office_id=office_id,
-            date=datetime.fromisoformat(data['date']),
+            date=datetime.fromisoformat(data['date']) if data.get('date') else datetime.utcnow(),
             total=_extract_float('total', 0.0),
             invoice_type=invoice_type,
             total_weight=_extract_float('total_weight', 0.0),
@@ -13027,6 +13027,12 @@ def add_invoice():
             cash_acc_id = get_account_id_for_mapping('مرتجع بيع', 'cash')
             customers_acc_id = get_account_id_for_mapping('مرتجع بيع', 'customers')
             sales_returns_acc_id = get_account_id_for_mapping('مرتجع بيع', 'sales_returns')
+            # Fallback: if no dedicated returns account, debit the revenue/sales account
+            if not sales_returns_acc_id:
+                sales_returns_acc_id = (
+                    get_account_id_for_mapping('بيع', 'revenue')
+                    or get_account_id_for_mapping('بيع', 'sales_gold_new')
+                )
             
             # حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
             inventory_accounts = {}
@@ -13040,81 +13046,23 @@ def add_invoice():
                         inventory_accounts[karat] = inv_acc_id
             
             # Use explicit total_cost if provided; otherwise default to total_cash.
-            # In this system COGS is recorded at selling price (not a separate lower cost basis),
-            # so cost = selling price. The old default of 0.8 * total_cash was incorrect and
-            # caused a cash imbalance when no sales_returns account was configured.
             total_cost = data.get('total_cost') or total_cash
             
-            # Line 1: مدين المخزون (نقد فقط) + قيد وزني للمذكرة (وزن فعلي)
-            total_weight_returned = sum(
-                weight for karat, weight in gold_by_karat.items()
-                if weight and weight > 0 and str(karat) in inventory_accounts
-            )
+            # في نظام je_engine_v2: المخزون حسابات وزنية فقط (لا نقد).
+            # القيود النقدية: مردودات مبيعات (مدين) + عميل (دائن).
+            # القيود الوزنية: عبر weight_entries_for_party أدناه.
 
-            if total_weight_returned > 0 and inventory_accounts:
-                remaining_cost = float(total_cost or 0)
-                positive_karats = [k for k in ['18', '21', '22', '24'] if gold_by_karat.get(k, 0) > 0 and k in inventory_accounts]
-
-                for idx, k in enumerate(positive_karats):
-                    w = float(gold_by_karat.get(k, 0) or 0)
-                    if w <= 0:
-                        continue
-
-                    inv_acc_id = inventory_accounts.get(k)
-                    if not inv_acc_id:
-                        continue
-
-                    if idx < len(positive_karats) - 1:
-                        cash_share = round(float(total_cost or 0) * (w / total_weight_returned), 2)
-                        remaining_cost = round(remaining_cost - cash_share, 2)
-                    else:
-                        cash_share = round(max(remaining_cost, 0.0), 2)
-                        remaining_cost = 0.0
-
-                    if cash_share > 0:
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=inv_acc_id,
-                            cash_debit=cash_share,
-                            apply_golden_rule=False,
-                            description=f"مرتجع للمخزون (قيمة) - عيار {k}"
-                        )
-
-                    # Weight memo: debit physical weight to inventory memo account
-                    inv_acc_obj = Account.query.get(inv_acc_id)
-                    memo_inv_id = inv_acc_obj.memo_account_id if inv_acc_obj else None
-                    if memo_inv_id:
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=memo_inv_id,
-                            **_weight_kwargs_for_karat(k, round(w, 3), 'debit'),
-                            apply_golden_rule=False,
-                            description=f"مرتجع وزني للمخزون - عيار {k}"
-                        )
-                    else:
-                        print(f"⚠️ No memo account for inventory {k}k (account {inv_acc_id}).")
-            elif inventory_accounts and float(total_cost or 0) > 0:
-                # Fallback: post cash only to any inventory account (should be rare)
-                fallback_inv_id = next(iter(inventory_accounts.values()))
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry.id,
-                    account_id=fallback_inv_id,
-                    cash_debit=float(total_cost or 0),
-                    apply_golden_rule=False,
-                    description="مرتجع للمخزون (قيمة)"
-                )
-            
-            # Line 2: مدين مردودات المبيعات
+            # Line 1: مدين مردودات المبيعات (القيمة الكاملة)
             if sales_returns_acc_id:
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
                     account_id=sales_returns_acc_id,
-                    cash_debit=total_cash - total_cost,
+                    cash_debit=total_cash,
                     apply_golden_rule=False,
                     description="مردودات المبيعات"
                 )
             
-            # Line 3: دائن العميل/الصندوق
+            # Line 2: دائن العميل/الصندوق
             acc_id = customers_acc_id or cash_acc_id or party_account.id
             create_dual_journal_entry(
                 journal_entry_id=journal_entry.id,
