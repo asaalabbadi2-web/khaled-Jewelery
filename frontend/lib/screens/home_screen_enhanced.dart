@@ -2767,43 +2767,66 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   }
 
   Widget _buildGoldPriceCard() {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // Helper to calculate price per gram for a given karat
-    double calculateKaratPrice(double ouncePrice, int karat) {
-      return (ouncePrice / 31.1035) * (karat / 24);
-    }
+    // ── Color tokens ─────────────────────────────────────────────────
+    // Light mode: warm cream + brown typography + golden accents
+    // Dark mode: dark amber-tinted surface + light typography
+    const goldenYellow  = Color(0xFFFFD700);
+    const goldenBorder  = Color(0xFFD4A017);
+    const darkSurface   = Color(0xFF2A1F00);
+    const darkBorderCol = Color(0xFF6B4F12);
+    const warmCream     = Color(0xFFFFF8E7);
+    const brownTitle    = Color(0xFF3E2000);
+    const brownSub      = Color(0xFF7A5430);
+    const brownMuted    = Color(0xFFB8895A);
 
-    // Calculate purchase price (what we buy from customers - lower than market)
-    double calculatePurchasePrice(double basePrice) {
-      return basePrice * 0.98; // 2% less than market price
-    }
+    final cardBg    = isDark ? darkSurface   : warmCream;
+    final borderCol = isDark ? darkBorderCol : goldenBorder.withValues(alpha: 0.55);
+    final titleCol  = isDark ? Colors.white  : brownTitle;
+    final subCol    = isDark ? const Color(0xFFD4B896) : brownSub;
+    final mutedCol  = isDark ? const Color(0xFF8A7A5A) : brownMuted;
+    // Sell = prominent; Buy = muted warm
+    final sellCol   = isDark ? Colors.white              : brownTitle;
+    final buyCol    = isDark ? const Color(0xFFFFCC66)   : const Color(0xFF8B6914);
 
-    // Sell price is the actual market price (base price)
-    double calculateSellPrice(double basePrice) {
-      return basePrice; // Actual world market price
+    // ── Price helpers ────────────────────────────────────────────────
+    double karatPrice(double oz, int k) =>
+        (oz / 31.1035) * (k / 24.0) * exchangeRate;
+    double buyPrice(double p)  => p * 0.98;
+    double sellPrice(double p) => p;
+
+    // ── Change vs opening price ──────────────────────────────────────
+    final ounce   = goldPrice;
+    final opening = goldPriceOpening;
+    double? changePct;
+    double? changeAbs;
+    bool priceUp = true;
+    if (ounce != null && opening != null && opening > 0) {
+      changeAbs = ounce - opening;
+      changePct = (changeAbs / opening) * 100.0;
+      priceUp   = changeAbs >= 0;
     }
+    final changeColor = changePct == null
+        ? mutedCol
+        : (priceUp
+            ? (isDark ? const Color(0xFF66BB6A) : const Color(0xFF2E7D32))
+            : (isDark ? const Color(0xFFEF5350) : const Color(0xFFC62828)));
+
+    // ── Main karat per-gram prices ───────────────────────────────────
+    final mainSell = ounce != null ? sellPrice(karatPrice(ounce, mainKarat)) : null;
+    final mainBuy  = ounce != null ? buyPrice(karatPrice(ounce, mainKarat))  : null;
 
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: isDark
-              ? [
-                  colorScheme.primary.withValues(alpha: 0.6),
-                  colorScheme.primary.withValues(alpha: 0.4),
-                ]
-              : [colorScheme.primary, colorScheme.secondary],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: cardBg,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderCol, width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: colorScheme.primary.withValues(alpha: isDark ? 0.25 : 0.35),
-            blurRadius: 15,
-            offset: Offset(0, 8),
+            color: goldenBorder.withValues(alpha: isDark ? 0.14 : 0.16),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -2811,15 +2834,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: () {
-            setState(() {
-              _isGoldPriceExpanded = !_isGoldPriceExpanded;
-            });
-          },
+          splashColor: goldenYellow.withValues(alpha: 0.08),
+          onTap: () => setState(() => _isGoldPriceExpanded = !_isGoldPriceExpanded),
           onLongPress: () async {
             final auth = context.read<AuthProvider>();
             if (!auth.hasPermission('gold_price.update')) return;
-
             await Navigator.push(
               context,
               MaterialPageRoute(
@@ -2829,64 +2848,96 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
             await _loadAllData();
           },
           child: Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Compact header section with main karat (21)
+                // ── Header row ────────────────────────────────────────
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Icon badge
                     Container(
-                      padding: EdgeInsets.all(10),
+                      padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: colorScheme.onPrimary.withValues(alpha: 0.25),
+                        color: goldenYellow.withValues(alpha: isDark ? 0.16 : 0.18),
                         borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: goldenBorder.withValues(alpha: isDark ? 0.5 : 0.4),
+                          width: 1,
+                        ),
                       ),
-                      child: Icon(
-                        Icons.trending_up,
-                        color: colorScheme.onPrimary,
-                        size: 24,
+                      child: const Icon(
+                        Icons.monetization_on_outlined,
+                        color: goldenYellow,
+                        size: 22,
                       ),
                     ),
-                    SizedBox(width: 12),
+                    const SizedBox(width: 12),
+
+                    // Ounce price — main focal point
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Text(
-                                'سعر الأونصة',
-                                style: TextStyle(
-                                  color: colorScheme.onPrimary.withValues(
-                                    alpha: 0.95,
-                                  ),
-                                  fontSize: 11,
-                                  fontFamily: 'Cairo',
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(height: 2),
                           Text(
-                            goldPrice != null
-                                ? '\$${goldPrice!.toStringAsFixed(2)}'
-                                : 'غير متوفر',
+                            'سعر الأونصة',
                             style: TextStyle(
-                              color: colorScheme.onPrimary,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
+                              color: subCol,
+                              fontSize: 10,
                               fontFamily: 'Cairo',
+                              letterSpacing: 0.3,
                             ),
                           ),
-                          if (goldPriceDate != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              'آخر تحديث: ${_ltrIsolate(DateFormat('dd/MM/yyyy HH:mm', 'en').format(goldPriceDate!))}',
-                              style: TextStyle(
-                                color: colorScheme.onPrimary.withValues(
-                                  alpha: 0.75,
+                          const SizedBox(height: 2),
+                          Text(
+                            ounce != null
+                                ? '\$${ounce.toStringAsFixed(2)}'
+                                : 'غير متوفر',
+                            style: TextStyle(
+                              color: titleCol,
+                              fontSize: 23,
+                              fontWeight: FontWeight.w800,
+                              fontFamily: 'Cairo',
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          // Change indicator
+                          if (changePct != null && changeAbs != null) ...[
+                            const SizedBox(height: 3),
+                            Row(
+                              children: [
+                                Icon(
+                                  priceUp
+                                      ? Icons.arrow_upward_rounded
+                                      : Icons.arrow_downward_rounded,
+                                  color: changeColor,
+                                  size: 12,
                                 ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  '${priceUp ? '+' : ''}${changeAbs.toStringAsFixed(2)}'
+                                  '  (${priceUp ? '+' : ''}${changePct.toStringAsFixed(2)}%)',
+                                  style: TextStyle(
+                                    color: changeColor,
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    fontFamily: 'Cairo',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          // Last update
+                          if (goldPriceDate != null) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              _ltrIsolate(
+                                DateFormat('dd/MM/yyyy HH:mm', 'en')
+                                    .format(goldPriceDate!),
+                              ),
+                              style: TextStyle(
+                                color: mutedCol,
                                 fontSize: 9,
                                 fontFamily: 'Cairo',
                               ),
@@ -2895,108 +2946,144 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         ],
                       ),
                     ),
-                    _isGoldPriceUpdatingNow
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                colorScheme.onPrimary,
-                              ),
-                            ),
-                          )
-                        : IconButton(
-                            tooltip: 'تحديث السعر الآن',
-                            onPressed: _updateGoldPriceNow,
-                            icon: Icon(
-                              Icons.refresh,
-                              color: colorScheme.onPrimary,
-                              size: 20,
-                            ),
-                          ),
-                    if (goldPrice != null)
+                    const SizedBox(width: 8),
+
+                    // Main karat block
+                    if (mainSell != null)
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(
-                            'عيار $mainKarat',
-                            style: TextStyle(
-                              color: colorScheme.onPrimary.withValues(
-                                alpha: 0.85,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: goldenYellow.withValues(
+                                alpha: isDark ? 0.18 : 0.20,
                               ),
-                              fontSize: 10,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: goldenBorder, width: 1),
+                            ),
+                            child: Text(
+                              'عيار $mainKarat',
+                              style: const TextStyle(
+                                color: Color(0xFFD4A017),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                fontFamily: 'Cairo',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _formatCash(mainSell, includeSymbol: false),
+                            style: TextStyle(
+                              color: sellCol,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
                               fontFamily: 'Cairo',
                             ),
                           ),
-                          SizedBox(height: 2),
                           Text(
-                            _formatCash(
-                              calculateSellPrice(
-                                    calculateKaratPrice(goldPrice!, mainKarat),
-                                  ) *
-                                  exchangeRate,
-                              includeSymbol: false,
-                            ),
+                            'بيع',
                             style: TextStyle(
-                              color: Colors.greenAccent.shade100,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
+                              color: mutedCol,
+                              fontSize: 9,
+                              fontFamily: 'Cairo',
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatCash(mainBuy!, includeSymbol: false),
+                            style: TextStyle(
+                              color: buyCol,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
                               fontFamily: 'Cairo',
                             ),
                           ),
                           Text(
-                            _formatCash(
-                              calculatePurchasePrice(
-                                    calculateKaratPrice(goldPrice!, mainKarat),
-                                  ) *
-                                  exchangeRate,
-                              includeSymbol: false,
-                            ),
+                            'شراء',
                             style: TextStyle(
-                              color: Colors.amber.shade200,
-                              fontSize: 12,
+                              color: mutedCol,
+                              fontSize: 9,
                               fontFamily: 'Cairo',
                             ),
                           ),
                         ],
                       ),
-                    SizedBox(width: 8),
-                    Icon(
-                      _isGoldPriceExpanded
-                          ? Icons.expand_less
-                          : Icons.expand_more,
-                      color: colorScheme.onPrimary,
-                      size: 24,
+                    const SizedBox(width: 6),
+
+                    // Refresh + expand controls
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        _isGoldPriceUpdatingNow
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    goldenYellow,
+                                  ),
+                                ),
+                              )
+                            : GestureDetector(
+                                onTap: _updateGoldPriceNow,
+                                child: Icon(
+                                  Icons.refresh_rounded,
+                                  color: mutedCol,
+                                  size: 20,
+                                ),
+                              ),
+                        const SizedBox(height: 8),
+                        Icon(
+                          _isGoldPriceExpanded
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          color: mutedCol,
+                          size: 20,
+                        ),
+                      ],
                     ),
                   ],
                 ),
 
-                // Expandable price table
+                // ── Expandable karat table ───────────────────────────
                 AnimatedCrossFade(
-                  firstChild: SizedBox.shrink(),
-                  secondChild: Column(
-                    children: [
-                      SizedBox(height: 12),
-                      Divider(
-                        color: colorScheme.onPrimary.withValues(alpha: 0.3),
-                        thickness: 0.5,
-                        height: 1,
-                      ),
-                      SizedBox(height: 10),
-                      if (goldPrice != null)
-                        _buildKaratPriceTable(
-                          colorScheme,
-                          calculateKaratPrice,
-                          calculatePurchasePrice,
-                          calculateSellPrice,
-                        ),
-                    ],
-                  ),
+                  duration: const Duration(milliseconds: 280),
                   crossFadeState: _isGoldPriceExpanded
                       ? CrossFadeState.showSecond
                       : CrossFadeState.showFirst,
-                  duration: Duration(milliseconds: 300),
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Column(
+                    children: [
+                      const SizedBox(height: 12),
+                      Divider(
+                        color: borderCol,
+                        thickness: 0.8,
+                        height: 1,
+                      ),
+                      const SizedBox(height: 10),
+                      if (ounce != null)
+                        _buildKaratPriceTable(
+                          isDark: isDark,
+                          titleCol: titleCol,
+                          subCol: subCol,
+                          mutedCol: mutedCol,
+                          sellCol: sellCol,
+                          buyCol: buyCol,
+                          borderCol: borderCol,
+                          goldenYellow: goldenYellow,
+                          goldenBorder: goldenBorder,
+                          karatPrice: karatPrice,
+                          buyPrice: buyPrice,
+                          sellPrice: sellPrice,
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -3006,96 +3093,152 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     );
   }
 
-  Widget _buildKaratPriceTable(
-    ColorScheme colorScheme,
-    double Function(double, int) calculateKaratPrice,
-    double Function(double) calculatePurchasePrice,
-    double Function(double) calculateSellPrice,
-  ) {
-    final karats = [24, 22, 21, 18];
-
-    return Table(
-      columnWidths: const {
-        0: FlexColumnWidth(1.0),
-        1: FlexColumnWidth(2.0),
-        2: FlexColumnWidth(2.0),
-      },
-      border: TableBorder(
-        horizontalInside: BorderSide(
-          color: colorScheme.onPrimary.withValues(alpha: 0.15),
-          width: 0.5,
-        ),
-      ),
-      children: [
-        // Header row
-        TableRow(
-          decoration: BoxDecoration(
-            color: colorScheme.onPrimary.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
-          ),
-          children: [
-            _buildTableCell(
-              'العيار',
-              colorScheme.onPrimary,
-              false,
-              isHeader: true,
-            ),
-            _buildTableCell(
-              'شراء',
-              colorScheme.onPrimary,
-              true,
-              isHeader: true,
-            ),
-            _buildTableCell('بيع', colorScheme.onPrimary, true, isHeader: true),
-          ],
-        ),
-        // Data rows
-        ...karats.map((karat) {
-          final basePrice = calculateKaratPrice(goldPrice!, karat);
-          final purchasePrice = calculatePurchasePrice(basePrice);
-          final sellPrice = calculateSellPrice(basePrice);
-
-          return TableRow(
-            children: [
-              _buildTableCell(
-                '$karat',
-                colorScheme.onPrimary.withValues(alpha: 0.95),
-                false,
-              ),
-              _buildTableCell(
-                _formatCash(purchasePrice * exchangeRate, includeSymbol: false),
-                Colors.amber.shade200,
-                false,
-              ),
-              _buildTableCell(
-                _formatCash(sellPrice * exchangeRate, includeSymbol: false),
-                Colors.greenAccent.shade100,
-                false,
-              ),
-            ],
-          );
-        }),
-      ],
-    );
-  }
-
-  Widget _buildTableCell(
-    String text,
-    Color color,
-    bool isNumeric, {
-    bool isHeader = false,
+  Widget _buildKaratPriceTable({
+    required bool isDark,
+    required Color titleCol,
+    required Color subCol,
+    required Color mutedCol,
+    required Color sellCol,
+    required Color buyCol,
+    required Color borderCol,
+    required Color goldenYellow,
+    required Color goldenBorder,
+    required double Function(double, int) karatPrice,
+    required double Function(double) buyPrice,
+    required double Function(double) sellPrice,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: color,
-          fontSize: isHeader ? 10 : 11,
-          fontWeight: isHeader ? FontWeight.bold : FontWeight.w600,
-          fontFamily: 'Cairo',
+    const karats = [24, 22, 21, 18];
+
+    Widget headerCell(String text) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: mutedCol,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'Cairo',
+              letterSpacing: 0.4,
+            ),
+          ),
+        );
+
+    Widget priceCell(String text, Color color, {bool bold = false}) =>
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: color,
+              fontSize: 11.5,
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+              fontFamily: 'Cairo',
+            ),
+          ),
+        );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Table(
+        columnWidths: const {
+          0: IntrinsicColumnWidth(),
+          1: FlexColumnWidth(1),
+          2: FlexColumnWidth(1),
+        },
+        border: TableBorder(
+          horizontalInside: BorderSide(
+            color: borderCol.withValues(alpha: 0.45),
+            width: 0.5,
+          ),
+          verticalInside: BorderSide(
+            color: borderCol.withValues(alpha: 0.30),
+            width: 0.5,
+          ),
         ),
+        children: [
+          // Header row
+          TableRow(
+            decoration: BoxDecoration(
+              color: goldenYellow.withValues(alpha: isDark ? 0.09 : 0.11),
+            ),
+            children: [
+              headerCell('العيار'),
+              headerCell('شراء'),
+              headerCell('بيع'),
+            ],
+          ),
+          // Data rows
+          ...karats.map((k) {
+            final base = karatPrice(goldPrice!, k);
+            final buy  = buyPrice(base);
+            final sell = sellPrice(base);
+            final isMain = k == mainKarat;
+
+            return TableRow(
+              decoration: isMain
+                  ? BoxDecoration(
+                      color: goldenBorder.withValues(
+                        alpha: isDark ? 0.14 : 0.09,
+                      ),
+                    )
+                  : const BoxDecoration(),
+              children: [
+                // Karat label
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 6,
+                  ),
+                  child: isMain
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: goldenYellow.withValues(alpha: 0.20),
+                            borderRadius: BorderRadius.circular(6),
+                            border:
+                                Border.all(color: goldenBorder, width: 0.8),
+                          ),
+                          child: Text(
+                            '$k',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Color(0xFFD4A017),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              fontFamily: 'Cairo',
+                            ),
+                          ),
+                        )
+                      : Text(
+                          '$k',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: subCol,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Cairo',
+                          ),
+                        ),
+                ),
+                priceCell(
+                  _formatCash(buy, includeSymbol: false),
+                  isMain ? buyCol : buyCol.withValues(alpha: 0.75),
+                  bold: isMain,
+                ),
+                priceCell(
+                  _formatCash(sell, includeSymbol: false),
+                  isMain ? sellCol : sellCol.withValues(alpha: 0.80),
+                  bold: isMain,
+                ),
+              ],
+            );
+          }),
+        ],
       ),
     );
   }
