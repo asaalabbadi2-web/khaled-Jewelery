@@ -322,8 +322,15 @@ with app.app_context():
     # (usually already under 2100x) is the canonical one.  We always merge FROM
     # the wrong (2200x) account INTO the canonical (2100x) account, then update
     # BOTH office.account_category_id AND supplier.account_id to the canonical id.
+    #
+    # ⚠️  DRY-RUN vs APPLY note for accounts also touched by Phase 2:
+    #   In dry-run, Phase 2 does NOT flush, so an account being renamed 22000020→21000020
+    #   still has its old number/parent when Phase 4 runs.  _is_mfg() will incorrectly
+    #   classify it as raw-gold, causing the merge direction to appear reversed.
+    #   In APPLY mode this is harmless: by_id is reloaded from the DB after Phase 2/3
+    #   flushes, so parent_id is already updated and _is_mfg() returns the correct result.
     if APPLY:
-        db.session.flush()
+        db.session.flush()          # ensure all Phase 2+3 renames/reparents are visible
         accs   = Account.query.all()
         by_id  = {a.id: a for a in accs}
 
@@ -333,13 +340,19 @@ with app.app_context():
     phase4_merge  = 0
 
     def _is_mfg(acc):
-        """True if account belongs to the manufactured-gold financial group (21xx)."""
+        """True if account belongs to the manufactured-gold financial group (21xx).
+
+        In APPLY mode, parent_id is always up-to-date after the Phase-2 flush.
+        In DRY-RUN mode, an account being renamed by Phase 2 (e.g. 22000020→21000020)
+        still carries its old number/parent here — both checks below will return False
+        for it, causing the else-branch to fire with a [NOTE] advisory.
+        """
         if not acc:
             return False
-        # After Phase 2 flushes, parent_id is the most reliable indicator
+        # In apply mode: parent_id is the most reliable indicator (updated by Phase 2 flush)
         if acc.parent_id == mfg_fin.id:
             return True
-        # Fallback: account-number prefix (works in dry-run before Phase 2 flushes)
+        # Fallback: account-number prefix (correct for accounts NOT touched by Phase 2)
         return digits(acc.account_number).startswith('21')
 
     for o in offices:
@@ -375,6 +388,14 @@ with app.app_context():
             canonical_acc = office_acc
             wrong_id      = sup_acc_id
             wrong_acc     = sup_acc
+            # In dry-run: if BOTH accounts appear raw (22xx), the supplier account may be
+            # one that Phase 2 will rename to 21xx.  In --apply the by_id reload after
+            # Phase 2 flush makes _is_mfg() return True for it, so the direction is correct.
+            if not APPLY and wrong_acc and digits(wrong_acc.account_number).startswith('22'):
+                print(f'  [NOTE] office {o.id:3} {o.name[:30]}:'
+                      f' dry-run cannot resolve canonical yet'
+                      f' ({wrong_acc.account_number} will be renamed by Phase 2);'
+                      f' direction will be correct in --apply')
 
         if canonical_acc is None:
             print(f'  [WARN] office {o.id} {o.name[:30]}: cannot determine canonical account, skip')
