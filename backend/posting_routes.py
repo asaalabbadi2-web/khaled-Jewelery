@@ -269,9 +269,12 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         # or via legacy deferred-payment recovery (ref_type=invoice_payment).
         # - Prefer invoice_payment_id when present.
         # - Fall back to ref_type/ref_id for older rows.
+        # CRITICAL: always restrict to the current invoice_id to avoid picking up
+        # stale rows from a previous DB cycle that share the same invoice_payment ID.
         existing_safe_tx = (
             SafeBoxTransaction.query
             .filter(
+                SafeBoxTransaction.invoice_id == invoice.id,
                 or_(
                     SafeBoxTransaction.invoice_payment_id == pay_id,
                     and_(
@@ -408,12 +411,11 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} غير موجودة - دفعة #{pay_id}')
             continue
 
-        # Use existing safe tx amount if present (supports partial recovery).
+        # Always use the payment record's amount for JE/SafeBox.
+        # Using existing_safe_tx.amount_cash is unsafe: if a stale transaction
+        # from another invoice is (incorrectly) matched, it would inflate the amount.
         try:
-            if existing_safe_tx is not None:
-                amount_cash = float(getattr(existing_safe_tx, 'amount_cash', 0.0) or 0.0)
-            else:
-                amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
+            amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
         except Exception:
             amount_cash = 0.0
 
