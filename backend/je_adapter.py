@@ -467,9 +467,10 @@ def weight_entries_for_party(
         karat_str = str(karat)
         if weight <= 0:
             continue
-        # For scrap purchases, use the gold safe account if specified
+        # For scrap purchases, use the gold safe account if specified.
+        # Always resolve to memo/weight account in case the safe is linked to a financial account.
         if is_purchase and scrap_purchase_gold_safe_account_id:
-            inv_acc_id = int(scrap_purchase_gold_safe_account_id)
+            inv_acc_id = _resolve_weight_account_id(int(scrap_purchase_gold_safe_account_id))
         else:
             raw_inv_id = int(inventory_accounts.get(karat_str) or 0)
             inv_acc_id = _resolve_weight_account_id(raw_inv_id) if raw_inv_id else 0

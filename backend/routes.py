@@ -12325,9 +12325,11 @@ def add_invoice():
         try:
             inv_type_tmp = (new_invoice.invoice_type or '').strip()
             inv_gold_type_tmp = (str(getattr(new_invoice, 'gold_type', '') or '').strip().lower())
+            # شراء من عميل دائماً يُعامَل كحركة كسر بغض النظر عن gold_type
+            # (inventory resolver hardcodes scrap for this type)
             is_customer_scrap_move = (
-                inv_type_tmp in ('شراء من عميل', 'مرتجع شراء')
-                and inv_gold_type_tmp == 'scrap'
+                inv_type_tmp == 'شراء من عميل'
+                or (inv_type_tmp == 'مرتجع شراء' and inv_gold_type_tmp == 'scrap')
             )
         except Exception:
             is_customer_scrap_move = False
@@ -12357,12 +12359,12 @@ def add_invoice():
                 except Exception:
                     pass
 
-            # 2) Otherwise, if employee gold safes are enabled, use the invoice employee gold safe.
+            # 2) Invoice employee's gold safe — always check, regardless of global flag.
+            # Rule: إذا كان الموظف يملك خزينة ذهب → استخدمها تلقائياً.
             if target_gold_safe_id is None:
                 try:
-                    employee_gold_enabled = bool(getattr(settings_row, 'employee_gold_safes_enabled', False)) if settings_row else False
                     employee_id_fallback = getattr(new_invoice, 'employee_id', None)
-                    if employee_gold_enabled and employee_id_fallback not in (None, '', False):
+                    if employee_id_fallback not in (None, '', False):
                         try:
                             emp_id = int(employee_id_fallback)
                         except Exception:
