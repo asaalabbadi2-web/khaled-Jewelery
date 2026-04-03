@@ -15352,25 +15352,32 @@ def import_accounts():
 
     db.session.flush()
 
-    # Build mapping after upserts
+    # Build mapping after upserts — include DB accounts too (for parent/memo lookups)
     imported_accounts = Account.query.filter(Account.account_number.in_(numbers)).all()
     number_to_id = {acc.account_number: acc.id for acc in imported_accounts}
     accounts_by_number = {acc.account_number: acc for acc in imported_accounts}
 
-    # Validate referenced parents/memos exist in import set
+    # Allow caller to skip strict ref-check when parents/memos already exist in DB
+    skip_ref_check = bool(payload.get('skip_ref_check') if isinstance(payload, dict) else False)
+
+    # Also include DB accounts in the lookup so existing parents/memos resolve
+    all_db_acc = {a.account_number: a.id for a in Account.query.all()}
+    number_to_id_extended = {**all_db_acc, **number_to_id}
+
+    # Validate referenced parents/memos exist in import set OR in DB
     missing_refs = []
     for row in normalized:
         p = row.get('parent_account_number')
         m = row.get('memo_account_number')
-        if p and p not in number_to_id:
+        if p and p not in number_to_id_extended:
             missing_refs.append({'account_number': row['account_number'], 'missing': 'parent_account_number', 'ref': p})
-        if m and m not in number_to_id:
+        if m and m not in number_to_id_extended:
             missing_refs.append({'account_number': row['account_number'], 'missing': 'memo_account_number', 'ref': m})
-    if missing_refs:
+    if missing_refs and not skip_ref_check:
         db.session.rollback()
         return jsonify({
             'error': 'missing_references',
-            'message': 'Some parent/memo references are missing from the import payload',
+            'message': 'Some parent/memo references are missing from the import payload and DB. Pass skip_ref_check:true to ignore.',
             'missing': missing_refs,
         }), 400
 
@@ -15381,8 +15388,9 @@ def import_accounts():
         parent_num = row.get('parent_account_number')
         memo_num = row.get('memo_account_number')
 
-        new_parent_id = number_to_id.get(parent_num) if parent_num else None
-        new_memo_id = number_to_id.get(memo_num) if memo_num else None
+        # Use extended map so existing DB accounts resolve as parents/memos
+        new_parent_id = number_to_id_extended.get(parent_num) if parent_num else None
+        new_memo_id = number_to_id_extended.get(memo_num) if memo_num else None
 
         if acc.parent_id != new_parent_id or acc.memo_account_id != new_memo_id:
             relinked += 1
