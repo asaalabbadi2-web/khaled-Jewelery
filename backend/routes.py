@@ -9456,7 +9456,7 @@ def get_account_id_for_mapping(operation_type, account_type):
 
         # الضرائب والعمولات
         'vat_payable': ['2210'],
-        'vat_receivable': ['1500'],
+        'vat_receivable': ['1400', '1500'],
         'commission': ['5150'],
         'commission_vat': ['1501'],
 
@@ -10439,6 +10439,13 @@ def add_invoice():
                 net_amount = data_total - commission_amount - commission_vat_total
     
     wage_mode_snapshot = _get_manufacturing_wage_mode()
+    # Capture the current max SafeBoxTransaction id before we create any new ones.
+    # This is used below to filter phantom old SBTs that happen to share the same
+    # invoice_id as the new invoice (coincidental ID collision from old data).
+    try:
+        _max_sbt_id_before = db.session.query(db.func.max(SafeBoxTransaction.id)).scalar() or 0
+    except Exception:
+        _max_sbt_id_before = 0
     try:
         # --- 1. Create Invoice and Items ---
         next_invoice_type_id = _next_invoice_type_id([invoice_type])
@@ -13109,6 +13116,10 @@ def add_invoice():
                 or (Account.query.get(customer_account_id) if customer_account_id else None)
             )
             if _je_party_purchase:
+                _purch_weight_override = (
+                    _je_adapter._resolve_weight_account_id(purchases_acc_id)
+                    if purchases_acc_id else None
+                )
                 _je_adapter.weight_entries_for_party(
                     journal_entry_id=journal_entry.id,
                     gold_by_karat=gold_by_karat,
@@ -13117,6 +13128,7 @@ def add_invoice():
                     direction='purchase',
                     customer_id=new_invoice.customer_id,
                     scrap_purchase_gold_safe_account_id=scrap_purchase_gold_safe_account_id,
+                    party_weight_account_override=_purch_weight_override,
                 )
             else:
                 # Fallback: لا يوجد حساب عميل — قيود وزنية مباشرة
@@ -13211,6 +13223,10 @@ def add_invoice():
                 or (Account.query.get(customers_acc_id) if customers_acc_id else None)
             )
             if _je_party_sale_ret and inventory_accounts:
+                _sales_ret_weight_override = (
+                    _je_adapter._resolve_weight_account_id(sales_returns_acc_id)
+                    if sales_returns_acc_id else None
+                )
                 _je_adapter.weight_entries_for_party(
                     journal_entry_id=journal_entry.id,
                     gold_by_karat=gold_by_karat,
@@ -13218,6 +13234,7 @@ def add_invoice():
                     party_account_obj=_je_party_sale_ret,
                     direction='purchase',   # مرتجع بيع = ذهب يعود للمخزون (مدين مخزون)
                     customer_id=new_invoice.customer_id,
+                    party_weight_account_override=_sales_ret_weight_override,
                 )
         
         elif invoice_type == 'مرتجع شراء':
@@ -13287,6 +13304,11 @@ def add_invoice():
                 or (Account.query.get(acc_id) if acc_id else None)
             )
             if _je_party_ret and _inv_accounts_ret:
+                _pr_acc = purchase_returns_acc_id or get_account_id_by_number('513')
+                _pr_weight_override = (
+                    _je_adapter._resolve_weight_account_id(_pr_acc)
+                    if _pr_acc else None
+                )
                 _je_adapter.weight_entries_for_party(
                     journal_entry_id=journal_entry.id,
                     gold_by_karat=gold_by_karat,
@@ -13298,6 +13320,7 @@ def add_invoice():
                         int(scrap_purchase_gold_safe_account_id)
                         if _is_scrap_ret else None
                     ),
+                    party_weight_account_override=_pr_weight_override,
                 )
         
         elif invoice_type == 'شراء':
@@ -13339,21 +13362,12 @@ def add_invoice():
                 vat_receivable_acc_id = _mapping('vat_receivable')
 
                 # Root-fix: VAT receivable must exist if any VAT is present.
-                # Default chart uses account_number 1500 for VAT receivable.
+                # Correct account is 1400 (ضريبة مدفوعة على المشتريات).
                 if not vat_receivable_acc_id:
                     try:
-                        vat_acc = Account.query.filter_by(account_number='1500').first()
+                        vat_acc = Account.query.filter_by(account_number='1400').first()
                         if not vat_acc:
-                            vat_acc = Account(
-                                account_number='1500',
-                                name='ضريبة القيمة المضافة (مدفوعة)',
-                                type='Asset',
-                                transaction_type='cash',
-                                tracks_weight=False,
-                                parent_id=None,
-                            )
-                            db.session.add(vat_acc)
-                            db.session.flush()
+                            vat_acc = Account.query.filter_by(account_number='1500').first()
                         vat_receivable_acc_id = vat_acc.id if vat_acc else None
                     except Exception:
                         vat_receivable_acc_id = vat_receivable_acc_id
@@ -13830,11 +13844,10 @@ def add_invoice():
                 if valuation_bridge_cash > 0:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry.id,
-                        account_id=bridge_acc_id,
+                        account_id=supplier_fin_account_id,
                         cash_credit=valuation_bridge_cash,
                         apply_golden_rule=False,
-                        exclude_from_ledger=True,  # مهم: لا نربطه بالمورد حتى لا يظهر كمديونية مزدوجة
-                        description="جسر تقييم الذهب الخام (غير ظاهر في كشف المورد)"
+                        description="التزام المورد - قيمة الذهب"
                     )
 
                 # B) الأجور + ضريبة الأجور:
@@ -13925,6 +13938,7 @@ def add_invoice():
                     payment_movements = (
                         SafeBoxTransaction.query
                         .filter_by(invoice_id=new_invoice.id, ref_type='invoice_payment')
+                        .filter(SafeBoxTransaction.id > _max_sbt_id_before)
                         .all()
                     )
                 except Exception:
