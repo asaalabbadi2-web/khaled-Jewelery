@@ -1064,8 +1064,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) =>
-                SalesRaceManagementScreen(api: api, isArabic: isAr),
+            builder: (_) => SalesRaceManagementScreen(api: api, isArabic: isAr),
           ),
         );
         _loadLeaderboard(period: _leaderboardPeriod);
@@ -1556,7 +1555,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                     ? Icons.view_stream_outlined
                     : Icons.horizontal_rule_rounded,
               ),
-              tooltip: _goldBarMode ? 'تبديل إلى الشريط المتحرك' : 'تبديل إلى الشريط الثابت',
+              tooltip: _goldBarMode
+                  ? 'تبديل إلى الشريط المتحرك'
+                  : 'تبديل إلى الشريط الثابت',
               onPressed: () => setState(() => _goldBarMode = !_goldBarMode),
             ),
             // زر تبديل الوضع (فاتح/داكن)
@@ -1600,7 +1601,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                         children: [
                           CircleAvatar(
                             radius: 17,
-                            backgroundColor: Colors.white.withValues(alpha: 0.25),
+                            backgroundColor: Colors.white.withValues(
+                              alpha: 0.25,
+                            ),
                             child: Text(
                               displayName.isNotEmpty
                                   ? displayName[0].toUpperCase()
@@ -1864,6 +1867,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   // Build content based on selected bottom nav tab
   Widget _buildSelectedTabContent(bool isAr) {
     final navKey = _bottomNavItems[_selectedNavIndex];
+    final isHomeTab = navKey == 'home';
 
     Widget tab;
     switch (navKey) {
@@ -1881,8 +1885,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         tab = _buildHomeTabContent(isAr);
     }
 
-    // In bar mode: add the persistent gold strip at the very top of every tab
-    if (_goldBarMode) {
+    // Show the enhanced gold bar only on the home tab.
+    if (_goldBarMode && isHomeTab) {
       return Column(
         children: [
           GoldPriceBar(
@@ -3231,7 +3235,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       _loadAllData();
     }
   }
-
 }
 
 class _DrawerSection {

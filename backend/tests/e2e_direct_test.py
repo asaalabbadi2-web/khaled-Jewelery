@@ -1,12 +1,13 @@
 """
 E2E test via Flask test client — no server restart needed.
-Tests: بيع, شراء من عميل, مرتجع بيع, مرتجع شراء
+Tests: بيع, شراء من عميل, مرتجع بيع, مرتجع شراء, COGS weight-closing
 """
 import sys
 import json
+from datetime import date
 
 import app as flask_app
-from models import db, JournalEntryLine, JournalEntry, Account
+from models import db, JournalEntryLine, JournalEntry, Account, WeightClosingOrder
 
 PASS = "✅"
 FAIL = "❌"
@@ -65,12 +66,18 @@ def check_je_balance(je_id, label):
     else:
         fail(f"{label}: weight UNBALANCED (debit={wd:.4f}g, credit={wc:.4f}g)")
 
-    # Check no weight on cash accounts (accounts not starting with 7/1300)
-    cash_accs = {l["account_id"] for l in lines if float(l["cash_debit"]) > 0 or float(l["cash_credit"]) > 0}
+    # Check that no SINGLE LINE contains both cash and weight values simultaneously.
+    # (A given account may appear in multiple lines — one cash-only, one weight-only — which is valid.)
+    mixed_line = None
     for l in lines:
-        if l["account_id"] in cash_accs and (l["debit_21k"] > 0 or l["credit_21k"] > 0):
-            fail(f"{label}: weight on cash account {l['account_id']}")
-            return
+        line_has_cash = float(l["cash_debit"]) > 0 or float(l["cash_credit"]) > 0
+        line_has_weight = float(l["debit_21k"]) > 0 or float(l["credit_21k"]) > 0
+        if line_has_cash and line_has_weight:
+            mixed_line = l
+            break
+    if mixed_line:
+        fail(f"{label}: single JE line mixes cash+weight (account_id={mixed_line['account_id']})")
+        return
     ok(f"{label}: no weight on cash accounts")
     return lines
 
@@ -248,6 +255,76 @@ with flask_app.app.test_client() as c:
             fail(f"مرتجع شراء (مورد) failed: {r6.status_code} {json.dumps(d6, ensure_ascii=False)[:400]}")
     else:
         print("  ⏭  Skipped (no supplier invoice)")
+
+    # ─── TEST 7: COGS via weight-closing execution ───────────────────────────
+    section("TEST 7: تكلفة المبيعات (COGS) عبر _auto_consume_weight_closing")
+    with flask_app.app.app_context():
+        from routes import _auto_consume_weight_closing
+
+        # تحقق من وجود حساب 521 وأوامر تسكير مفتوحة
+        cogs_account = Account.query.filter_by(account_number='521').first()
+        open_orders = WeightClosingOrder.query.filter(
+            WeightClosingOrder.status.in_(['open', 'partially_closed'])
+        ).all()
+
+        if not cogs_account:
+            print("  ⏭  Skipped (account 521 not found in DB)")
+        elif not open_orders:
+            print("  ⏭  Skipped (no open weight_closing_orders)")
+        else:
+            # أنشئ قيداً مؤقتاً للاختبار
+            test_je = JournalEntry(
+                entry_number='TEST-COGS-001',
+                date=date.today(),
+                description='اختبار قيد COGS تلقائي',
+                is_posted=True,
+                posted_by='test',
+            )
+            db.session.add(test_je)
+            db.session.flush()
+
+            avail_weight = sum(
+                (o.total_weight_main_karat or 0.0) - (o.executed_weight_main_karat or 0.0)
+                for o in open_orders
+            )
+            consume_w = min(avail_weight, 1.0)  # استهلاك 1 غرام كحد أقصى للاختبار
+
+            summary = _auto_consume_weight_closing(
+                weight_override=consume_w,
+                price_per_gram=open_orders[0].close_price_per_gram or 491.93,
+                execution_type='purchase_scrap',
+                journal_entry_id=test_je.id,
+                notes='E2E COGS test',
+            )
+
+            db.session.flush()
+
+            je_lines = JournalEntryLine.query.filter_by(journal_entry_id=test_je.id).all()
+            cogs_debit_lines = [
+                l for l in je_lines
+                if l.account_id == cogs_account.id and float(l.cash_debit or 0) > 0
+            ]
+            inv_credit_lines = [
+                l for l in je_lines
+                if float(l.cash_credit or 0) > 0 and l.account_id != cogs_account.id
+            ]
+
+            if cogs_debit_lines:
+                total_cogs = sum(float(l.cash_debit or 0) for l in cogs_debit_lines)
+                ok(f"COGS Dr.521 found: {total_cogs:.2f} SAR")
+            else:
+                fail("COGS Dr.521 not found in JE lines")
+
+            # تحقق من توازن الجانب المالي (COGS يجب أن يتوازن ذاتياً)
+            total_cd = sum(float(l.cash_debit or 0) for l in je_lines)
+            total_cc = sum(float(l.cash_credit or 0) for l in je_lines)
+            if abs(total_cd - total_cc) < 0.05:
+                ok(f"JE balanced after COGS: debit={total_cd:.2f} credit={total_cc:.2f}")
+            else:
+                fail(f"JE unbalanced after COGS: debit={total_cd:.2f} credit={total_cc:.2f}")
+
+            # تراجع عن الاختبار (لا نريد أن نؤثر على البيانات)
+            db.session.rollback()
 
 # ─── SUMMARY ────────────────────────────────────────────────────────────────
 section("SUMMARY")

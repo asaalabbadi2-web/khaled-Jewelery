@@ -13,6 +13,8 @@ class GoldPriceBar extends StatelessWidget {
   final VoidCallback? onRefresh;
 
   static const _baseKarats = [24, 22, 21, 18];
+  static const _significantChangeThresholdPct = 0.5;
+  static const _displayZeroEpsilon = 0.00005;
 
   const GoldPriceBar({
     super.key,
@@ -45,9 +47,28 @@ class GoldPriceBar extends StatelessWidget {
   }
 
   List<int> _displayKarats() {
-    final karats = {..._baseKarats, mainKarat}.toList()
-      ..sort((a, b) => b.compareTo(a));
+    final karats = {..._baseKarats, mainKarat}.toList()..sort();
     return karats;
+  }
+
+  double _normalizeDelta(double value) {
+    return value.abs() < _displayZeroEpsilon ? 0.0 : value;
+  }
+
+  String _formatDelta(
+    double value, {
+    String suffix = '',
+    bool includePlus = true,
+  }) {
+    final normalized = _normalizeDelta(value);
+    final absolute = normalized.abs();
+    final decimals = absolute > 0 && absolute < 0.01 ? 4 : 2;
+    final sign = normalized > 0
+        ? (includePlus ? '+' : '')
+        : normalized < 0
+        ? '-'
+        : '';
+    return '$sign${absolute.toStringAsFixed(decimals)}$suffix';
   }
 
   @override
@@ -64,12 +85,16 @@ class GoldPriceBar extends StatelessWidget {
     double? changePercent;
     var priceUp = true;
     if (ouncePrice != null && openingPrice != null && openingPrice > 0) {
-      changeAmount = ouncePrice - openingPrice;
-      changePercent = (changeAmount / openingPrice) * 100.0;
-      priceUp = changeAmount >= 0;
+      final rawChangeAmount = ouncePrice - openingPrice;
+      final rawChangePercent = (rawChangeAmount / openingPrice) * 100.0;
+      changeAmount = _normalizeDelta(rawChangeAmount);
+      changePercent = _normalizeDelta(rawChangePercent);
+      priceUp = rawChangeAmount >= 0;
     }
 
-    final showAlert = changePercent != null && changePercent.abs() >= 1.0;
+    final showAlert =
+        changePercent != null &&
+        changePercent.abs() >= _significantChangeThresholdPct;
     final sarPerGramMain = ouncePrice != null
         ? _gramPrice(ouncePrice, mainKarat)
         : null;
@@ -113,6 +138,7 @@ class GoldPriceBar extends StatelessWidget {
                         changeAmount: changeAmount,
                         changePercent: changePercent,
                         priceUp: priceUp,
+                        formatDelta: _formatDelta,
                         formatOunce: _formatOunce,
                         formatPrice: _formatPrice,
                         isUpdating: isUpdating,
@@ -134,6 +160,7 @@ class GoldPriceBar extends StatelessWidget {
                         showAlert: showAlert,
                         changePercent: changePercent,
                         priceUp: priceUp,
+                        formatDelta: _formatDelta,
                       ),
                     ],
                   ),
@@ -155,6 +182,7 @@ class _OunceBlock extends StatelessWidget {
   final double? changeAmount;
   final double? changePercent;
   final bool priceUp;
+  final String Function(double, {String suffix, bool includePlus}) formatDelta;
   final String Function(double) formatOunce;
   final String Function(double) formatPrice;
   final bool isUpdating;
@@ -168,6 +196,7 @@ class _OunceBlock extends StatelessWidget {
     required this.changeAmount,
     required this.changePercent,
     required this.priceUp,
+    required this.formatDelta,
     required this.formatOunce,
     required this.formatPrice,
     required this.isUpdating,
@@ -186,20 +215,16 @@ class _OunceBlock extends StatelessWidget {
         ? GoldPriceBarColors.upBorder
         : GoldPriceBarColors.downBorder;
 
-    final amountText = changeAmount == null
-        ? null
-        : '${priceUp ? '+' : ''}${changeAmount!.toStringAsFixed(2)}';
+    final amountText = changeAmount == null ? null : formatDelta(changeAmount!);
     final percentText = changePercent == null
         ? null
-        : '(${priceUp ? '+' : ''}${changePercent!.toStringAsFixed(2)}%)';
+        : '(${formatDelta(changePercent!, suffix: '%')})';
 
     return Container(
       constraints: const BoxConstraints(minWidth: 210),
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
       decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(color: palette.line, width: 0.5),
-        ),
+        border: Border(left: BorderSide(color: palette.line, width: 0.5)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -222,7 +247,7 @@ class _OunceBlock extends StatelessWidget {
                 style: TextStyle(
                   color: palette.gold,
                   fontSize: 22,
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.w700,
                   fontFamily: 'Cairo',
                   letterSpacing: -0.25,
                 ),
@@ -265,11 +290,11 @@ class _OunceBlock extends StatelessWidget {
           if (amountText != null && percentText != null) ...[
             const SizedBox(height: 6),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
               decoration: BoxDecoration(
                 color: changeBg,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: changeBorder, width: 0.5),
+                border: Border.all(color: changeBorder, width: 0.8),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -286,7 +311,7 @@ class _OunceBlock extends StatelessWidget {
                     '$amountText $percentText',
                     style: TextStyle(
                       color: changeColor,
-                      fontSize: 10,
+                      fontSize: 10.5,
                       fontWeight: FontWeight.w700,
                       fontFamily: 'Cairo',
                     ),
@@ -323,6 +348,7 @@ class _KaratGrid extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
+        textDirection: TextDirection.ltr,
         children: karats.asMap().entries.map((entry) {
           final index = entry.key;
           final karat = entry.value;
@@ -342,10 +368,10 @@ class _KaratGrid extends StatelessWidget {
                 border: isMain
                     ? Border.all(color: palette.goldBorder, width: 0.5)
                     : index > 0
-                        ? Border(
-                            right: BorderSide(color: palette.lineSoft, width: 0.5),
-                          )
-                        : null,
+                    ? Border(
+                        right: BorderSide(color: palette.lineSoft, width: 0.5),
+                      )
+                    : null,
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -387,8 +413,9 @@ class _KaratGrid extends StatelessWidget {
                   Text(
                     'بيع',
                     style: TextStyle(
-                      color: palette.textMuted,
-                      fontSize: 9,
+                      color: isMain ? palette.gold : palette.text,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
                       fontFamily: 'Cairo',
                     ),
                   ),
@@ -397,8 +424,8 @@ class _KaratGrid extends StatelessWidget {
                     sellPrice != null ? formatPrice(sellPrice) : '—',
                     style: TextStyle(
                       color: isMain ? palette.gold : palette.text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                      fontSize: isMain ? 15 : 14,
+                      fontWeight: FontWeight.w800,
                       fontFamily: 'Cairo',
                     ),
                     textAlign: TextAlign.center,
@@ -409,7 +436,8 @@ class _KaratGrid extends StatelessWidget {
                     'شراء',
                     style: TextStyle(
                       color: palette.textMuted,
-                      fontSize: 9,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w500,
                       fontFamily: 'Cairo',
                     ),
                   ),
@@ -418,8 +446,8 @@ class _KaratGrid extends StatelessWidget {
                     buyPrice != null ? formatPrice(buyPrice) : '—',
                     style: TextStyle(
                       color: palette.textSoft,
-                      fontSize: 11,
-                      fontWeight: isMain ? FontWeight.w500 : FontWeight.w400,
+                      fontSize: isMain ? 11.5 : 11,
+                      fontWeight: FontWeight.w500,
                       fontFamily: 'Cairo',
                     ),
                     textAlign: TextAlign.center,
@@ -441,6 +469,7 @@ class _MetaBlock extends StatelessWidget {
   final bool showAlert;
   final double? changePercent;
   final bool priceUp;
+  final String Function(double, {String suffix, bool includePlus}) formatDelta;
 
   const _MetaBlock({
     required this.palette,
@@ -448,6 +477,7 @@ class _MetaBlock extends StatelessWidget {
     required this.showAlert,
     required this.changePercent,
     required this.priceUp,
+    required this.formatDelta,
   });
 
   @override
@@ -466,9 +496,7 @@ class _MetaBlock extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 168, maxWidth: 190),
       padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
       decoration: BoxDecoration(
-        border: Border(
-          right: BorderSide(color: palette.line, width: 0.5),
-        ),
+        border: Border(right: BorderSide(color: palette.line, width: 0.5)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -476,24 +504,40 @@ class _MetaBlock extends StatelessWidget {
         children: [
           if (showAlert && changePercent != null) ...[
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               decoration: BoxDecoration(
                 color: alertBg,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: alertBorder, width: 0.5),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: alertBorder, width: 0.9),
               ),
-              child: Text(
-                priceUp
-                    ? 'السعر ارتفع ${changePercent!.abs().toStringAsFixed(2)}% - راجع أسعار البيع'
-                    : 'السعر انخفض ${changePercent!.abs().toStringAsFixed(2)}% - راجع أسعار الشراء',
-                style: TextStyle(
-                  color: alertColor,
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w700,
-                  fontFamily: 'Cairo',
-                  height: 1.35,
-                ),
-                textAlign: TextAlign.right,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    priceUp
+                        ? Icons.trending_up_rounded
+                        : Icons.trending_down_rounded,
+                    color: alertColor,
+                    size: 15,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      priceUp
+                          ? 'تنبيه سعر: ارتفع ${formatDelta(changePercent!.abs(), suffix: '%', includePlus: false)} - راجع أسعار البيع'
+                          : 'تنبيه سعر: انخفض ${formatDelta(changePercent!.abs(), suffix: '%', includePlus: false)} - راجع أسعار الشراء',
+                      style: TextStyle(
+                        color: alertColor,
+                        fontSize: 9.8,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: 'Cairo',
+                        height: 1.35,
+                      ),
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 6),
@@ -575,10 +619,10 @@ class _GoldPriceBarPalette {
 }
 
 class GoldPriceBarColors {
-  static const upText = Color(0xFF5DCAA5);
-  static const upBg = Color(0x261D9E75);
-  static const upBorder = Color(0x4D1D9E75);
-  static const downText = Color(0xFFF09595);
-  static const downBg = Color(0x26E24B4A);
-  static const downBorder = Color(0x4DE24B4A);
+  static const upText = Color(0xFF16624F);
+  static const upBg = Color(0xFFE0F4EE);
+  static const upBorder = Color(0xFF8ACDBA);
+  static const downText = Color(0xFF8D241C);
+  static const downBg = Color(0xFFFBE3DE);
+  static const downBorder = Color(0xFFD99083);
 }

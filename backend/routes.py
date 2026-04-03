@@ -27614,6 +27614,36 @@ def _auto_consume_weight_closing(
         chunk_cash_value = round(chunk_24k * exec_price, 2) if exec_price else 0.0
         cash_spent += chunk_cash_value
 
+        # ─── قيد تكلفة المبيعات (COGS): د/521 × ه/مخزون مالي ────────────────────
+        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense") لتعكس تكلفة الذهب المباع.
+        if journal_entry_id and chunk_cash_value > 0 and execution_type != 'expense':
+            _cogs_account = Account.query.filter_by(account_number='521').first()
+            if _cogs_account:
+                _karat_ln = (
+                    InvoiceKaratLine.query.filter_by(invoice_id=invoice.id).first()
+                    if invoice else None
+                )
+                _exec_karat_cogs = int(_karat_ln.karat) if _karat_ln else get_main_karat()
+                _inv_fin_id = _get_inventory_account_by_karat(_exec_karat_cogs)
+                if _inv_fin_id:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry_id,
+                        account_id=_cogs_account.id,
+                        cash_debit=chunk_cash_value,
+                        description=(
+                            f'تكلفة مبيعات ذهب – {round(chunk, 4)} غ عيار {_exec_karat_cogs}'
+                        ),
+                    )
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry_id,
+                        account_id=_inv_fin_id,
+                        cash_credit=chunk_cash_value,
+                        description=(
+                            f'إخراج من مخزون مالي لتكلفة المبيعات – عيار {_exec_karat_cogs}'
+                        ),
+                    )
+        # ─────────────────────────────────────────────────────────────────────────
+
         difference_value = 0.0
         difference_weight = 0.0
         reference_price = order.close_price_per_gram or 0.0
