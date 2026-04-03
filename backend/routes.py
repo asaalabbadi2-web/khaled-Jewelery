@@ -28269,11 +28269,23 @@ def settle_office_reservation(reservation_id: int):
         db.session.add(gold_entry)
         db.session.flush()
 
-        # ✅ مكاتب التسكير: شراء نقدي/ذمم مباشرة على المخزون، بدون المرور على حساب الجسر.
+        # ✅ مكاتب التسكير: تُعامل كمشتريات من عميل — Dr. مشتريات (512) / Cr. حساب المكتب.
         inventory_account_id = _resolve_inventory_account_id_for_invoice('شراء', 'scrap')
         if not inventory_account_id:
             db.session.rollback()
             return jsonify({'error': 'تعذر تحديد حساب مخزون الذهب (scrap)'}), 500
+
+        # حساب المشتريات (512 كسر / 511 جديد) — مدين نقداً عند الاستلام
+        _purchases_key = 'purchases_gold_scrap' if getattr(reservation, 'gold_type', 'scrap') == 'scrap' else 'purchases_gold_new'
+        purchases_acc_id = (
+            get_account_id_for_mapping('شراء من عميل', _purchases_key)
+            or get_account_id_for_mapping('شراء من عميل', 'purchases_gold')
+            or get_account_id_by_number('512')
+            or get_account_id_by_number('511')
+        )
+        if not purchases_acc_id:
+            db.session.rollback()
+            return jsonify({'error': 'تعذر تحديد حساب المشتريات (511/512) لتسوية الحجز'}), 500
 
         karat = int(reservation.karat or get_main_karat())
         if karat not in (18, 21, 22, 24):
@@ -28303,19 +28315,19 @@ def settle_office_reservation(reservation_id: int):
             db.session.rollback()
             return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمخزون الذهب عند التسكير'}), 500
 
-        # القيد النقدي على الحساب المالي فقط
+        # مدين: مشتريات ذهب (512/511) — تكلفة الشراء من المكتب
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
-            account_id=inventory_account_id,
+            account_id=purchases_acc_id,
             cash_debit=total_amount,
-            description=f'تسليم ذهب للتسكير عيار {karat} - قيمة نقدية',
+            description=f'شراء ذهب تسكير عيار {karat} - مشتريات',
         )
-        # القيد الوزني على حساب المذكرة فقط
+        # مدين: مخزون وزني (memo) — الذهب يدخل مخزوننا
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=inventory_memo_acc_id,
-            description=f'تسليم ذهب للتسكير عيار {karat} - إخراج وزن من المخزون',
-            **{karat_credit: weight_grams},
+            description=f'استلام ذهب تسكير عيار {karat} - دخول وزن للمخزون',
+            **{karat_debit: weight_grams},
         )
 
         # IMPORTANT: office bridge account is used for cash-equivalent tracking.
@@ -28341,12 +28353,13 @@ def settle_office_reservation(reservation_id: int):
             db.session.rollback()
             return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمكتب التسكير'}), 500
 
+        # دائن: وزني المكتب — الذهب يغادر المكتب بعد التنفيذ
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=int(office_memo_id),
             supplier_id=supplier.id,
-            description=f'ذهب لدى مكتب التسكير (وزن) - عيار {karat}',
-            **{karat_debit: weight_grams},
+            description=f'خروج ذهب من مكتب التسكير (وزن) - عيار {karat}',
+            **{karat_credit: weight_grams},
         )
         verify_dual_balance(gold_entry.id)
 

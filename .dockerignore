@@ -11,12 +11,23 @@ backend/.venv/
 # Flutter
 frontend/.dart_tool/
 frontend/build/
+frontend/
 
 # IDE
 .vscode/
 
-# Backups
+# Backups & DB files
 backups/
+*.db
+*.db.backup*
+*.db.damaged*
+
+# Docs / reports
+*.md
+*.py  
+export_chart.py
+apply_formatters*.py
+generate_permission*.py
 
 # OS
 .DS_Store
