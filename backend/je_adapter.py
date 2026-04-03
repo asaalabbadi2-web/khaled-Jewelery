@@ -141,6 +141,22 @@ def _build_party_accounts(account_obj) -> PartyAccounts:
 # DB Persistence
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _resolve_weight_account_id(account_id: int) -> int:
+    """
+    إذا كان الحساب مالياً (لا يحتوي وزناً)، نُعيد memo_account_id المرتبط به.
+    هذا يضمن أن قيود المخزون الوزني تذهب إلى 7130000 لا 1300.
+    مستخدَمة في apply_je_to_db و weight_entries_for_party.
+    """
+    try:
+        from models import Account as _Account  # noqa: local import
+        acc = _Account.query.get(account_id)
+        if acc and getattr(acc, 'memo_account_id', None):
+            return int(acc.memo_account_id)
+    except Exception:
+        pass
+    return account_id
+
+
 def apply_je_to_db(
     engine_je: EngineJE,
     journal_entry_id: int,
@@ -156,9 +172,20 @@ def apply_je_to_db(
 
     for line in engine_je.lines:
         if line.is_weight_account:
+            # تحقق من كل القيم الوزنية — إذا كانت كلها صفراً تخطّ السطر
+            w_vals = (
+                float(line.weight_debit_18k), float(line.weight_credit_18k),
+                float(line.weight_debit_21k), float(line.weight_credit_21k),
+                float(line.weight_debit_22k), float(line.weight_credit_22k),
+                float(line.weight_debit_24k), float(line.weight_credit_24k),
+            )
+            if all(v == 0.0 for v in w_vals):
+                continue
+
+            resolved_id = _resolve_weight_account_id(line.account_id)
             create_dual_journal_entry(
                 journal_entry_id=journal_entry_id,
-                account_id=line.account_id,
+                account_id=resolved_id,
                 weight_18k_debit=float(line.weight_debit_18k),
                 weight_18k_credit=float(line.weight_credit_18k),
                 weight_21k_debit=float(line.weight_debit_21k),
@@ -444,7 +471,8 @@ def weight_entries_for_party(
         if is_purchase and scrap_purchase_gold_safe_account_id:
             inv_acc_id = int(scrap_purchase_gold_safe_account_id)
         else:
-            inv_acc_id = int(inventory_accounts.get(karat_str) or 0)
+            raw_inv_id = int(inventory_accounts.get(karat_str) or 0)
+            inv_acc_id = _resolve_weight_account_id(raw_inv_id) if raw_inv_id else 0
         if not inv_acc_id:
             continue
         kw = {f'weight_{karat}k_{debit_side}': float(weight)}
