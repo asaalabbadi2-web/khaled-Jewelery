@@ -12652,6 +12652,30 @@ def add_invoice():
                     if inv_acc_id:
                         inventory_accounts[karat] = inv_acc_id
 
+            # بيع كسر: استخدام حساب صندوق الكسر للوزن بدلاً من 7130001 (مخزون وزني)
+            # يضمن التناسق مع سطر الشراء الذي يُدبن 71310000 (صندوق الكسر الرئيسي وزني)
+            scrap_sale_safe_account_id = None
+            _scrap_sale_target_sb_id = None
+            if gold_type == 'scrap':
+                try:
+                    _sale_settings = Settings.query.first()
+                    _scrap_sale_sb_id = getattr(_sale_settings, 'main_scrap_gold_safe_box_id', None) if _sale_settings else None
+                    if not _scrap_sale_sb_id:
+                        _fallback_sale_sb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+                        if _fallback_sale_sb:
+                            _scrap_sale_sb_id = _fallback_sale_sb.id
+                    if _scrap_sale_sb_id:
+                        _sale_gold_safe = SafeBox.query.get(int(_scrap_sale_sb_id))
+                        if _sale_gold_safe and getattr(_sale_gold_safe, 'account', None):
+                            scrap_sale_safe_account_id = int(_sale_gold_safe.account.id)
+                            _scrap_sale_target_sb_id = int(_sale_gold_safe.id)
+                            # Override: كل العيارات تشير لحساب صندوق الكسر المالي
+                            # _resolve_weight_account_id سيحوله لـ 71310000 عند إنشاء قيد الوزن
+                            inventory_accounts = {k: scrap_sale_safe_account_id for k in ['18', '21', '22', '24']}
+                except Exception:
+                    scrap_sale_safe_account_id = None
+                    _scrap_sale_target_sb_id = None
+
             # ✅ تحقق مبكر: منع إنشاء قيود بحساب None وإرجاع رسالة واضحة
             missing = []
             if not sales_gold_new_acc_id:
@@ -12869,6 +12893,27 @@ def add_invoice():
                             description="ضريبة القيمة المضافة",
                             apply_golden_rule=False,
                         )
+
+            # بيع كسر: تسجيل خروج الوزن من صندوق الكسر (يقابل دخول عند الشراء)
+            if _scrap_sale_target_sb_id and not approval_required:
+                _sale_sbt_weights = {
+                    'weight_18k': float(gold_by_karat.get('18', 0.0) or 0.0),
+                    'weight_21k': float(gold_by_karat.get('21', 0.0) or 0.0),
+                    'weight_22k': float(gold_by_karat.get('22', 0.0) or 0.0),
+                    'weight_24k': float(gold_by_karat.get('24', 0.0) or 0.0),
+                }
+                if any(v > 0 for v in _sale_sbt_weights.values()):
+                    db.session.add(SafeBoxTransaction(
+                        safe_box_id=_scrap_sale_target_sb_id,
+                        ref_type='invoice_scrap_sale',
+                        ref_id=new_invoice.id,
+                        invoice_id=new_invoice.id,
+                        direction='out',
+                        amount_cash=0.0,
+                        notes='scrap sale - gold out',
+                        created_by=posted_by_username,
+                        **_sale_sbt_weights,
+                    ))
 
             # ─── المصنعية: استهلاك منفصل ───
             _wage_cash_sale = 0.0
