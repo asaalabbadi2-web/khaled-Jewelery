@@ -21,7 +21,21 @@ sys.path.insert(0, os.path.dirname(__file__))
 from app import app
 from models import db, Account
 
-JSON_PATH = os.path.join(os.path.dirname(__file__), '..', 'new_accounts_to_import.json')
+# Support: next to script, one level up, or /tmp/
+def _find_json():
+    candidates = [
+        os.path.join(os.path.dirname(__file__), 'new_accounts_to_import.json'),
+        os.path.join(os.path.dirname(__file__), '..', 'new_accounts_to_import.json'),
+        '/tmp/new_accounts_to_import.json',
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(
+        "new_accounts_to_import.json not found. Copy it next to the script or to /tmp/."
+    )
+
+JSON_PATH = _find_json()
 
 def run():
     with app.app_context():
