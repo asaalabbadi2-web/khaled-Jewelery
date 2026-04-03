@@ -11,7 +11,6 @@ backend/.venv/
 # Flutter
 frontend/.dart_tool/
 frontend/build/
-frontend/
 
 # IDE
 .vscode/
@@ -24,7 +23,6 @@ backups/
 
 # Docs / reports
 *.md
-*.py  
 export_chart.py
 apply_formatters*.py
 generate_permission*.py
