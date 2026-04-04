@@ -96,8 +96,8 @@ WEIGHT_SUPPORT_ACCOUNTS = [
 			'parent_number': '130',
 		},
 		'memo': {
-			'account_number': '7130000',
-			'name': 'مخزون ذهب معروض للبيع وزني',
+			'account_number': '71300',
+			'name': 'مخزون الذهب المعروض للبيع وزني',
 			'type': 'Asset',
 			'transaction_type': 'gold',
 			'tracks_weight': True,
@@ -116,12 +116,12 @@ WEIGHT_SUPPORT_ACCOUNTS = [
 			'parent_number': '130',
 		},
 		'memo': {
-			'account_number': '7130001',
-			'name': 'مخزون ذهب كسر وزني',
+			'account_number': '71310000',
+			'name': 'صندوق الكسر الرئيسي وزني',
 			'type': 'Asset',
 			'transaction_type': 'gold',
 			'tracks_weight': True,
-			'parent_number': '7130',
+			'parent_number': '71310',
 		},
 	},
 	{

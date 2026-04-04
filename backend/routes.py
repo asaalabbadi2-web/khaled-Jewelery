@@ -5622,6 +5622,25 @@ def get_supplier_ledger(supplier_id):
     except Exception:
         pass
 
+    # Exclude journal entries linked to cancelled or rejected office reservations.
+    try:
+        _cancelled_res_je_ids_ledger = (
+            db.session.query(JournalEntry.id)
+            .join(
+                OfficeReservation,
+                and_(
+                    JournalEntry.reference_type == 'office_reservation',
+                    JournalEntry.reference_id == OfficeReservation.id,
+                ),
+            )
+            .filter(OfficeReservation.status.in_(['cancelled', 'rejected']))
+            .subquery()
+        )
+        base_query = base_query.filter(JournalEntry.id.notin_(_cancelled_res_je_ids_ledger))
+        base_query_relaxed = base_query_relaxed.filter(JournalEntry.id.notin_(_cancelled_res_je_ids_ledger))
+    except Exception:
+        pass
+
     if date_from_dt:
         base_query = base_query.filter(JournalEntry.date >= date_from_dt)
     if date_to_dt:
@@ -5903,6 +5922,25 @@ def get_supplier_weight_statement(supplier_id):
                 or any(abs(a - b) > eps_gold for a, b in zip(strict_nets[1:], relaxed_nets[1:]))
             ):
                 base_query = base_query_relaxed
+    except Exception:
+        pass
+
+    # Exclude journal entries linked to cancelled or rejected office reservations.
+    try:
+        _cancelled_res_je_ids = (
+            db.session.query(JournalEntry.id)
+            .join(
+                OfficeReservation,
+                and_(
+                    JournalEntry.reference_type == 'office_reservation',
+                    JournalEntry.reference_id == OfficeReservation.id,
+                ),
+            )
+            .filter(OfficeReservation.status.in_(['cancelled', 'rejected']))
+            .subquery()
+        )
+        base_query = base_query.filter(JournalEntry.id.notin_(_cancelled_res_je_ids))
+        base_query_relaxed = base_query_relaxed.filter(JournalEntry.id.notin_(_cancelled_res_je_ids))
     except Exception:
         pass
 
@@ -12927,7 +12965,7 @@ def add_invoice():
             for _wd in data.get('items', []):
                 _wage_cash_sale += (
                     _to_float(_wd.get('wage', 0), 0.0)
-                    * _to_float(_wd.get('quantity', 1), 1.0)
+                    * _to_float(_wd.get('weight', 0), 0.0)
                 )
             if karat_lines_data and isinstance(karat_lines_data, list):
                 for _kl in karat_lines_data:

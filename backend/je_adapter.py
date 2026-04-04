@@ -445,6 +445,7 @@ def weight_entries_for_party(
     customer_id: Optional[int] = None,
     supplier_id: Optional[int] = None,
     scrap_purchase_gold_safe_account_id: Optional[int] = None,
+    party_weight_account_override: Optional[int] = None,
 ):
     """
     يُنشئ قيود الوزن فقط (بدون نقد) لعملية شراء أو بيع.
@@ -487,15 +488,16 @@ def weight_entries_for_party(
             apply_golden_rule=False,
         )
 
-    # Party weight account (gold leaves / arrives at the party)
-    if party.weight_account_id:
+    # Party weight account — use override when provided (e.g. purchases weight 7511/7512)
+    _party_weight_acc = party_weight_account_override or party.weight_account_id
+    if _party_weight_acc:
         for karat, weight in weights.as_dict().items():
             if weight <= 0:
                 continue
             kw = {f'weight_{karat}k_{credit_side}': float(weight)}
             create_dual_journal_entry(
                 journal_entry_id=journal_entry_id,
-                account_id=party.weight_account_id,
+                account_id=_party_weight_acc,
                 **kw,
                 description=f"وزن {'من' if is_purchase else 'إلى'} الطرف [{party.party_name}] عيار {karat}",
                 customer_id=customer_id,

@@ -714,6 +714,7 @@ def get_office_balance(office_id):
             db.session.query(db.func.sum(OfficeReservation.weight_remaining_main_karat))
             .filter(OfficeReservation.office_id == office.id)
             .filter(OfficeReservation.weight_remaining_main_karat > 0)
+            .filter(OfficeReservation.status.notin_(['cancelled', 'rejected']))
             .scalar()
             or 0.0
         )
@@ -729,6 +730,7 @@ def get_office_balance(office_id):
             .filter(OfficeReservation.office_id == office.id)
             .filter(OfficeReservation.weight_main_karat > 0)
             .filter(OfficeReservation.execution_price_per_gram > 0)
+            .filter(OfficeReservation.status.notin_(['cancelled', 'rejected']))
             .first()
         )
         total_w = float((avg_weight[0] or 0.0) if avg_weight else 0.0)
