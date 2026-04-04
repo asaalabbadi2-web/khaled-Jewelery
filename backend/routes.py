@@ -13625,15 +13625,9 @@ def add_invoice():
                             cash_share = max(round(remaining_cash, 2), 0)
                             remaining_cash = 0
 
-                        # إثبات المخزون نقداً فقط (بدون وزن)
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry.id,
-                            account_id=inv_account_id,
-                            cash_debit=cash_share if cash_share > 0 else 0,
-                            apply_golden_rule=False,  # الوزن يثبت يدوياً لاحقاً
-                            exclude_from_ledger=True,  # لا نربط المخزون بالمورد في كشف الحساب
-                            description=f"إثبات مخزون عيار {karat} شراء (مورد)"
-                        )
+                        # المخزون: وزن فقط (بدون قيد نقدي)
+                        # قيمة الذهب مرجعية (للضريبة/التقارير) وليست التزاماً على المورد
+                        # الوزن يُثبَّت في حساب المذكرة أدناه
                         
                         # 🆕 القيد الوزني: استخدام الوزن الفعلي من karat_lines (بدون المصنعية)
                         actual_weight_for_karat = physical_gold_weights_for_posting.get(karat, 0.0)
@@ -13798,8 +13792,10 @@ def add_invoice():
                     cash_debit_booked = round(cash_debit_booked + gold_tax_total, 2)
 
                 # --- 4) فصل الالتزامات ---
-                # A) التقييم النقدي للذهب (ليس التزاماً على المورد في كشف الحساب)
-                valuation_bridge_cash = round(valuation_cash_total + gold_tax_total, 2)
+                # A) ضريبة الذهب فقط (إذا كانت الضريبة على كامل قيمة الذهب - نادر)
+                # قيمة الذهب نفسها (valuation_cash_total) ليست التزاماً نقدياً على المورد:
+                # الذهب يتم عبر مقايضة (يتسلم خاماً ويسلم مشغولاً) وليس بيعاً نقدياً.
+                valuation_bridge_cash = round(gold_tax_total, 2)
 
                 # Supplier-specific wage settlement type:
                 # - cash: wage is a SAR payable on supplier
@@ -13847,7 +13843,7 @@ def add_invoice():
                         account_id=supplier_fin_account_id,
                         cash_credit=valuation_bridge_cash,
                         apply_golden_rule=False,
-                        description="التزام المورد - قيمة الذهب"
+                        description="التزام المورد - ضريبة قيمة الذهب"
                     )
 
                 # B) الأجور + ضريبة الأجور:
