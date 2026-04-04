@@ -28458,12 +28458,48 @@ def settle_office_reservation(reservation_id: int):
         # IMPORTANT: office bridge account is used for cash-equivalent tracking.
         # Weight must be posted to the memo (7xxxx) account so it maps cleanly
         # to the office gold SafeBox (which is linked to the memo account).
+        #
+        # If this reservation already has a prior JE that CREDITED the supplier's
+        # account (office.account_category_id) — e.g. a WGT-XXXX-00001 payment bridge
+        # entry — we must NOT credit the supplier account again here. Instead we credit
+        # the purchases bridge account (1710 - حساب جسر المشتريات) to close it out.
+        # This prevents double-counting the supplier liability.
+        _prior_supplier_credited = False
+        _cash_credit_account_id = int(office.account_category_id)
+        _cash_credit_supplier_id = supplier.id
+        try:
+            _bridge_acc_id = get_account_id_by_number('1710')
+            if _bridge_acc_id and float(reservation.paid_amount or 0.0) > 0:
+                _prior_je = (
+                    JournalEntry.query
+                    .join(JournalEntryLine, JournalEntryLine.journal_entry_id == JournalEntry.id)
+                    .filter(
+                        JournalEntry.reference_type == 'office_reservation',
+                        JournalEntry.reference_id == reservation.id,
+                        JournalEntry.is_deleted.is_(False),
+                        JournalEntryLine.account_id == int(office.account_category_id),
+                        JournalEntryLine.cash_credit > 0,
+                        JournalEntryLine.is_deleted.is_(False),
+                    )
+                    .first()
+                )
+                if _prior_je is not None:
+                    _prior_supplier_credited = True
+                    _cash_credit_account_id = int(_bridge_acc_id)
+                    _cash_credit_supplier_id = None
+        except Exception:
+            pass
+
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
-            account_id=office.account_category_id,
+            account_id=_cash_credit_account_id,
             cash_credit=total_amount,
-            supplier_id=supplier.id,
-            description=f'ذهب لدى مكتب التسكير (قيمة نقدية مكافئة) - عيار {karat}',
+            supplier_id=_cash_credit_supplier_id,
+            description=(
+                f'إقفال جسر مشتريات التسكير - عيار {karat}'
+                if _prior_supplier_credited
+                else f'ذهب لدى مكتب التسكير (قيمة نقدية مكافئة) - عيار {karat}'
+            ),
         )
 
         office_account = Account.query.get(int(office.account_category_id))
