@@ -25,8 +25,7 @@ class SalesRaceManagementScreen extends StatefulWidget {
       _SalesRaceManagementScreenState();
 }
 
-class _SalesRaceManagementScreenState
-    extends State<SalesRaceManagementScreen> {
+class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   // ── Leaderboard ──────────────────────────────────────────────────────────
   Map<String, dynamic>? _data;
   bool _loading = false;
@@ -114,19 +113,20 @@ class _SalesRaceManagementScreenState
     _enabled = cfg['enabled'] as bool? ?? true;
     _defaultPeriod =
         (cfg['default_period'] as String?)?.trim().toLowerCase() == 'week'
-            ? 'week'
-            : 'today';
-    _pointsPerGram =
-        (cfg['points_per_gram'] as num?)?.toDouble() ?? 10.0;
+        ? 'week'
+        : 'today';
+    _pointsPerGram = (cfg['points_per_gram'] as num?)?.toDouble() ?? 10.0;
     _allowFallback = cfg['allow_fallback_to_latest_period'] as bool? ?? true;
     _showInvoiceCount = cfg['show_invoice_count'] as bool? ?? true;
     _showChampion = cfg['show_champion'] as bool? ?? true;
     _weeklyTarget =
         (cfg['weekly_sales_target_weight'] as num?)?.toDouble() ?? 2000.0;
     _pointsCtrl.text = _pointsPerGram.toStringAsFixed(
-        _pointsPerGram == _pointsPerGram.truncateToDouble() ? 0 : 1);
+      _pointsPerGram == _pointsPerGram.truncateToDouble() ? 0 : 1,
+    );
     _weeklyTargetCtrl.text = _weeklyTarget.toStringAsFixed(
-        _weeklyTarget == _weeklyTarget.truncateToDouble() ? 0 : 1);
+      _weeklyTarget == _weeklyTarget.truncateToDouble() ? 0 : 1,
+    );
   }
 
   Future<void> _saveConfig() async {
@@ -164,11 +164,11 @@ class _SalesRaceManagementScreenState
       if (!mounted) return;
       _applyConfig(saved);
       // Notify home screen to refresh its leaderboard card.
-      Provider.of<SalesRaceRefreshProvider>(context, listen: false)
-          .notifySettingsChanged();
-      _showSnack(
-        widget.isArabic ? 'تم حفظ الإعدادات بنجاح' : 'Settings saved',
-      );
+      Provider.of<SalesRaceRefreshProvider>(
+        context,
+        listen: false,
+      ).notifySettingsChanged();
+      _showSnack(widget.isArabic ? 'تم حفظ الإعدادات بنجاح' : 'Settings saved');
     } catch (e) {
       if (!mounted) return;
       _showSnack(e.toString(), isError: true);
@@ -199,7 +199,7 @@ class _SalesRaceManagementScreenState
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
-          title: Text(isAr ? 'سباق المبيعات' : 'Sales Race'),
+          title: Text(isAr ? 'سباق الأداء' : 'Performance Race'),
           backgroundColor: AppColors.darkGold,
           actions: [
             IconButton(
@@ -272,7 +272,10 @@ class _SalesRaceManagementScreenState
               _buildChampionAndSummaryRow(isAr),
               const SizedBox(height: 16),
               if (_period == 'week') ...[
-                _buildWeeklyGoalCard(isAr),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: _buildWeeklyGoalCard(isAr),
+                ),
                 const SizedBox(height: 16),
               ],
               _buildRankingCard(isAr),
@@ -311,18 +314,7 @@ class _SalesRaceManagementScreenState
                   _loadLeaderboard();
                 },
           showSelectedIcon: false,
-          style: ButtonStyle(
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.selected)) return Colors.black;
-              return null;
-            }),
-            backgroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.selected)) {
-                return AppColors.primaryGold;
-              }
-              return null;
-            }),
-          ),
+          style: _segmentedControlStyle(),
         ),
         // Metric
         SegmentedButton<String>(
@@ -350,18 +342,7 @@ class _SalesRaceManagementScreenState
                   _loadLeaderboard();
                 },
           showSelectedIcon: false,
-          style: ButtonStyle(
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.selected)) return Colors.black;
-              return null;
-            }),
-            backgroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.selected)) {
-                return AppColors.primaryGold;
-              }
-              return null;
-            }),
-          ),
+          style: _segmentedControlStyle(),
         ),
       ],
     );
@@ -372,8 +353,7 @@ class _SalesRaceManagementScreenState
     final champion = data['champion'] as Map?;
     final adminSummary = data['admin_summary'] as Map?;
     final isFallback = data['is_fallback'] == true;
-    final effectiveStartStr =
-        (data['effective_start_date'] ?? '').toString();
+    final effectiveStartStr = (data['effective_start_date'] ?? '').toString();
     final effectiveDate = DateTime.tryParse(effectiveStartStr);
 
     return Column(
@@ -385,14 +365,13 @@ class _SalesRaceManagementScreenState
             icon: Icons.history_toggle_off_rounded,
             message: _period == 'week'
                 ? (isAr
-                    ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في ${_fmt(effectiveDate)}'
-                    : 'No sales this week — showing latest week starting ${_fmt(effectiveDate)}')
+                      ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في ${_fmt(effectiveDate)}'
+                      : 'No sales this week — showing latest week starting ${_fmt(effectiveDate)}')
                 : (isAr
-                    ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم بتاريخ ${_fmt(effectiveDate)}'
-                    : 'No sales today — showing latest day on ${_fmt(effectiveDate)}'),
+                      ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم بتاريخ ${_fmt(effectiveDate)}'
+                      : 'No sales today — showing latest day on ${_fmt(effectiveDate)}'),
           ),
-        if (isFallback && effectiveDate != null)
-          const SizedBox(height: 12),
+        if (isFallback && effectiveDate != null) const SizedBox(height: 12),
 
         // Champion card + admin summary in a row on wide screens
         if (champion != null || adminSummary != null)
@@ -424,44 +403,64 @@ class _SalesRaceManagementScreenState
   Widget _buildChampionCard(bool isAr, Map champion) {
     final name = (champion['name'] ?? '').toString();
     return _card(
-      child: Row(
-        children: [
-          const Text('🥇', style: TextStyle(fontSize: 32)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  isAr ? 'بطل اليوم' : "Today's Champion",
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.6),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  name,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryGold,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: AppColors.lightGold.withValues(alpha: 0.18),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppColors.primaryGold.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Center(
+                child: Text('🥇', style: TextStyle(fontSize: 30)),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isAr ? 'بطل الفترة' : 'Champion',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.6),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    name,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.deepGold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildAdminSummaryCard(bool isAr, Map summary) {
-    final totalCash = (summary['total_cash'] as num?)?.toDouble();
-    final totalProfit = (summary['total_profit'] as num?)?.toDouble();
+    final totalSalesAmount = (summary['total_sales_amount'] as num?)?.toDouble() ??
+        (summary['total_cash'] as num?)?.toDouble();
+    final totalPurchaseAmount =
+        (summary['total_purchase_amount'] as num?)?.toDouble();
+    final totalPoints = (summary['total_points'] as num?)?.toInt();
     final currency = (summary['currency'] ?? 'SAR').toString();
     return _card(
       child: Column(
@@ -469,34 +468,44 @@ class _SalesRaceManagementScreenState
         children: [
           Row(
             children: [
-              Icon(Icons.bar_chart_rounded,
-                  size: 20, color: AppColors.primaryGold),
+              Icon(
+                Icons.bar_chart_rounded,
+                size: 20,
+                color: AppColors.primaryGold,
+              ),
               const SizedBox(width: 8),
               Text(
-                isAr ? 'ملخص المبيعات' : 'Sales Summary',
+                isAr ? 'ملخص السباق' : 'Race Summary',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   fontWeight: FontWeight.w600,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.7),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.7),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          if (totalCash != null)
+          if (totalSalesAmount != null)
             _summaryRow(
-              isAr ? 'إجمالي المبيعات' : 'Total Sales',
-              '${totalCash.toStringAsFixed(2)} $currency',
-              color: AppColors.info,
+              isAr ? 'مبلغ المبيعات' : 'Sales Amount',
+              '${totalSalesAmount.toStringAsFixed(2)} $currency',
+              color: AppColors.primaryGold,
             ),
-          if (totalProfit != null) ...[
+          if (totalPurchaseAmount != null) ...[
             const SizedBox(height: 6),
             _summaryRow(
-              isAr ? 'إجمالي الربح' : 'Total Profit',
-              '${totalProfit.toStringAsFixed(2)} $currency',
-              color: AppColors.success,
+              isAr ? 'مبلغ المشتريات' : 'Purchases Amount',
+              '${totalPurchaseAmount.toStringAsFixed(2)} $currency',
+              color: AppColors.darkGold,
+            ),
+          ],
+          if (totalPoints != null) ...[
+            const SizedBox(height: 6),
+            _summaryRow(
+              isAr ? 'إجمالي النقاط' : 'Total Points',
+              isAr ? '$totalPoints نقطة' : '$totalPoints pts',
+              color: AppColors.deepGold,
             ),
           ],
         ],
@@ -511,10 +520,9 @@ class _SalesRaceManagementScreenState
         Text(
           label,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context)
-                .colorScheme
-                .onSurface
-                .withValues(alpha: 0.6),
+            color: Theme.of(
+              context,
+            ).colorScheme.onSurface.withValues(alpha: 0.6),
           ),
         ),
         Text(
@@ -535,27 +543,35 @@ class _SalesRaceManagementScreenState
     final weeklyTarget = (data['weekly_target_weight_g'] as num?)?.toDouble();
     final teamPoints = (data['team_points'] as num?)?.toInt();
     final weeklyTargetPoints = (data['weekly_target_points'] as num?)?.toInt();
-    final targetProgress =
-        (data['target_progress'] as num?)?.toDouble() ?? 0.0;
+    final targetProgress = (data['target_progress'] as num?)?.toDouble() ?? 0.0;
     final remainingWeight = (data['remaining_weight_g'] as num?)?.toDouble();
     final remainingPoints = (data['remaining_points'] as num?)?.toInt();
 
-    final isGoalAchieved = targetProgress >= 0.9999;
+    final usePoints = metric == 'points';
+    final currentValue = usePoints ? teamPoints?.toDouble() : teamWeight;
+    final targetValue = usePoints ? weeklyTargetPoints?.toDouble() : weeklyTarget;
+    final effectiveTargetProgress =
+        (currentValue != null && targetValue != null && targetValue > 0)
+        ? (currentValue / targetValue).clamp(0.0, 1.0)
+        : targetProgress.clamp(0.0, 1.0);
+    final isGoalAchieved =
+        (currentValue != null && targetValue != null && targetValue > 0 && currentValue >= targetValue) ||
+        targetProgress >= 0.9999;
     final goalColor = isGoalAchieved
         ? AppColors.success
-        : (targetProgress < 0.5 ? AppColors.warning : AppColors.info);
+        : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);
 
-    final usePoints = metric == 'points';
-    final teamVal =
-        usePoints ? teamPoints?.toStringAsFixed(0) : teamWeight?.toStringAsFixed(1);
+    final teamVal = usePoints
+        ? teamPoints?.toStringAsFixed(0)
+        : teamWeight?.toStringAsFixed(1);
     final targetVal = usePoints
         ? weeklyTargetPoints?.toStringAsFixed(0)
         : weeklyTarget?.toStringAsFixed(0);
-    final remainingVal =
-        usePoints ? remainingPoints?.toStringAsFixed(0) : remainingWeight?.toStringAsFixed(1);
-    final unit = usePoints
-        ? (isAr ? ' نقطة' : ' pts')
-        : (isAr ? ' جم' : ' g');
+    final remainingVal = usePoints
+        ? remainingPoints?.toStringAsFixed(0)
+        : remainingWeight?.toStringAsFixed(1);
+    final unit = usePoints ? (isAr ? ' نقطة' : ' pts') : (isAr ? ' جم' : ' g');
+    final percentText = '${(effectiveTargetProgress * 100).round()}%';
 
     if (teamVal == null || targetVal == null) return const SizedBox.shrink();
 
@@ -564,97 +580,204 @@ class _SalesRaceManagementScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.flag_rounded, size: 20, color: goalColor),
-              const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  isAr ? 'هدف الفريق الأسبوعي' : 'Team Weekly Goal',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.flag_rounded, size: 20, color: goalColor),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            isAr ? 'هدف الفريق الأسبوعي' : 'Team Weekly Goal',
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: goalColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isGoalAchieved
+                          ? (isAr
+                                ? 'الهدف أُغلق بنجاح، وما زال المجال مفتوحاً لتوسيع الصدارة'
+                                : 'The goal is closed successfully, with room to extend the lead')
+                          : (isAr
+                                ? 'لوحة مركزة توضح أين وصل الفريق هذا الأسبوع'
+                                : 'A focused panel showing where the team stands this week'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.68),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              if (isGoalAchieved) const Text('🎉', style: TextStyle(fontSize: 20)),
               const SizedBox(width: 8),
-              Text(
-                '${(targetProgress.clamp(0.0, 1.0) * 100).round()}%',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: goalColor,
-                  fontWeight: FontWeight.w800,
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: goalColor.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: goalColor.withValues(alpha: 0.16)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      percentText,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: goalColor,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      isAr ? 'إنجاز' : 'Progress',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: targetProgress.clamp(0.0, 1.0),
-              minHeight: 12,
-              backgroundColor: Theme.of(context)
-                  .colorScheme
-                  .onSurface
-                  .withValues(alpha: 0.08),
-              valueColor: AlwaysStoppedAnimation<Color>(goalColor),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.06),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _summaryRow(
-                isAr ? 'المحقق' : 'Achieved',
-                '$teamVal$unit',
-                color: goalColor,
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                isAr ? 'الهدف' : 'Target',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.6),
-                ),
-              ),
-              Text(
-                '$targetVal$unit',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          if (!isGoalAchieved && remainingVal != null) ...[
-            const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Row(
               children: [
-                Text(
-                  isAr ? 'المتبقي' : 'Remaining',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.6),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isAr ? 'المحقق حتى الآن' : 'Achieved so far',
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.56),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '$teamVal$unit',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: goalColor,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  '$remainingVal$unit',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.warning,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Container(
+                  width: 1,
+                  height: 42,
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08),
+                ),
+                const SizedBox(width: 14),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isAr ? 'الهدف' : 'Target',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.56),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '$targetVal$unit',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: AppColors.primaryGold,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
+          ),
+          if (!isGoalAchieved && remainingVal != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: AppColors.warning.withValues(alpha: 0.16)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.timelapse_rounded,
+                      size: 15,
+                      color: AppColors.warning,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isAr ? 'المتبقي: $remainingVal$unit' : 'Remaining: $remainingVal$unit',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: AppColors.warning,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(
+                begin: 0,
+                end: effectiveTargetProgress,
+              ),
+              duration: const Duration(milliseconds: 800),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, child) => LinearProgressIndicator(
+                value: value,
+                minHeight: 12,
+                backgroundColor: Theme.of(context)
+                    .colorScheme
+                    .onSurface
+                    .withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(goalColor),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            isGoalAchieved
+                ? (isAr
+                      ? 'الأسبوع محسوم رقمياً، والواجهة تعرضه الآن بشكل أكثر مباشرة ووضوحاً.'
+                      : 'The week is numerically secured, and the UI now presents it more directly and clearly.')
+                : (isAr
+                      ? 'المشهد ما زال مفتوحاً، والهدف ضمن مدى الوصول إذا استمر الأداء بهذا النسق.'
+                      : 'The race is still open, and the goal remains reachable if this pace continues.'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.74),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -665,20 +788,28 @@ class _SalesRaceManagementScreenState
     final ranking = (data['ranking'] as List?) ?? const [];
     final config = data['config'] as Map?;
     final metric = (data['metric'] ?? 'weight_g').toString();
+    final adminSummary = data['admin_summary'] as Map?;
+    final champion = data['champion'] as Map?;
+    final championName = (champion?['name'] ?? '').toString().trim();
+    final currency = (adminSummary?['currency'] ?? (isAr ? 'ر.س' : 'SAR'))
+        .toString();
     final showInvoiceCount = config?['show_invoice_count'] != false;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final rankingRows = ranking.whereType<Map>().toList(growable: false);
 
-    if (ranking.isEmpty) {
+    if (rankingRows.isEmpty) {
       return _card(
         child: Center(
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
             child: Column(
               children: [
-                Icon(Icons.emoji_events_outlined,
-                    size: 40,
-                    color: colorScheme.onSurface.withValues(alpha: 0.35)),
+                Icon(
+                  Icons.emoji_events_outlined,
+                  size: 40,
+                  color: colorScheme.onSurface.withValues(alpha: 0.35),
+                ),
                 const SizedBox(height: 8),
                 Text(
                   isAr
@@ -695,26 +826,41 @@ class _SalesRaceManagementScreenState
       );
     }
 
-    String rankLabel(int i) {
-      if (i == 0) return '🥇';
-      if (i == 1) return '🥈';
-      if (i == 2) return '🥉';
-      return '${i + 1}';
+    String rankRoleLabel(int i) {
+      if (i == 0) return isAr ? 'المتصدر' : 'Leader';
+      if (i == 1) return isAr ? 'الثاني' : 'Second';
+      if (i == 2) return isAr ? 'الثالث' : 'Third';
+      return isAr ? 'مشارك' : 'Ranked';
     }
 
-    String metricText(Map row, int i) {
+    String metricValueText(Map row) {
       final score = (row['score'] as num?)?.toDouble() ?? 0.0;
       final count = (row['count'] as num?)?.toInt() ?? 0;
-      final invoiceLabel = isAr ? 'فاتورة' : (count == 1 ? 'invoice' : 'invoices');
       if (metric == 'count') {
-        return isAr ? '$count فاتورة' : '$count $invoiceLabel';
+        return count.toString();
       }
       if (metric == 'points') {
-        final base = '${score.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}';
-        return showInvoiceCount ? '$base • $count $invoiceLabel' : base;
+        return score.toStringAsFixed(0);
       }
-      final base = '${score.toStringAsFixed(1)} ${isAr ? 'جم' : 'g'}';
-      return showInvoiceCount ? '$base • $count $invoiceLabel' : base;
+      return score.toStringAsFixed(1);
+    }
+
+    String metricUnitText() {
+      if (metric == 'count') return isAr ? 'فاتورة' : 'Invoices';
+      if (metric == 'points') return isAr ? 'نقطة' : 'Points';
+      return isAr ? 'جم' : 'g';
+    }
+
+    String invoiceSummaryText(int count) {
+      if (!showInvoiceCount) {
+        return metric == 'points'
+            ? (isAr ? 'حركة مبيعات ومشتريات' : 'Sales and purchases activity')
+            : (isAr ? 'حركة بيع' : 'Sales activity');
+      }
+      final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
+      return metric == 'points'
+          ? (isAr ? '$count حركة' : '$count transactions')
+          : (isAr ? '$count فاتورة بيع' : '$count sales $invoiceLabelEn');
     }
 
     return _card(
@@ -730,8 +876,84 @@ class _SalesRaceManagementScreenState
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              Icon(Icons.emoji_events_rounded,
-                  color: AppColors.primaryGold, size: 22),
+              Icon(
+                Icons.emoji_events_rounded,
+                color: AppColors.primaryGold,
+                size: 22,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.lightGold.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: AppColors.primaryGold.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Text(
+                  switch (metric) {
+                    'count' => isAr ? 'عرض حسب الفواتير' : 'Invoice view',
+                    'points' => isAr ? 'عرض حسب النقاط' : 'Points view',
+                    _ => isAr ? 'عرض حسب الوزن' : 'Weight view',
+                  },
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: AppColors.deepGold,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.onSurface.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  isAr
+                      ? '${rankingRows.length} موظف في الترتيب'
+                      : '${rankingRows.length} staff ranked',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.72),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (championName.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGold.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: AppColors.primaryGold.withValues(alpha: 0.16),
+                    ),
+                  ),
+                  child: Text(
+                    isAr
+                        ? 'المتصدر الآن: $championName'
+                        : 'Current leader: $championName',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AppColors.deepGold,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
             ],
           ),
           if (_fetchedAt != null) ...[
@@ -746,11 +968,14 @@ class _SalesRaceManagementScreenState
             ),
           ],
           const SizedBox(height: 16),
-          ...List.generate(ranking.length, (i) {
-            final row = ranking[i] as Map;
+          ...List.generate(rankingRows.length, (i) {
+            final row = rankingRows[i];
             final name = (row['name'] ?? '').toString();
             final share = (row['share'] as num?)?.toDouble() ?? 0.0;
-            final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
+            final salesAmount =
+                (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
+            final purchaseAmount =
+              (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
             final isLeader = i == 0;
             final Color valueColor = isLeader
                 ? colorScheme.primary
@@ -760,39 +985,105 @@ class _SalesRaceManagementScreenState
               2 => const Color(0xFFCD7F32),
               _ => valueColor,
             };
+            final medalAccent = switch (i) {
+              0 => AppColors.primaryGold,
+              1 => const Color(0xFF98A2B3),
+              2 => const Color(0xFFCD7F32),
+              _ => valueColor,
+            };
+            final medalSurface = switch (i) {
+              0 => [AppColors.lightGold.withValues(alpha: 0.42), Colors.white],
+              1 => [
+                const Color(0xFFF3F4F6),
+                const Color(0xFFE5E7EB).withValues(alpha: 0.35),
+              ],
+              2 => [
+                const Color(0xFFFDF1E7),
+                const Color(0xFFF6D7BE).withValues(alpha: 0.4),
+              ],
+              _ => [colorScheme.surface, colorScheme.surface],
+            };
+            final roleBadgeColor = i == 0
+                ? AppColors.darkGold
+                : colorScheme.onSurface.withValues(alpha: 0.62);
+            final avatarText = name.trim().isEmpty
+                ? '?'
+                : name
+                      .trim()
+                      .split(RegExp(r'\s+'))
+                      .where((part) => part.isNotEmpty)
+                      .take(2)
+                      .map((part) => part.characters.first)
+                      .join();
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 10),
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
-                  color: colorScheme.onSurface.withValues(alpha: 0.035),
-                  borderRadius: BorderRadius.circular(16),
+                  color: colorScheme.surface,
+                  gradient: i < 3
+                      ? LinearGradient(
+                          begin: AlignmentDirectional.topStart,
+                          end: AlignmentDirectional.bottomEnd,
+                          colors: medalSurface,
+                        )
+                      : null,
+                  borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: colorScheme.onSurface.withValues(alpha: 0.08),
+                    color: i < 3
+                        ? medalAccent.withValues(alpha: i == 0 ? 0.42 : 0.22)
+                        : colorScheme.onSurface.withValues(alpha: 0.08),
                   ),
+                  boxShadow: i < 3
+                      ? [
+                          BoxShadow(
+                            color: medalAccent.withValues(
+                              alpha: i == 0 ? 0.16 : 0.08,
+                            ),
+                            blurRadius: i == 0 ? 22 : 14,
+                            offset: Offset(0, i == 0 ? 8 : 4),
+                          ),
+                        ]
+                      : null,
                 ),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     SizedBox(
                       width: 28,
                       child: Text(
-                        rankLabel(i),
+                        '${i + 1}',
                         textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: i < 3
+                              ? medalAccent.withValues(alpha: 0.82)
+                              : colorScheme.onSurface.withValues(alpha: 0.3),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    CircleAvatar(
-                      radius: 16,
-                      backgroundColor: valueColor.withValues(alpha: 0.12),
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: medalAccent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: medalAccent.withValues(alpha: 0.18),
+                        ),
+                      ),
                       child: Text(
-                        name.isNotEmpty ? name.characters.first : '?',
-                        style: TextStyle(
-                          color: valueColor,
-                          fontWeight: FontWeight.bold,
+                        avatarText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: medalAccent,
+                          fontWeight: FontWeight.w800,
+                          height: 2.0,
                         ),
                       ),
                     ),
@@ -802,49 +1093,173 @@ class _SalesRaceManagementScreenState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Expanded(
                                 child: Text(
                                   name,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.bodyMedium
-                                      ?.copyWith(fontWeight: FontWeight.w600),
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: colorScheme.onSurface,
+                                  ),
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Text(
-                                metricText(row, i),
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: valueColor,
-                                  fontWeight: FontWeight.w800,
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 9,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: roleBadgeColor.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  rankRoleLabel(i),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: roleBadgeColor,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            isAr
-                                ? 'المبيعات: ${salesAmount.toStringAsFixed(2)}'
-                                : 'Sales: ${salesAmount.toStringAsFixed(2)}',
+                            invoiceSummaryText(
+                              (row['count'] as num?)?.toInt() ?? 0,
+                            ),
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: AppColors.primaryGold,
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.58,
+                              ),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            isAr
+                                ? (purchaseAmount > 0
+                                      ? 'مبيعات ${salesAmount.toStringAsFixed(2)} $currency • مشتريات ${purchaseAmount.toStringAsFixed(2)} $currency'
+                                      : '${salesAmount.toStringAsFixed(2)} $currency مبيعات')
+                                : (purchaseAmount > 0
+                                      ? 'Sales ${salesAmount.toStringAsFixed(2)} $currency • Purchases ${purchaseAmount.toStringAsFixed(2)} $currency'
+                                      : '${salesAmount.toStringAsFixed(2)} $currency sales'),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: AppColors.darkGold,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
                           const SizedBox(height: 6),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: LinearProgressIndicator(
-                              value: share.clamp(0.0, 1.0),
-                              minHeight: 8,
-                              backgroundColor: colorScheme.onSurface
-                                  .withValues(alpha: 0.08),
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                progressColor,
+                            borderRadius: BorderRadius.circular(999),
+                            child: Container(
+                              height: 9,
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.07,
                               ),
+                              child: TweenAnimationBuilder<double>(
+                                tween: Tween<double>(
+                                  begin: 0,
+                                  end: share.clamp(0.0, 1.0),
+                                ),
+                                duration: Duration(
+                                  milliseconds: 650 + (i * 120),
+                                ),
+                                curve: Curves.easeOutCubic,
+                                builder: (context, value, child) {
+                                  return Stack(
+                                    children: [
+                                      FractionallySizedBox(
+                                        alignment:
+                                            AlignmentDirectional.centerStart,
+                                        widthFactor: value,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: AlignmentDirectional
+                                                  .centerStart,
+                                              end: AlignmentDirectional
+                                                  .centerEnd,
+                                              colors: [
+                                                progressColor.withValues(
+                                                  alpha: 0.72,
+                                                ),
+                                                medalAccent,
+                                              ],
+                                            ),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: medalAccent.withValues(
+                                                  alpha: 0.18,
+                                                ),
+                                                blurRadius: 8,
+                                                offset: const Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(minWidth: 72),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 13,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: i == 0
+                                  ? AppColors.primaryGold.withValues(
+                                      alpha: 0.14,
+                                    )
+                                  : valueColor.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: i == 0
+                                    ? AppColors.primaryGold.withValues(
+                                        alpha: 0.28,
+                                      )
+                                    : valueColor.withValues(alpha: 0.14),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  metricValueText(row),
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    color: medalAccent,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: i == 0 ? 23 : null,
+                                  ),
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  metricUnitText(),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.46,
+                                    ),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -867,14 +1282,17 @@ class _SalesRaceManagementScreenState
         children: [
           Row(
             children: [
-              Icon(Icons.error_outline_rounded,
-                  color: Theme.of(context).colorScheme.error),
+              Icon(
+                Icons.error_outline_rounded,
+                color: Theme.of(context).colorScheme.error,
+              ),
               const SizedBox(width: 8),
               Text(
                 isAr ? 'تعذر تحميل البيانات' : 'Failed to load data',
                 style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                    fontWeight: FontWeight.w600),
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -900,8 +1318,10 @@ class _SalesRaceManagementScreenState
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(_configError!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _configError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
             const SizedBox(height: 12),
             ElevatedButton(
               onPressed: _loadConfig,
@@ -925,7 +1345,7 @@ class _SalesRaceManagementScreenState
           _card(
             child: SwitchListTile(
               title: Text(
-                isAr ? 'تفعيل سباق المبيعات' : 'Enable Sales Race',
+                isAr ? 'تفعيل سباق الأداء' : 'Enable Performance Race',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               subtitle: Text(
@@ -953,43 +1373,29 @@ class _SalesRaceManagementScreenState
                       ? 'الفترة المعروضة عند فتح لوحة الصدارة'
                       : 'Period shown when opening the leaderboard',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.65),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.65),
                   ),
                 ),
                 const SizedBox(height: 12),
                 SegmentedButton<String>(
                   segments: [
                     ButtonSegment(
-                        value: 'today',
-                        label: Text(isAr ? 'اليوم' : 'Today')),
+                      value: 'today',
+                      label: Text(isAr ? 'اليوم' : 'Today'),
+                    ),
                     ButtonSegment(
-                        value: 'week',
-                        label: Text(isAr ? 'الأسبوع' : 'Week')),
+                      value: 'week',
+                      label: Text(isAr ? 'الأسبوع' : 'Week'),
+                    ),
                   ],
                   selected: {_defaultPeriod},
                   onSelectionChanged: (s) {
                     if (s.isNotEmpty) setState(() => _defaultPeriod = s.first);
                   },
                   showSelectedIcon: false,
-                  style: ButtonStyle(
-                    foregroundColor:
-                        WidgetStateProperty.resolveWith((states) {
-                      if (states.contains(WidgetState.selected)) {
-                        return Colors.black;
-                      }
-                      return null;
-                    }),
-                    backgroundColor:
-                        WidgetStateProperty.resolveWith((states) {
-                      if (states.contains(WidgetState.selected)) {
-                        return AppColors.primaryGold;
-                      }
-                      return null;
-                    }),
-                  ),
+                  style: _segmentedControlStyle(),
                 ),
               ],
             ),
@@ -1003,8 +1409,9 @@ class _SalesRaceManagementScreenState
           _card(
             child: TextField(
               controller: _weeklyTargetCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: InputDecoration(
                 labelText: isAr ? 'الهدف الأسبوعي (جرام)' : 'Weekly target (g)',
                 suffixText: isAr ? 'جم' : 'g',
@@ -1021,11 +1428,13 @@ class _SalesRaceManagementScreenState
           _card(
             child: TextField(
               controller: _pointsCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: InputDecoration(
-                labelText:
-                    isAr ? 'نقاط لكل جرام ربح' : 'Points per profit gram',
+                labelText: isAr
+                    ? 'نقاط لكل جرام ربح'
+                    : 'Points per profit gram',
                 suffixText: isAr ? 'نقطة/جم' : 'pts/g',
                 border: const OutlineInputBorder(),
               ),
@@ -1052,7 +1461,9 @@ class _SalesRaceManagementScreenState
                 const Divider(height: 1),
                 SwitchListTile(
                   title: Text(
-                    isAr ? 'إظهار عدد الفواتير مع النقاط' : 'Show Invoice Count with Score',
+                    isAr
+                        ? 'إظهار عدد الفواتير مع النقاط'
+                        : 'Show Invoice Count with Score',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   value: _showInvoiceCount,
@@ -1127,10 +1538,9 @@ class _SalesRaceManagementScreenState
         color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Theme.of(context)
-              .colorScheme
-              .onSurface
-              .withValues(alpha: 0.08),
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.08),
         ),
         boxShadow: [
           BoxShadow(
@@ -1141,6 +1551,39 @@ class _SalesRaceManagementScreenState
         ],
       ),
       child: child,
+    );
+  }
+
+  ButtonStyle _segmentedControlStyle() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return ButtonStyle(
+      side: WidgetStateProperty.all(BorderSide.none),
+      shape: WidgetStateProperty.all(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      padding: WidgetStateProperty.all(
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      ),
+      textStyle: WidgetStateProperty.all(
+        theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      foregroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return AppColors.deepGold;
+        }
+        return colorScheme.onSurface.withValues(alpha: 0.72);
+      }),
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return AppColors.primaryGold.withValues(alpha: 0.9);
+        }
+        return Colors.white.withValues(alpha: 0.82);
+      }),
+      overlayColor: WidgetStateProperty.all(
+        AppColors.primaryGold.withValues(alpha: 0.08),
+      ),
+      elevation: WidgetStateProperty.all(0),
     );
   }
 
@@ -1168,14 +1611,12 @@ class _SalesRaceManagementScreenState
         color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color:
-              Theme.of(context).colorScheme.primary.withValues(alpha: 0.18),
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.18),
         ),
       ),
       child: Row(
         children: [
-          Icon(icon,
-              size: 18, color: Theme.of(context).colorScheme.primary),
+          Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

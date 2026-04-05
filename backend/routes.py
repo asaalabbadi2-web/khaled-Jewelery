@@ -13197,7 +13197,28 @@ def add_invoice():
                     description="ضريبة القيمة المضافة",
                     apply_golden_rule=False,
                 )
-        
+
+            # ─── نقاط السباق: profit_gold = وزن مشترى - مقابله بسعر السوق ───
+            # المنطق: الموظف دفع X ريال واستلم Y جرام
+            # مقابل X ريال بسعر اليوم = X / سعر الجرام (عيار رئيسي)
+            # الربح الحقيقي = Y - (X / سعر_الجرام) → كمية الذهب الزائدة عن السعر
+            # نفس مبدأ المبيعات: profit_gold = profit_cash / سعر_الجرام
+            _mk = get_main_karat() or 21
+            _weight_main_karat = sum(
+                float(w or 0) * int(k) / _mk
+                for k, w in gold_by_karat.items()
+                if float(w or 0) > 0
+            )
+            _gold_price_now2 = get_current_gold_price()
+            _price_main2 = _gold_price_now2.get(
+                'price_per_gram_main_karat',
+                _gold_price_now2.get('price_main_karat', 350.0),
+            )
+            _cash_paid = float(total_cash or 0)
+            _cost_in_gold = (_cash_paid / _price_main2) if _price_main2 > 0 else _weight_main_karat
+            _purchase_profit_gold = max(0.0, _weight_main_karat - _cost_in_gold)
+            new_invoice.profit_gold = round(_purchase_profit_gold, 3)
+
         elif invoice_type == 'مرتجع بيع':
             # 3. مرتجع بيع (عكس البيع)
             # من حـ/ المخزون [مدين]
@@ -19318,11 +19339,11 @@ def get_home_leaderboard():
 
     Contract:
     - Query Params: period=today|week, metric=weight|count|points
-    - Uses posted sales invoices only (invoice_type == 'بيع', is_posted == True)
+    - Uses posted sales invoices for weight/count and sales+purchases for points
     - Excludes returns in phase 1
     - Admin summary is included only for admins/financial report viewers
     """
-    from sqlalchemy import func
+    from sqlalchemy import case, func
 
     period = (request.args.get('period') or 'today').strip().lower()
     metric = (request.args.get('metric') or 'weight').strip().lower()
@@ -19368,6 +19389,8 @@ def get_home_leaderboard():
     if metric not in {'weight', 'count', 'points'}:
         metric = 'weight'
 
+    leaderboard_invoice_types = ['بيع', 'شراء', 'شراء من عميل'] if metric == 'points' else ['بيع']
+
     def _resolve_period_bounds(period_value: str, anchor_dt: datetime | None = None):
         ref = anchor_dt or datetime.now()
         normalized = (period_value or 'today').strip().lower()
@@ -19387,11 +19410,11 @@ def get_home_leaderboard():
     effective_period = period
     effective_source_date = start_dt.date().isoformat() if start_dt else None
 
-    has_sales_in_period = (
+    has_activity_in_period = (
         db.session.query(Invoice.id)
         .filter(
             Invoice.is_posted.is_(True),
-            Invoice.invoice_type == 'بيع',
+            Invoice.invoice_type.in_(leaderboard_invoice_types),
             Invoice.date >= start_dt,
             Invoice.date < end_dt,
         )
@@ -19399,18 +19422,18 @@ def get_home_leaderboard():
         is not None
     )
 
-    if not has_sales_in_period and bool(sales_race_config.get('allow_fallback_to_latest_period', True)):
-        latest_sale_dt = (
+    if not has_activity_in_period and bool(sales_race_config.get('allow_fallback_to_latest_period', True)):
+        latest_activity_dt = (
             db.session.query(func.max(Invoice.date))
             .filter(
                 Invoice.is_posted.is_(True),
-                Invoice.invoice_type == 'بيع',
+                Invoice.invoice_type.in_(leaderboard_invoice_types),
             )
             .scalar()
         )
-        if latest_sale_dt is not None:
-            effective_period, start_dt, end_dt = _resolve_period_bounds(period, latest_sale_dt)
-            effective_source_date = latest_sale_dt.date().isoformat()
+        if latest_activity_dt is not None:
+            effective_period, start_dt, end_dt = _resolve_period_bounds(period, latest_activity_dt)
+            effective_source_date = latest_activity_dt.date().isoformat()
             is_fallback = True
 
     # Sales only, posted only.
@@ -19418,10 +19441,13 @@ def get_home_leaderboard():
     # when `employee_id` is missing, so we don't filter it out at the DB level.
     base_filters = [
         Invoice.is_posted.is_(True),
-        Invoice.invoice_type == 'بيع',
         Invoice.date >= start_dt,
         Invoice.date < end_dt,
     ]
+    if metric == 'points':
+        base_filters.append(Invoice.invoice_type.in_(leaderboard_invoice_types))
+    else:
+        base_filters.append(Invoice.invoice_type == 'بيع')
 
     if metric != 'points':
         # For weight/count leaderboards we rely on SQL group_by employee_id.
@@ -19431,6 +19457,7 @@ def get_home_leaderboard():
     employee_points_map = {}
     employee_profit_gold_map = {}
     employee_sales_map = {}
+    employee_purchase_map = {}
     points_invoices = None
     if metric == 'points':
         invoices = Invoice.query.filter(*base_filters).all()
@@ -19516,7 +19543,11 @@ def get_home_leaderboard():
             actor_name_map[int(actor_id)] = actor_name
 
             counts_by_employee[int(actor_id)] = counts_by_employee.get(int(actor_id), 0) + 1
-            employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + float(getattr(inv, 'total', 0.0) or 0.0)
+            invoice_total = float(getattr(inv, 'total', 0.0) or 0.0)
+            if str(getattr(inv, 'invoice_type', '') or '').strip() in ('شراء', 'شراء من عميل'):
+                employee_purchase_map[int(actor_id)] = employee_purchase_map.get(int(actor_id), 0.0) + invoice_total
+            else:
+                employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + invoice_total
 
             earned_main = float(getattr(inv, 'profit_gold', 0.0) or 0.0)
             employee_profit_gold_map[int(actor_id)] = (
@@ -19595,6 +19626,10 @@ def get_home_leaderboard():
                 ),
                 2,
             ),
+            'purchase_amount': round(
+                _to_float(employee_purchase_map.get(emp_id, 0.0), 0.0),
+                2,
+            ),
         })
 
     metric_key = 'weight_g'
@@ -19625,6 +19660,7 @@ def get_home_leaderboard():
             'count': int(it.get('count') or 0),
             'score': round(score_value, 3 if metric_key == 'weight_g' else 0),
             'sales_amount': round(_to_float(it.get('sales_amount', 0.0), 0.0), 2),
+            'purchase_amount': round(_to_float(it.get('purchase_amount', 0.0), 0.0), 2),
             'share': round(float(share), 4),
         })
 
@@ -19733,20 +19769,39 @@ def get_home_leaderboard():
         except Exception:
             can_view_admin = False
 
-    # مبلغ المبيعات الإجمالي مرئي للجميع — الربح فقط للإداريين وأصحاب صلاحية reports.financial
+    # مبلغ المبيعات والمشتريات مرئي للجميع — الربح فقط للإداريين وأصحاب صلاحية reports.financial
     can_view_total_cash = True
     can_view_total_profit = can_view_admin
 
     if can_view_total_cash or can_view_total_profit:
-        # Aggregate across all sales (not per employee) for the same period.
+        # Aggregate across posted sales and purchases for the same period.
         totals = (
             db.session.query(
-                func.coalesce(func.sum(Invoice.total), 0.0).label('cash_total'),
-                func.coalesce(func.sum(Invoice.profit_cash), 0.0).label('profit_total'),
+                func.coalesce(
+                    func.sum(case((Invoice.invoice_type == 'بيع', Invoice.total), else_=0.0)),
+                    0.0,
+                ).label('sales_total'),
+                func.coalesce(
+                    func.sum(case((Invoice.invoice_type.in_(['شراء', 'شراء من عميل']), Invoice.total), else_=0.0)),
+                    0.0,
+                ).label('purchase_total'),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Invoice.invoice_type.in_(['بيع', 'شراء', 'شراء من عميل']), Invoice.profit_gold),
+                            else_=0.0,
+                        )
+                    ),
+                    0.0,
+                ).label('points_profit_gold_total'),
+                func.coalesce(
+                    func.sum(case((Invoice.invoice_type == 'بيع', Invoice.profit_cash), else_=0.0)),
+                    0.0,
+                ).label('profit_total'),
             )
             .filter(
                 Invoice.is_posted.is_(True),
-                Invoice.invoice_type == 'بيع',
+                Invoice.invoice_type.in_(['بيع', 'شراء', 'شراء من عميل']),
                 Invoice.date >= start_dt,
                 Invoice.date < end_dt,
             )
@@ -19754,7 +19809,21 @@ def get_home_leaderboard():
         )
         summary_payload = {'currency': 'SAR'}
         if can_view_total_cash:
-            summary_payload['total_cash'] = round(_to_float(getattr(totals, 'cash_total', 0.0), 0.0), 2)
+            total_sales_amount = round(_to_float(getattr(totals, 'sales_total', 0.0), 0.0), 2)
+            total_purchase_amount = round(_to_float(getattr(totals, 'purchase_total', 0.0), 0.0), 2)
+            total_points_value = max(
+                0,
+                int(
+                    round(
+                        _to_float(getattr(totals, 'points_profit_gold_total', 0.0), 0.0)
+                        * points_per_gram
+                    )
+                ),
+            )
+            summary_payload['total_cash'] = total_sales_amount
+            summary_payload['total_sales_amount'] = total_sales_amount
+            summary_payload['total_purchase_amount'] = total_purchase_amount
+            summary_payload['total_points'] = total_points_value
         if can_view_total_profit:
             summary_payload['total_profit'] = round(_to_float(getattr(totals, 'profit_total', 0.0), 0.0), 2)
         payload['admin_summary'] = summary_payload
@@ -23138,10 +23207,10 @@ def create_journal_entry_from_voucher(voucher):
         return journal_entry
         
     except Exception as e:
-        print(f"Error creating journal entry from voucher: {str(e)}")
         import traceback
         traceback.print_exc()
-        return None
+        # Re-raise with full context so approve_voucher can surface the real error.
+        raise Exception(f'فشل إنشاء القيد المحاسبي من السند: {str(e)}') from e
 
 
 def _ensure_safe_box_transactions_for_invoice_je(invoice_id: int, journal_entry_id: int, created_by: str = 'system'):
@@ -24129,10 +24198,7 @@ def approve_voucher(voucher_id):
     try:
         # إنشاء القيد المحاسبي
         journal_entry = create_journal_entry_from_voucher(voucher)
-        
-        if not journal_entry:
-            raise Exception('فشل إنشاء القيد المحاسبي')
-        
+
         # Mark the JE as posted immediately — voucher approval means finalised.
         journal_entry.is_posted = True
         journal_entry.posted_at = datetime.now()

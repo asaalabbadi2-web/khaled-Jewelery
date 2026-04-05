@@ -174,7 +174,11 @@ def compute_live_supplier_balances(
     if allowed_account_ids:
         account_filter = or_(Account.id.in_(allowed_account_ids), payable_filter)
 
-    # (A) Tagged lines grouped by supplier_id (STRICT)
+    # (A) Tagged lines on allowed accounts only (same account_filter as statement endpoint).
+    # We intentionally do NOT fall back to a relaxed (no account filter) path because that
+    # would include inventory / COGS / expense lines that happen to carry supplier_id, which
+    # inflates the balance. Path (B) below handles the rare case where supplier_id is NULL
+    # but the line was posted to the supplier's own financial/memo account.
     if supplier_ids:
         tagged_rows = (
             db.session.query(
@@ -208,117 +212,19 @@ def compute_live_supplier_balances(
             .group_by(JournalEntryLine.supplier_id)
             .all()
         )
-        strict_counts = (
-            db.session.query(
-                JournalEntryLine.supplier_id.label('supplier_id'),
-                func.count(JournalEntryLine.id).label('cnt'),
-            )
-            .join(JournalEntry)
-            .join(Account, JournalEntryLine.account_id == Account.id)
-            .filter(JournalEntryLine.supplier_id.in_(supplier_ids))
-            .filter(*jl_filters)
-            .filter(account_filter)
-            .group_by(JournalEntryLine.supplier_id)
-            .all()
-        )
-        strict_count_by_supplier: Dict[int, int] = {}
-        for r in strict_counts:
-            try:
-                strict_count_by_supplier[int(r.supplier_id)] = int(getattr(r, 'cnt', 0) or 0)
-            except Exception:
-                continue
 
-        # (A2) Tagged lines grouped by supplier_id (RELAXED)
-        relaxed_rows = (
-            db.session.query(
-                JournalEntryLine.supplier_id.label('supplier_id'),
-                (
-                    func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0)
-                    - func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0)
-                ).label('cash'),
-                (
-                    func.coalesce(func.sum(JournalEntryLine.debit_18k), 0.0)
-                    - func.coalesce(func.sum(JournalEntryLine.credit_18k), 0.0)
-                ).label('b18'),
-                (
-                    func.coalesce(func.sum(JournalEntryLine.debit_21k), 0.0)
-                    - func.coalesce(func.sum(JournalEntryLine.credit_21k), 0.0)
-                ).label('b21'),
-                (
-                    func.coalesce(func.sum(JournalEntryLine.debit_22k), 0.0)
-                    - func.coalesce(func.sum(JournalEntryLine.credit_22k), 0.0)
-                ).label('b22'),
-                (
-                    func.coalesce(func.sum(JournalEntryLine.debit_24k), 0.0)
-                    - func.coalesce(func.sum(JournalEntryLine.credit_24k), 0.0)
-                ).label('b24'),
-            )
-            .join(JournalEntry)
-            .join(Account, JournalEntryLine.account_id == Account.id)
-            .filter(JournalEntryLine.supplier_id.in_(supplier_ids))
-            .filter(*jl_filters)
-            .group_by(JournalEntryLine.supplier_id)
-            .all()
-        )
-        relaxed_counts = (
-            db.session.query(
-                JournalEntryLine.supplier_id.label('supplier_id'),
-                func.count(JournalEntryLine.id).label('cnt'),
-            )
-            .join(JournalEntry)
-            .filter(JournalEntryLine.supplier_id.in_(supplier_ids))
-            .filter(*jl_filters)
-            .group_by(JournalEntryLine.supplier_id)
-            .all()
-        )
-        relaxed_count_by_supplier: Dict[int, int] = {}
-        for r in relaxed_counts:
-            try:
-                relaxed_count_by_supplier[int(r.supplier_id)] = int(getattr(r, 'cnt', 0) or 0)
-            except Exception:
-                continue
-
-        strict_by_supplier: Dict[int, Dict[str, float]] = {}
         for r in tagged_rows:
             try:
                 sid = int(r.supplier_id)
             except Exception:
                 continue
-            strict_by_supplier[sid] = {
+            balances_by_supplier[sid] = {
                 'cash': float(getattr(r, 'cash', 0.0) or 0.0),
                 '18k': float(getattr(r, 'b18', 0.0) or 0.0),
                 '21k': float(getattr(r, 'b21', 0.0) or 0.0),
                 '22k': float(getattr(r, 'b22', 0.0) or 0.0),
                 '24k': float(getattr(r, 'b24', 0.0) or 0.0),
             }
-
-        relaxed_by_supplier: Dict[int, Dict[str, float]] = {}
-        for r in relaxed_rows:
-            try:
-                sid = int(r.supplier_id)
-            except Exception:
-                continue
-            relaxed_by_supplier[sid] = {
-                'cash': float(getattr(r, 'cash', 0.0) or 0.0),
-                '18k': float(getattr(r, 'b18', 0.0) or 0.0),
-                '21k': float(getattr(r, 'b21', 0.0) or 0.0),
-                '22k': float(getattr(r, 'b22', 0.0) or 0.0),
-                '24k': float(getattr(r, 'b24', 0.0) or 0.0),
-            }
-
-        # Decide strict vs relaxed per supplier (mirrors statement fallback behavior).
-        for sid in supplier_ids:
-            strict = strict_by_supplier.get(sid, {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0})
-            relaxed = relaxed_by_supplier.get(sid, {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0})
-
-            strict_cnt = int(strict_count_by_supplier.get(sid, 0) or 0)
-            relaxed_cnt = int(relaxed_count_by_supplier.get(sid, 0) or 0)
-
-            differs = any(abs(float(strict[k]) - float(relaxed[k])) > 1e-9 for k in ('cash', '18k', '21k', '22k', '24k'))
-            if relaxed_cnt > strict_cnt and differs:
-                balances_by_supplier[sid] = dict(relaxed)
-            else:
-                balances_by_supplier[sid] = dict(strict)
 
     # (B) Mis-tagged lines posted to supplier accounts (supplier_id NULL)
     if allowed_account_ids:

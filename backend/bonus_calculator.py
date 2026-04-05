@@ -22,6 +22,7 @@ from models import (
     EmployeeBonus,
     Invoice,
     db,
+    get_race_points_per_gram,
 )
 
 
@@ -181,22 +182,51 @@ class BonusCalculator:
 
         eligible_invoices = eligible_invoices_query.all()
 
-        # نحسب الربح لكل فاتورة ثم نستبعد الفواتير غير المربحة (<= 0)
+        # نحسب الربح لكل فاتورة بنفس منطق السباق (profit_gold = وزن العيار الرئيسي)
         # حتى لا تُسقط فاتورة بخسارة مكافأة الفترة بالكامل.
+
+        conditions = rule.conditions or {}
+        min_profit = conditions.get("min_profit", 0)
+        profit_type = conditions.get("profit_type", "cash")
+
+        # ── نوع الفواتير التي تُعتبر "مشتريات" (نفس قاموس السباق) ──
+        PURCHASE_TYPES = {'شراء من عميل', 'شراء'}
+
         profitable_invoice_ids = []
         profitable_per_invoice_profit = []
+        total_profit_cash = 0.0
+        total_profit_gold = 0.0
+
         for inv in eligible_invoices:
-            if inv.invoice_type == 'شراء من عميل':
-                profit_val = inv.profit_cash or 0
+            # ─ ربح ذهب: نفس الحقل الذي يستخدمه السباق ─
+            inv_profit_gold = float(inv.profit_gold or 0.0)
+
+            # ─ ربح نقدي ─
+            if inv.invoice_type in PURCHASE_TYPES:
+                # للمشتريات: الربح الحقيقي هو وزن الذهب المُقتنى (inv_profit_gold).
+                # لا ربح نقدي صافٍ للمشتريات.
+                inv_profit_cash = 0.0
             else:
-                total_value = inv.total or 0
-                tax_value = inv.total_tax or 0
-                cost_value = inv.total_cost or 0
-                commission = inv.commission_amount or 0
-                profit_val = total_value - tax_value - cost_value - commission
+                total_value = float(inv.total or 0)
+                tax_value = float(inv.total_tax or 0)
+                cost_value = float(inv.total_cost or 0)
+                commission = float(inv.commission_amount or 0)
+                inv_profit_cash = total_value - tax_value - cost_value - commission
+
+            # ─ اختر قيمة الربح حسب نوع القاعدة ─
+            if profit_type == "gold":
+                profit_val = inv_profit_gold
+            elif profit_type == "cash":
+                profit_val = inv_profit_cash
+            else:
+                # "both": وزن للمشتريات + نقد للمبيعات
+                profit_val = inv_profit_gold if inv.invoice_type in PURCHASE_TYPES else inv_profit_cash
+
             if profit_val > 0:
                 profitable_invoice_ids.append(inv.id)
                 profitable_per_invoice_profit.append(profit_val)
+                total_profit_cash += inv_profit_cash
+                total_profit_gold += inv_profit_gold
 
         invoice_count = len(profitable_invoice_ids)
         if invoice_count == 0:
@@ -205,17 +235,12 @@ class BonusCalculator:
         invoice_ids = profitable_invoice_ids
         per_invoice_profit = profitable_per_invoice_profit
 
-        total_profit_cash = sum(per_invoice_profit)
-        total_profit_gold = 0
-
-        conditions = rule.conditions or {}
-        min_profit = conditions.get("min_profit", 0)
-        profit_type = conditions.get("profit_type", "cash")
-
         if profit_type == "cash":
             target_profit = total_profit_cash
         elif profit_type == "gold":
-            target_profit = total_profit_gold
+            # نحوّل الجرام لنقاط باستخدام إعداد سباق الأداء الديناميكي
+            points_per_gram = get_race_points_per_gram()
+            target_profit = total_profit_gold * points_per_gram
         else:
             target_profit = total_profit_cash + total_profit_gold
 
@@ -240,6 +265,7 @@ class BonusCalculator:
             "total_profit_gold": total_profit_gold,
             "target_profit": target_profit,
             "profit_type": profit_type,
+            "points_per_gram": get_race_points_per_gram() if profit_type == "gold" else None,
             "invoice_count": invoice_count,
             "min_profit": min_profit,
             "base_salary": employee.salary,

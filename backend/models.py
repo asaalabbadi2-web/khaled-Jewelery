@@ -32,6 +32,22 @@ def _configured_main_karat_f() -> float:
         return 21.0
 
 
+def get_race_points_per_gram() -> float:
+    """Return points_per_gram from سباق الأداء settings (dynamic, not hardcoded)."""
+    import json as _json
+    try:
+        settings = Settings.query.first()  # type: ignore[name-defined]
+        if settings:
+            raw = getattr(settings, 'sales_race_settings', None)
+            if raw:
+                cfg = _json.loads(raw)
+                if isinstance(cfg, dict) and 'points_per_gram' in cfg:
+                    return max(0.0, float(cfg['points_per_gram']))
+    except Exception:
+        pass
+    return 10.0
+
+
 PAYMENT_METHOD_ALLOWED_INVOICE_TYPES = [
     'بيع',
     'شراء من عميل',

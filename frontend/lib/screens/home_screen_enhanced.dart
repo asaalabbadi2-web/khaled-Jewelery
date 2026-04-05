@@ -15,6 +15,7 @@ import '../models/quick_action_item.dart';
 import '../widgets/gold_price_bar.dart';
 import '../widgets/gold_price_ticker_bar.dart';
 import '../widgets/app_logo.dart';
+import '../app_route_observer.dart';
 import 'items_screen_enhanced.dart';
 import 'add_customer_screen.dart';
 import 'add_item_screen_enhanced.dart';
@@ -79,7 +80,8 @@ class HomeScreenEnhanced extends StatefulWidget {
   State<HomeScreenEnhanced> createState() => _HomeScreenEnhancedState();
 }
 
-class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
+class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
+    with RouteAware, WidgetsBindingObserver {
   final ApiService api = ApiService();
 
   // Isolate LTR runs (dates/numbers) inside Arabic sentences to avoid
@@ -121,6 +123,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   String? _leaderboardError;
   String _leaderboardPeriod = 'today';
   DateTime? _leaderboardFetchedAt;
+  bool _showAllLeaderboardEmployees = false;
   int _lastHandledSalesRaceRefreshToken = 0;
   bool _pendingLeaderboardRefresh = false;
   String _salesRaceSettingsFingerprint = '';
@@ -138,30 +141,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   bool isLoading = true;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final settings = Provider.of<SettingsProvider>(context);
-
-    final newSymbol = settings.currencySymbol;
-    final newDecimals = settings.decimalPlaces;
-    final newMainKarat = settings.mainKarat;
-
-    if (newSymbol != currencySymbol ||
-        newDecimals != currencyDecimalPlaces ||
-        newMainKarat != mainKarat) {
-      setState(() {
-        currencySymbol = newSymbol;
-        currencyDecimalPlaces = newDecimals;
-        mainKarat = newMainKarat;
-      });
-    }
-
-    _syncGoldPriceAutoRefresh(settings);
-    _syncSalesRaceSettingsRefresh(settings);
-  }
-
-  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
+    WidgetsBinding.instance.removeObserver(this);
     _goldPriceAutoRefreshTimer?.cancel();
     _goldPriceAutoRefreshTimer = null;
 
@@ -241,8 +223,56 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadAllData();
   }
+
+  // ── RouteAware: fires when a pushed screen pops back to here ──
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
+    final settings = Provider.of<SettingsProvider>(context);
+
+    final newSymbol = settings.currencySymbol;
+    final newDecimals = settings.decimalPlaces;
+    final newMainKarat = settings.mainKarat;
+
+    if (newSymbol != currencySymbol ||
+        newDecimals != currencyDecimalPlaces ||
+        newMainKarat != mainKarat) {
+      setState(() {
+        currencySymbol = newSymbol;
+        currencyDecimalPlaces = newDecimals;
+        mainKarat = newMainKarat;
+      });
+    }
+
+    _syncGoldPriceAutoRefresh(settings);
+    _syncSalesRaceSettingsRefresh(settings);
+  }
+
+  @override
+  void didPopNext() {
+    // Returned from a sub-screen — refresh leaderboard immediately.
+    _loadLeaderboard(period: _leaderboardPeriod);
+  }
+
+  // ── WidgetsBindingObserver: fires when app resumes from background ──
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadLeaderboard(period: _leaderboardPeriod);
+    }
+  }
+
+  // Unused WidgetsBindingObserver stubs
+  @override void didChangeAccessibilityFeatures() {}
+  @override void didChangeLocales(List<Locale>? locales) {}
+  @override void didChangeMetrics() {}
+  @override void didChangePlatformBrightness() {}
+  @override void didChangeTextScaleFactor() {}
+  @override void didHaveMemoryPressure() {}
 
   Future<void> _loadAllData() async {
     try {
@@ -1058,7 +1088,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     }
     addDestination(
       icon: Icons.emoji_events_rounded,
-      title: isAr ? 'سباق المبيعات' : 'Sales Race',
+      title: isAr ? 'سباق الأداء' : 'Performance Race',
       color: AppColors.primaryGold,
       onSelected: () async {
         await Navigator.push(
@@ -1998,27 +2028,59 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
     final weeklyTarget = (data?['weekly_target_weight_g'] as num?)?.toDouble();
     final teamWeight = (data?['team_weight_g'] as num?)?.toDouble();
     final remainingWeight = (data?['remaining_weight_g'] as num?)?.toDouble();
+    final metric = (data?['metric'] ?? 'weight_g').toString();
 
     final weeklyTargetPoints = (data?['weekly_target_points'] as num?)?.toInt();
     final teamPoints = (data?['team_points'] as num?)?.toInt();
     final remainingPoints = (data?['remaining_points'] as num?)?.toInt();
     final targetProgress =
-        (data?['target_progress'] as num?)?.toDouble() ?? 0.0;
-
-    final isGoalAchieved = targetProgress >= 0.9999;
+      (data?['target_progress'] as num?)?.toDouble() ?? 0.0;
+    final usePointsGoal = metric == 'points';
+    final goalCurrentValue = usePointsGoal
+      ? (teamPoints?.toDouble())
+      : teamWeight;
+    final goalTargetValue = usePointsGoal
+      ? (weeklyTargetPoints?.toDouble())
+      : weeklyTarget;
+    final goalRemainingValue = usePointsGoal
+      ? (remainingPoints?.toDouble())
+      : remainingWeight;
+    final effectiveTargetProgress =
+      (goalCurrentValue != null &&
+        goalTargetValue != null &&
+        goalTargetValue > 0)
+      ? (goalCurrentValue / goalTargetValue).clamp(0.0, 1.0)
+      : targetProgress.clamp(0.0, 1.0);
+    final isGoalAchieved =
+      (goalCurrentValue != null &&
+        goalTargetValue != null &&
+        goalTargetValue > 0 &&
+        goalCurrentValue >= goalTargetValue) ||
+      targetProgress >= 0.9999;
     final Color goalColor = isGoalAchieved
         ? AppColors.success
-        : (targetProgress < 0.5 ? AppColors.warning : AppColors.info);
-
-    final metric = (data?['metric'] ?? 'weight_g').toString();
+      : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);
+    final goalPercentText =
+      '${(effectiveTargetProgress * 100).round()}%';
+    final goalCurrentText = usePointsGoal
+      ? '${(goalCurrentValue ?? 0).toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
+      : '${(goalCurrentValue ?? 0).toStringAsFixed(1)} ${isAr ? 'جم' : 'g'}';
+    final goalTargetText = usePointsGoal
+      ? '${(goalTargetValue ?? 0).toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
+      : '${(goalTargetValue ?? 0).toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}';
+    final goalRemainingText = goalRemainingValue == null
+      ? null
+      : (usePointsGoal
+          ? '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
+          : '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}');
 
     final microcopy = isWeek
         ? (isGoalAchieved
-              ? (isAr ? 'إنجاز جماعي رائع 👏' : 'Amazing team achievement 👏')
+          ? (isAr ? 'إنجاز جماعي واضح هذا الأسبوع' : 'A strong team achievement this week')
               : (isAr
-                    ? 'معًا نحو تحقيق هدف الأسبوع 💪'
-                    : 'Together towards the weekly goal 💪'))
-        : (isAr ? 'هدف اليوم: سرعة + دقة' : 'Today\'s goal: speed + accuracy');
+            ? 'تقدم متدرج نحو إغلاق هدف الأسبوع'
+            : 'Steady progress toward closing the weekly goal'))
+        : (isAr ? 'هدف اليوم: اجعل العميل بطلاً في قصتك، وليس مجرد رقم في مبيعاتك.' : 'Today\'s goal: speed + accuracy');
 
     String? fallbackText() {
       if (!isFallback || effectiveStartDate == null) return null;
@@ -2069,12 +2131,24 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
 
     final effectivePeriodLabel = effectivePeriodText();
     final updateLabel = lastUpdatedText();
+    final allRanking = ranking.whereType<Map>().toList(growable: false);
+    final topRanking = allRanking.take(3).toList(growable: false);
+    final extraRanking = allRanking.skip(3).toList(growable: false);
+    final remainingEmployeesCount = allRanking.length > topRanking.length
+        ? allRanking.length - topRanking.length
+        : 0;
+    final championName = (champion?['name'] ?? '').toString().trim();
+    final metricPillText = switch (metric) {
+      'count' => isAr ? 'عرض حسب الفواتير' : 'Invoice View',
+      'points' => isAr ? 'عرض حسب النقاط' : 'Points View',
+      _ => isAr ? 'عرض حسب الوزن' : 'Weight View',
+    };
 
-    String rankLabel(int index) {
-      if (index == 0) return '🥇';
-      if (index == 1) return '🥈';
-      if (index == 2) return '🥉';
-      return '${index + 1}';
+    String rankRoleLabel(int index) {
+      if (index == 0) return isAr ? 'المتصدر' : 'Leader';
+      if (index == 1) return isAr ? 'الثاني' : 'Second';
+      if (index == 2) return isAr ? 'الثالث' : 'Third';
+      return isAr ? 'مشارك' : 'Ranked';
     }
 
     Widget buildRow(Map row, int index) {
@@ -2083,6 +2157,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
       final share = (row['share'] as num?)?.toDouble() ?? 0.0;
       final count = (row['count'] as num?)?.toInt() ?? 0;
       final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
+      final purchaseAmount = (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
 
       final isLeader = index == 0;
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
@@ -2091,57 +2166,122 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         2 => const Color(0xFFCD7F32),
         _ => valueColor,
       };
-
+      final medalAccent = switch (index) {
+        0 => AppColors.primaryGold,
+        1 => const Color(0xFF98A2B3),
+        2 => const Color(0xFFCD7F32),
+        _ => valueColor,
+      };
+      final medalSurface = switch (index) {
+        0 => [AppColors.lightGold.withValues(alpha: 0.42), Colors.white],
+        1 => [
+          const Color(0xFFF3F4F6),
+          const Color(0xFFE5E7EB).withValues(alpha: 0.35),
+        ],
+        2 => [
+          const Color(0xFFFDF1E7),
+          const Color(0xFFF6D7BE).withValues(alpha: 0.4),
+        ],
+        _ => [colorScheme.surface, colorScheme.surface],
+      };
+      final roleBadgeColor = index == 0
+          ? AppColors.darkGold
+          : colorScheme.onSurface.withValues(alpha: 0.62);
       final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
-      final metricText = (metric == 'count')
-          ? (isAr ? '$count فاتورة' : '$count $invoiceLabelEn')
-          : (metric == 'points')
-          ? (isAr
-                ? showInvoiceCount
-                      ? '${score.toStringAsFixed(0)} نقطة • $count فاتورة'
-                      : '${score.toStringAsFixed(0)} نقطة'
-                : showInvoiceCount
-                ? '${score.toStringAsFixed(0)} pts • $count $invoiceLabelEn'
-                : '${score.toStringAsFixed(0)} pts')
-          : (isAr
-                ? showInvoiceCount
-                      ? '${score.toStringAsFixed(1)} جم • $count فاتورة'
-                      : '${score.toStringAsFixed(1)} جم'
-                : showInvoiceCount
-                ? '${score.toStringAsFixed(1)} g • $count $invoiceLabelEn'
-                : '${score.toStringAsFixed(1)} g');
+      final invoiceSummary = showInvoiceCount
+          ? (metric == 'points'
+            ? (isAr ? '$count حركة' : '$count transactions')
+            : (isAr ? '$count فاتورة بيع' : '$count sales $invoiceLabelEn'))
+          : (metric == 'points'
+            ? (isAr ? 'حركة مبيعات ومشتريات' : 'Sales and purchases activity')
+            : (isAr ? 'حركة بيع' : 'Sales activity'));
+      final scoreValueText = switch (metric) {
+        'count' => count.toString(),
+        'points' => score.toStringAsFixed(0),
+        _ => score.toStringAsFixed(1),
+      };
+      final scoreUnitText = switch (metric) {
+        'count' => isAr ? 'فاتورة' : 'Invoices',
+        'points' => isAr ? 'نقطة' : 'Points',
+        _ => isAr ? 'جم' : 'g',
+      };
+      final amountSummary = isAr
+          ? 'مبيعات ${salesAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol • مشتريات ${purchaseAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol'
+          : 'Sales ${salesAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol • Purchases ${purchaseAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol';
+      final avatarText = name.trim().isEmpty
+          ? '?'
+          : name
+                .trim()
+                .split(RegExp(r'\s+'))
+                .where((part) => part.isNotEmpty)
+                .take(2)
+                .map((part) => part.characters.first)
+                .join();
 
       return Padding(
         padding: const EdgeInsetsDirectional.only(bottom: 12),
         child: Container(
-          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+          padding: const EdgeInsetsDirectional.fromSTEB(14, 12, 14, 12),
           decoration: BoxDecoration(
-            color: colorScheme.onSurface.withValues(alpha: 0.035),
-            borderRadius: BorderRadius.circular(16),
+            color: colorScheme.surface,
+            gradient: index < 3
+                ? LinearGradient(
+                    begin: AlignmentDirectional.topStart,
+                    end: AlignmentDirectional.bottomEnd,
+                    colors: medalSurface,
+                  )
+                : null,
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: colorScheme.onSurface.withValues(alpha: 0.08),
+              color: index < 3
+                  ? medalAccent.withValues(alpha: index == 0 ? 0.42 : 0.22)
+                  : colorScheme.onSurface.withValues(alpha: 0.08),
             ),
+            boxShadow: index < 3
+                ? [
+                    BoxShadow(
+                      color: medalAccent.withValues(
+                        alpha: index == 0 ? 0.16 : 0.08,
+                      ),
+                      blurRadius: index == 0 ? 22 : 14,
+                      offset: Offset(0, index == 0 ? 8 : 4),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               SizedBox(
                 width: 28,
                 child: Text(
-                  rankLabel(index),
+                  '${index + 1}',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: index < 3
+                        ? medalAccent.withValues(alpha: 0.82)
+                        : colorScheme.onSurface.withValues(alpha: 0.3),
                   ),
                 ),
               ),
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: valueColor.withValues(alpha: 0.12),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: medalAccent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: medalAccent.withValues(alpha: 0.18),
+                  ),
+                ),
                 child: Text(
-                  name.isNotEmpty ? name.characters.first : '?',
-                  style: TextStyle(
-                    color: valueColor,
-                    fontWeight: FontWeight.bold,
+                  avatarText,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: medalAccent,
+                    fontWeight: FontWeight.w800,
+                    height: 2.0,
                   ),
                 ),
               ),
@@ -2159,47 +2299,144 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w700,
+                              color: colorScheme.onSurface,
                             ),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Text(
-                          metricText,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: valueColor,
-                            fontWeight: FontWeight.w800,
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: roleBadgeColor.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            rankRoleLabel(index),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: roleBadgeColor,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 4),
+                    Text(
+                      invoiceSummary,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurface.withValues(alpha: 0.58),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     if (showSalesAmountPerEmployee) ...[
-                      const SizedBox(height: 4),
-                      Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: Text(
-                          isAr
-                              ? 'مبلغ المبيعات: ${salesAmount.toStringAsFixed(2)} $currencySymbol'
-                              : 'Sales amount: ${salesAmount.toStringAsFixed(2)} $currencySymbol',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: AppColors.primaryGold,
-                            fontWeight: FontWeight.w800,
-                          ),
+                      const SizedBox(height: 3),
+                      Text(
+                        amountSummary,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.darkGold,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
                     const SizedBox(height: 6),
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(
-                        value: share.clamp(0.0, 1.0),
-                        minHeight: 8,
-                        backgroundColor: colorScheme.onSurface.withValues(
-                          alpha: 0.08,
+                      borderRadius: BorderRadius.circular(999),
+                      child: Container(
+                        height: 9,
+                        color: colorScheme.onSurface.withValues(alpha: 0.07),
+                        child: TweenAnimationBuilder<double>(
+                          tween: Tween<double>(
+                            begin: 0,
+                            end: share.clamp(0.0, 1.0),
+                          ),
+                          duration: Duration(milliseconds: 650 + (index * 120)),
+                          curve: Curves.easeOutCubic,
+                          builder: (context, value, child) {
+                            return Stack(
+                              children: [
+                                FractionallySizedBox(
+                                  alignment: AlignmentDirectional.centerStart,
+                                  widthFactor: value,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: AlignmentDirectional.centerStart,
+                                        end: AlignmentDirectional.centerEnd,
+                                        colors: [
+                                          progressColor.withValues(alpha: 0.72),
+                                          medalAccent,
+                                        ],
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: medalAccent.withValues(
+                                            alpha: 0.18,
+                                          ),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          progressColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 72),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: index == 0
+                            ? AppColors.primaryGold.withValues(alpha: 0.14)
+                            : valueColor.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: index == 0
+                              ? AppColors.primaryGold.withValues(alpha: 0.28)
+                              : valueColor.withValues(alpha: 0.14),
                         ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            scoreValueText,
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              color: medalAccent,
+                              fontWeight: FontWeight.w800,
+                              fontSize: index == 0 ? 23 : null,
+                            ),
+                          ),
+                          const SizedBox(height: 1),
+                          Text(
+                            scoreUnitText,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.46,
+                              ),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -2217,72 +2454,169 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    isAr
-                        ? (isWeek ? 'تحدي الأسبوع' : 'سباق المبيعات — اليوم')
-                        : (isWeek ? 'Weekly Challenge' : 'Sales Race — Today'),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: AlignmentDirectional.topStart,
+                  end: AlignmentDirectional.bottomEnd,
+                  colors: [
+                    AppColors.lightGold.withValues(alpha: 0.24),
+                    Colors.white,
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Icon(
-                  Icons.emoji_events_rounded,
-                  color: AppColors.primaryGold,
-                  size: 28,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.24),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: SegmentedButton<String>(
-                segments: <ButtonSegment<String>>[
-                  ButtonSegment<String>(
-                    value: 'today',
-                    label: Text(isAr ? 'اليوم' : 'Today'),
-                  ),
-                  ButtonSegment<String>(
-                    value: 'week',
-                    label: Text(isAr ? 'الأسبوع' : 'Week'),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryGold.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Icon(
+                          Icons.emoji_events_rounded,
+                          color: AppColors.darkGold,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isAr
+                                  ? (isWeek
+                                        ? 'سباق الأداء — الأسبوع'
+                                        : 'سباق الأداء — اليوم')
+                                  : (isWeek
+                                        ? 'Sales Race — Week'
+                                        : 'Sales Race — Today'),
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.deepGold,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              microcopy,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: colorScheme.onSurface.withValues(
+                                  alpha: 0.68,
+                                ),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (showChampion && championName.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                isAr
+                                    ? 'المتصدر الآن: $championName'
+                                    : 'Current leader: $championName',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: AppColors.darkGold,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      SegmentedButton<String>(
+                        segments: <ButtonSegment<String>>[
+                          ButtonSegment<String>(
+                            value: 'today',
+                            label: Text(isAr ? 'اليوم' : 'Today'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'week',
+                            label: Text(isAr ? 'الأسبوع' : 'Week'),
+                          ),
+                        ],
+                        selected: <String>{_leaderboardPeriod},
+                        onSelectionChanged: _leaderboardLoading
+                            ? null
+                            : (selection) {
+                                final next = selection.isNotEmpty
+                                    ? selection.first
+                                    : _leaderboardPeriod;
+                                if (next == _leaderboardPeriod) return;
+                                setState(() {
+                                  _leaderboardPeriod = next;
+                                  _showAllLeaderboardEmployees = false;
+                                });
+                                _loadLeaderboard(period: next);
+                              },
+                        showSelectedIcon: false,
+                        style: _leaderboardSegmentedButtonStyle(theme),
+                      ),
+                    ],
                   ),
                 ],
-                selected: <String>{_leaderboardPeriod},
-                onSelectionChanged: _leaderboardLoading
-                    ? null
-                    : (selection) {
-                        final next = selection.isNotEmpty
-                            ? selection.first
-                            : _leaderboardPeriod;
-                        if (next == _leaderboardPeriod) return;
-                        setState(() {
-                          _leaderboardPeriod = next;
-                        });
-                        _loadLeaderboard(period: next);
-                      },
-                showSelectedIcon: false,
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              microcopy,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.65),
-              ),
-            ),
+            const SizedBox(height: 10),
             if (effectivePeriodLabel != null || updateLabel != null) ...[
-              const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 6,
                 children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.lightGold.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: AppColors.primaryGold.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Text(
+                      metricPillText,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.deepGold,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (topRanking.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.onSurface.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        _showAllLeaderboardEmployees
+                            ? (isAr ? 'عرض كامل الفريق' : 'Full team view')
+                            : (isAr
+                                  ? 'أفضل ${topRanking.length} موظفين'
+                                  : 'Top ${topRanking.length} staff'),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.72),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   if (effectivePeriodLabel != null)
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -2361,11 +2695,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                 ),
               ),
             ],
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             if (!raceEnabled)
               Text(
                 isAr
-                    ? 'تم إيقاف سباق المبيعات من الإعدادات.'
+                    ? 'تم إيقاف سباق الأداء من الإعدادات.'
                     : 'Sales race is disabled from settings.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurface.withValues(alpha: 0.7),
@@ -2393,12 +2727,20 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                           weeklyTarget != null &&
                           teamWeight != null))) ...[
                 Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: colorScheme.onSurface.withValues(alpha: 0.04),
-                    borderRadius: BorderRadius.circular(16),
+                    gradient: LinearGradient(
+                      begin: AlignmentDirectional.topStart,
+                      end: AlignmentDirectional.bottomEnd,
+                      colors: [
+                        Colors.white,
+                        goalColor.withValues(alpha: 0.06),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(18),
                     border: Border.all(
-                      color: colorScheme.onSurface.withValues(alpha: 0.08),
+                      color: goalColor.withValues(alpha: 0.14),
                     ),
                   ),
                   child: Column(
@@ -2407,64 +2749,190 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              Text(
-                                isAr ? 'هدف الفريق' : 'Team Goal',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              if (isGoalAchieved) ...[
-                                const SizedBox(width: 8),
-                                const Text(
-                                  '🎉',
-                                  style: TextStyle(fontSize: 16),
-                                ),
-                              ],
-                            ],
-                          ),
-                          Row(
-                            children: [
-                              Text(
-                                metric == 'points'
-                                    ? (isAr
-                                          ? '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} نقطة'
-                                          : '${(teamPoints ?? 0)} / ${(weeklyTargetPoints ?? 0)} pts')
-                                    : (isAr
-                                          ? '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} جم'
-                                          : '${(teamWeight ?? 0.0).toStringAsFixed(1)} / ${(weeklyTarget ?? 0.0).toStringAsFixed(0)} g'),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface.withValues(
-                                    alpha: 0.65,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isAr ? 'هدف الفريق الأسبوعي' : 'Weekly Team Goal',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: goalColor,
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 10),
-                              Text(
-                                '${(targetProgress.clamp(0.0, 1.0) * 100).round()}%',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: goalColor,
+                                const SizedBox(height: 2),
+                                Text(
+                                  isGoalAchieved
+                                      ? (isAr
+                                            ? 'أداء جماعي مكتمل بإيقاع قوي'
+                                            : 'A completed team push with strong momentum')
+                                      : (isAr
+                                            ? 'قراءة سريعة لما تحقق هذا الأسبوع'
+                                            : 'A quick view of what the team achieved this week'),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.68,
+                                    ),
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: goalColor.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: goalColor.withValues(alpha: 0.16),
                               ),
-                            ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  goalPercentText,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: goalColor,
+                                  ),
+                                ),
+                                Text(
+                                  isAr ? 'إنجاز' : 'Progress',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.55,
+                                    ),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.82),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: colorScheme.onSurface.withValues(alpha: 0.06),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isAr ? 'المحقق حتى الآن' : 'Achieved so far',
+                                    style: theme.textTheme.labelMedium?.copyWith(
+                                      color: colorScheme.onSurface.withValues(alpha: 0.56),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    goalCurrentText,
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      color: goalColor,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Container(
+                              width: 1,
+                              height: 42,
+                              color: colorScheme.onSurface.withValues(alpha: 0.08),
+                            ),
+                            const SizedBox(width: 14),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isAr ? 'الهدف' : 'Target',
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    color: colorScheme.onSurface.withValues(alpha: 0.56),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  goalTargetText,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    color: AppColors.primaryGold,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!isGoalAchieved && goalRemainingText != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 7,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.warning.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: AppColors.warning.withValues(alpha: 0.16),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.timelapse_rounded,
+                                  size: 15,
+                                  color: AppColors.warning,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  isAr
+                                      ? 'المتبقي: $goalRemainingText'
+                                      : 'Remaining: $goalRemainingText',
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    color: AppColors.warning,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
                       ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(999),
                         child: TweenAnimationBuilder<double>(
                           tween: Tween<double>(
                             begin: 0,
-                            end: targetProgress.clamp(0.0, 1.0),
+                            end: effectiveTargetProgress,
                           ),
                           duration: const Duration(milliseconds: 700),
                           builder: (context, value, child) =>
                               LinearProgressIndicator(
                                 value: value,
-                                minHeight: 10,
+                                minHeight: 8,
                                 backgroundColor: colorScheme.onSurface
                                     .withValues(alpha: 0.08),
                                 valueColor: AlwaysStoppedAnimation<Color>(
@@ -2473,60 +2941,27 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                               ),
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Text(
-                        (metric == 'points')
-                            ? ((remainingPoints != null && remainingPoints > 0)
-                                  ? (isAr
-                                        ? 'بقيت $remainingPoints نقطة لتحقيق هدف الأسبوع'
-                                        : '$remainingPoints pts remaining to hit the weekly goal')
-                                  : (isAr
-                                        ? 'تم تحقيق هدف الأسبوع! 🎉'
-                                        : 'Weekly goal achieved! 🎉'))
-                            : ((remainingWeight != null && remainingWeight > 0)
-                                  ? (isAr
-                                        ? 'بقيت ${remainingWeight.toStringAsFixed(0)} جم لتحقيق هدف الأسبوع'
-                                        : '${remainingWeight.toStringAsFixed(0)} g remaining to hit the weekly goal')
-                                  : (isAr
-                                        ? 'تم تحقيق هدف الأسبوع! 🎉'
-                                        : 'Weekly goal achieved! 🎉')),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.75),
-                        ),
+                                isGoalAchieved
+                                    ? (isAr
+                                          ? 'استمروا بهذا النسق، الفريق أنهى الهدف وبقيت فرصة لتوسيع الفارق.'
+                                          : 'Keep this tempo, the team has closed the goal and can widen the lead.')
+                                        : (isAr
+                                          ? 'المؤشر يتحرك بوضوح، والهدف ما زال في المتناول هذا الأسبوع.'
+                                          : 'The indicator is moving clearly, and the goal remains within reach this week.'),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurface.withValues(alpha: 0.76),
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
                       ),
                     ],
                   ),
                 ),
-                if (isGoalAchieved)
-                  Padding(
-                    padding: const EdgeInsetsDirectional.only(top: 10),
-                    child: Align(
-                      alignment: AlignmentDirectional.centerEnd,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.success.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: AppColors.success.withValues(alpha: 0.28),
-                          ),
-                        ),
-                        child: Text(
-                          isAr ? '🎉 اكتمل الأسبوع' : '🎉 Week Completed',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.success,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
                 const SizedBox(height: 12),
               ],
-              if (ranking.isEmpty)
+              if (allRanking.isEmpty)
                 Text(
                   isAr
                       ? (isWeek
@@ -2538,103 +2973,146 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
                   style: theme.textTheme.bodySmall,
                 )
               else ...[
-                if (showChampion && champion != null)
-                  Padding(
-                    padding: const EdgeInsetsDirectional.only(bottom: 12),
-                    child: Row(
-                      children: [
-                        Text(
-                          (champion['badge'] ?? '🥇').toString(),
-                          style: const TextStyle(fontSize: 18),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            isAr
-                                ? 'المتصدّر: ${champion['name'] ?? ''}'
-                                : 'Champion: ${champion['name'] ?? ''}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
+                for (int i = 0; i < topRanking.length; i++)
+                  buildRow(topRanking[i], i),
+                if (extraRanking.isNotEmpty)
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 320),
+                    curve: Curves.easeInOutCubic,
+                    alignment: AlignmentDirectional.topCenter,
+                    child: ClipRect(
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        opacity: _showAllLeaderboardEmployees ? 1 : 0,
+                        child: _showAllLeaderboardEmployees
+                            ? Column(
+                                children: [
+                                  const SizedBox(height: 4),
+                                  for (int i = 0; i < extraRanking.length; i++)
+                                    buildRow(extraRanking[i], i + topRanking.length),
+                                ],
+                              )
+                            : const SizedBox.shrink(),
+                      ),
                     ),
                   ),
-                for (int i = 0; i < ranking.length; i++)
-                  if (ranking[i] is Map) buildRow(ranking[i] as Map, i),
+                if (remainingEmployeesCount > 0 || _showAllLeaderboardEmployees)
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(top: 6),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: () {
+                          setState(() {
+                            _showAllLeaderboardEmployees =
+                                !_showAllLeaderboardEmployees;
+                          });
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGold.withValues(
+                              alpha: _showAllLeaderboardEmployees ? 0.14 : 0.08,
+                            ),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: AppColors.primaryGold.withValues(alpha: 0.16),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              AnimatedRotation(
+                                duration: const Duration(milliseconds: 220),
+                                turns: _showAllLeaderboardEmployees ? 0.5 : 0,
+                                child: Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  size: 18,
+                                  color: AppColors.darkGold,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 180),
+                                transitionBuilder: (child, animation) =>
+                                    FadeTransition(opacity: animation, child: child),
+                                child: Text(
+                                  _showAllLeaderboardEmployees
+                                      ? (isAr
+                                            ? 'إخفاء بقية الموظفين'
+                                            : 'Hide remaining staff')
+                                      : (isAr
+                                            ? 'عرض تقدم $remainingEmployeesCount موظفين آخرين'
+                                            : 'Show progress for $remainingEmployeesCount more staff'),
+                                  key: ValueKey<bool>(_showAllLeaderboardEmployees),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: AppColors.darkGold,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ],
             if (raceEnabled &&
                 adminSummary != null &&
-                ((adminSummary['total_cash'] != null) ||
-                    (adminSummary['total_profit'] != null))) ...[
+                ((adminSummary['total_sales_amount'] != null) ||
+                    (adminSummary['total_purchase_amount'] != null) ||
+                    (adminSummary['total_points'] != null))) ...[
               const SizedBox(height: 8),
               Row(
                 children: [
-                  if (adminSummary['total_cash'] != null)
+                  if (adminSummary['total_sales_amount'] != null) ...[
                     Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: colorScheme.primary.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: colorScheme.primary.withValues(alpha: 0.18),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isAr ? 'إجمالي النقد' : 'Total Cash',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${(adminSummary['total_cash'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
+                      child: _buildLeaderboardSummaryTile(
+                        theme: theme,
+                        colorScheme: colorScheme,
+                        icon: Icons.point_of_sale_rounded,
+                        label: isAr ? 'مبلغ المبيعات' : 'Sales',
+                        value:
+                            '${(adminSummary['total_sales_amount'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                        accent: AppColors.primaryGold,
                       ),
                     ),
-                  if (adminSummary['total_cash'] != null &&
-                      adminSummary['total_profit'] != null)
-                    const SizedBox(width: 12),
-                  if (adminSummary['total_profit'] != null)
+                    const SizedBox(width: 8),
+                  ],
+                  if (adminSummary['total_purchase_amount'] != null) ...[
                     Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: colorScheme.secondary.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: colorScheme.secondary.withValues(
-                              alpha: 0.18,
-                            ),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isAr ? 'إجمالي الربح' : 'Total Profit',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${(adminSummary['total_profit'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
+                      child: _buildLeaderboardSummaryTile(
+                        theme: theme,
+                        colorScheme: colorScheme,
+                        icon: Icons.shopping_bag_rounded,
+                        label: isAr ? 'مبلغ المشتريات' : 'Purchases',
+                        value:
+                            '${(adminSummary['total_purchase_amount'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                        accent: AppColors.darkGold,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  if (adminSummary['total_points'] != null)
+                    Expanded(
+                      child: _buildLeaderboardSummaryTile(
+                        theme: theme,
+                        colorScheme: colorScheme,
+                        icon: Icons.stars_rounded,
+                        label: isAr ? 'إجمالي النقاط' : 'Points',
+                        value: isAr
+                            ? '${(adminSummary['total_points'] ?? 0).toString()} نقطة'
+                            : '${(adminSummary['total_points'] ?? 0).toString()} pts',
+                        accent: AppColors.deepGold,
                       ),
                     ),
                 ],
@@ -2643,6 +3121,100 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildLeaderboardSummaryTile({
+    required ThemeData theme,
+    required ColorScheme colorScheme,
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color accent,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: AlignmentDirectional.topStart,
+          end: AlignmentDirectional.bottomEnd,
+          colors: [
+            Colors.white,
+            accent.withValues(alpha: 0.06),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, size: 18, color: accent),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.62),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: accent,
+                    fontSize: 17,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  ButtonStyle _leaderboardSegmentedButtonStyle(ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+    return ButtonStyle(
+      side: WidgetStateProperty.all(BorderSide.none),
+      shape: WidgetStateProperty.all(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      padding: WidgetStateProperty.all(
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      ),
+      textStyle: WidgetStateProperty.all(
+        theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      foregroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return AppColors.deepGold;
+        }
+        return colorScheme.onSurface.withValues(alpha: 0.72);
+      }),
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return AppColors.primaryGold.withValues(alpha: 0.9);
+        }
+        return Colors.white.withValues(alpha: 0.82);
+      }),
+      overlayColor: WidgetStateProperty.all(
+        AppColors.primaryGold.withValues(alpha: 0.08),
+      ),
+      elevation: WidgetStateProperty.all(0),
     );
   }
 
