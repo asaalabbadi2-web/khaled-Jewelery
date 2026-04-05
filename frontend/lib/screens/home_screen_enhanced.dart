@@ -254,15 +254,25 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   @override
   void didPopNext() {
-    // Returned from a sub-screen — refresh leaderboard immediately.
-    _loadLeaderboard(period: _leaderboardPeriod);
+    // Returned from a sub-screen — refresh leaderboard but only if data is stale (>30s).
+    final last = _leaderboardFetchedAt;
+    if (last == null || DateTime.now().difference(last) > const Duration(seconds: 30)) {
+      _loadLeaderboard(period: _leaderboardPeriod);
+    }
   }
 
   // ── WidgetsBindingObserver: fires when app resumes from background ──
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Only refresh when the app resumes AND data is at least 2 minutes old.
+    // On web, "resumed" fires on every window-focus event, so without this
+    // guard every click-back into the browser would spam API calls and cause
+    // unnecessary full-tree rebuilds (BackdropFilter is GPU-expensive).
     if (state == AppLifecycleState.resumed) {
-      _loadLeaderboard(period: _leaderboardPeriod);
+      final last = _leaderboardFetchedAt;
+      if (last == null || DateTime.now().difference(last) > const Duration(minutes: 2)) {
+        _loadLeaderboard(period: _leaderboardPeriod);
+      }
     }
   }
 
@@ -2006,6 +2016,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   Widget _buildLeaderboardCard(bool isAr) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
 
     final data = _leaderboardData;
     final config = data?['config'] as Map?;
@@ -2172,29 +2183,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         2 => const Color(0xFFCD7F32),
         _ => valueColor,
       };
-      final medalSurface = switch (index) {
-        0 => [AppColors.lightGold.withValues(alpha: 0.42), Colors.white],
-        1 => [
-          const Color(0xFFF3F4F6),
-          const Color(0xFFE5E7EB).withValues(alpha: 0.35),
-        ],
-        2 => [
-          const Color(0xFFFDF1E7),
-          const Color(0xFFF6D7BE).withValues(alpha: 0.4),
-        ],
-        _ => [colorScheme.surface, colorScheme.surface],
-      };
       final roleBadgeColor = index == 0
           ? AppColors.darkGold
           : colorScheme.onSurface.withValues(alpha: 0.62);
       final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
+      final invoiceLabelAr = count == 1 ? 'فاتورة بيع' : 'فواتير بيع';
       final invoiceSummary = showInvoiceCount
           ? (metric == 'points'
-            ? (isAr ? '$count حركة' : '$count transactions')
-            : (isAr ? '$count فاتورة بيع' : '$count sales $invoiceLabelEn'))
+            ? (isAr ? '$count فاتورة' : '$count transactions')
+            : (isAr ? '$count $invoiceLabelAr' : '$count sales $invoiceLabelEn'))
           : (metric == 'points'
-            ? (isAr ? 'حركة مبيعات ومشتريات' : 'Sales and purchases activity')
-            : (isAr ? 'حركة بيع' : 'Sales activity'));
+            ? (isAr ? 'فواتير مبيعات ومشتريات' : 'Sales and purchases activity')
+            : (isAr ? 'فواتير بيع' : 'Sales activity'));
       final scoreValueText = switch (metric) {
         'count' => count.toString(),
         'points' => score.toStringAsFixed(0),
@@ -2219,187 +2219,187 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 .join();
 
       return Padding(
-        padding: const EdgeInsetsDirectional.only(bottom: 12),
-        child: Container(
-          padding: const EdgeInsetsDirectional.fromSTEB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            color: colorScheme.surface,
-            gradient: index < 3
-                ? LinearGradient(
-                    begin: AlignmentDirectional.topStart,
-                    end: AlignmentDirectional.bottomEnd,
-                    colors: medalSurface,
-                  )
-                : null,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: index < 3
-                  ? medalAccent.withValues(alpha: index == 0 ? 0.42 : 0.22)
-                  : colorScheme.onSurface.withValues(alpha: 0.08),
+        padding: const EdgeInsetsDirectional.only(bottom: 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(
+              sigmaX: index < 3 ? 10 : 4,
+              sigmaY: index < 3 ? 10 : 4,
             ),
-            boxShadow: index < 3
-                ? [
-                    BoxShadow(
-                      color: medalAccent.withValues(
-                        alpha: index == 0 ? 0.16 : 0.08,
+            child: Container(
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? colorScheme.surfaceContainerHighest
+                        .withValues(alpha: index < 3 ? 0.65 : 0.50)
+                    : Colors.white.withValues(alpha: index < 3 ? 0.52 : 0.40),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: index < 3
+                      ? medalAccent.withValues(alpha: index == 0 ? 0.38 : 0.18)
+                      : colorScheme.onSurface.withValues(alpha: 0.07),
+                ),
+                boxShadow: index < 3
+                    ? [
+                        BoxShadow(
+                          color: medalAccent.withValues(
+                            alpha: index == 0 ? 0.12 : 0.06,
+                          ),
+                          blurRadius: index == 0 ? 18 : 10,
+                          offset: Offset(0, index == 0 ? 6 : 3),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 26,
+                    child: Text(
+                      '${index + 1}',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: index < 3
+                            ? medalAccent.withValues(alpha: 0.82)
+                            : colorScheme.onSurface.withValues(alpha: 0.3),
                       ),
-                      blurRadius: index == 0 ? 22 : 14,
-                      offset: Offset(0, index == 0 ? 8 : 4),
                     ),
-                  ]
-                : null,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox(
-                width: 28,
-                child: Text(
-                  '${index + 1}',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: index < 3
-                        ? medalAccent.withValues(alpha: 0.82)
-                        : colorScheme.onSurface.withValues(alpha: 0.3),
                   ),
-                ),
-              ),
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: medalAccent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: medalAccent.withValues(alpha: 0.18),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: medalAccent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(
+                        color: medalAccent.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        avatarText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: medalAccent,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-                child: Text(
-                  avatarText,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: medalAccent,
-                    fontWeight: FontWeight.w800,
-                    height: 2.0,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: colorScheme.onSurface,
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: colorScheme.onSurface,
+                                ),
+                              ),
                             ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: roleBadgeColor.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                rankRoleLabel(index),
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: roleBadgeColor,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          invoiceSummary,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurface.withValues(alpha: 0.58),
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 9,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: roleBadgeColor.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            rankRoleLabel(index),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: roleBadgeColor,
+                        if (showSalesAmountPerEmployee) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            amountSummary,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: AppColors.darkGold,
                               fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            height: 5,
+                            color: colorScheme.onSurface.withValues(alpha: 0.07),
+                            child: TweenAnimationBuilder<double>(
+                              tween: Tween<double>(
+                                begin: 0,
+                                end: share.clamp(0.0, 1.0),
+                              ),
+                              duration: Duration(milliseconds: 650 + (index * 120)),
+                              curve: Curves.easeOutCubic,
+                              builder: (context, value, child) {
+                                return Stack(
+                                  children: [
+                                    FractionallySizedBox(
+                                      alignment: AlignmentDirectional.centerStart,
+                                      widthFactor: value,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            begin: AlignmentDirectional.centerStart,
+                                            end: AlignmentDirectional.centerEnd,
+                                            colors: [
+                                              progressColor.withValues(alpha: 0.72),
+                                              medalAccent,
+                                            ],
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: medalAccent.withValues(
+                                                alpha: 0.18,
+                                              ),
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      invoiceSummary,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurface.withValues(alpha: 0.58),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (showSalesAmountPerEmployee) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        amountSummary,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppColors.darkGold,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 6),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        height: 9,
-                        color: colorScheme.onSurface.withValues(alpha: 0.07),
-                        child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(
-                            begin: 0,
-                            end: share.clamp(0.0, 1.0),
-                          ),
-                          duration: Duration(milliseconds: 650 + (index * 120)),
-                          curve: Curves.easeOutCubic,
-                          builder: (context, value, child) {
-                            return Stack(
-                              children: [
-                                FractionallySizedBox(
-                                  alignment: AlignmentDirectional.centerStart,
-                                  widthFactor: value,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: AlignmentDirectional.centerStart,
-                                        end: AlignmentDirectional.centerEnd,
-                                        colors: [
-                                          progressColor.withValues(alpha: 0.72),
-                                          medalAccent,
-                                        ],
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: medalAccent.withValues(
-                                            alpha: 0.18,
-                                          ),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 72),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
+                  ),
+                  const SizedBox(width: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 72),
+                    child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 13,
                         vertical: 10,
@@ -2407,12 +2407,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       decoration: BoxDecoration(
                         color: index == 0
                             ? AppColors.primaryGold.withValues(alpha: 0.14)
-                            : valueColor.withValues(alpha: 0.08),
+                            : medalAccent.withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(
                           color: index == 0
                               ? AppColors.primaryGold.withValues(alpha: 0.28)
-                              : valueColor.withValues(alpha: 0.14),
+                              : medalAccent.withValues(alpha: 0.14),
                         ),
                       ),
                       child: Column(
@@ -2439,36 +2439,38 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       );
     }
 
     return _buildGlassCard(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
             Container(
               width: double.infinity,
-              padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 12),
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 16, 16, 14),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: AlignmentDirectional.topStart,
                   end: AlignmentDirectional.bottomEnd,
                   colors: [
-                    AppColors.lightGold.withValues(alpha: 0.24),
-                    Colors.white,
+                    AppColors.primaryGold.withValues(alpha: 0.18),
+                    AppColors.lightGold.withValues(alpha: 0.10),
+                    isDark
+                        ? Colors.black.withValues(alpha: 0.15)
+                        : Colors.white.withValues(alpha: 0.60),
                   ],
+                  stops: const [0.0, 0.5, 1.0],
                 ),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: AppColors.primaryGold.withValues(alpha: 0.24),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
                 ),
               ),
               child: Column(
@@ -2481,8 +2483,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
-                          color: AppColors.primaryGold.withValues(alpha: 0.14),
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              AppColors.primaryGold.withValues(alpha: 0.22),
+                              AppColors.darkGold.withValues(alpha: 0.10),
+                            ],
+                          ),
                           borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: AppColors.primaryGold.withValues(alpha: 0.18),
+                          ),
                         ),
                         child: Icon(
                           Icons.emoji_events_rounded,
@@ -2511,24 +2523,38 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 4),
-                            Text(
-                              microcopy,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurface.withValues(
-                                  alpha: 0.68,
-                                ),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
                             if (showChampion && championName.isNotEmpty) ...[
-                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.star_rounded,
+                                    size: 14,
+                                    color: AppColors.primaryGold,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      isAr
+                                          ? 'المتصدر الآن: $championName'
+                                          : 'Current leader: $championName',
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: AppColors.darkGold,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ] else ...[
                               Text(
-                                isAr
-                                    ? 'المتصدر الآن: $championName'
-                                    : 'Current leader: $championName',
+                                microcopy,
                                 style: theme.textTheme.bodySmall?.copyWith(
-                                  color: AppColors.darkGold,
-                                  fontWeight: FontWeight.w700,
+                                  color: colorScheme.onSurface.withValues(
+                                    alpha: 0.58,
+                                  ),
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ],
@@ -2569,7 +2595,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ],
               ),
             ),
-            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
             if (effectivePeriodLabel != null || updateLabel != null) ...[
               Wrap(
                 spacing: 8,
@@ -2734,7 +2764,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       begin: AlignmentDirectional.topStart,
                       end: AlignmentDirectional.bottomEnd,
                       colors: [
-                        Colors.white,
+                        isDark
+                            ? colorScheme.surfaceContainerHighest
+                            : Colors.white,
                         goalColor.withValues(alpha: 0.06),
                       ],
                     ),
@@ -2822,7 +2854,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.82),
+                          color: isDark
+                              ? colorScheme.surface.withValues(alpha: 0.35)
+                              : Colors.white.withValues(alpha: 0.82),
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
                             color: colorScheme.onSurface.withValues(alpha: 0.06),
@@ -3118,9 +3152,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ],
               ),
             ],
+                ],
+              ),
+            ),
           ],
         ),
-      ),
     );
   }
 
@@ -3132,56 +3168,57 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     required String value,
     required Color accent,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: AlignmentDirectional.topStart,
-          end: AlignmentDirectional.bottomEnd,
-          colors: [
-            Colors.white,
-            accent.withValues(alpha: 0.06),
-          ],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: accent.withValues(alpha: 0.18)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: accent.withValues(alpha: 0.12)),
+                ),
+                child: Icon(icon, size: 18, color: accent),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: accent.withValues(alpha: 0.72),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      value,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: accent,
+                        fontSize: 18,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: accent.withValues(alpha: 0.14)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, size: 18, color: accent),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurface.withValues(alpha: 0.62),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    color: accent,
-                    fontSize: 17,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

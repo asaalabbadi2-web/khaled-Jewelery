@@ -15713,15 +15713,21 @@ def get_next_account_number_api(parent_number):
     """
     try:
         from account_number_generator import suggest_account_number_with_validation
-        
+
         result = suggest_account_number_with_validation(parent_number)
         return jsonify(result), 200
-        
+
+    except ValueError as e:
+        return jsonify({
+            'suggested_number': None,
+            'is_valid': False,
+            'message': str(e),
+        }), 400
     except Exception as e:
         return jsonify({
             'suggested_number': None,
             'is_valid': False,
-            'message': f'خطأ: {str(e)}'
+            'message': f'Failed to get next account number: {str(e)}',
         }), 400
 
 @api.route('/accounts/validate-number', methods=['POST'])
@@ -19389,7 +19395,7 @@ def get_home_leaderboard():
     if metric not in {'weight', 'count', 'points'}:
         metric = 'weight'
 
-    leaderboard_invoice_types = ['بيع', 'شراء', 'شراء من عميل'] if metric == 'points' else ['بيع']
+    leaderboard_invoice_types = ['بيع', 'شراء من عميل'] if metric == 'points' else ['بيع']
 
     def _resolve_period_bounds(period_value: str, anchor_dt: datetime | None = None):
         ref = anchor_dt or datetime.now()
@@ -19544,7 +19550,7 @@ def get_home_leaderboard():
 
             counts_by_employee[int(actor_id)] = counts_by_employee.get(int(actor_id), 0) + 1
             invoice_total = float(getattr(inv, 'total', 0.0) or 0.0)
-            if str(getattr(inv, 'invoice_type', '') or '').strip() in ('شراء', 'شراء من عميل'):
+            if str(getattr(inv, 'invoice_type', '') or '').strip() == 'شراء من عميل':
                 employee_purchase_map[int(actor_id)] = employee_purchase_map.get(int(actor_id), 0.0) + invoice_total
             else:
                 employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + invoice_total
@@ -19782,13 +19788,13 @@ def get_home_leaderboard():
                     0.0,
                 ).label('sales_total'),
                 func.coalesce(
-                    func.sum(case((Invoice.invoice_type.in_(['شراء', 'شراء من عميل']), Invoice.total), else_=0.0)),
+                    func.sum(case((Invoice.invoice_type == 'شراء من عميل', Invoice.total), else_=0.0)),
                     0.0,
                 ).label('purchase_total'),
                 func.coalesce(
                     func.sum(
                         case(
-                            (Invoice.invoice_type.in_(['بيع', 'شراء', 'شراء من عميل']), Invoice.profit_gold),
+                            (Invoice.invoice_type.in_(['بيع', 'شراء من عميل']), Invoice.profit_gold),
                             else_=0.0,
                         )
                     ),
@@ -19801,7 +19807,7 @@ def get_home_leaderboard():
             )
             .filter(
                 Invoice.is_posted.is_(True),
-                Invoice.invoice_type.in_(['بيع', 'شراء', 'شراء من عميل']),
+                Invoice.invoice_type.in_(['بيع', 'شراء من عميل']),
                 Invoice.date >= start_dt,
                 Invoice.date < end_dt,
             )
@@ -23051,12 +23057,19 @@ def create_journal_entry_from_voucher(voucher):
         
         # Cache SafeBox account ids so we do not remap those.
         safe_account_ids = set()
+        # Pre-fetch all Account objects touched by this voucher's lines.
+        # Eliminates N+1 Account.query.get() calls inside the JEL loop, which on
+        # PostgreSQL trigger a "Query-invoked autoflush" while a pending
+        # JournalEntryLine is in the session — causing the INSERT to fail.
+        _account_cache: dict = {}
         try:
             line_account_ids = list({l.account_id for l in account_lines if getattr(l, 'account_id', None) is not None})
             if line_account_ids:
                 for sb in SafeBox.query.filter(SafeBox.account_id.in_(line_account_ids)).all():
                     if getattr(sb, 'account_id', None) is not None:
                         safe_account_ids.add(int(sb.account_id))
+                for _a in Account.query.filter(Account.id.in_(line_account_ids)).all():
+                    _account_cache[int(_a.id)] = _a
         except Exception:
             safe_account_ids = set()
 
@@ -23076,7 +23089,7 @@ def create_journal_entry_from_voucher(voucher):
             if (amount_type or '').strip().lower() != 'gold':
                 return int(account_id)
             try:
-                acc = Account.query.get(int(account_id))
+                acc = _account_cache.get(int(account_id)) or Account.query.get(int(account_id))
             except Exception:
                 acc = None
             if not acc:

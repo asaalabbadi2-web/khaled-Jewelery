@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../providers/auth_provider.dart';
 import '../api_service.dart';
 import '../widgets/currency_manager_dialog.dart';
 import '../widgets/widgets.dart'; // Import shared widgets
@@ -314,19 +316,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         return 'مرتجع فاتورة شراء';
       default:
         return widget.returnType;
-    }
-  }
-
-  String _getReturnTypeDescription() {
-    switch (widget.returnType) {
-      case 'مرتجع بيع':
-        return 'استرجاع ذهب تم بيعه للعميل مع تحديث المخزون والدفعات.';
-      case 'مرتجع شراء':
-        return 'عكس عملية شراء من عميل وإرجاع الوزن إلى المخزون.';
-      case 'مرتجع شراء (مورد)':
-        return 'إرجاع ذهب للمورد مع تسوية حسابات المورد والخزينة.';
-      default:
-        return 'إدارة عمليات الاسترجاع المحاسبية للذهب.';
     }
   }
 
@@ -1437,9 +1426,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = _getReturnTypeDescription();
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: Text(_getReturnTypeDisplayName()),
@@ -1447,6 +1433,23 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         foregroundColor: Colors.white,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          Consumer<AuthProvider>(
+            builder: (context, auth, _) => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.person_outline, size: 14, color: Colors.white),
+                  const SizedBox(width: 4),
+                  Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'إعدادات الفاتورة',
@@ -1470,16 +1473,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-            child: InvoiceTypeBanner(
-              title: _getReturnTypeDisplayName(),
-              subtitle: subtitle,
-              color: AppColors.invoiceReturn,
-              icon: Icons.undo_rounded,
-              trailing: Text('نوع الفاتورة', style: theme.textTheme.labelLarge),
-            ),
-          ),
           const SizedBox(height: 8),
           Expanded(
             child: Stepper(

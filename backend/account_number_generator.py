@@ -9,7 +9,25 @@ Account Number Generator - مولد أرقام الحسابات التلقائي
 
 from typing import Optional
 
+import sqlalchemy as _sa
 from models import Account, db
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL compat: always cast account_number to BIGINT (8-byte), never INT.
+# INT (4-byte) overflows at 2,147,483,647.  Weight memo accounts under deep
+# hierarchies can exceed 10 digits (e.g. 7210000020) which triggers
+# psycopg2.errors.NumericValueOutOfRange on production PostgreSQL.
+# ─────────────────────────────────────────────────────────────────────────────
+_BIGINT = _sa.BigInteger
+
+
+def _cast_bigint(col):
+    """Cast the account_number column to BIGINT safely across SQLite and PostgreSQL."""
+    return db.cast(col, _BIGINT)
+
+
+# Max allowed digits for any auto-generated account number (prevent unbounded growth).
+_MAX_ACCOUNT_DIGITS = 10
 
 
 def _digits_only(value: str) -> str:
@@ -59,10 +77,16 @@ def _compute_child_range_and_step(parent_account_number: str) -> tuple[int, int,
         end = start + 999
         return start, end, 1, 7
 
-    # fallback: one extra digit
+    # fallback: one extra digit — guard against unbounded depth.
+    next_len = parent_len + 1
+    if next_len > _MAX_ACCOUNT_DIGITS:
+        raise ValueError(
+            f'رقم الحساب {parent_account_number} عميق جداً ({parent_len} خانة). '
+            f'الحد الأقصى المسموح به هو {_MAX_ACCOUNT_DIGITS} خانة.'
+        )
     start = parent_int * 10
     end = start + 9
-    return start, end, 1, parent_len + 1
+    return start, end, 1, next_len
 
 
 def _find_account_by_number(account_number: str) -> Optional[Account]:
@@ -93,6 +117,19 @@ def _suggest_next_weight_child_number(weight_parent_number: str) -> tuple[str, b
     financial_parent = _financial_parent_from_weight(weight_parent_number)
     start_range, end_range, step, child_len = _compute_child_range_and_step(financial_parent)
     use_spacing = step == 10
+
+    # Guard: reject if the weight candidate would exceed _MAX_ACCOUNT_DIGITS.
+    # e.g. financial parent '21000002' (8-digit) → candidate '721000020' (9 digits) is fine,
+    # but financial parent '210000002' (9-digit) → candidate '7210000020' (10 digits) would
+    # overflow PostgreSQL INTEGER (max 2,147,483,647).  BIGINT handles it but the number is
+    # unusable in practice; cap at _MAX_ACCOUNT_DIGITS to keep the chart manageable.
+    weight_start_str = f"7{start_range}"
+    if len(weight_start_str) > _MAX_ACCOUNT_DIGITS:
+        raise ValueError(
+            f'رقم الحساب الوزني الأب {weight_parent_number} عميق جداً ({len(weight_start_str)} خانة). '
+            f'الحد الأقصى المسموح به {_MAX_ACCOUNT_DIGITS} خانات. '
+            f'يُرجى اختيار أب من مستوى أعلى في الشجرة.'
+        )
 
     # Iterate the financial child range and pick first unused weight number.
     for candidate in range(start_range, end_range + 1, step):
@@ -142,12 +179,25 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
     """
     
     start_range, end_range, step, _child_len = _compute_child_range_and_step(parent_account_number)
-    
+
+    # Use LENGTH + LIKE prefix to pre-filter accounts with the correct digit count before
+    # casting to BIGINT.  This prevents NumericValueOutOfRange on PostgreSQL when unrelated
+    # long account numbers (e.g. legacy 7210000020) exist in the same table.
+    expected_len = len(str(end_range))
+    prefix_for_like = str(start_range)[:max(1, expected_len - 1)]
+
     # ابحث عن آخر رقم حساب مستخدم في هذا النطاق
-    last_account = Account.query.filter(
-        db.cast(Account.account_number, db.Integer) >= start_range,
-        db.cast(Account.account_number, db.Integer) <= end_range
-    ).order_by(db.cast(Account.account_number, db.Integer).desc()).first()
+    last_account = (
+        Account.query
+        .filter(
+            db.func.length(Account.account_number) == expected_len,
+            Account.account_number.like(f"{prefix_for_like}%"),
+            _cast_bigint(Account.account_number) >= start_range,
+            _cast_bigint(Account.account_number) <= end_range,
+        )
+        .order_by(_cast_bigint(Account.account_number).desc())
+        .first()
+    )
     
     if last_account:
         last_number = int(last_account.account_number)
@@ -169,13 +219,18 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
 def _first_unused_number_in_range(start_range: int, end_range: int, step: int = 1) -> str:
     """Return the first unused account_number within an integer range."""
 
+    expected_len = len(str(end_range))
+    prefix_for_like = str(start_range)[:max(1, expected_len - 1)]
+
     existing_numbers = {
         int(row[0])
         for row in (
             Account.query.with_entities(Account.account_number)
             .filter(
-                db.cast(Account.account_number, db.Integer) >= start_range,
-                db.cast(Account.account_number, db.Integer) <= end_range,
+                db.func.length(Account.account_number) == expected_len,
+                Account.account_number.like(f"{prefix_for_like}%"),
+                _cast_bigint(Account.account_number) >= start_range,
+                _cast_bigint(Account.account_number) <= end_range,
             )
             .all()
         )
@@ -247,11 +302,15 @@ def get_customer_account_capacity(customer_category: str = '1200') -> dict:
     start_range, end_range, _step, _child_len = _compute_child_range_and_step(customer_category)
     
     total_capacity = end_range - start_range + 1
-    
+
     # عدد الحسابات المستخدمة
+    expected_len = len(str(end_range))
+    prefix_for_like = str(start_range)[:max(1, expected_len - 1)]
     used_count = Account.query.filter(
-        db.cast(Account.account_number, db.Integer) >= start_range,
-        db.cast(Account.account_number, db.Integer) <= end_range
+        db.func.length(Account.account_number) == expected_len,
+        Account.account_number.like(f"{prefix_for_like}%"),
+        _cast_bigint(Account.account_number) >= start_range,
+        _cast_bigint(Account.account_number) <= end_range,
     ).count()
     
     available = total_capacity - used_count

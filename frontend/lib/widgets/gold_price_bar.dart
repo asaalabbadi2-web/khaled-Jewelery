@@ -603,26 +603,26 @@ class _GoldPriceBarPalette {
     }
 
     return const _GoldPriceBarPalette(
-      background: Color(0xFFFDFBF6),
+      background: Color(0xFFF9F3E5),
       gold: AppColors.deepGold,
-      goldSoft: Color(0x10D4AF37),
-      goldBorder: Color(0x1FD4AF37),
-      text: Color(0xFF4E3A12),
-      textSoft: Color(0xFF7C6328),
-      textMuted: Color(0xFFA88B53),
-      line: Color(0x14D4AF37),
-      lineSoft: Color(0x0FD4AF37),
-      bottomBorder: Color(0x1FD4AF37),
-      shadow: Color(0x08D4AF37),
+      goldSoft: Color(0x22D4AF37),
+      goldBorder: Color(0x38D4AF37),
+      text: Color(0xFF3A2908),
+      textSoft: Color(0xFF6B5220),
+      textMuted: Color(0xFF8D7340),
+      line: Color(0x22D4AF37),
+      lineSoft: Color(0x18D4AF37),
+      bottomBorder: Color(0x30D4AF37),
+      shadow: Color(0x12D4AF37),
     );
   }
 }
 
 class GoldPriceBarColors {
-  static const upText = Color(0xFF16624F);
-  static const upBg = Color(0xFFE0F4EE);
-  static const upBorder = Color(0xFF8ACDBA);
-  static const downText = Color(0xFF8D241C);
-  static const downBg = Color(0xFFFBE3DE);
-  static const downBorder = Color(0xFFD99083);
+  static const upText = Color(0xFF0E5240);
+  static const upBg = Color(0xFFD4F0E5);
+  static const upBorder = Color(0xFF6FBD9F);
+  static const downText = Color(0xFF7A1A14);
+  static const downBg = Color(0xFFF8D5CE);
+  static const downBorder = Color(0xFFC97A6E);
 }

@@ -189,8 +189,9 @@ class BonusCalculator:
         min_profit = conditions.get("min_profit", 0)
         profit_type = conditions.get("profit_type", "cash")
 
-        # ── نوع الفواتير التي تُعتبر "مشتريات" (نفس قاموس السباق) ──
-        PURCHASE_TYPES = {'شراء من عميل', 'شراء'}
+        # ── نوع الفواتير التي تُعتبر "مشتريات" في سباق الأداء ──
+        # شراء من عميل فقط (كسر) — لا تشمل شراء المورد
+        PURCHASE_TYPES = {'شراء من عميل'}
 
         profitable_invoice_ids = []
         profitable_per_invoice_profit = []

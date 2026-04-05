@@ -11,7 +11,6 @@ import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/sales_race_refresh_provider.dart';
 import 'add_customer_screen.dart';
-import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
 import '../widgets/party_picker_dialog.dart';
 import '../widgets/searchable_picker_field.dart';
@@ -3521,15 +3520,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         final bodyContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            InvoiceTypeBanner(
-              title: 'فاتورة بيع ذهب جديدة',
-              subtitle:
-                  'لبيع الذهب الجديد مع ضريبة القيمة المضافة ووسائل الدفع المتعددة',
-              color: AppColors.invoiceSaleNew,
-              icon: Icons.point_of_sale_rounded,
-              trailing: Text('نوع الفاتورة', style: theme.textTheme.labelLarge),
-            ),
-            const SizedBox(height: 16),
             _buildCustomerSection(theme),
             const SizedBox(height: 24),
             if (isWideLayout)
@@ -3652,7 +3642,64 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             foregroundColor: Colors.white,
             iconTheme: const IconThemeData(color: Colors.white),
             title: Text(_isEditMode ? 'تعديل فاتورة البيع' : 'فاتورة البيع '),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(26.0),
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.20),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: _goldPrice24k > 0
+                      ? Row(children: [
+                          const Icon(Icons.monetization_on_outlined, size: 12, color: Colors.amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                          ),
+                          const Padding(padding: EdgeInsets.symmetric(horizontal: 5), child: Text('|', style: TextStyle(color: Colors.white38, fontSize: 10))),
+                          ...([24, 22, 21, 18].map((k) {
+                            final gp = _goldPrice24k * k / 24;
+                            final isMain = k == _settingsProvider.mainKarat;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 10),
+                              child: Text(
+                                '${k}k: ${gp.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: isMain ? Colors.amber : Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: isMain ? FontWeight.w800 : FontWeight.w500,
+                                ),
+                              ),
+                            );
+                          }).toList()),
+                          const Text('ر.س/جم', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        ])
+                      : const Text(
+                          'جاري تحميل سعر الذهب...',
+                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                        ),
+                ),
+              ),
+            ),
             actions: [
+              Consumer<AuthProvider>(
+                builder: (context, auth, _) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.person_outline, size: 14, color: Colors.white),
+                      const SizedBox(width: 4),
+                      Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+                ),
+              ),
               IconButton(
                 tooltip: 'إكمال لاحقاً',
                 onPressed: _completeLater,

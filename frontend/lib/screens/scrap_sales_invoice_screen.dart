@@ -5,11 +5,11 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../providers/settings_provider.dart';
-import '../widgets/invoice_type_banner.dart';
 import '../widgets/invoice_settings_sheet.dart';
 import '../utils/invoice_direct_print.dart';
 import '../utils/arabic_number_formatter.dart';
 import '../utils.dart';
+import '../providers/auth_provider.dart';
 import 'settings_screen_enhanced.dart';
 
 enum _PreSaveDecision { cancel, proceed, proceedSuppressWarning }
@@ -1203,6 +1203,364 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   }
 
   // ==================== Submit Invoice ====================
+  Future<String?> _showPostSaveInvoiceSummary({
+    required Map<String, dynamic> invoice,
+    required bool approvalRequired,
+    String? approvalWarning,
+  }) async {
+    double asDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '') ?? 0.0;
+    }
+
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final total = asDouble(invoice['total']);
+    final paid = asDouble(invoice['amount_paid']);
+    final remaining = total - paid;
+    final totalWeight = asDouble(invoice['total_weight']);
+    final totalTax = asDouble(invoice['total_tax']);
+    final invoiceId = invoice['id']?.toString() ?? '';
+
+    final customerName =
+        (invoice['customer_name'] ?? invoice['customer'] ?? '')
+            .toString()
+            .trim();
+
+    Widget line(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                ),
+              ),
+            ),
+            Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 14,
+              bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.success.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Icon(
+                        Icons.check_circle,
+                        color: AppColors.success,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        approvalRequired
+                            ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
+                            : 'تم حفظ الفاتورة',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(sheetContext, null),
+                      icon: const Icon(Icons.close),
+                      tooltip: 'إغلاق',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (invoiceId.isNotEmpty) line('رقم الفاتورة', '#$invoiceId'),
+                if (customerName.isNotEmpty) line('العميل', customerName),
+                const Divider(height: 18),
+                line(
+                  'الإجمالي',
+                  '${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                ),
+                line(
+                  'المدفوع',
+                  '${paid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                ),
+                line(
+                  'المتبقي',
+                  '${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                ),
+                if (totalWeight > 0)
+                  line('إجمالي الوزن', '${totalWeight.toStringAsFixed(3)} جم'),
+                if (totalTax > 0)
+                  line(
+                    'الضريبة',
+                    '${totalTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                  ),
+                if ((approvalWarning ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.warning.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Text(
+                      approvalWarning!,
+                      style: theme.textTheme.bodyMedium?.copyWith(height: 1.3),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () =>
+                                Navigator.pop(sheetContext, 'print'),
+                            icon: const Icon(Icons.print),
+                            label: const Text('طباعة'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () =>
+                                Navigator.pop(sheetContext, 'share'),
+                            icon: const Icon(Icons.share, size: 18),
+                            label: const Text('مشاركة'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextButton(
+                            onPressed: () => Navigator.pop(sheetContext, null),
+                            child: const Text('تم'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<bool> _showPreSaveInvoiceSummary({
+    required String customerLabel,
+    required int itemsCount,
+    required double total,
+    required double totalWeight,
+    required double totalTax,
+    required double totalCost,
+    required double paidCash,
+    required double remaining,
+    required bool allowPartialPayments,
+  }) async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final warnings = <String>[];
+    if (!allowPartialPayments && remaining.abs() > 0.01) {
+      warnings.add('⚠️ هذا الإعداد يتطلب سداد كامل الفاتورة قبل الحفظ.');
+    }
+    if (remaining > 0.01) {
+      warnings.add('⚠️ الفاتورة آجل/جزئي: يوجد مبلغ متبقي.');
+    }
+    if (totalCost > 0 && total + 0.01 < totalCost) {
+      warnings.add('⚠️ سعر البيع أقل من التكلفة (قد تحتاج اعتماد مدير).');
+    }
+
+    Widget line(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                ),
+              ),
+            ),
+            Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: colorScheme.surface,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+          ),
+          builder: (sheetContext) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 14,
+                  bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGold.withValues(
+                              alpha: 0.10,
+                            ),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(Icons.receipt_long),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'ملخص الفاتورة قبل الحفظ',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetContext, false),
+                          icon: const Icon(Icons.close),
+                          tooltip: 'إغلاق',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (customerLabel.trim().isNotEmpty)
+                      line('العميل', customerLabel.trim()),
+                    line('عدد الأصناف', itemsCount.toString()),
+                    const Divider(height: 18),
+                    line(
+                      'الإجمالي',
+                      '${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    if (totalTax > 0)
+                      line(
+                        'الضريبة',
+                        '${totalTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      ),
+                    if (totalWeight > 0)
+                      line(
+                        'إجمالي الوزن',
+                        '${totalWeight.toStringAsFixed(3)} جم',
+                      ),
+                    line(
+                      'المدفوع (نقدي)',
+                      '${paidCash.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    line(
+                      'المتبقي',
+                      '${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    ),
+                    if (warnings.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: AppColors.warning.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Text(
+                          warnings.join('\n'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(sheetContext, false),
+                            child: const Text('رجوع'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => Navigator.pop(sheetContext, true),
+                            icon: const Icon(Icons.save),
+                            label: const Text('حفظ الفاتورة'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ) ??
+        false;
+  }
+
   Future<void> _submitInvoice() async {
     if (_items.isEmpty) {
       _showError('يرجى إضافة أصناف للفاتورة');
@@ -1290,6 +1648,40 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       suppressPostSaveApprovalWarning =
           decision == _PreSaveDecision.proceedSuppressWarning;
     }
+
+    // ✅ ملخص قبل الحفظ (حفظ/رجوع)
+    String customerLabel = 'عميل نقدي';
+    if (_selectedCustomerId != null) {
+      try {
+        final match = widget.customers.firstWhere(
+          (c) => c['id'].toString() == _selectedCustomerId.toString(),
+        );
+        customerLabel = (match['name'] ?? match['customer_name'] ?? 'عميل')
+            .toString();
+      } catch (_) {
+        customerLabel = 'عميل';
+      }
+    }
+
+    final totalWeightForSummary = _items.fold<double>(
+      0.0,
+      (sum, item) => sum + item.weight,
+    );
+    final totalTaxForSummary =
+        _items.fold<double>(0.0, (sum, item) => sum + item.tax);
+
+    final proceed = await _showPreSaveInvoiceSummary(
+      customerLabel: customerLabel,
+      itemsCount: _items.length,
+      total: total,
+      totalWeight: totalWeightForSummary,
+      totalTax: totalTaxForSummary,
+      totalCost: totalCost,
+      paidCash: totalPaid,
+      remaining: remaining,
+      allowPartialPayments: allowPartialPayments,
+    );
+    if (!proceed) return;
 
     try {
       final apiService = ApiService();
@@ -1419,46 +1811,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
         final shouldPrint = _uiAutoOpenPrintAfterSave
             ? 'print'
-            : await showDialog<String>(
-                context: context,
-                barrierDismissible: false,
-                builder: (dialogContext) {
-                  return AlertDialog(
-                    title: Text(
-                      approvalRequired
-                          ? 'تم حفظ الفاتورة (تحتاج اعتماد)'
-                          : 'تم حفظ الفاتورة',
-                    ),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          '✅ تم حفظ الفاتورة #${invoiceForPrint['id'] ?? ''}'
-                          '${approvalWarning != null ? "\n\n$approvalWarning" : ""}'
-                          '\n\nاختر الإجراء:',
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton.icon(
-                          onPressed: () => Navigator.pop(dialogContext, 'print'),
-                          icon: const Icon(Icons.print),
-                          label: const Text('طباعة'),
-                        ),
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                          onPressed: () => Navigator.pop(dialogContext, 'share'),
-                          icon: const Icon(Icons.share, size: 18),
-                          label: const Text('مشاركة'),
-                        ),
-                        const SizedBox(height: 4),
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext, null),
-                          child: const Text('تم'),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+            : await _showPostSaveInvoiceSummary(
+                invoice: invoiceForPrint,
+                approvalRequired: approvalRequired,
+                approvalWarning: approvalWarning,
               );
 
         if (!context.mounted) return;
@@ -1784,14 +2140,6 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         final bodyContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            InvoiceTypeBanner(
-              title: 'فاتورة بيع ذهب كسر',
-              subtitle:
-                  'مخصصة لبيع الذهب المستعمل بعد إعادة تقييم الوزن والسعر',
-              color: AppColors.invoiceSaleScrap,
-              icon: Icons.handshake_outlined,
-              trailing: Text('نوع الفاتورة', style: theme.textTheme.labelLarge),
-            ),
             _buildCustomerSection(theme),
             const SizedBox(height: 24),
             if (isWideLayout)
@@ -1818,6 +2166,42 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                         _buildActionButtons(),
                         const SizedBox(height: 24),
                         _buildPaymentSection(),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed:
+                                _items.isEmpty ||
+                                    _payments.isEmpty ||
+                                    _remainingAmount > 0.01
+                                ? null
+                                : _submitInvoice,
+                            icon: const Icon(
+                              Icons.check_circle_outline,
+                              size: 24,
+                            ),
+                            label: Text(
+                              _remainingAmount > 0.01
+                                  ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+                                  : 'حفظ الفاتورة',
+                            ),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 18,
+                                horizontal: 24,
+                              ),
+                              textStyle: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                              backgroundColor: colorScheme.primary,
+                              foregroundColor: colorScheme.onPrimary,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                       ],
                     ),
                   ),
@@ -1831,12 +2215,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               _buildActionButtons(),
               const SizedBox(height: 24),
               _buildPaymentSection(),
-            ],
-            const SizedBox(height: 32),
-            Align(
-              alignment: Alignment.center,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
                 child: FilledButton.icon(
                   onPressed:
                       _items.isEmpty ||
@@ -1844,7 +2225,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           _remainingAmount > 0.01
                       ? null
                       : _submitInvoice,
-                  icon: const Icon(Icons.check_circle_outline),
+                  icon: const Icon(Icons.check_circle_outline, size: 24),
                   label: Text(
                     _remainingAmount > 0.01
                         ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
@@ -1852,18 +2233,22 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                   ),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
-                      vertical: 16,
+                      vertical: 18,
                       horizontal: 24,
                     ),
-                    textStyle: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    textStyle: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
                     backgroundColor: colorScheme.primary,
                     foregroundColor: colorScheme.onPrimary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
               ),
-            ),
+              const SizedBox(height: 10),
+            ],
           ],
         );
 
@@ -1873,7 +2258,64 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
             foregroundColor: Colors.white,
             iconTheme: const IconThemeData(color: Colors.white),
             title: const Text('فاتورة بيع الكسر'),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(26.0),
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.20),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: _goldPrice24k > 0
+                      ? Row(children: [
+                          const Icon(Icons.monetization_on_outlined, size: 12, color: Colors.amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                          ),
+                          const Padding(padding: EdgeInsets.symmetric(horizontal: 5), child: Text('|', style: TextStyle(color: Colors.white38, fontSize: 10))),
+                          ...([24, 22, 21, 18].map((k) {
+                            final gp = _goldPrice24k * k / 24;
+                            final isMain = k == _settingsProvider.mainKarat;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 10),
+                              child: Text(
+                                '${k}k: ${gp.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: isMain ? Colors.amber : Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: isMain ? FontWeight.w800 : FontWeight.w500,
+                                ),
+                              ),
+                            );
+                          }).toList()),
+                          const Text('ر.س/جم', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        ])
+                      : const Text(
+                          'جاري تحميل سعر الذهب...',
+                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                        ),
+                ),
+              ),
+            ),
             actions: [
+              Consumer<AuthProvider>(
+                builder: (context, auth, _) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.person_outline, size: 14, color: Colors.white),
+                      const SizedBox(width: 4),
+                      Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+                ),
+              ),
               IconButton(
                 tooltip: 'تحديث سعر الذهب',
                 onPressed: _loadSettings,
@@ -2837,8 +3279,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               ),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(0, 56),
-                backgroundColor: AppColors.karat24,
-                foregroundColor: Colors.white,
+                backgroundColor: isDark
+                    ? AppColors.karat24
+                    : AppColors.primaryGold,
+                foregroundColor: isDark ? Colors.white : Colors.black,
                 disabledBackgroundColor: theme.disabledColor.withValues(
                   alpha: 0.2,
                 ),
