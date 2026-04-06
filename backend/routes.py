@@ -23102,7 +23102,12 @@ def create_journal_entry_from_voucher(voucher):
             return int(account_id)
 
         # Resolve expected party account id (so we can tag it even if misconfigured as a SafeBox account).
+        # IMPORTANT: use a SAVEPOINT so that if ensure_*_accounts() triggers a db.session.flush() that
+        # raises an IntegrityError, only the savepoint is rolled back — NOT the outer transaction.
+        # Without a savepoint, a flush failure inside the bare try/except would leave PostgreSQL in an
+        # InFailedSqlTransaction state, making every subsequent INSERT in this function fail.
         expected_party_account_id = None
+        _party_sp = db.session.begin_nested()
         try:
             if getattr(voucher, 'party_type', None) == 'supplier' and getattr(voucher, 'supplier_id', None):
                 supplier = Supplier.query.get(int(voucher.supplier_id))
@@ -23112,7 +23117,9 @@ def create_journal_entry_from_voucher(voucher):
                 customer = Customer.query.get(int(voucher.customer_id))
                 if customer:
                     expected_party_account_id = int(ensure_customer_accounts(customer).financial.id)
+            _party_sp.commit()
         except Exception:
+            _party_sp.rollback()
             expected_party_account_id = None
 
         # إنشاء سطور القيد المحاسبي من سطور السند

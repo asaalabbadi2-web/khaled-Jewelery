@@ -35,16 +35,23 @@ def _get_parent_id_hint_for_memo_root(prefix: str) -> Optional[int]:
     try:
         # Avoid choosing the prefix root itself (e.g. '71'), because that would
         # return parent_id=7 and place 71000 under 7. We want 71000 under 71.
-        sibling = (
+        # NOTE: Sort in Python instead of using db.cast(account_number, Integer) in ORDER BY.
+        # PostgreSQL raises DataError if any account_number cannot be cast to INTEGER (e.g. contains
+        # letters or dashes), which poisons the transaction even when caught in Python.
+        rows = (
             Account.query.filter(
                 and_(
                     Account.account_number.like(f"{prefix}%"),
                     Account.account_number != str(prefix),
                 )
             )
-            .order_by(db.cast(Account.account_number, db.Integer).asc())
-            .first()
+            .all()
         )
+        numeric_rows = sorted(
+            (r for r in rows if r.account_number and r.account_number.isdigit()),
+            key=lambda a: int(a.account_number),
+        )
+        sibling = numeric_rows[0] if numeric_rows else None
         if sibling and sibling.parent_id:
             return sibling.parent_id
 
@@ -210,19 +217,17 @@ def _next_sequential_under_root(root_number: str, *, start_suffix: int = 1, widt
     start = base + start_suffix
     end = base + (10**width) - 1
 
-    last = (
-        Account.query.filter(
-            and_(
-                db.cast(Account.account_number, db.Integer) >= start,
-                db.cast(Account.account_number, db.Integer) <= end,
-            )
-        )
-        .order_by(db.cast(Account.account_number, db.Integer).desc())
-        .first()
-    )
+    # NOTE: Fetch by LIKE + filter in Python to avoid db.cast(account_number, Integer) which
+    # raises DataError on PostgreSQL when any account_number is non-numeric, poisoning the transaction.
+    prefix_rows = Account.query.filter(Account.account_number.like(f"{root_digits}%")).all()
+    candidates = [
+        int(r.account_number)
+        for r in prefix_rows
+        if r.account_number and r.account_number.isdigit() and start <= int(r.account_number) <= end
+    ]
 
-    if last:
-        next_number = int(last.account_number) + 1
+    if candidates:
+        next_number = max(candidates) + 1
     else:
         next_number = start
 
