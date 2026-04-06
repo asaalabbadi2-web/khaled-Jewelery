@@ -179,7 +179,17 @@ def compute_live_supplier_balances(
         func.coalesce(JournalEntry.is_deleted, False) == False,
         func.coalesce(JournalEntryLine.is_deleted, False) == False,
     ]
-    if _db_has_column('journal_entry', 'is_draft'):
+    if _db_has_column('journal_entry', 'is_draft') and _db_has_column('journal_entry', 'is_posted'):
+        # A posted entry (is_posted=True) MUST always be included even if is_draft was
+        # accidentally left True (data inconsistency after invoice/voucher workflows).
+        # Only exclude genuine unposted drafts: is_draft=True AND is_posted=False.
+        jl_filters.append(
+            or_(
+                func.coalesce(JournalEntry.is_posted, False) == True,
+                func.coalesce(JournalEntry.is_draft, False) == False,
+            )
+        )
+    elif _db_has_column('journal_entry', 'is_draft'):
         jl_filters.append(func.coalesce(JournalEntry.is_draft, False) == False)
     elif _db_has_column('journal_entry', 'is_posted'):
         jl_filters.append(func.coalesce(JournalEntry.is_posted, True) == True)
