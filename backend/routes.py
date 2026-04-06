@@ -29332,19 +29332,20 @@ def get_gram_profit_report():
 
             # ثانياً: items — نستخدم snapshot الوزن والعيار من InvoiceItem أولاً
             # (الكتالوج قد يتغير بعد إنشاء الفاتورة)
+            # ملاحظة: weight في InvoiceItem = الوزن الكلي للسطر (وليس لكل قطعة)
+            # لذلك لا نضرب في qty
             inv_items = getattr(inv, 'items', None) or []
             if inv_items:
                 for ii in inv_items:
-                    qty = float(ii.quantity or 1)
                     w = float(getattr(ii, 'weight', 0) or 0)
                     k = float(getattr(ii, 'karat', 0) or 0)
                     if w > 0 and k > 0:
-                        total += (w * k / main_karat) * qty
+                        total += w * k / main_karat
                     else:
-                        # fallback: كتالوج الأصناف
+                        # fallback: كتالوج الأصناف — weight_in_main_karat هو لقطعة واحدة
                         item_obj = getattr(ii, 'item', None)
                         if item_obj:
-                            total += float(item_obj.weight_in_main_karat() or 0) * qty
+                            total += float(item_obj.weight_in_main_karat() or 0)
                 if total > 0:
                     return total
 
@@ -29363,7 +29364,6 @@ def get_gram_profit_report():
             )
             .all()
         )
-        # مرتجعات البيع
         sell_return_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type.in_(['مرتجع بيع']))
@@ -29383,7 +29383,6 @@ def get_gram_profit_report():
             total_sales_cash += float(inv.total or 0.0)
             total_weight_sold += _inv_weight_in_main_karat(inv)
 
-        # طرح المرتجعات
         for inv in sell_return_invoices:
             total_sales_cash -= float(inv.total or 0.0)
             total_weight_sold -= _inv_weight_in_main_karat(inv)
@@ -29478,7 +29477,6 @@ def get_gram_profit_report():
             supplier_weight_purchased -= _inv_weight_in_main_karat(inv)
 
         # معدل الشراء = (عملاء + تسكير) ÷ وزنهما
-        # مشتريات الموردين (ذهب مقابل ذهب) لا تدخل
         cash_for_gold_purchases = total_purchases_cash + settlement_purchases_cash
         cash_for_gold_weight = total_weight_purchased + settlement_weight_purchased
 

@@ -9,14 +9,29 @@ Or locally:
     cd backend && python3 devtools/diagnose_gram_profit.py
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_here = os.path.dirname(os.path.abspath(__file__))
+_parent = os.path.dirname(_here)
+_grandparent = os.path.dirname(_parent)
+for _candidate in [_parent, _grandparent]:
+    if _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
 
-from app import app
+# Import app first — it sets up sys.path and calls db.init_app(app).
+# After that, always use bare 'models'/'config' (not 'backend.models')
+# to get the SAME db instance that app.py registered.
+try:
+    from app import app
+except ImportError:
+    from backend.app import app
+
+# app.py already added the backend dir to sys.path and did db.init_app,
+# so these bare imports get the correctly-registered db/models.
 from models import db, Invoice, InvoiceItem, Item, InvoiceKaratLine, Settings
+from config import MAIN_KARAT
+
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
-from config import MAIN_KARAT
 
 
 def get_main_karat():
@@ -75,15 +90,14 @@ def run():
                 if inv_items:
                     source = 'items'
                     for ii in inv_items:
-                        qty = float(ii.quantity or 1)
                         w = float(getattr(ii, 'weight', 0) or 0)
                         k = float(getattr(ii, 'karat', 0) or 0)
                         if w > 0 and k > 0:
-                            mk_weight += (w * k / main_karat) * qty
+                            mk_weight += w * k / main_karat
                         else:
                             item_obj = ii.item
                             if item_obj:
-                                mk_weight += float(item_obj.weight_in_main_karat() or 0) * qty
+                                mk_weight += float(item_obj.weight_in_main_karat() or 0)
 
             if mk_weight <= 0:
                 source = 'fallback'
