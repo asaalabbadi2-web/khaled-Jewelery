@@ -36,15 +36,17 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _response;
-  Map<String, dynamic>? _safeBoxRecon;
   bool _isLoading = false;
   String? _error;
-  String? _safeBoxReconError;
 
   int? _expandedVaultSafeBoxId;
   int? _pressedVaultSafeBoxId;
 
   _TimeRange _timeRange = _TimeRange.today;
+
+  // ── Gram Profit KPI ─────────────────────────────────────────────────────
+  Map<String, dynamic>? _gramProfitData;
+  bool _gramProfitLoading = false;
 
   // ── Overlay alert state ──────────────────────────────────────────────────
   /// Alerts that the user has manually dismissed (by id/text key).
@@ -196,32 +198,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     setState(() {
       _isLoading = true;
       _error = null;
-      _safeBoxReconError = null;
     });
 
     try {
-      final dashboardFuture = widget.api.getAdminDashboard();
-      final reconFuture = widget.api.getSafeBoxesReconciliation(
-        safeType: 'cash',
-      );
-
-      final result = await dashboardFuture;
+      final result = await widget.api.getAdminDashboard();
       if (!mounted) return;
-
-      Map<String, dynamic>? recon;
-      String? reconError;
-      try {
-        recon = await reconFuture;
-      } catch (e) {
-        reconError = e.toString();
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _response = result;
-        _safeBoxRecon = recon;
-        _safeBoxReconError = reconError;
-      });
+      setState(() => _response = result);
+      _loadGramProfit();
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -232,6 +215,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           if (mounted) _updateToastOverlay();
         });
       }
+    }
+  }
+
+  Future<void> _loadGramProfit() async {
+    try {
+      setState(() => _gramProfitLoading = true);
+      final now = DateTime.now();
+      final DateTime start;
+      switch (_timeRange) {
+        case _TimeRange.today:
+          start = DateTime(now.year, now.month, now.day);
+          break;
+        case _TimeRange.month:
+          start = DateTime(now.year, now.month, 1);
+          break;
+        case _TimeRange.year:
+          start = DateTime(now.year, 1, 1);
+          break;
+      }
+      final data = await widget.api.getGramProfitReport(
+        startDate: start,
+        endDate: now,
+      );
+      if (mounted) setState(() => _gramProfitData = data);
+    } catch (e) {
+      debugPrint('❌ Gram profit load error: $e');
+    } finally {
+      if (mounted) setState(() => _gramProfitLoading = false);
     }
   }
 
@@ -361,57 +372,45 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
           ),
 
-          // === 3. HERO Profit Card (always TODAY, range-independent) ===
+          // === 3. Time-range-dependent content ===
           SliverToBoxAdapter(
-            child: _buildHeroProfitSection(kpis, liquidity),
-          ),
+            child: Column(
+              children: [
+                // Gram Profit KPI (weight hero — top)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
+                  child: _buildGramProfitKpi(),
+                ),
 
-          // === 4. Safe Box Reconciliation ===
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(_s(16), _s(4), _s(16), 0),
-              child: _buildSafeBoxReconciliationCard(),
-            ),
-          ),
+                // Cash Profit Card (follows time range)
+                _buildHeroProfitSection(kpis, liquidity, salesPurchasesSummary),
 
-          // === 5. Time-range-dependent content (animated on switch) ===
-          SliverToBoxAdapter(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, animation) => FadeTransition(
-                opacity: animation,
-                child: child,
-              ),
-              child: Column(
-                key: ValueKey(_timeRange),
-                children: [
-                  // KPI Grid
-                  Padding(
-                    padding: EdgeInsets.all(_s(16)),
-                    child: _buildKpiGrid(
-                      kpis: kpis,
-                      series: series,
-                      goldByKarat: goldByKarat,
-                      liquidity: liquidity,
-                    ),
+                // KPI Grid
+                Padding(
+                  padding: EdgeInsets.all(_s(16)),
+                  child: _buildKpiGrid(
+                    kpis: kpis,
+                    series: series,
+                    goldByKarat: goldByKarat,
+                    liquidity: liquidity,
                   ),
-                  // Sales / Purchases / Expenses Summary
-                  Padding(
-                    padding: EdgeInsets.symmetric(
+                ),
+                // Sales / Purchases / Expenses Summary
+                Padding(
+                  padding: EdgeInsets.symmetric(
                       horizontal: _s(16),
                       vertical: _s(8),
                     ),
                     child: _buildSalesSummaryCard(salesPurchasesSummary),
                   ),
-                ],
-              ),
+              ],
             ),
           ),
 
-          // === 6. Vaults & Custody (Horizontal List) ===
+          // === 4. Vaults & Custody (Horizontal List) ===
           SliverToBoxAdapter(child: _buildVaultsSection(safeBoxes)),
 
-          // === 7. Sensitive Operations Feed ===
+          // === 5. Sensitive Operations Feed ===
           SliverToBoxAdapter(
             child: _buildSensitiveOperationsSection(sensitiveOps),
           ),
@@ -569,20 +568,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ChoiceChip(
                 label: Text(isArabic ? 'اليوم' : 'Today'),
                 selected: _timeRange == _TimeRange.today,
-                onSelected: (_) =>
-                    setState(() => _timeRange = _TimeRange.today),
+                onSelected: (_) {
+                  setState(() => _timeRange = _TimeRange.today);
+                  _loadGramProfit();
+                },
               ),
               ChoiceChip(
                 label: Text(isArabic ? 'هذا الشهر' : 'This Month'),
                 selected: _timeRange == _TimeRange.month,
-                onSelected: (_) =>
-                    setState(() => _timeRange = _TimeRange.month),
+                onSelected: (_) {
+                  setState(() => _timeRange = _TimeRange.month);
+                  _loadGramProfit();
+                },
               ),
               ChoiceChip(
                 label: Text(isArabic ? 'هذه السنة' : 'This Year'),
                 selected: _timeRange == _TimeRange.year,
-                onSelected: (_) =>
-                    setState(() => _timeRange = _TimeRange.year),
+                onSelected: (_) {
+                  setState(() => _timeRange = _TimeRange.year);
+                  _loadGramProfit();
+                },
               ),
             ],
           ),
@@ -1433,165 +1438,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Widget _buildSafeBoxReconciliationCard() {
-    final theme = Theme.of(context);
-    final isArabic = widget.isArabic;
-
-    if (_safeBoxRecon == null && _safeBoxReconError == null) {
-      return const SizedBox.shrink();
-    }
-
-    if (_safeBoxReconError != null) {
-      return Container(
-        padding: EdgeInsets.all(_s(12)),
-        decoration: BoxDecoration(
-          color: theme.cardColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.orange.shade200),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: _s(20)),
-            SizedBox(width: _s(8)),
-            Expanded(
-              child: Text(
-                isArabic
-                    ? 'تعذّر تحميل مطابقة الخزن مع دفتر الأستاذ'
-                    : 'Failed to load SafeBox reconciliation',
-                style: theme.textTheme.bodyMedium,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final data = _safeBoxRecon ?? <String, dynamic>{};
-    final mismatchCount = _asInt(data['mismatch_count']);
-    final threshold = _asDouble(data['threshold']);
-    final summary = (data['summary'] as List?) ?? const [];
-
-    final mismatches = <Map<String, dynamic>>[];
-    for (final row in summary) {
-      if (row is! Map) continue;
-      final r = row.cast<String, dynamic>();
-      final diff = _asDouble(r['diff']);
-      if (diff.abs() > threshold) {
-        mismatches.add(r);
-      }
-    }
-    mismatches.sort((a, b) {
-      final ad = _asDouble(a['abs_diff']);
-      final bd = _asDouble(b['abs_diff']);
-      return bd.compareTo(ad);
-    });
-    final top = mismatches.take(3).toList();
-
-    final ok = mismatchCount <= 0;
-    final headerColor = ok ? Colors.green.shade700 : Colors.red.shade700;
-    final borderColor = ok ? Colors.green.shade200 : Colors.red.shade200;
-
-    return Container(
-      padding: EdgeInsets.all(_s(12)),
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: borderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.account_balance, color: headerColor, size: _s(20)),
-              SizedBox(width: _s(8)),
-              Expanded(
-                child: Text(
-                  isArabic
-                      ? 'مطابقة الخزن مع دفتر الأستاذ (GL)'
-                      : 'SafeBox vs GL Reconciliation',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: headerColor,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => SafeBoxesScreen(
-                        api: widget.api,
-                        isArabic: widget.isArabic,
-                        balancesView: true,
-                        initialFilterType: 'cash',
-                        lockFilterType: true,
-                        titleOverride: isArabic ? 'خزن النقد - مطابقة' : 'Cash Safes - Reconcile',
-                      ),
-                    ),
-                  );
-                },
-                child: Text(isArabic ? 'عرض الخزن' : 'Open safes'),
-              ),
-            ],
-          ),
-          SizedBox(height: _s(8)),
-          Row(
-            children: [
-              Icon(
-                ok ? Icons.check_circle : Icons.error,
-                color: ok ? Colors.green : Colors.red,
-                size: _s(18),
-              ),
-              SizedBox(width: _s(8)),
-              Expanded(
-                child: Text(
-                  ok
-                      ? (isArabic
-                          ? 'كل خزن النقد مطابقة مع القيود'
-                          : 'All cash safes match the ledger')
-                      : (isArabic
-                          ? 'يوجد $mismatchCount خزنة غير مطابقة'
-                          : '$mismatchCount safes mismatched'),
-                  style: theme.textTheme.bodyMedium,
-                ),
-              ),
-            ],
-          ),
-          if (!ok && top.isNotEmpty) ...[
-            SizedBox(height: _s(8)),
-            ...top.map((r) {
-              final name = (r['safe_box_name'] ?? '').toString();
-              final diff = _asDouble(r['diff']);
-              return Padding(
-                padding: EdgeInsets.only(top: _s(4)),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        name.isEmpty
-                            ? (isArabic ? 'خزنة' : 'Safe')
-                            : name,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ),
-                    Text(
-                      _formatCurrency(diff),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: diff >= 0 ? Colors.green : Colors.red,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }),
-          ],
-        ],
-      ),
-    );
-  }
-
   // ── macOS-style floating notification toasts ──────────────────────────────
   /// Collects all current alerts from response data, filters dismissed ones.
   List<_AlertItem> _getAllAlerts() {
@@ -2403,30 +2249,58 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // HERO PROFIT SECTION (always shows TODAY, range-independent)
+  // HERO PROFIT SECTION (follows selected time range)
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildHeroProfitSection(
     Map<String, dynamic> kpis,
     Map<String, dynamic> liquidity,
+    Map<String, dynamic> salesPurchasesSummary,
   ) {
     final theme = Theme.of(context);
     final isArabic = widget.isArabic;
 
-    final todayProfit = _asDouble(kpis['today_profit']);
-    final marginValue = _asDoubleOrNull(kpis['today_profit_margin_pct']);
-    final vsYesterdayPct = _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct']);
-    final salesChangePct = _asDoubleOrNull(
-        (kpis['sales_today'] as Map?)?['change_pct'],
-    );
+    // Pull period-specific data from salesPurchasesSummary
+    final periodData =
+        (salesPurchasesSummary[_summaryPeriod] as Map<String, dynamic>?) ?? {};
+    final salesData = (periodData['sales'] as Map<String, dynamic>?) ?? {};
+    final purchasesData =
+        (periodData['purchases'] as Map<String, dynamic>?) ?? {};
+    final expensesData =
+        (periodData['expenses'] as Map<String, dynamic>?) ?? {};
 
-    final salesToday = _asDouble((kpis['sales_today'] as Map?)?['net_value']);
-    final purchasesToday = _asDouble((kpis['purchases_today'] as Map?)?['net_value']);
+    final periodSales = _asDouble(salesData['total_value']);
+    final periodPurchases = _asDouble(purchasesData['total_value']);
+    final periodExpenses = _asDouble(expensesData['total_value']);
+    final periodProfit = periodSales - periodPurchases - periodExpenses;
+    final periodMargin =
+        periodSales > 0 ? (periodProfit / periodSales) * 100 : null;
+
     final cashAvailable = _asDouble(liquidity['cash_available']);
 
-    final isProfit = todayProfit >= 0;
+    // Today-specific comparison data (only shown when range is today)
+    final vsYesterdayPct =
+        _timeRange == _TimeRange.today
+            ? _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct'])
+            : null;
+
+    final isProfit = periodProfit >= 0;
     final profitColor = isProfit ? AppColors.success : Colors.red.shade600;
 
-    // Build smart insight text
+    // Period title
+    final String periodTitle;
+    switch (_timeRange) {
+      case _TimeRange.today:
+        periodTitle = isArabic ? 'صافي ربح اليوم' : "Today's Net Profit";
+        break;
+      case _TimeRange.month:
+        periodTitle = isArabic ? 'صافي ربح الشهر' : "Monthly Net Profit";
+        break;
+      case _TimeRange.year:
+        periodTitle = isArabic ? 'صافي ربح السنة' : "Yearly Net Profit";
+        break;
+    }
+
+    // Smart insight
     String insightText = '';
     if (vsYesterdayPct != null) {
       final direction = vsYesterdayPct >= 0
@@ -2435,17 +2309,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       insightText = isArabic
           ? 'الربح $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
           : 'Profit $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% vs yesterday';
-    } else if (salesChangePct != null && salesChangePct.abs() > 0) {
-      final dirSales = salesChangePct >= 0
-          ? (isArabic ? 'ارتفعت' : 'up')
-          : (isArabic ? 'انخفضت' : 'down');
-      insightText = isArabic
-          ? 'المبيعات $dirSales ${salesChangePct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
-          : 'Sales $dirSales ${salesChangePct.abs().toStringAsFixed(1)}% vs yesterday';
     } else if (isProfit) {
       insightText = isArabic ? 'النتيجة: ربح ✓' : 'Result: Profit ✓';
     } else {
-      insightText = isArabic ? 'المصروف أعلى من المبيعات اليوم' : 'Expenses exceed sales today';
+      insightText = isArabic ? 'المصروفات تفوق المبيعات' : 'Expenses exceed sales';
     }
 
     return Padding(
@@ -2492,7 +2359,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
                 SizedBox(width: _s(6)),
                 Text(
-                  isArabic ? 'صافي الربح اليوم' : "Today's Net Profit",
+                  periodTitle,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                     color: theme.textTheme.bodySmall?.color,
@@ -2542,7 +2409,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
             // The hero number
             Text(
-              _formatCurrency(todayProfit),
+              _formatCurrency(periodProfit),
               style: theme.textTheme.displaySmall?.copyWith(
                 fontWeight: FontWeight.w900,
                 color: profitColor,
@@ -2552,7 +2419,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
 
             // Margin badge
-            if (marginValue != null) ...[
+            if (periodMargin != null) ...[
               SizedBox(height: _s(4)),
               Container(
                 padding: EdgeInsets.symmetric(
@@ -2564,7 +2431,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  '${marginValue.toStringAsFixed(1)}% ${isArabic ? "هامش ربح" : "margin"}',
+                  '${periodMargin.toStringAsFixed(1)}% ${isArabic ? "هامش ربح" : "margin"}',
                   style: TextStyle(
                     fontSize: _s(11),
                     fontWeight: FontWeight.bold,
@@ -2610,13 +2477,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 _heroChip(
                   icon: Icons.arrow_upward,
                   label: isArabic ? 'مبيعات' : 'Sales',
-                  value: _formatCurrency(salesToday),
+                  value: _formatCurrency(periodSales),
                   color: const Color(0xFF1B9E4B),
                 ),
                 _heroChip(
                   icon: Icons.arrow_downward,
                   label: isArabic ? 'مشتريات' : 'Purch.',
-                  value: _formatCurrency(purchasesToday),
+                  value: _formatCurrency(periodPurchases),
                   color: Colors.orange.shade700,
                 ),
               ],
@@ -2663,6 +2530,233 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   fontWeight: FontWeight.bold,
                   color: color,
                 ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 3b. GRAM PROFIT KPI  (follows time range)
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildGramProfitKpi() {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    if (_gramProfitLoading && _gramProfitData == null) {
+      return Container(
+        height: _s(100),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(_s(20)),
+          color: theme.cardColor,
+        ),
+        child: Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGold),
+        ),
+      );
+    }
+
+    final g = _gramProfitData;
+    if (g == null) return const SizedBox.shrink();
+
+    double gd(String k) => (g[k] is num) ? (g[k] as num).toDouble() : 0.0;
+
+    final netProfit = gd('net_profit');
+    final netProfitWeight = gd('net_profit_weight');
+    final avgSell = gd('avg_sell_per_gram');
+    final avgBuy = gd('avg_buy_per_gram');
+    final marginPerGram = gd('margin_per_gram');
+    final netMarginPct = gd('net_margin_pct');
+    final weightSold = gd('weight_sold');
+    final mainKarat = g['main_karat']?.toString() ?? '21';
+    final isProfit = netProfitWeight >= 0;
+
+    final profitColor = isProfit ? AppColors.success : Colors.red.shade600;
+
+    // Dynamic period label
+    final String periodLabel;
+    switch (_timeRange) {
+      case _TimeRange.today:
+        periodLabel = isArabic ? 'اليوم' : 'Today';
+        break;
+      case _TimeRange.month:
+        periodLabel = isArabic ? 'هذا الشهر' : 'This month';
+        break;
+      case _TimeRange.year:
+        periodLabel = isArabic ? 'هذه السنة' : 'This year';
+        break;
+    }
+
+    return Container(
+      padding: EdgeInsets.all(_s(20)),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: [
+            AppColors.primaryGold.withValues(alpha: 0.08),
+            theme.cardColor,
+          ],
+        ),
+        borderRadius: BorderRadius.circular(_s(20)),
+        border: Border.all(
+          color: AppColors.primaryGold.withValues(alpha: 0.20),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryGold.withValues(alpha: 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Title row ────────────────────────────────────────
+          Row(
+            children: [
+              Icon(
+                Icons.auto_graph,
+                color: AppColors.primaryGold,
+                size: _s(20),
+              ),
+              SizedBox(width: _s(6)),
+              Text(
+                isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: theme.textTheme.bodySmall?.color,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: _s(8),
+                  vertical: _s(3),
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGold.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  periodLabel,
+                  style: TextStyle(
+                    fontSize: _s(10),
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primaryGold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(10)),
+
+          // ── Hero number: WEIGHT PROFIT ───────────────────────
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _formatWeight(netProfitWeight),
+                style: theme.textTheme.displaySmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: profitColor,
+                  fontSize: _s(30),
+                  letterSpacing: -0.5,
+                ),
+              ),
+              SizedBox(width: _s(6)),
+              Padding(
+                padding: EdgeInsets.only(bottom: _s(4)),
+                child: Text(
+                  isArabic ? 'جم ($mainKarat)' : 'g ($mainKarat)',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: profitColor.withValues(alpha: 0.7),
+                    fontWeight: FontWeight.w600,
+                    fontSize: _s(13),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // ── Cash equivalent + Margin badge row ───────────────
+          SizedBox(height: _s(4)),
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: _s(8),
+                  vertical: _s(3),
+                ),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '≈ ${_formatCurrency(netProfit)}',
+                  style: TextStyle(
+                    fontSize: _s(11),
+                    fontWeight: FontWeight.bold,
+                    color: profitColor,
+                  ),
+                ),
+              ),
+              SizedBox(width: _s(6)),
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: _s(8),
+                  vertical: _s(3),
+                ),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${netMarginPct.toStringAsFixed(1)}% ${isArabic ? "هامش" : "margin"}',
+                  style: TextStyle(
+                    fontSize: _s(11),
+                    fontWeight: FontWeight.bold,
+                    color: profitColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          SizedBox(height: _s(14)),
+
+          // ── Chips row ────────────────────────────────────────
+          Wrap(
+            spacing: _s(8),
+            runSpacing: _s(6),
+            children: [
+              _heroChip(
+                icon: Icons.trending_up,
+                label: isArabic ? 'بيع/جم' : 'Sell/g',
+                value: _formatCurrency(avgSell),
+                color: const Color(0xFF1B9E4B),
+              ),
+              _heroChip(
+                icon: Icons.trending_down,
+                label: isArabic ? 'شراء/جم' : 'Buy/g',
+                value: _formatCurrency(avgBuy),
+                color: Colors.orange.shade700,
+              ),
+              _heroChip(
+                icon: Icons.swap_horiz,
+                label: isArabic ? 'فارق/جم' : 'Margin/g',
+                value: _formatCurrency(marginPerGram),
+                color: marginPerGram >= 0 ? Colors.teal : Colors.red,
+              ),
+              _heroChip(
+                icon: Icons.monitor_weight_outlined,
+                label: isArabic ? 'المباع' : 'Sold',
+                value: _formatWeight(weightSold),
+                color: Colors.blue,
               ),
             ],
           ),

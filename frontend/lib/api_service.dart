@@ -2153,6 +2153,27 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getGramProfitReport({
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/reports/gram_profit').replace(
+      queryParameters: {
+        'start_date': startDate.toIso8601String().split('T').first,
+        'end_date': endDate.toIso8601String().split('T').first,
+      },
+    );
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {};
+    } else {
+      throw Exception('Failed to load gram profit report: ${response.body}');
+    }
+  }
+
+
   Future<Map<String, dynamic>> getSalesByCustomerReport({
     DateTime? startDate,
     DateTime? endDate,

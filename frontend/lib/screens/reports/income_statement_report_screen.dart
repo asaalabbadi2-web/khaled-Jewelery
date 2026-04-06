@@ -27,6 +27,7 @@ class IncomeStatementReportScreen extends StatefulWidget {
 class _IncomeStatementReportScreenState
     extends State<IncomeStatementReportScreen> {
   Map<String, dynamic>? _report;
+  Map<String, dynamic>? _gramReport;
   bool _isLoading = false;
   String? _error;
 
@@ -123,6 +124,19 @@ class _IncomeStatementReportScreenState
       );
       if (!mounted) return;
       setState(() => _report = result);
+
+      // تقرير ربح الجرام — يستخدم نفس الفترة
+      try {
+        final start = _selectedRange?.start ?? DateTime.now().subtract(const Duration(days: 89));
+        final end = _selectedRange?.end ?? DateTime.now();
+        final gramResult = await widget.api.getGramProfitReport(
+          startDate: start,
+          endDate: end,
+        );
+        if (mounted) setState(() => _gramReport = gramResult);
+      } catch (_) {
+        if (mounted) setState(() => _gramReport = null);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -228,6 +242,8 @@ class _IncomeStatementReportScreenState
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           _buildFiltersCard(isArabic),
+          const SizedBox(height: 16),
+          _buildGramProfitCard(isArabic),
           const SizedBox(height: 16),
           _buildSummaryCard(isArabic),
           const SizedBox(height: 16),
@@ -642,6 +658,344 @@ class _IncomeStatementReportScreenState
     );
   }
 
+  Widget _buildGramProfitCard(bool isArabic) {
+    final g = _gramReport;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const goldColor = Color(0xFFFFD700);
+    final darkGold = const Color(0xFF7A5C00);
+
+    if (g == null) {
+      return AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: _isLoading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    isArabic ? 'لا توجد بيانات لهذه الفترة' : 'No data for this period',
+                    style: TextStyle(color: Colors.grey.shade500),
+                  ),
+                ),
+              ),
+      );
+    }
+
+    double val(String key) {
+      final v = g[key];
+      if (v is num) return v.toDouble();
+      return 0.0;
+    }
+
+    final weightSold      = val('weight_sold');
+    final weightBought    = val('weight_purchased');
+    final avgSell         = val('avg_sell_per_gram');
+    final avgBuy          = val('avg_buy_per_gram');
+    final marginPerGram   = val('margin_per_gram');
+    final grossProfit     = val('gross_profit');
+    final grossProfitWeight = val('gross_profit_weight');
+    final wages           = val('manufacturing_wages');
+    final otherExpenses   = val('other_expenses');
+    final profitAfterWages = val('profit_after_wages');
+    final profitAfterWagesWeight = val('profit_after_wages_weight');
+    final netProfit       = val('net_profit');
+    final netProfitWeight = val('net_profit_weight');
+    final netMarginPct    = val('net_margin_pct');
+    final totalSales      = val('total_sales_cash');
+    final customerPurchases = val('customer_purchases_cash');
+    final supplierPurchases = val('supplier_purchases_cash');
+    final supplierWeight  = val('supplier_weight_purchased');
+    final customerWeight  = val('weight_purchased_customer');
+    final mainKarat       = g['main_karat']?.toString() ?? '21';
+    final isProfit        = netProfit >= 0;
+
+    final profitColor = isProfit ? Colors.green.shade600 : Colors.red.shade600;
+    final profitBg = isProfit
+        ? Colors.green.withOpacity(0.08)
+        : Colors.red.withOpacity(0.08);
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1D1800), const Color(0xFF0F0E00)]
+              : [const Color(0xFFFFFDE7), const Color(0xFFFFF8E1)],
+        ),
+        border: Border.all(color: goldColor.withOpacity(0.3), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: goldColor.withOpacity(0.10),
+            blurRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Title ──────────────────────────────────────────────
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [goldColor.withOpacity(0.25), goldColor.withOpacity(0.10)],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.auto_graph, color: goldColor, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? goldColor : darkGold,
+                        ),
+                      ),
+                      Text(
+                        isArabic
+                            ? '(سعر بيع − سعر شراء) × الوزن − المصاريف'
+                            : '(Sell − Buy) × Weight − Expenses',
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+
+            // ── Net Profit Hero ────────────────────────────────────
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
+              decoration: BoxDecoration(
+                color: profitBg,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: profitColor.withOpacity(0.25)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    isArabic ? 'صافي الربح الفعلي' : 'Net Profit',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _formatCurrency(netProfit),
+                    style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.bold,
+                      color: profitColor,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: profitColor.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.scale, size: 16, color: profitColor),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${netProfitWeight.toStringAsFixed(3)} ${isArabic ? "جم" : "g"}',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: profitColor,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isArabic ? '(عيار $mainKarat)' : '(K$mainKarat)',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: profitColor.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${netMarginPct.toStringAsFixed(1)}% ${isArabic ? "هامش" : "margin"}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: profitColor,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // ── Stat Cards ─────────────────────────────────────────
+            _GramStatRow(
+              items: [
+                _GramStat(
+                  label: isArabic ? 'وزن مباع ($mainKarat)' : 'Sold ($mainKarat k)',
+                  value: '${weightSold.toStringAsFixed(3)} جم',
+                  icon: Icons.trending_up,
+                  color: Colors.blue,
+                  isDark: isDark,
+                ),
+                _GramStat(
+                  label: isArabic ? 'وزن مشترى ($mainKarat)' : 'Bought ($mainKarat k)',
+                  value: '${weightBought.toStringAsFixed(3)} جم',
+                  icon: Icons.trending_down,
+                  color: Colors.indigo,
+                  isDark: isDark,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _GramStatRow(
+              items: [
+                _GramStat(
+                  label: isArabic ? 'متوسط بيع/جم' : 'Avg sell/g',
+                  value: _formatCurrency(avgSell),
+                  icon: Icons.sell,
+                  color: Colors.green,
+                  isDark: isDark,
+                ),
+                _GramStat(
+                  label: isArabic ? 'متوسط شراء/جم' : 'Avg buy/g',
+                  value: _formatCurrency(avgBuy),
+                  icon: Icons.shopping_bag,
+                  color: Colors.orange,
+                  isDark: isDark,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _GramStatRow(
+              items: [
+                _GramStat(
+                  label: isArabic ? 'فارق الجرام' : 'Margin/g',
+                  value: _formatCurrency(marginPerGram),
+                  icon: Icons.swap_horiz,
+                  color: marginPerGram >= 0 ? Colors.teal : Colors.red,
+                  isDark: isDark,
+                ),
+                _GramStat(
+                  label: isArabic ? 'إجمالي المبيعات' : 'Total Sales',
+                  value: _formatCurrency(totalSales),
+                  icon: Icons.receipt,
+                  color: Colors.green.shade700,
+                  isDark: isDark,
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+
+            // ── Profit Waterfall ───────────────────────────────────
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withOpacity(0.03) : Colors.white.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: goldColor.withOpacity(0.12)),
+              ),
+              child: Column(
+                children: [
+                  _ProfitStep(
+                    label: isArabic
+                        ? 'إجمالي الربح (فارق × وزن مباع)'
+                        : 'Gross Profit (margin × sold)',
+                    value: grossProfit,
+                    weightEquiv: grossProfitWeight,
+                    isFirst: true,
+                    isSubtract: false,
+                    isDark: isDark,
+                  ),
+                  _ProfitStep(
+                    label: isArabic ? 'أجور مصنعية' : 'Manufacturing Wages',
+                    value: wages,
+                    isSubtract: true,
+                    isDark: isDark,
+                  ),
+                  _ProfitStep(
+                    label: isArabic ? 'بعد الأجور' : 'After Wages',
+                    value: profitAfterWages,
+                    weightEquiv: profitAfterWagesWeight,
+                    isSubtotalRow: true,
+                    isSubtract: false,
+                    isDark: isDark,
+                  ),
+                  _ProfitStep(
+                    label: isArabic ? 'مصاريف تشغيلية أخرى' : 'Other Operating Expenses',
+                    value: otherExpenses,
+                    isSubtract: true,
+                    isDark: isDark,
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Methodology Note ──────────────────────────────────
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withOpacity(0.04) : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: Colors.grey.shade500),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      isArabic
+                          ? 'معدل الشراء = (${_formatCurrency(customerPurchases)} عملاء + ${_formatCurrency(supplierPurchases)} تسكير) ÷ (${customerWeight.toStringAsFixed(2)} + ${supplierWeight.toStringAsFixed(2)} جم)'
+                          : 'Avg buy = (${_formatCurrency(customerPurchases)} cust. + ${_formatCurrency(supplierPurchases)} clearing) ÷ (${customerWeight.toStringAsFixed(2)} + ${supplierWeight.toStringAsFixed(2)} g)',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
   Widget _buildExpensesCard(bool isArabic) {
     final expenses = List<Map<String, dynamic>>.from(
       _report?['expense_breakdown'] ?? [],
@@ -771,6 +1125,177 @@ class _LegendChip extends StatelessWidget {
       avatar: CircleAvatar(backgroundColor: color, radius: 6),
       label: Text(label),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    );
+  }
+}
+
+// ─── Gram Profit Helpers ─────────────────────────────────────────────────────
+
+class _GramStat {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final bool isDark;
+
+  const _GramStat({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.isDark,
+  });
+}
+
+class _ProfitStep extends StatelessWidget {
+  final String label;
+  final double value;
+  final double? weightEquiv;
+  final bool isSubtract;
+  final bool isFirst;
+  final bool isSubtotalRow;
+  final bool isDark;
+
+  const _ProfitStep({
+    required this.label,
+    required this.value,
+    this.weightEquiv,
+    this.isSubtract = false,
+    this.isFirst = false,
+    this.isSubtotalRow = false,
+    required this.isDark,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isSubtotalRow
+        ? Colors.blueGrey
+        : isSubtract
+            ? Colors.red.shade700
+            : Colors.teal.shade700;
+
+    final bgColor = isSubtotalRow
+        ? (isDark ? Colors.blueGrey.withOpacity(0.15) : Colors.blueGrey.shade50)
+        : (isDark ? Colors.white.withOpacity(0.03) : Colors.grey.shade50);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(10),
+        border: isSubtotalRow
+            ? Border.all(color: Colors.blueGrey.withOpacity(0.3))
+            : null,
+      ),
+      child: Row(
+        children: [
+          Text(
+            isFirst ? '' : (isSubtract ? '−' : '+'),
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: isSubtotalRow ? 13 : 12,
+                fontWeight: isSubtotalRow ? FontWeight.w600 : FontWeight.normal,
+                color: isDark ? Colors.white70 : Colors.grey.shade700,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    NumberFormat('#,##0.00').format(value),
+                    style: TextStyle(
+                      fontSize: isSubtotalRow ? 14 : 13,
+                      fontWeight: isSubtotalRow ? FontWeight.bold : FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                  Text(
+                    ' ر.س',
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                  ),
+                ],
+              ),
+              if (weightEquiv != null)
+                Text(
+                  '≈ ${weightEquiv!.toStringAsFixed(3)} جم',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: color.withOpacity(0.8),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GramStatRow extends StatelessWidget {
+  final List<_GramStat> items;
+
+  const _GramStatRow({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: items.map((s) {
+        return Expanded(
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            decoration: BoxDecoration(
+              color: s.color.withOpacity(s.isDark ? 0.12 : 0.07),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: s.color.withOpacity(0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(s.icon, size: 14, color: s.color),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        s.label,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.grey.shade600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  s.value,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: s.color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 }
