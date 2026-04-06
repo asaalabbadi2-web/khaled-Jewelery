@@ -29310,12 +29310,55 @@ def get_gram_profit_report():
             except Exception:
                 return 0.0
 
+        def _inv_weight_in_main_karat(inv):
+            """حساب وزن الفاتورة بالعيار الرئيسي.
+
+            1. karat_lines — كل سطر له عيار ووزن خام → نحوّله
+            2. items — كل صنف له عيار ووزن → نحوّله
+            3. fallback: total_weight (خام، يُفترض عيار رئيسي)
+            """
+            total = 0.0
+
+            # أولاً: karat_lines (V2 invoices)
+            kl = getattr(inv, 'karat_lines', None) or []
+            if kl:
+                for line in kl:
+                    w = float(getattr(line, 'weight_grams', 0) or 0)
+                    k = float(getattr(line, 'karat', main_karat) or main_karat)
+                    if w > 0:
+                        total += w * k / main_karat
+                if total > 0:
+                    return total
+
+            # ثانياً: items (V1 invoices)
+            inv_items = getattr(inv, 'items', None) or []
+            if inv_items:
+                for ii in inv_items:
+                    qty = float(ii.quantity or 1)
+                    item_obj = getattr(ii, 'item', None)
+                    if item_obj:
+                        total += float(item_obj.weight_in_main_karat() or 0) * qty
+                    else:
+                        w = float(getattr(ii, 'weight', 0) or 0)
+                        k = float(getattr(ii, 'karat', main_karat) or main_karat)
+                        if w > 0:
+                            total += (w * k / main_karat) * qty
+                if total > 0:
+                    return total
+
+            # fallback: total_weight كما هو (يُفترض معادل رئيسي)
+            return float(inv.total_weight or 0.0)
+
         # ── المبيعات: فواتير البيع المرحّلة ──────────────────────────────────
         sell_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type.in_(['بيع', 'sell']))
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(
+                joinedload(Invoice.karat_lines),
+                joinedload(Invoice.items).joinedload(InvoiceItem.item),
+            )
             .all()
         )
         # مرتجعات البيع
@@ -29324,6 +29367,10 @@ def get_gram_profit_report():
             .filter(Invoice.invoice_type.in_(['مرتجع بيع']))
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(
+                joinedload(Invoice.karat_lines),
+                joinedload(Invoice.items).joinedload(InvoiceItem.item),
+            )
             .all()
         )
 
@@ -29332,25 +29379,29 @@ def get_gram_profit_report():
 
         for inv in sell_invoices:
             total_sales_cash += float(inv.total or 0.0)
-            total_weight_sold += float(inv.total_weight or 0.0)
+            total_weight_sold += _inv_weight_in_main_karat(inv)
 
         # طرح المرتجعات
         for inv in sell_return_invoices:
             total_sales_cash -= float(inv.total or 0.0)
-            total_weight_sold -= float(inv.total_weight or 0.0)
+            total_weight_sold -= _inv_weight_in_main_karat(inv)
 
         avg_sell_per_gram = (
             total_sales_cash / total_weight_sold if total_weight_sold > 0 else 0.0
         )
 
         # ── مشتريات العملاء (شراء من عميل): أساس حساب سعر الشراء/جرام ────────
-        # نستخدم "شراء من عميل" فقط لأن ربح الجرام = سعر بيع للعميل − سعر شراء من العميل
-        # مشتريات التسكير (شراء من مورد) تُعالَج كمخزون وليست جزءاً من فارق الجرام
+        _inv_eager = (
+            joinedload(Invoice.karat_lines),
+            joinedload(Invoice.items).joinedload(InvoiceItem.item),
+        )
+
         customer_buy_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type == 'شراء من عميل')
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(*_inv_eager)
             .all()
         )
         # مرتجعات الشراء من العملاء
@@ -29359,6 +29410,7 @@ def get_gram_profit_report():
             .filter(Invoice.invoice_type == 'مرتجع شراء')
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(*_inv_eager)
             .all()
         )
 
@@ -29369,6 +29421,7 @@ def get_gram_profit_report():
             .filter(func.coalesce(Invoice.gold_type, '') == 'scrap')
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(*_inv_eager)
             .all()
         )
 
@@ -29382,6 +29435,7 @@ def get_gram_profit_report():
             ))
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(*_inv_eager)
             .all()
         )
         supplier_buy_returns = (
@@ -29389,6 +29443,7 @@ def get_gram_profit_report():
             .filter(Invoice.invoice_type == 'مرتجع شراء (مورد)')
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .options(*_inv_eager)
             .all()
         )
 
@@ -29397,28 +29452,28 @@ def get_gram_profit_report():
 
         for inv in customer_buy_invoices:
             total_purchases_cash += float(inv.total or 0.0)
-            total_weight_purchased += float(inv.total_weight or 0.0)
+            total_weight_purchased += _inv_weight_in_main_karat(inv)
 
         for inv in customer_buy_returns:
             total_purchases_cash -= float(inv.total or 0.0)
-            total_weight_purchased -= float(inv.total_weight or 0.0)
+            total_weight_purchased -= _inv_weight_in_main_karat(inv)
 
         # إضافة مشتريات التسكير (نقد مقابل ذهب)
         settlement_purchases_cash = 0.0
         settlement_weight_purchased = 0.0
         for inv in settlement_buy_invoices:
             settlement_purchases_cash += float(inv.total or 0.0)
-            settlement_weight_purchased += float(inv.total_weight or 0.0)
+            settlement_weight_purchased += _inv_weight_in_main_karat(inv)
 
         # مشتريات الموردين (ذهب مقابل ذهب) — للعرض فقط
         supplier_purchases_cash = 0.0
         supplier_weight_purchased = 0.0
         for inv in supplier_buy_invoices:
             supplier_purchases_cash += float(inv.total or 0.0)
-            supplier_weight_purchased += float(inv.total_weight or 0.0)
+            supplier_weight_purchased += _inv_weight_in_main_karat(inv)
         for inv in supplier_buy_returns:
             supplier_purchases_cash -= float(inv.total or 0.0)
-            supplier_weight_purchased -= float(inv.total_weight or 0.0)
+            supplier_weight_purchased -= _inv_weight_in_main_karat(inv)
 
         # معدل الشراء = (عملاء + تسكير) ÷ وزنهما
         # مشتريات الموردين (ذهب مقابل ذهب) لا تدخل
