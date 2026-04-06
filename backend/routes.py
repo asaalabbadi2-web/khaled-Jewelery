@@ -29362,10 +29362,24 @@ def get_gram_profit_report():
             .all()
         )
 
-        # مشتريات التسكير (من الموردين) — تُعرض منفصلة لكن لا تدخل في فارق الجرام
+        # مشتريات التسكير (مكاتب تسكير): نقد مقابل ذهب — تدخل في حساب معدل الشراء/جرام
+        settlement_buy_invoices = (
+            Invoice.query
+            .filter(Invoice.invoice_type.in_(['شراء', 'buy']))
+            .filter(func.coalesce(Invoice.gold_type, '') == 'scrap')
+            .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
+            .filter(func.coalesce(Invoice.is_posted, False) == True)
+            .all()
+        )
+
+        # مشتريات الموردين (ذهب مقابل ذهب): لا تدخل في حساب فارق الجرام
         supplier_buy_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type.in_(['شراء', 'buy']))
+            .filter(or_(
+                func.coalesce(Invoice.gold_type, '') != 'scrap',
+                Invoice.gold_type.is_(None),
+            ))
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
             .all()
@@ -29378,8 +29392,8 @@ def get_gram_profit_report():
             .all()
         )
 
-        total_purchases_cash = 0.0       # شراء من عميل فقط (للعرض)
-        total_weight_purchased = 0.0      # وزن مشتريات العملاء
+        total_purchases_cash = 0.0       # شراء من عميل
+        total_weight_purchased = 0.0
 
         for inv in customer_buy_invoices:
             total_purchases_cash += float(inv.total or 0.0)
@@ -29389,7 +29403,14 @@ def get_gram_profit_report():
             total_purchases_cash -= float(inv.total or 0.0)
             total_weight_purchased -= float(inv.total_weight or 0.0)
 
-        # إجمالي مشتريات التسكير
+        # إضافة مشتريات التسكير (نقد مقابل ذهب)
+        settlement_purchases_cash = 0.0
+        settlement_weight_purchased = 0.0
+        for inv in settlement_buy_invoices:
+            settlement_purchases_cash += float(inv.total or 0.0)
+            settlement_weight_purchased += float(inv.total_weight or 0.0)
+
+        # مشتريات الموردين (ذهب مقابل ذهب) — للعرض فقط
         supplier_purchases_cash = 0.0
         supplier_weight_purchased = 0.0
         for inv in supplier_buy_invoices:
@@ -29399,13 +29420,17 @@ def get_gram_profit_report():
             supplier_purchases_cash -= float(inv.total or 0.0)
             supplier_weight_purchased -= float(inv.total_weight or 0.0)
 
-        # معدل الشراء = إجمالي المبلغ (عملاء + تسكير) ÷ إجمالي الوزن
-        total_all_purchases_cash = total_purchases_cash + supplier_purchases_cash
-        total_all_weight_purchased = total_weight_purchased + supplier_weight_purchased
+        # معدل الشراء = (عملاء + تسكير) ÷ وزنهما
+        # مشتريات الموردين (ذهب مقابل ذهب) لا تدخل
+        cash_for_gold_purchases = total_purchases_cash + settlement_purchases_cash
+        cash_for_gold_weight = total_weight_purchased + settlement_weight_purchased
+
+        total_all_purchases_cash = cash_for_gold_purchases + supplier_purchases_cash
+        total_all_weight_purchased = cash_for_gold_weight + supplier_weight_purchased
 
         avg_buy_per_gram = (
-            total_all_purchases_cash / total_all_weight_purchased
-            if total_all_weight_purchased > 0
+            cash_for_gold_purchases / cash_for_gold_weight
+            if cash_for_gold_weight > 0
             else 0.0
         )
 
@@ -29480,10 +29505,12 @@ def get_gram_profit_report():
         total_operating_expenses = manufacturing_wages + other_expenses
 
         # ── حساب الربح ───────────────────────────────────────────────────────
+        # ربح الجرام = فارق سعر البيع والشراء (عملاء فقط) × الكمية المباعة
+        # المصاريف العامة (إيجار، رواتب...) لا تدخل — مكانها قائمة الدخل
         margin_per_gram = avg_sell_per_gram - avg_buy_per_gram
         gross_profit = margin_per_gram * total_weight_sold
         profit_after_wages = gross_profit - manufacturing_wages
-        net_profit = profit_after_wages - other_expenses
+        net_profit = profit_after_wages  # صافي ربح الجرام = الإجمالي − أجور المصنعية فقط
 
         # الوزن المعادل للأرباح = الربح النقدي ÷ معدل سعر شراء الجرام
         # (كم جراماً يمكن شراؤه بهذا الربح)
@@ -29519,6 +29546,8 @@ def get_gram_profit_report():
             'total_sales_cash': round(total_sales_cash, 2),
             'total_purchases_cash': round(total_all_purchases_cash, 2),
             'customer_purchases_cash': round(total_purchases_cash, 2),
+            'settlement_purchases_cash': round(settlement_purchases_cash, 2),
+            'settlement_weight_purchased': round(settlement_weight_purchased, 3),
             'supplier_purchases_cash': round(supplier_purchases_cash, 2),
             'supplier_weight_purchased': round(supplier_weight_purchased, 3),
             'main_karat': main_karat,
