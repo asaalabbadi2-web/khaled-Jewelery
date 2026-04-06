@@ -1706,35 +1706,38 @@ def _resolve_inventory_account_id_for_invoice(invoice_type: str, gold_type: str)
     return _resolve(fallback_number)
 
 
-def _invoice_weight_in_main_karat(invoice: Invoice) -> float:
+def _invoice_weight_mk_v2(invoice: Invoice) -> float:
+    """حساب وزن الفاتورة بالعيار الرئيسي (v2) — الوزن الكلي للسطر بدون ضرب في الكمية.
+    الأولوية: karat_lines → InvoiceItem.weight (snapshot) → total_weight (احتياط).
+    """
     if not invoice:
         return 0.0
-    try:
-        if hasattr(invoice, 'calculate_total_weight'):
-            value = invoice.calculate_total_weight() or 0.0
-            if value:
-                return float(value)
-    except Exception:
-        pass
-    weight = 0.0
-    for line in invoice.karat_lines or []:
-        karat = line.karat or get_main_karat()
-        weight += convert_to_main_karat(line.weight_grams or 0.0, karat)
-    if weight:
-        return weight
-    for item in invoice.items or []:
-        karat = item.karat or get_main_karat()
-        try:
-            is_customer_scrap_purchase = (
-                (getattr(invoice, 'invoice_type', None) or '').strip() == 'شراء من عميل'
-                and str(getattr(invoice, 'gold_type', '') or '').strip().lower() == 'scrap'
-            )
-        except Exception:
-            is_customer_scrap_purchase = False
+    main_karat = get_main_karat() or 21
+    w = 0.0
+    karat_lines = getattr(invoice, 'karat_lines', None) or []
+    if karat_lines:
+        for line in karat_lines:
+            lw = float(getattr(line, 'weight_grams', 0) or 0)
+            lk = float(getattr(line, 'karat', main_karat) or main_karat)
+            if lw > 0:
+                w += lw * lk / main_karat
+        if w > 0:
+            return w
+    items = getattr(invoice, 'items', None) or []
+    if items:
+        for ii in items:
+            iw = float(getattr(ii, 'weight', 0) or 0)
+            ik = float(getattr(ii, 'karat', 0) or 0)
+            if iw > 0 and ik > 0:
+                w += iw * ik / main_karat
+        if w > 0:
+            return w
+    return float(getattr(invoice, 'total_weight', 0) or 0)
 
-        qty_multiplier = 1 if is_customer_scrap_purchase else (item.quantity or 1)
-        weight += convert_to_main_karat((item.weight or 0.0) * qty_multiplier, karat)
-    return weight
+
+def _invoice_weight_in_main_karat(invoice: Invoice) -> float:
+    """Wrapper لـ _invoice_weight_mk_v2 — الأسماء القديمة محفوظة للتوافق."""
+    return _invoice_weight_mk_v2(invoice)
 
 
 def create_item_from_invoice_payload(item_data):
@@ -10798,7 +10801,9 @@ def add_invoice():
                 purchase_profit_cash += diff_weight * direct_price_per_gram
 
             qty_multiplier = 1.0 if is_customer_scrap_purchase else quantity_value
-            item_total_weight = weight_per_item * (qty_multiplier if qty_multiplier > 0 else 1.0)
+            # weight_per_item = الوزن الكلي للسطر — لا نضربه في الكمية
+            # (الكمية للعرض التوضيحي فقط)
+            item_total_weight = weight_per_item
             if item_total_weight > 0:
                 if not has_valid_karat_lines:
                     computed_total_weight += item_total_weight
@@ -17148,9 +17153,19 @@ def get_sales_overview_report():
     invoices = (
         Invoice.query
         .filter(*filters)
+        .options(
+            joinedload(Invoice.karat_lines),
+            joinedload(Invoice.items),
+        )
         .order_by(Invoice.date.asc())
         .all()
     )
+
+    main_karat = get_main_karat()
+
+    def _calc_weight_mk(inv):
+        """Wrapper محلي — يستدعي _invoice_weight_mk_v2 المشتركة."""
+        return _invoice_weight_mk_v2(inv)
 
     summary = {
         'total_documents': len(invoices),
@@ -17188,7 +17203,7 @@ def get_sales_overview_report():
     for invoice in invoices:
         sign = sale_types.get(invoice.invoice_type, 1)
         total_value = float(invoice.total or 0.0)
-        total_weight = float(invoice.total_weight or 0.0)
+        total_weight = _calc_weight_mk(invoice)
 
         net_value = total_value * sign
         net_weight = total_weight * sign
@@ -17624,24 +17639,14 @@ def get_sales_by_customer_report():
         0,
     ).label('net_value')
 
-    sales_weight_expr = func.coalesce(
-        func.sum(case((Invoice.invoice_type == 'مرتجع بيع', 0), else_=func.coalesce(Invoice.total_weight, 0))),
-        0,
-    ).label('sales_weight')
-    returns_weight_expr = func.coalesce(
-        func.sum(case((Invoice.invoice_type == 'مرتجع بيع', func.coalesce(Invoice.total_weight, 0)), else_=0)),
-        0,
-    ).label('returns_weight')
-    net_weight_expr = func.coalesce(
-        func.sum(func.coalesce(Invoice.total_weight, 0) * sales_case),
-        0,
-    ).label('net_weight')
-
     last_invoice_expr = func.max(Invoice.date).label('last_invoice_date')
     average_invoice_expr = func.coalesce(
         func.avg(func.coalesce(Invoice.total, 0)),
         0,
     ).label('average_invoice_value')
+
+    # v2: أعمدة الوزن محذوفة من SQL (total_weight مضخّم) —
+    # تُحسب لاحقاً عبر Python من karat_lines/items
 
     query = (
         db.session.query(
@@ -17652,9 +17657,6 @@ def get_sales_by_customer_report():
             sales_value_expr,
             returns_value_expr,
             net_value_expr,
-            sales_weight_expr,
-            returns_weight_expr,
-            net_weight_expr,
             last_invoice_expr,
             average_invoice_expr,
         )
@@ -17668,9 +17670,6 @@ def get_sales_by_customer_report():
         'sales_value': sales_value_expr,
         'returns_value': returns_value_expr,
         'net_value': net_value_expr,
-        'sales_weight': sales_weight_expr,
-        'returns_weight': returns_weight_expr,
-        'net_weight': net_weight_expr,
         'last_invoice_date': last_invoice_expr,
         'average_invoice_value': average_invoice_expr,
     }
@@ -17683,6 +17682,26 @@ def get_sales_by_customer_report():
 
     results = query.limit(limit).all()
 
+    # ── v2: حساب الأوزان الصحيحة من karat_lines/items ──
+    weight_invoices = (
+        Invoice.query
+        .filter(*filters)
+        .options(joinedload(Invoice.karat_lines), joinedload(Invoice.items))
+        .all()
+    )
+    from collections import defaultdict as _ddict
+    cust_weight: dict = _ddict(lambda: {'sales_weight': 0.0, 'returns_weight': 0.0})
+    total_sales_weight = 0.0
+    total_returns_weight = 0.0
+    for _inv in weight_invoices:
+        _w = _invoice_weight_mk_v2(_inv)
+        if (_inv.invoice_type or '') == 'مرتجع بيع':
+            cust_weight[_inv.customer_id]['returns_weight'] += _w
+            total_returns_weight += _w
+        else:
+            cust_weight[_inv.customer_id]['sales_weight'] += _w
+            total_sales_weight += _w
+
     summary_row = (
         db.session.query(
             func.count(func.distinct(Invoice.customer_id)).label('customer_count'),
@@ -17690,9 +17709,6 @@ def get_sales_by_customer_report():
             func.coalesce(func.sum(case((Invoice.invoice_type == 'مرتجع بيع', 0), else_=func.coalesce(Invoice.total, 0))), 0).label('sales_value'),
             func.coalesce(func.sum(case((Invoice.invoice_type == 'مرتجع بيع', func.coalesce(Invoice.total, 0)), else_=0)), 0).label('returns_value'),
             func.coalesce(func.sum(func.coalesce(Invoice.total, 0) * sales_case), 0).label('net_value'),
-            func.coalesce(func.sum(case((Invoice.invoice_type == 'مرتجع بيع', 0), else_=func.coalesce(Invoice.total_weight, 0))), 0).label('sales_weight'),
-            func.coalesce(func.sum(case((Invoice.invoice_type == 'مرتجع بيع', func.coalesce(Invoice.total_weight, 0)), else_=0)), 0).label('returns_weight'),
-            func.coalesce(func.sum(func.coalesce(Invoice.total_weight, 0) * sales_case), 0).label('net_weight'),
             func.coalesce(func.avg(func.coalesce(Invoice.total, 0)), 0).label('average_invoice_value'),
         )
         .filter(*filters)
@@ -17711,9 +17727,9 @@ def get_sales_by_customer_report():
         'sales_value': round_money(summary_row.sales_value),
         'returns_value': round_money(summary_row.returns_value),
         'net_value': round_money(summary_row.net_value),
-        'sales_weight': round_weight(summary_row.sales_weight),
-        'returns_weight': round_weight(summary_row.returns_weight),
-        'net_weight': round_weight(summary_row.net_weight),
+        'sales_weight': round_weight(total_sales_weight),
+        'returns_weight': round_weight(total_returns_weight),
+        'net_weight': round_weight(total_sales_weight - total_returns_weight),
         'average_invoice_value': round_money(summary_row.average_invoice_value),
     }
 
@@ -17736,6 +17752,9 @@ def get_sales_by_customer_report():
     customers_data = []
     for index, row in enumerate(results, start=1):
         balances = balance_map.get(row.customer_id, {'cash': 0.0, 'gold_main_karat': 0.0})
+        cw = cust_weight[row.customer_id]
+        sw = cw['sales_weight']
+        rw = cw['returns_weight']
         customers_data.append({
             'rank': index,
             'customer_id': row.customer_id,
@@ -17745,9 +17764,9 @@ def get_sales_by_customer_report():
             'sales_value': round_money(row.sales_value),
             'returns_value': round_money(row.returns_value),
             'net_value': round_money(row.net_value),
-            'sales_weight': round_weight(row.sales_weight),
-            'returns_weight': round_weight(row.returns_weight),
-            'net_weight': round_weight(row.net_weight),
+            'sales_weight': round_weight(sw),
+            'returns_weight': round_weight(rw),
+            'net_weight': round_weight(sw - rw),
             'average_invoice_value': round_money(row.average_invoice_value),
             'last_invoice_date': row.last_invoice_date.isoformat() if row.last_invoice_date else None,
             'balance_cash': balances['cash'],
@@ -18007,6 +18026,187 @@ def get_sales_by_item_report():
             'order_direction': order_direction,
         },
         'count': len(limited_items),
+    })
+
+
+
+@api.route('/reports/sales_by_karat', methods=['GET'])
+@require_permission('reports.sales')
+def get_sales_by_karat_report():
+    """تقرير المبيعات حسب العيار — وزن وقيمة مجمّعان لكل عيار في الفترة المحددة."""
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    include_unposted = request.args.get('include_unposted', 'false').lower() == 'true'
+
+    try:
+        start_dt = None
+        end_dt = None
+        if start_date:
+            start_dt = datetime.combine(_parse_iso_date(start_date, 'start_date'), datetime.min.time())
+        if end_date:
+            end_dt = datetime.combine(_parse_iso_date(end_date, 'end_date'), datetime.min.time()) + timedelta(days=1)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    sale_types = {'بيع', 'مرتجع بيع'}
+
+    filters = [Invoice.invoice_type.in_(list(sale_types))]
+    if not include_unposted:
+        filters.append(Invoice.is_posted.is_(True))
+    if start_dt:
+        filters.append(Invoice.date >= start_dt)
+    if end_dt:
+        filters.append(Invoice.date < end_dt)
+
+    invoices = (
+        Invoice.query
+        .filter(*filters)
+        .options(joinedload(Invoice.karat_lines), joinedload(Invoice.items))
+        .all()
+    )
+
+    main_karat = get_main_karat() or 21
+
+    # {karat_int: {'sales_weight': float, 'returns_weight': float,
+    #              'sales_value': float, 'returns_value': float, 'documents': set}}
+    from collections import defaultdict as _dd
+    by_karat: dict = _dd(lambda: {
+        'sales_weight': 0.0, 'returns_weight': 0.0,
+        'sales_value': 0.0, 'returns_value': 0.0,
+        'documents': set(),
+    })
+
+    totals = {
+        'sales_weight': 0.0, 'returns_weight': 0.0,
+        'sales_value': 0.0, 'returns_value': 0.0,
+        'total_documents': 0,
+    }
+
+    for inv in invoices:
+        is_return = (inv.invoice_type or '').strip() == 'مرتجع بيع'
+        inv_value = float(inv.total or 0.0)
+
+        karat_lines = getattr(inv, 'karat_lines', None) or []
+        if karat_lines:
+            # توزيع القيمة بالنسبة من الوزن لكل سطر عيار
+            total_kl_weight = sum(float(l.weight_grams or 0) for l in karat_lines)
+            for line in karat_lines:
+                lw = float(line.weight_grams or 0)
+                lk = int(round(float(line.karat or main_karat)))
+                if lw <= 0:
+                    continue
+                weight_mk = lw * lk / main_karat
+                value_share = inv_value * (lw / total_kl_weight) if total_kl_weight > 0 else 0.0
+                bucket = by_karat[lk]
+                if is_return:
+                    bucket['returns_weight'] += weight_mk
+                    bucket['returns_value'] += value_share
+                else:
+                    bucket['sales_weight'] += weight_mk
+                    bucket['sales_value'] += value_share
+                    bucket['documents'].add(inv.id)
+        else:
+            items = getattr(inv, 'items', None) or []
+            for ii in items:
+                iw = float(getattr(ii, 'weight', 0) or 0)
+                ik_raw = getattr(ii, 'karat', None)
+                ik = int(round(float(ik_raw))) if ik_raw else main_karat
+                if iw <= 0:
+                    continue
+                weight_mk = iw * ik / main_karat
+                bucket = by_karat[ik]
+                if is_return:
+                    bucket['returns_weight'] += weight_mk
+                    bucket['returns_value'] += 0.0  # لا يمكن تحديد القيمة بدون karat_lines
+                else:
+                    bucket['sales_weight'] += weight_mk
+                    bucket['sales_value'] += 0.0
+                    bucket['documents'].add(inv.id)
+
+            # القيمة الإجمالية تُوزَّع على العيار الأكثر وزناً إذا لم توجد karat_lines
+            if items:
+                dominant_karat = max(
+                    by_karat.keys(),
+                    key=lambda k: by_karat[k]['sales_weight'] + by_karat[k]['returns_weight'],
+                    default=main_karat,
+                )
+                if is_return:
+                    by_karat[dominant_karat]['returns_value'] += inv_value
+                else:
+                    by_karat[dominant_karat]['sales_value'] += inv_value
+            elif inv_value > 0:
+                # فواتير بدون بنود — تُضاف للعيار الرئيسي
+                if is_return:
+                    by_karat[main_karat]['returns_value'] += inv_value
+                else:
+                    by_karat[main_karat]['sales_value'] += inv_value
+                    by_karat[main_karat]['documents'].add(inv.id)
+
+    # بناء القائمة
+    karats_list = []
+    for karat_val in sorted(by_karat.keys()):
+        b = by_karat[karat_val]
+        sw = round(b['sales_weight'], 3)
+        rw = round(b['returns_weight'], 3)
+        sv = round(b['sales_value'], 2)
+        rv = round(b['returns_value'], 2)
+        nw = round(sw - rw, 3)
+        nv = round(sv - rv, 2)
+        docs = len(b['documents'])
+
+        avg_price = round(sv / sw, 2) if sw > 0 else 0.0
+
+        karats_list.append({
+            'karat': karat_val,
+            'karat_label': f'عيار {karat_val}',
+            'documents': docs,
+            'sales_weight': sw,
+            'returns_weight': rw,
+            'net_weight': nw,
+            'sales_value': sv,
+            'returns_value': rv,
+            'net_value': nv,
+            'avg_price_per_gram': avg_price,
+            'weight_share_pct': 0.0,   # يُحسب لاحقاً
+        })
+
+        totals['sales_weight'] += sw
+        totals['returns_weight'] += rw
+        totals['sales_value'] += sv
+        totals['returns_value'] += rv
+        totals['total_documents'] += docs
+
+    # نسب الوزن
+    total_nw = sum(k['net_weight'] for k in karats_list)
+    for k in karats_list:
+        k['weight_share_pct'] = round(
+            k['net_weight'] / total_nw * 100, 1
+        ) if total_nw > 0 else 0.0
+
+    totals['net_weight'] = round(totals['sales_weight'] - totals['returns_weight'], 3)
+    totals['net_value'] = round(totals['sales_value'] - totals['returns_value'], 2)
+    totals['avg_price_per_gram'] = round(
+        totals['sales_value'] / totals['sales_weight'], 2
+    ) if totals['sales_weight'] > 0 else 0.0
+
+    return jsonify({
+        'summary': {
+            'sales_weight': round(totals['sales_weight'], 3),
+            'returns_weight': round(totals['returns_weight'], 3),
+            'net_weight': totals['net_weight'],
+            'sales_value': round(totals['sales_value'], 2),
+            'returns_value': round(totals['returns_value'], 2),
+            'net_value': totals['net_value'],
+            'total_documents': totals['total_documents'],
+            'avg_price_per_gram': totals['avg_price_per_gram'],
+            'main_karat': main_karat,
+        },
+        'karats': karats_list,
+        'filters': {
+            'start_date': start_date,
+            'end_date': end_date,
+            'include_unposted': include_unposted,
+        },
     })
 
 
@@ -20490,7 +20690,11 @@ def get_sales_vs_purchases_trend():
         return timeline_map[key]
 
     # Query invoices in date range with optional filters
-    invoice_query = Invoice.query.filter(Invoice.date >= start_dt, Invoice.date < end_dt)
+    invoice_query = (
+        Invoice.query
+        .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
+        .options(joinedload(Invoice.karat_lines), joinedload(Invoice.items))
+    )
     if gold_type:
         invoice_query = invoice_query.filter(Invoice.gold_type == gold_type)
     if not include_unposted:
@@ -20522,15 +20726,9 @@ def get_sales_vs_purchases_trend():
         if direction == 0:
             continue
 
-        # totals
+        # totals — v2: الوزن يُحسب من karat_lines/items بدون ضرب في الكمية
         total_cash = safe_float(inv.total)
-        weight = safe_float(inv.total_weight)
-        # fallback: sum item weights if total_weight not present
-        if not weight and inv.items:
-            try:
-                weight = sum((it.weight or 0.0) * (it.quantity or 1) for it in inv.items)
-            except Exception:
-                weight = 0.0
+        weight = _invoice_weight_mk_v2(inv)
 
         bucket = ensure_bucket(inv.date.date())
         if direction < 0:
@@ -28788,6 +28986,7 @@ def get_weight_based_income_statement():
                 Invoice.is_posted == True,
                 Invoice.invoice_type.in_(sale_invoice_types)
             )
+            .options(joinedload(Invoice.karat_lines), joinedload(Invoice.items))
             .all()
         )
 
@@ -28797,13 +28996,8 @@ def get_weight_based_income_statement():
             if 'مرتجع' in inv_type and 'بيع' in inv_type:
                 direction = -1.0
 
-            # استخدم الوزن المحسوب إن لم يكن الحقل مخزناً
-            weight_value = inv.total_weight
-            if weight_value in (None, 0):
-                try:
-                    weight_value = inv.calculate_total_weight()
-                except Exception:
-                    weight_value = 0.0
+            # v2: الوزن يُحسب من karat_lines/items بدون ضرب في qty
+            weight_value = _invoice_weight_mk_v2(inv)
 
             if weight_value:
                 actual_sold_weight += direction * float(weight_value)

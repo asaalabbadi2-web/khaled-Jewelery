@@ -1279,17 +1279,22 @@ class Invoice(db.Model):
 
         base_weight = 0.0
 
-        for invoice_item in self.items:
-            quantity = invoice_item.quantity or 1
-            if invoice_item.item:
-                base_weight += (invoice_item.item.weight_in_main_karat() or 0.0) * quantity
-            else:
-                manual_weight = _convert_to_main_karat(invoice_item.weight, invoice_item.karat)
-                if manual_weight:
-                    base_weight += manual_weight * quantity
-
+        # v2: أولوية لـ karat_lines (الأكثر دقة) — بدون ضرب في الكمية
         if self.karat_lines:
-            base_weight += sum(line.weight_grams or 0 for line in self.karat_lines)
+            kl_weight = 0.0
+            for line in self.karat_lines:
+                kl_weight += _convert_to_main_karat(line.weight_grams or 0, line.karat or main_karat)
+            if kl_weight > 0:
+                return kl_weight
+
+        # v2: InvoiceItem.weight = الوزن الكلي للسطر — لا يُضرب في الكمية
+        for invoice_item in self.items:
+            if invoice_item.weight is not None and invoice_item.weight > 0:
+                base_weight += _convert_to_main_karat(invoice_item.weight, invoice_item.karat or main_karat)
+            elif invoice_item.item:
+                # احتياط: وزن الكتالوج (للصنف غير الوزن السطر) × الكمية
+                quantity = invoice_item.quantity or 1
+                base_weight += (invoice_item.item.weight_in_main_karat() or 0.0) * quantity
 
         return base_weight
 

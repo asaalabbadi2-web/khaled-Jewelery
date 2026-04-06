@@ -1279,6 +1279,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
               },
               onChanged: (value) => _onAccountChanged(line, value),
             ),
+            _buildAccountBalanceHint(line.accountId, accounts),
             const SizedBox(height: 12),
 
             Divider(height: 1, color: Colors.grey.shade300),
@@ -1289,6 +1290,79 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
             _buildGoldSection(line, index: index),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildAccountBalanceHint(
+    int? accountId,
+    List<Map<String, dynamic>> accounts,
+  ) {
+    if (accountId == null) return const SizedBox.shrink();
+
+    Map<String, dynamic>? acc;
+    for (final a in accounts) {
+      final raw = a['id'];
+      final id = raw is int
+          ? raw
+          : (raw is num ? raw.toInt() : int.tryParse('${raw ?? ''}'));
+      if (id == accountId) {
+        acc = a;
+        break;
+      }
+    }
+    if (acc == null) return const SizedBox.shrink();
+
+    final balances = acc['balances'] as Map<String, dynamic>?;
+    if (balances == null) return const SizedBox.shrink();
+
+    final cash = (balances['cash'] as num?)?.toDouble() ?? 0.0;
+    final weightMap = balances['weight'] as Map<String, dynamic>?;
+    final totalWeight =
+        weightMap != null ? (weightMap['total'] as num?)?.toDouble() : null;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, right: 2, left: 2),
+      child: Row(
+        children: [
+          Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 12,
+            color: Colors.grey.shade500,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            'الرصيد: ',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+          Text(
+            _formatCashValue(cash.abs()),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: cash >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+            ),
+          ),
+          if (totalWeight != null && totalWeight.abs() > 0.001) ...[
+            const SizedBox(width: 10),
+            Icon(Icons.scale_outlined, size: 12, color: Colors.grey.shade500),
+            const SizedBox(width: 4),
+            Text(
+              'ذهب: ',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+            ),
+            Text(
+              '${totalWeight.abs().toStringAsFixed(3)} جم',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: totalWeight >= 0
+                    ? Colors.amber.shade700
+                    : Colors.red.shade700,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

@@ -13,6 +13,7 @@ import 'category_weight_audit_report_screen.dart';
 import 'low_stock_report_screen.dart';
 import 'sales_by_customer_report_screen.dart';
 import 'sales_by_item_report_screen.dart';
+import 'sales_by_karat_report_screen.dart';
 import 'sales_vs_purchases_trend_report_screen.dart';
 import 'sales_overview_report_screen.dart';
 import 'customer_balances_aging_report_screen.dart';
@@ -352,6 +353,12 @@ class _ReportsMainScreenState extends State<ReportsMainScreen> {
         break;
       case 'sales_by_item':
         destination = SalesByItemReportScreen(
+          api: widget.api,
+          isArabic: widget.isArabic,
+        );
+        break;
+      case 'sales_by_karat':
+        destination = SalesByKaratReportScreen(
           api: widget.api,
           isArabic: widget.isArabic,
         );

@@ -148,6 +148,20 @@ class ReportCatalog {
             available: true,
           ),
           ReportDescriptor(
+            id: 'sales_by_karat',
+            icon: Icons.diamond,
+            titleAr: 'المبيعات حسب العيار',
+            titleEn: 'Sales by Karat',
+            descriptionAr:
+                'توزيع المبيعات والأوزان والقيم حسب عيار الذهب (18، 21، 22، 24).',
+            descriptionEn:
+                'Distribution of sales, weights and values by gold karat (18, 21, 22, 24).',
+            route: 'sales_by_karat',
+            type: ReportType.sales,
+            available: true,
+            requiresFilters: true,
+          ),
+          ReportDescriptor(
             id: 'sales_vs_purchases_trend',
             icon: Icons.auto_graph,
             titleAr: 'اتجاه المبيعات مقابل المشتريات',

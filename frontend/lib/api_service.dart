@@ -2215,6 +2215,32 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getSalesByKaratReport({
+    DateTime? startDate,
+    DateTime? endDate,
+    bool includeUnposted = false,
+  }) async {
+    final queryParams = <String, String>{};
+    if (startDate != null) {
+      queryParams['start_date'] = startDate.toIso8601String().split('T').first;
+    }
+    if (endDate != null) {
+      queryParams['end_date'] = endDate.toIso8601String().split('T').first;
+    }
+    if (includeUnposted) {
+      queryParams['include_unposted'] = 'true';
+    }
+    final uri = Uri.parse(
+      '$_baseUrl/reports/sales_by_karat',
+    ).replace(queryParameters: queryParams);
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load sales by karat report: ${response.body}');
+    }
+  }
+
   Future<Map<String, dynamic>> getSalesByItemReport({
     DateTime? startDate,
     DateTime? endDate,
