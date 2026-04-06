@@ -29330,19 +29330,21 @@ def get_gram_profit_report():
                 if total > 0:
                     return total
 
-            # ثانياً: items (V1 invoices)
+            # ثانياً: items — نستخدم snapshot الوزن والعيار من InvoiceItem أولاً
+            # (الكتالوج قد يتغير بعد إنشاء الفاتورة)
             inv_items = getattr(inv, 'items', None) or []
             if inv_items:
                 for ii in inv_items:
                     qty = float(ii.quantity or 1)
-                    item_obj = getattr(ii, 'item', None)
-                    if item_obj:
-                        total += float(item_obj.weight_in_main_karat() or 0) * qty
+                    w = float(getattr(ii, 'weight', 0) or 0)
+                    k = float(getattr(ii, 'karat', 0) or 0)
+                    if w > 0 and k > 0:
+                        total += (w * k / main_karat) * qty
                     else:
-                        w = float(getattr(ii, 'weight', 0) or 0)
-                        k = float(getattr(ii, 'karat', main_karat) or main_karat)
-                        if w > 0:
-                            total += (w * k / main_karat) * qty
+                        # fallback: كتالوج الأصناف
+                        item_obj = getattr(ii, 'item', None)
+                        if item_obj:
+                            total += float(item_obj.weight_in_main_karat() or 0) * qty
                 if total > 0:
                     return total
 
