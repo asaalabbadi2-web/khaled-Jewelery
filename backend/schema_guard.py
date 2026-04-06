@@ -545,7 +545,7 @@ def ensure_auth_security_columns(engine: Engine) -> None:
 
 
 def ensure_journal_line_dimension_columns(engine: Engine) -> None:
-    """Ensure Financial Dimensions + analytics columns exist on journal_entry_line."""
+    """Ensure dual-system + Financial Dimensions + analytics columns exist on journal_entry_line."""
     columns_added: list[str] = []
     try:
         columns_added.extend(
@@ -553,6 +553,14 @@ def ensure_journal_line_dimension_columns(engine: Engine) -> None:
                 engine,
                 "journal_entry_line",
                 [
+                    # Dual-system columns (dual_system_001 migration)
+                    ("debit_weight", "FLOAT", "0.0"),
+                    ("credit_weight", "FLOAT", "0.0"),
+                    ("gold_price_snapshot", "FLOAT", "NULL"),
+                    ("description", "VARCHAR(500)", "NULL"),
+                    # weight_type column (weight_type_field_001 migration)
+                    ("weight_type", "VARCHAR(20)", "'ANALYTICAL'"),
+                    # Financial Dimensions + analytics columns
                     ("dimension_set_id", "INTEGER", "NULL"),
                     ("analytic_amount_cash", "FLOAT", "NULL"),
                     ("analytic_weight_24k", "FLOAT", "NULL"),
