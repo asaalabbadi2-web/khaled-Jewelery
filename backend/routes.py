@@ -5568,6 +5568,12 @@ def get_supplier_ledger(supplier_id):
             ),
         )
 
+    # Exclude genuine unposted drafts (is_draft=True AND is_posted=False).
+    # Posted entries must always appear even if is_draft was accidentally left True.
+    _draft_posted_filter = or_(
+        func.coalesce(JournalEntry.is_posted, False) == True,
+        func.coalesce(JournalEntry.is_draft, False) == False,
+    )
     base_query_relaxed = (
         JournalEntryLine.query
         .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
@@ -5575,6 +5581,7 @@ def get_supplier_ledger(supplier_id):
         .filter(supplier_line_filter)
         .filter(JournalEntryLine.is_deleted.is_(False))
         .filter(JournalEntry.is_deleted.is_(False))
+        .filter(_draft_posted_filter)
     )
 
     base_query = base_query_relaxed.filter(account_filter)
@@ -5872,6 +5879,12 @@ def get_supplier_weight_statement(supplier_id):
             ),
         )
 
+    # Exclude genuine unposted drafts (is_draft=True AND is_posted=False).
+    # Posted entries must always appear even if is_draft was accidentally left True.
+    _draft_posted_filter = or_(
+        func.coalesce(JournalEntry.is_posted, False) == True,
+        func.coalesce(JournalEntry.is_draft, False) == False,
+    )
     base_query_relaxed = (
         JournalEntryLine.query
         .join(JournalEntry)
@@ -5879,6 +5892,7 @@ def get_supplier_weight_statement(supplier_id):
         .filter(supplier_line_filter)
         .filter(JournalEntryLine.is_deleted.is_(False))
         .filter(JournalEntry.is_deleted.is_(False))
+        .filter(_draft_posted_filter)
     )
 
     base_query = base_query_relaxed.filter(account_filter)
