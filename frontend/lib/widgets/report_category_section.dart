@@ -29,30 +29,27 @@ class ReportCategorySection extends StatelessWidget {
         LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth > 840;
-            final crossAxisCount = isWide
-                ? 3
-                : (constraints.maxWidth > 520 ? 2 : 1);
+            final cardWidth = isWide
+                ? (constraints.maxWidth - 32) / 3
+                : (constraints.maxWidth > 520
+                    ? (constraints.maxWidth - 16) / 2
+                    : constraints.maxWidth);
 
-            return GridView.builder(
-              itemCount: category.reports.length,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossAxisCount,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
-                childAspectRatio: isWide ? 1.4 : 1.5,
-              ),
-              itemBuilder: (context, index) {
-                final report = category.reports[index];
-                return ReportCard(
-                  report: report,
-                  isArabic: isArabic,
-                  onTap: report.available
-                      ? () => onReportSelected?.call(report)
-                      : null,
+            return Wrap(
+              spacing: 16,
+              runSpacing: 16,
+              children: category.reports.map((report) {
+                return SizedBox(
+                  width: cardWidth,
+                  child: ReportCard(
+                    report: report,
+                    isArabic: isArabic,
+                    onTap: report.available
+                        ? () => onReportSelected?.call(report)
+                        : null,
+                  ),
                 );
-              },
+              }).toList(),
             );
           },
         ),

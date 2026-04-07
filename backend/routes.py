@@ -18095,46 +18095,42 @@ def get_sales_by_karat_report():
                 lk = int(round(float(line.karat or main_karat)))
                 if lw <= 0:
                     continue
-                weight_mk = lw * lk / main_karat
                 value_share = inv_value * (lw / total_kl_weight) if total_kl_weight > 0 else 0.0
                 bucket = by_karat[lk]
                 if is_return:
-                    bucket['returns_weight'] += weight_mk
+                    bucket['returns_weight'] += lw
                     bucket['returns_value'] += value_share
                 else:
-                    bucket['sales_weight'] += weight_mk
+                    bucket['sales_weight'] += lw
                     bucket['sales_value'] += value_share
                     bucket['documents'].add(inv.id)
         else:
             items = getattr(inv, 'items', None) or []
+            # استخدام القيمة الفعلية لكل بند (net) للحصول على القيمة الدقيقة لكل عيار
+            items_net_total = sum(float(getattr(ii, 'net', 0) or 0) for ii in items)
             for ii in items:
                 iw = float(getattr(ii, 'weight', 0) or 0)
                 ik_raw = getattr(ii, 'karat', None)
                 ik = int(round(float(ik_raw))) if ik_raw else main_karat
                 if iw <= 0:
                     continue
-                weight_mk = iw * ik / main_karat
+                # القيمة الفعلية للبند — net إن وُجد، وإلا تناسب من إجمالي الفاتورة
+                item_net = float(getattr(ii, 'net', 0) or 0)
+                if items_net_total > 0:
+                    item_value = item_net
+                else:
+                    total_items_weight = sum(float(getattr(x, 'weight', 0) or 0) for x in items)
+                    item_value = inv_value * (iw / total_items_weight) if total_items_weight > 0 else 0.0
                 bucket = by_karat[ik]
                 if is_return:
-                    bucket['returns_weight'] += weight_mk
-                    bucket['returns_value'] += 0.0  # لا يمكن تحديد القيمة بدون karat_lines
+                    bucket['returns_weight'] += iw
+                    bucket['returns_value'] += item_value
                 else:
-                    bucket['sales_weight'] += weight_mk
-                    bucket['sales_value'] += 0.0
+                    bucket['sales_weight'] += iw
+                    bucket['sales_value'] += item_value
                     bucket['documents'].add(inv.id)
 
-            # القيمة الإجمالية تُوزَّع على العيار الأكثر وزناً إذا لم توجد karat_lines
-            if items:
-                dominant_karat = max(
-                    by_karat.keys(),
-                    key=lambda k: by_karat[k]['sales_weight'] + by_karat[k]['returns_weight'],
-                    default=main_karat,
-                )
-                if is_return:
-                    by_karat[dominant_karat]['returns_value'] += inv_value
-                else:
-                    by_karat[dominant_karat]['sales_value'] += inv_value
-            elif inv_value > 0:
+            if not items and inv_value > 0:
                 # فواتير بدون بنود — تُضاف للعيار الرئيسي
                 if is_return:
                     by_karat[main_karat]['returns_value'] += inv_value

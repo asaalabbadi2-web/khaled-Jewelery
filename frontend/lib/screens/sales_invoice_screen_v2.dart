@@ -1696,13 +1696,16 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               final wage = tryParseOptionalDouble(wageController.text) ?? 0;
               final count = int.tryParse(countController.text) ?? 1;
               final manualTotal = tryParseOptionalDouble(totalController.text);
+              // weight في النظام = الوزن الكلي للسطر (v2)
+              // إذا أدخل المستخدم وزن القطعة مع عدد > 1، نحول إلى وزن إجمالي
+              final totalLineWeight = weight * count;
 
               Navigator.pop(dialogContext, {
                 'name': nameController.text.trim(),
                 'barcode': barcodeController.text.trim(),
                 'count': count,
                 'karat': selectedKarat.toDouble(),
-                'weight': weight,
+                'weight': totalLineWeight,
                 'wage': wage,
                 'total_with_tax': manualTotal,
               });
@@ -1813,7 +1816,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           ),
                         ],
                         decoration: const InputDecoration(
-                          labelText: 'الوزن بالجرام',
+                          labelText: 'وزن القطعة الواحدة (جم)',
+                          hintText: 'سيُضرب في العدد تلقائياً',
                           prefixIcon: Icon(Icons.scale),
                         ),
                         validator: (value) {

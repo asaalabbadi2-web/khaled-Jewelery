@@ -43,6 +43,7 @@ class ReportCard extends StatelessWidget {
           crossAxisAlignment: isArabic
               ? CrossAxisAlignment.end
               : CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,

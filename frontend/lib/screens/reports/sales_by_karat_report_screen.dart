@@ -38,14 +38,14 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
 
   // ألوان العيارات
   static const Map<int, Color> _karatColors = {
-    18: Color(0xFF9C6E3A),
-    21: Color(0xFFFFD700),
-    22: Color(0xFFFFC107),
-    24: Color(0xFFFF8F00),
+    18: Color(0xFF7B4F2E),
+    21: Color(0xFFB8860B),
+    22: Color(0xFFD4880A),
+    24: Color(0xFFBF6000),
   };
 
   Color _karatColor(int karat) =>
-      _karatColors[karat] ?? const Color(0xFF8E7D6D);
+      _karatColors[karat] ?? const Color(0xFF6D5D4B);
 
   @override
   void initState() {
@@ -310,59 +310,67 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
       ),
     ];
 
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 12,
-      mainAxisSpacing: 12,
-      childAspectRatio: 2.1,
-      children: items.map(_buildSummaryTile).toList(),
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _buildSummaryTile(items[0])),
+            const SizedBox(width: 10),
+            Expanded(child: _buildSummaryTile(items[1])),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(child: _buildSummaryTile(items[2])),
+            const SizedBox(width: 10),
+            Expanded(child: _buildSummaryTile(items[3])),
+          ],
+        ),
+      ],
     );
   }
 
   Widget _buildSummaryTile(_SummaryItem item) {
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
             Container(
-              width: 40,
-              height: 40,
+              width: 34,
+              height: 34,
               decoration: BoxDecoration(
                 color: item.color.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(item.icon, color: item.color, size: 22),
+              child: Icon(item.icon, color: item.color, size: 18),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     item.label,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey.shade600,
-                    ),
+                    style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 2),
                   Text(
                     item.value,
                     style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 14),
+                        fontWeight: FontWeight.bold, fontSize: 13),
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (item.sub != null)
                     Text(
                       item.sub!,
-                      style:
-                          TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                      style: TextStyle(
+                          fontSize: 10, color: Colors.grey.shade500),
                     ),
                 ],
               ),
@@ -506,141 +514,278 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     return Card(
       elevation: 2,
       margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ExpansionTile(
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Center(
-            child: Text(
-              '$karat',
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-          ),
-        ),
-        title: Text(
-          'عيار $karat',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-        ),
-        subtitle: Row(
-          children: [
-            Icon(Icons.scale, size: 12, color: Colors.grey.shade500),
-            const SizedBox(width: 4),
-            Text(
-              _fw(nw),
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-            ),
-            const SizedBox(width: 12),
-            Icon(Icons.percent, size: 12, color: color),
-            const SizedBox(width: 2),
-            Text(
-              '${_pctFormat.format(pct)}%',
-              style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-        trailing: Text(
-          _fv(nv),
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 15,
-            color: color,
-          ),
-        ),
-        childrenPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: color.withOpacity(0.35), width: 1.2),
+      ),
+      child: Column(
         children: [
-          const Divider(height: 1),
-          const SizedBox(height: 12),
-          _buildDetailGrid([
-            _DetailItem(
-                label: isArabic ? 'وزن المبيعات' : 'Sales Weight',
-                value: _fw(sw),
-                icon: Icons.arrow_upward,
-                color: Colors.green),
-            _DetailItem(
-                label: isArabic ? 'وزن المرتجعات' : 'Returns Weight',
-                value: _fw(rw),
-                icon: Icons.arrow_downward,
-                color: Colors.red),
-            _DetailItem(
-                label: isArabic ? 'إجمالي المبيعات' : 'Sales Value',
-                value: _fv(sv),
-                icon: Icons.sell,
-                color: Colors.green),
-            _DetailItem(
-                label: isArabic ? 'إجمالي المرتجعات' : 'Returns Value',
-                value: _fv(rv),
-                icon: Icons.undo,
-                color: Colors.orange),
-            _DetailItem(
-                label: isArabic ? 'متوسط سعر/جم' : 'Avg Price/g',
-                value: _fv(avg),
-                icon: Icons.speed,
-                color: Colors.blue),
-            _DetailItem(
-                label: isArabic ? 'عدد الفواتير' : 'Invoices',
-                value: '$docs',
-                icon: Icons.receipt_long,
-                color: Colors.purple),
-          ]),
-          const SizedBox(height: 8),
+          // ── رأس الكارت: اسم العيار + الوزن الرئيسي + النسبة ──
+          Container(
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                // دائرة رقم العيار
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$karat',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'عيار $karat',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Text(
+                            '$docs فاتورة',
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey.shade600),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '${_pctFormat.format(pct)}% من الوزن',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: color,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                // صافي القيمة
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      _fv(nv),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: color,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'صافي المبيعات',
+                      style: TextStyle(
+                          fontSize: 10, color: Colors.grey.shade500),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // ── شريط الوزن البارز ──
+          Padding(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // وزن صافي — الأكبر
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'صافي الوزن',
+                        style: TextStyle(
+                            fontSize: 10, color: Colors.grey.shade500),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _fw(nw),
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: color,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // وزن مبيعات
+                _buildWeightChip(
+                    label: 'مبيعات',
+                    value: _fw(sw),
+                    color: Colors.green.shade700),
+                const SizedBox(width: 8),
+                // وزن مرتجعات
+                if (rw > 0)
+                  _buildWeightChip(
+                      label: 'مرتجع',
+                      value: _fw(rw),
+                      color: Colors.red.shade600),
+              ],
+            ),
+          ),
+
+          // ── تفاصيل قابلة للطي ──
+          Theme(
+            data: Theme.of(context).copyWith(
+              dividerColor: Colors.transparent,
+            ),
+            child: ExpansionTile(
+              tilePadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+              title: Text(
+                'تفاصيل إضافية',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500),
+              ),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: _buildDetailGrid([
+                    _DetailItem(
+                        label: isArabic ? 'إجمالي المبيعات' : 'Sales Value',
+                        value: _fv(sv),
+                        icon: Icons.sell,
+                        color: Colors.green),
+                    _DetailItem(
+                        label: isArabic
+                            ? 'إجمالي المرتجعات'
+                            : 'Returns Value',
+                        value: _fv(rv),
+                        icon: Icons.undo,
+                        color: Colors.orange),
+                    _DetailItem(
+                        label:
+                            isArabic ? 'متوسط سعر/جم' : 'Avg Price/g',
+                        value: _fv(avg),
+                        icon: Icons.speed,
+                        color: Colors.blue),
+                    _DetailItem(
+                        label: isArabic ? 'عدد الفواتير' : 'Invoices',
+                        value: '$docs',
+                        icon: Icons.receipt_long,
+                        color: Colors.purple),
+                  ]),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildDetailGrid(List<_DetailItem> items) {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      childAspectRatio: 2.8,
-      children: items.map((item) {
-        return Container(
-          decoration: BoxDecoration(
-            color: item.color.withOpacity(0.07),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Row(
-            children: [
-              Icon(item.icon, size: 16, color: item.color),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      item.label,
-                      style: TextStyle(
-                          fontSize: 10, color: Colors.grey.shade600),
-                    ),
-                    Text(
-                      item.value,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 12),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
+  Widget _buildWeightChip({
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          label,
+          style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.bold, color: color),
+        ),
+      ],
     );
+  }
+
+  Widget _buildDetailGrid(List<_DetailItem> items) {
+    Widget buildCell(_DetailItem item) {
+      return Container(
+        decoration: BoxDecoration(
+          color: item.color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(item.icon, size: 14, color: item.color),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    item.label,
+                    style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                  ),
+                  Text(
+                    item.value,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 12),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final rows = <Widget>[];
+    for (var i = 0; i < items.length; i += 2) {
+      rows.add(Row(
+        children: [
+          Expanded(child: buildCell(items[i])),
+          const SizedBox(width: 8),
+          Expanded(
+              child: i + 1 < items.length
+                  ? buildCell(items[i + 1])
+                  : const SizedBox.shrink()),
+        ],
+      ));
+      if (i + 2 < items.length) rows.add(const SizedBox(height: 8));
+    }
+    return Column(mainAxisSize: MainAxisSize.min, children: rows);
   }
 }
 
