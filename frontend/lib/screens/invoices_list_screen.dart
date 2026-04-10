@@ -3432,6 +3432,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       return;
     }
 
+    // If posted, reject — edit is only for unposted invoices.
     if (invoice['is_posted'] == true) {
       _showSnackBar(
         isAr ? 'لا يمكن تعديل فاتورة مرحّلة' : 'Cannot edit a posted invoice',

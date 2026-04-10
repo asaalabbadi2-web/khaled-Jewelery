@@ -36,6 +36,7 @@ class ClearingSettlementScheduler:
     def __init__(self, app):
         self.app = app
         self.is_running = False
+        self._scheduler = schedule.Scheduler()
 
     def _live_cash_balance_for_safe_box(self, safe_box) -> float:
         account = getattr(safe_box, 'account', None)
@@ -149,6 +150,54 @@ class ClearingSettlementScheduler:
         effective_count = transaction_count if transaction_count > 0 else 1
         fee_amount = round((gross_amount * rate / 100.0) + (fixed * effective_count), 2)
         return fee_amount, transaction_count
+
+    # ------------------------------------------------------------------
+    # Last-settlement date detection
+    # ------------------------------------------------------------------
+    def _last_settlement_date_for_safe_box(self, safe_box_id: int) -> date | None:
+        """Return the date of the most recent clearing-settlement voucher for this safe box."""
+        last_dt = (
+            db.session.query(func.max(Voucher.date))
+            .join(SafeBoxTransaction, SafeBoxTransaction.ref_id == Voucher.id)
+            .filter(
+                SafeBoxTransaction.safe_box_id == safe_box_id,
+                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+                Voucher.reference_type == 'clearing_settlement',
+            )
+            .scalar()
+        )
+        if last_dt is None:
+            return None
+        if isinstance(last_dt, datetime):
+            return last_dt.date()
+        return last_dt
+
+    # ------------------------------------------------------------------
+    # Due amount for a specific day window
+    # ------------------------------------------------------------------
+    def _compute_due_for_day(self, safe_box_id: int, day_start: datetime, day_end: datetime) -> float:
+        """Sum invoice-payment amounts in the [day_start, day_end] window that haven't been settled."""
+        payments_signed = func.coalesce(
+            func.sum(
+                case(
+                    (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
+                    else_=-SafeBoxTransaction.amount_cash,
+                )
+            ),
+            0.0,
+        )
+        amount = (
+            db.session.query(payments_signed)
+            .filter(
+                SafeBoxTransaction.safe_box_id == safe_box_id,
+                SafeBoxTransaction.ref_type == 'invoice_payment',
+                SafeBoxTransaction.created_at >= day_start,
+                SafeBoxTransaction.created_at <= day_end,
+            )
+            .scalar()
+            or 0.0
+        )
+        return round(float(amount), 2)
 
     def process_due_settlements(self) -> dict:
         """Run auto-settlement for all eligible payment methods.
@@ -267,12 +316,6 @@ class ClearingSettlementScheduler:
                     if clearing_balance <= 0.0:
                         _skip(f'clearing_balance_zero_or_negative:{clearing_balance:.2f}')
                         continue
-                    if gross_amount > clearing_balance:
-                        gross_amount = round(clearing_balance, 2)
-
-                    if gross_amount < 0.01:
-                        _skip('gross_after_cap_zero')
-                        continue
 
                     # نمط التسوية: bulk أو per_transaction
                     settlement_mode = str(getattr(pm, 'settlement_mode', 'bulk') or 'bulk').strip().lower()
@@ -289,61 +332,187 @@ class ClearingSettlementScheduler:
                         result['per_tx_settled_count'] += settled
                         continue
 
-                    # -------- تسوية مجمّعة (bulk) — الوضع الافتراضي --------
-                    reference_number = f"AUTO-PM-{pm.id}-{today.isoformat()}"
-
-                    fee_amount, fee_tx_count = self._compute_bulk_fee_amount(
-                        pm=pm,
-                        safe_box_id=clearing_sb.id,
-                        cutoff_dt=cutoff_dt,
-                        gross_amount=gross_amount,
-                    )
-                    if fee_amount >= gross_amount:
-                        print(
-                            f"[ClearingSettlementScheduler] Skipping PM#{pm.id} ({pm.name}): fee {fee_amount:.2f} >= gross {gross_amount:.2f}"
-                        )
-                        _skip(f'fee_exceeds_gross:{fee_amount:.2f}>={gross_amount:.2f}')
-                        continue
-
-                    _bulk_net = round(gross_amount - fee_amount, 2)
-                    description = (
-                        f"تسوية تلقائية لمستحقات التحصيل: {pm.name} "
-                        f"({clearing_sb.name} → {bank_sb.name}) "
-                        f"(إجمالي {gross_amount:.2f}، عمولة {fee_amount:.2f}، صافي {_bulk_net:.2f})"
-                    )
-
-                    try:
-                        voucher_result = _create_clearing_settlement_voucher(
-                            clearing_safe_box_id=clearing_sb.id,
-                            bank_safe_box_id=bank_sb.id,
-                            gross_amount=gross_amount,
-                            fee_amount=fee_amount,
-                            settlement_dt=datetime.now(),
-                            reference_number=reference_number,
-                            created_by='scheduler',
-                            fee_account_id=getattr(pm, 'fee_expense_account_id', None),
-                            description_override=description,
-                            notes='auto_settlement',
-                            ensure_unique_reference=True,
-                        )
-                        # If the helper reports it was skipped (idempotent), don't commit anything.
-                        if voucher_result.get('skipped'):
-                            db.session.rollback()
-                            _skip('duplicate_reference_skipped')
+                    # ================================================================
+                    # تسوية أسبوعية (weekday): سند واحد مجمّع لكل دفعات الأسبوع
+                    # ================================================================
+                    if schedule_type == 'weekday':
+                        if gross_amount > clearing_balance:
+                            gross_amount = round(clearing_balance, 2)
+                        if gross_amount < 0.01:
+                            _skip('gross_after_cap_zero')
                             continue
 
-                        db.session.commit()
-                        result['settled_count'] += 1
-                        print(
-                            f"[ClearingSettlementScheduler] ✓ Settled {gross_amount:.2f}"
-                            f" (fee {fee_amount:.2f}, tx_count {fee_tx_count}) for PM#{pm.id} ({pm.name})"
+                        reference_number = f"AUTO-PM-{pm.id}-W-{today.isoformat()}"
+
+                        fee_amount, fee_tx_count = self._compute_bulk_fee_amount(
+                            pm=pm,
+                            safe_box_id=clearing_sb.id,
+                            cutoff_dt=cutoff_dt,
+                            gross_amount=gross_amount,
                         )
-                    except Exception as exc:
-                        db.session.rollback()
-                        print(
-                            f"[ClearingSettlementScheduler] ❌ Failed PM#{pm.id} ({pm.name}): {exc}"
+                        if fee_amount >= gross_amount:
+                            _skip(f'fee_exceeds_gross:{fee_amount:.2f}>={gross_amount:.2f}')
+                            continue
+
+                        _bulk_net = round(gross_amount - fee_amount, 2)
+                        description = (
+                            f"تسوية أسبوعية تلقائية: {pm.name} "
+                            f"({clearing_sb.name} → {bank_sb.name}) "
+                            f"(إجمالي {gross_amount:.2f}، عمولة {fee_amount:.2f}، صافي {_bulk_net:.2f})"
                         )
-                        _skip(f'voucher_creation_error:{str(exc)[:120]}')
+
+                        try:
+                            voucher_result = _create_clearing_settlement_voucher(
+                                clearing_safe_box_id=clearing_sb.id,
+                                bank_safe_box_id=bank_sb.id,
+                                gross_amount=gross_amount,
+                                fee_amount=fee_amount,
+                                settlement_dt=datetime.now(),
+                                reference_number=reference_number,
+                                created_by='scheduler',
+                                fee_account_id=getattr(pm, 'fee_expense_account_id', None),
+                                description_override=description,
+                                notes='auto_settlement:weekly',
+                                ensure_unique_reference=True,
+                            )
+                            if voucher_result.get('skipped'):
+                                db.session.rollback()
+                                _skip('duplicate_reference_skipped')
+                                continue
+
+                            db.session.commit()
+                            result['settled_count'] += 1
+                            print(
+                                f"[ClearingSettlementScheduler] ✓ Weekly settled {gross_amount:.2f}"
+                                f" (fee {fee_amount:.2f}) for PM#{pm.id} ({pm.name})"
+                            )
+                        except Exception as exc:
+                            db.session.rollback()
+                            print(f"[ClearingSettlementScheduler] ❌ Failed PM#{pm.id} ({pm.name}): {exc}")
+                            _skip(f'voucher_creation_error:{str(exc)[:120]}')
+                        continue
+
+                    # ================================================================
+                    # تسوية يومية (days): يوم بيوم عند التأخير
+                    # ================================================================
+                    # تحديد الأيام المستحقة: من آخر تسوية حتى cutoff_date
+                    last_settled = self._last_settlement_date_for_safe_box(clearing_sb.id)
+
+                    # أقدم يوم به دفعات لم تُسوَّ
+                    first_payment_date = (
+                        db.session.query(func.min(func.date(SafeBoxTransaction.created_at)))
+                        .filter(
+                            SafeBoxTransaction.safe_box_id == clearing_sb.id,
+                            SafeBoxTransaction.ref_type == 'invoice_payment',
+                        )
+                        .scalar()
+                    )
+
+                    if last_settled:
+                        # ابدأ من اليوم التالي لآخر تسوية
+                        range_start = last_settled + timedelta(days=1)
+                    elif first_payment_date:
+                        if isinstance(first_payment_date, str):
+                            range_start = date.fromisoformat(first_payment_date)
+                        elif isinstance(first_payment_date, datetime):
+                            range_start = first_payment_date.date()
+                        else:
+                            range_start = first_payment_date
+                    else:
+                        range_start = cutoff_date
+
+                    # لا نسوي أيام بعد cutoff_date
+                    if range_start > cutoff_date:
+                        _skip(f'no_days_due:range_start={range_start.isoformat()},cutoff={cutoff_date.isoformat()}')
+                        continue
+
+                    # بناء قائمة الأيام المستحقة
+                    due_days = []
+                    d = range_start
+                    while d <= cutoff_date:
+                        due_days.append(d)
+                        d += timedelta(days=1)
+
+                    if not due_days:
+                        _skip('no_due_days')
+                        continue
+
+                    # محاولة التسوية لكل يوم (cap بالرصيد المتاح)
+                    running_balance = clearing_balance
+                    days_settled = 0
+
+                    for settle_day in due_days:
+                        day_start = datetime.combine(settle_day, time.min)
+                        day_end = datetime.combine(settle_day, time.max)
+
+                        day_amount = self._compute_due_for_day(clearing_sb.id, day_start, day_end)
+                        if day_amount < 0.01:
+                            continue
+
+                        # فحص الحد الأدنى
+                        if min_settle > 0.01 and day_amount < min_settle:
+                            continue
+
+                        # cap بالرصيد المتبقي
+                        if day_amount > running_balance:
+                            day_amount = round(running_balance, 2)
+                        if day_amount < 0.01:
+                            break  # الرصيد نفد
+
+                        reference_number = f"AUTO-PM-{pm.id}-{settle_day.isoformat()}"
+
+                        fee_amount_day, fee_tx_count = self._compute_bulk_fee_amount(
+                            pm=pm,
+                            safe_box_id=clearing_sb.id,
+                            cutoff_dt=day_end,
+                            gross_amount=day_amount,
+                        )
+                        if fee_amount_day >= day_amount:
+                            continue
+
+                        _day_net = round(day_amount - fee_amount_day, 2)
+                        description = (
+                            f"تسوية تلقائية لمستحقات التحصيل: {pm.name} "
+                            f"({clearing_sb.name} → {bank_sb.name}) "
+                            f"يوم {settle_day.isoformat()} "
+                            f"(إجمالي {day_amount:.2f}، عمولة {fee_amount_day:.2f}، صافي {_day_net:.2f})"
+                        )
+
+                        try:
+                            voucher_result = _create_clearing_settlement_voucher(
+                                clearing_safe_box_id=clearing_sb.id,
+                                bank_safe_box_id=bank_sb.id,
+                                gross_amount=day_amount,
+                                fee_amount=fee_amount_day,
+                                settlement_dt=datetime.combine(settle_day, time(12, 0)),
+                                reference_number=reference_number,
+                                created_by='scheduler',
+                                fee_account_id=getattr(pm, 'fee_expense_account_id', None),
+                                description_override=description,
+                                notes=f'auto_settlement:day={settle_day.isoformat()}',
+                                ensure_unique_reference=True,
+                            )
+                            if voucher_result.get('skipped'):
+                                continue
+
+                            db.session.commit()
+                            running_balance -= day_amount
+                            days_settled += 1
+                            result['settled_count'] += 1
+                            print(
+                                f"[ClearingSettlementScheduler] ✓ Settled {day_amount:.2f}"
+                                f" (fee {fee_amount_day:.2f}) for PM#{pm.id} ({pm.name})"
+                                f" day={settle_day.isoformat()}"
+                            )
+                        except Exception as exc:
+                            db.session.rollback()
+                            print(
+                                f"[ClearingSettlementScheduler] ❌ Failed PM#{pm.id} ({pm.name})"
+                                f" day={settle_day.isoformat()}: {exc}"
+                            )
+
+                    if days_settled == 0:
+                        _skip(f'no_days_had_due_amount:range={range_start.isoformat()}..{cutoff_date.isoformat()}')
 
                 except Exception as exc:
                     db.session.rollback()
@@ -503,7 +672,7 @@ class ClearingSettlementScheduler:
 
     def setup_schedule(self):
         # Run once per day at 04:10.
-        schedule.every().day.at('04:10').do(self.process_due_settlements)
+        self._scheduler.every().day.at('04:10').do(self.process_due_settlements)
         print('[ClearingSettlementScheduler] ✓ Auto settlement scheduled daily at 04:10')
 
     def start(self):
@@ -516,7 +685,7 @@ class ClearingSettlementScheduler:
 
         def run_scheduler():
             while self.is_running:
-                schedule.run_pending()
+                self._scheduler.run_pending()
                 # Check every minute
                 import time as _time
 
@@ -528,7 +697,7 @@ class ClearingSettlementScheduler:
 
     def stop(self):
         self.is_running = False
-        schedule.clear()
+        self._scheduler.clear()
         print('[ClearingSettlementScheduler] stopped')
 
 

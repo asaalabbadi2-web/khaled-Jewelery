@@ -27,6 +27,7 @@ class SafeboxReconciliationScheduler:
     def __init__(self, app):
         self.app = app
         self.is_running = False
+        self._scheduler = schedule.Scheduler()
 
     # ------------------------------------------------------------------
     # Repair logic (mirrors the /safe-boxes/repair-transactions endpoint)
@@ -176,14 +177,14 @@ class SafeboxReconciliationScheduler:
 
     def _loop(self) -> None:
         while self.is_running:
-            schedule.run_pending()
+            self._scheduler.run_pending()
             time.sleep(30)
 
     def start(self) -> None:
         if self.is_running:
             return
         self.is_running = True
-        schedule.every().day.at(self.RUN_AT).do(self.repair_job).tag(
+        self._scheduler.every().day.at(self.RUN_AT).do(self.repair_job).tag(
             "safebox_reconciliation"
         )
         thread = Thread(

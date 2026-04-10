@@ -786,22 +786,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       setState(() {
         _paymentMethods = normalizedMethods;
-
-        if (_paymentMethods.isNotEmpty) {
-          final defaultMethod = _paymentMethods.firstWhere(
-            (m) => (m['name'] ?? '').toString().trim() == 'نقداً',
-            orElse: () => _paymentMethods.first,
-          );
-          _selectedPaymentMethodId = defaultMethod['id'] as int?;
-        } else {
-          _selectedPaymentMethodId = null;
-        }
+        _selectedPaymentMethodId = null; // لا توجد وسيلة دفع افتراضية — يجب على الموظف الاختيار يدوياً
       });
-
-      // 🆕 تحميل الخزائن عند اختيار طريقة الدفع
-      if (_selectedPaymentMethodId != null) {
-        await _loadSafeBoxesForPaymentMethod(_selectedPaymentMethodId!);
-      }
     } catch (e) {
       _showError('فشل تحميل وسائل الدفع: $e');
     }
@@ -5867,9 +5853,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: colorScheme.primary.withValues(
-                                  alpha: 0.16,
-                                ),
+                                color: colorScheme.primary.withValues(alpha: 0.16),
                                 blurRadius: 4,
                                 offset: const Offset(0, 2),
                               ),

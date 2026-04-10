@@ -1621,6 +1621,40 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               tooltip: isAr ? 'English' : 'العربية',
               onPressed: widget.onToggleLocale,
             ),
+            // زر تبديل المستخدم - ظاهر مباشرة في الشريط
+            Consumer<AuthProvider>(
+              builder: (context, auth, _) => IconButton(
+                icon: const Icon(Icons.switch_account),
+                tooltip: isAr ? 'تبديل المستخدم' : 'Switch User',
+                onPressed: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: Text(isAr ? 'تبديل المستخدم' : 'Switch User'),
+                      content: Text(
+                        isAr
+                            ? 'سيتم تسجيل خروج المستخدم الحالي.\nهل تريد المتابعة؟'
+                            : 'The current user will be signed out.\nDo you want to continue?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: Text(isAr ? 'إلغاء' : 'Cancel'),
+                        ),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.switch_account, size: 18),
+                          label: Text(isAr ? 'تبديل' : 'Switch'),
+                          onPressed: () => Navigator.pop(ctx, true),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    await auth.logout();
+                  }
+                },
+              ),
+            ),
             Consumer<AuthProvider>(
               builder: (context, auth, _) {
                 final displayName = auth.fullName.isEmpty

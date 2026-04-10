@@ -7782,6 +7782,23 @@ def update_unposted_invoice(invoice_id: int):
             reference_type='invoice', reference_id=invoice_id
         ).all()
         for v in linked_vouchers:
+            # Delete all JEs linked to this voucher (via journal_entry_id FK + reference_type)
+            vje_ids: set = set()
+            if v.journal_entry_id:
+                vje_ids.add(v.journal_entry_id)
+            for vje in JournalEntry.query.filter_by(
+                reference_type='voucher', reference_id=v.id
+            ).all():
+                vje_ids.add(vje.id)
+            for vje_id in vje_ids:
+                JournalEntryLine.query.filter_by(journal_entry_id=vje_id).delete()
+                vje_obj = JournalEntry.query.get(vje_id)
+                if vje_obj:
+                    db.session.delete(vje_obj)
+            # Detach FK before deleting voucher to avoid constraint errors
+            if v.journal_entry_id:
+                v.journal_entry_id = None
+                db.session.flush()
             VoucherAccountLine.query.filter_by(voucher_id=v.id).delete()
             db.session.delete(v)
 
@@ -8245,6 +8262,111 @@ def unpost_invoice(invoice_id: int):
     except Exception as exc:
         db.session.rollback()
         return jsonify({'error': 'unpost_failed', 'message': str(exc)}), 500
+
+
+def _add_payment_lines_to_consolidated_je(
+    *,
+    invoice,
+    voucher,
+    voucher_number: str,
+    safe_account_id: int,
+    party_account_id: int,
+    amount: float,
+    payment_id: int,
+    direction: str,
+    voucher_date,
+    created_by: str,
+):
+    """Find or create a consolidated JE for this invoice's payments, then add lines.
+
+    All payment vouchers for the same invoice share ONE JournalEntry
+    (reference_type='invoice_payments'). Each payment adds 2 lines (debit/credit).
+
+    Returns the JournalEntry.
+    """
+    consolidated_je = (
+        JournalEntry.query
+        .filter(
+            JournalEntry.is_deleted == False,
+            JournalEntry.reference_type == 'invoice_payments',
+            JournalEntry.reference_id == int(invoice.id),
+        )
+        .first()
+    )
+
+    if consolidated_je is None:
+        inv_num = (
+            getattr(invoice, 'invoice_number', None)
+            or getattr(invoice, 'invoice_type_id', None)
+            or str(invoice.id)
+        )
+        consolidated_je = JournalEntry(
+            entry_number=_generate_journal_entry_number(entry_date=voucher_date),
+            date=voucher_date,
+            description=f'دفعات فاتورة {inv_num}',
+            reference_type='invoice_payments',
+            reference_id=int(invoice.id),
+            reference_number=str(inv_num),
+            is_posted=True,
+            posted_at=datetime.now(),
+            posted_by=created_by,
+            created_by=created_by,
+        )
+        db.session.add(consolidated_je)
+        db.session.flush()
+
+    # Add lines for this payment
+    if direction == 'in':
+        db.session.add(JournalEntryLine(
+            journal_entry_id=consolidated_je.id,
+            account_id=int(safe_account_id),
+            cash_debit=float(amount),
+            description=f'استلام نقد - دفعة #{payment_id} ({voucher_number})',
+        ))
+        db.session.add(JournalEntryLine(
+            journal_entry_id=consolidated_je.id,
+            account_id=int(party_account_id),
+            cash_credit=float(amount),
+            description=f'تسوية ذمم - دفعة #{payment_id} ({voucher_number})',
+        ))
+    else:
+        db.session.add(JournalEntryLine(
+            journal_entry_id=consolidated_je.id,
+            account_id=int(party_account_id),
+            cash_debit=float(amount),
+            description=f'تسوية ذمم - دفعة #{payment_id} ({voucher_number})',
+        ))
+        db.session.add(JournalEntryLine(
+            journal_entry_id=consolidated_je.id,
+            account_id=int(safe_account_id),
+            cash_credit=float(amount),
+            description=f'صرف نقد - دفعة #{payment_id} ({voucher_number})',
+        ))
+
+    # Update description with all voucher numbers
+    try:
+        inv_num = (
+            getattr(invoice, 'invoice_number', None)
+            or getattr(invoice, 'invoice_type_id', None)
+            or str(invoice.id)
+        )
+        linked_vouchers = (
+            Voucher.query
+            .filter(
+                Voucher.reference_type == 'invoice',
+                Voucher.reference_id == int(invoice.id),
+                Voucher.status != 'cancelled',
+            )
+            .all()
+        )
+        voucher_nums = [v.voucher_number for v in linked_vouchers if v.voucher_number]
+        if voucher_number not in voucher_nums:
+            voucher_nums.append(voucher_number)
+        consolidated_je.description = f'دفعات فاتورة {inv_num} ({", ".join(voucher_nums)})'
+    except Exception:
+        pass
+
+    return consolidated_je
 
 
 @api.route('/invoices/<int:invoice_id>/payments', methods=['POST'])
@@ -8713,14 +8835,24 @@ def add_invoice_payment(invoice_id: int):
         ))
         db.session.flush()
 
-        journal_entry = create_journal_entry_from_voucher(voucher)
-        if not journal_entry:
-            raise Exception('Failed to create journal entry from voucher')
+        # ── قيد مجمّع: نجمع كل دفعات الفاتورة في قيد واحد ──
+        consolidated_je = _add_payment_lines_to_consolidated_je(
+            invoice=invoice,
+            voucher=voucher,
+            voucher_number=voucher_number,
+            safe_account_id=int(safe_account_id),
+            party_account_id=int(party_account_id),
+            amount=float(amount),
+            payment_id=payment.id,
+            direction=direction,
+            voucher_date=voucher_date,
+            created_by=created_by_name or 'system',
+        )
 
         voucher.status = 'approved'
         voucher.approved_at = datetime.now()
         voucher.approved_by = created_by_name or 'system'
-        voucher.journal_entry_id = journal_entry.id
+        voucher.journal_entry_id = consolidated_je.id
 
         _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
 
@@ -9036,7 +9168,7 @@ def safe_boxes_reconciliation():
         threshold = 0.01
     threshold = max(0.0, threshold)
 
-    raw_ignore = (request.args.get('ignore_ref_types') or 'shift_closing_settlement').strip()
+    raw_ignore = (request.args.get('ignore_ref_types') or 'shift_closing_settlement,journal_entry').strip()
     ignore_ref_types = [x.strip().lower() for x in raw_ignore.replace(';', ',').split(',') if x.strip()]
 
     q_safes = SafeBox.query
@@ -9100,6 +9232,10 @@ def safe_boxes_reconciliation():
         .filter(func.coalesce(JournalEntry.is_deleted, False) == False)  # noqa: E712
         .filter(func.coalesce(JournalEntry.is_draft, False) == False)  # noqa: E712
         .filter(func.coalesce(JournalEntry.is_posted, True) == True)  # noqa: E712
+        # Exclude manual JEs — they have no SBT counterpart by design (Fix 2b).
+        .filter(func.lower(func.trim(func.coalesce(JournalEntry.reference_type, ''))).notin_(
+            ['', 'manual', 'journal_entry']
+        ))
         .group_by(SafeBox.id)
         .all()
     )
@@ -9149,6 +9285,10 @@ def safe_boxes_reconciliation():
             .filter(func.coalesce(JournalEntry.is_deleted, False) == False)  # noqa: E712
             .filter(func.coalesce(JournalEntry.is_draft, False) == False)  # noqa: E712
             .filter(func.coalesce(JournalEntry.is_posted, True) == True)  # noqa: E712
+            # Exclude manual JEs — no SBT counterpart by design.
+            .filter(func.lower(func.trim(func.coalesce(JournalEntry.reference_type, ''))).notin_(
+                ['', 'manual', 'journal_entry']
+            ))
             .group_by(je_ref_type_norm, je_ref_id_norm)
             .all()
         )
@@ -11606,15 +11746,23 @@ def add_invoice():
                     ))
                     db.session.flush()
 
-                    journal_entry = create_journal_entry_from_voucher(voucher)
-                    if not journal_entry:
-                        db.session.rollback()
-                        return jsonify({'error': 'voucher_post_failed', 'message': 'فشل إنشاء القيد من السند'}), 500
+                    consolidated_je = _add_payment_lines_to_consolidated_je(
+                        invoice=new_invoice,
+                        voucher=voucher,
+                        voucher_number=voucher_number,
+                        safe_account_id=int(safe_account_id),
+                        party_account_id=int(party_account_id),
+                        amount=float(pm_amount),
+                        payment_id=payment_row.id,
+                        direction=direction,
+                        voucher_date=voucher_date,
+                        created_by=created_by_name or 'system',
+                    )
 
                     voucher.status = 'approved'
                     voucher.approved_at = datetime.now()
                     voucher.approved_by = created_by_name or 'system'
-                    voucher.journal_entry_id = journal_entry.id
+                    voucher.journal_entry_id = consolidated_je.id
 
                     _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
         
@@ -11832,15 +11980,23 @@ def add_invoice():
                 ))
                 db.session.flush()
 
-                journal_entry = create_journal_entry_from_voucher(voucher)
-                if not journal_entry:
-                    db.session.rollback()
-                    return jsonify({'error': 'voucher_post_failed', 'message': 'فشل إنشاء القيد من السند'}), 500
+                consolidated_je = _add_payment_lines_to_consolidated_je(
+                    invoice=new_invoice,
+                    voucher=voucher,
+                    voucher_number=voucher_number,
+                    safe_account_id=int(safe_account_id),
+                    party_account_id=int(party_account_id),
+                    amount=float(amount_value),
+                    payment_id=payment_row.id,
+                    direction=direction,
+                    voucher_date=voucher_date,
+                    created_by=posted_by_username or 'system',
+                )
 
                 voucher.status = 'approved'
                 voucher.approved_at = datetime.now()
                 voucher.approved_by = posted_by_username or 'system'
-                voucher.journal_entry_id = journal_entry.id
+                voucher.journal_entry_id = consolidated_je.id
                 _append_safe_transactions_for_voucher(voucher, created_by=voucher.approved_by)
 
         # --- Gold settlement (barter/partial) ---
@@ -16323,10 +16479,12 @@ def _weight_kwargs_from_map(gold_map, side='debit'):
 
 
 def _is_manual_like_journal_entry(entry: 'JournalEntry') -> bool:
-    """Return True when a JournalEntry is manually created/edited.
+    """Return True when a JournalEntry is manually created/edited (not system-generated).
 
-    We only sync SafeBoxTransaction for manual-like journal entries to avoid
-    double-counting when entries are generated from invoices/vouchers.
+    Manual entries (reference_type in '', 'manual', 'journal_entry') must NOT create
+    SafeBoxTransaction rows — they are internal accounting transfers, not physical
+    cash/gold movements.  Only system-generated entries (invoice, voucher, shift, etc.)
+    should produce SBTs.
     """
     try:
         rt = (getattr(entry, 'reference_type', None) or '').strip().lower()
@@ -16369,7 +16527,11 @@ def _rebuild_safe_box_transactions_for_journal_entry(entry: 'JournalEntry', line
         # If schema doesn't have is_posted, proceed.
         pass
 
-    if not _is_manual_like_journal_entry(entry):
+    # Manual JEs (reference_type = '' / 'manual' / 'journal_entry') are internal
+    # accounting adjustments — they do NOT represent physical cash/gold movements.
+    # The cleanup above already removed any stale SBT rows; return now to prevent
+    # double-counting against the GL.
+    if _is_manual_like_journal_entry(entry):
         return
 
     j_lines = [l for l in (lines or []) if getattr(l, 'account_id', None) is not None]

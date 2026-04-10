@@ -132,6 +132,13 @@ def _derive_ref_fields(reference_type: str | None, reference_id: int | None, je_
         pay_id = int(rid)
         return "invoice_payment", pay_id, None, pay_id
 
+    if rt_norm == "invoice_payments":
+        # Consolidated JE: reference_id is the invoice_id, not a single payment id.
+        if rid in (None, 0):
+            raise ValueError("invoice_payments journal_entry is missing reference_id (invoice_id)")
+        inv_id = int(rid)
+        return "invoice_payment", inv_id, inv_id, None
+
     if rt_norm == "invoice":
         if rid in (None, 0):
             raise ValueError("invoice journal_entry is missing reference_id")

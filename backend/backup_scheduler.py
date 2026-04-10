@@ -33,6 +33,7 @@ class BackupScheduler:
         self.app = app
         self.is_running = False
         self._last_config: tuple[str, str, str, str, str] | None = None
+        self._scheduler = schedule.Scheduler()
 
     def _read_config(self) -> tuple[bool, str, int, str, int]:
         with self.app.app_context():
@@ -158,7 +159,7 @@ class BackupScheduler:
                 print(f"[BackupScheduler] ❌ Backup failed: {exc}")
 
     def _apply_schedule(self, enabled: bool, mode: str, interval_minutes: int, at_time: str) -> None:
-        schedule.clear("backup")
+        self._scheduler.clear("backup")
         if not enabled:
             print("[BackupScheduler] Auto-backup disabled")
             return
@@ -166,7 +167,7 @@ class BackupScheduler:
         normalized = (mode or "daily").strip().lower()
         if normalized == "daily":
             try:
-                schedule.every().day.at(at_time).do(self.run_backup_now).tag("backup")
+                self._scheduler.every().day.at(at_time).do(self.run_backup_now).tag("backup")
                 print(f"[BackupScheduler] Auto-backup enabled daily at {at_time}")
             except Exception as exc:
                 print(f"[BackupScheduler] Invalid daily time '{at_time}': {exc}")
@@ -176,7 +177,7 @@ class BackupScheduler:
         minutes = int(interval_minutes) if interval_minutes else 1440
         if minutes < 1:
             minutes = 1
-        schedule.every(minutes).minutes.do(self.run_backup_now).tag("backup")
+        self._scheduler.every(minutes).minutes.do(self.run_backup_now).tag("backup")
         print(f"[BackupScheduler] Auto-backup enabled every {minutes} minute(s)")
 
     def start(self) -> None:
@@ -207,7 +208,7 @@ class BackupScheduler:
                 except Exception as exc:
                     print(f"[BackupScheduler] Config read failed: {exc}")
 
-                schedule.run_pending()
+                self._scheduler.run_pending()
                 time.sleep(30)
 
         Thread(target=run_loop, daemon=True).start()
@@ -215,7 +216,7 @@ class BackupScheduler:
 
     def stop(self) -> None:
         self.is_running = False
-        schedule.clear("backup")
+        self._scheduler.clear("backup")
         print("[BackupScheduler] ⏸️ Stopped")
 
 

@@ -23,6 +23,7 @@ class BonusScheduler:
     def __init__(self, app):
         self.app = app
         self.is_running = False
+        self._scheduler = schedule.Scheduler()
         
     def calculate_daily_bonuses(self):
         """حساب المكافآت اليومية"""
@@ -125,16 +126,16 @@ class BonusScheduler:
     def setup_schedule(self):
         """إعداد جدول المهام"""
         # حساب المكافآت اليومية - كل يوم الساعة 1:00 صباحاً
-        schedule.every().day.at("01:00").do(self.calculate_daily_bonuses)
+        self._scheduler.every().day.at("01:00").do(self.calculate_daily_bonuses)
         
         # حساب المكافآت الأسبوعية - كل يوم اثنين الساعة 2:00 صباحاً
-        schedule.every().monday.at("02:00").do(self.calculate_weekly_bonuses)
+        self._scheduler.every().monday.at("02:00").do(self.calculate_weekly_bonuses)
         
         # حساب المكافآت الشهرية - أول يوم من كل شهر الساعة 3:00 صباحاً
-        schedule.every().day.at("03:00").do(self._check_and_calculate_monthly)
+        self._scheduler.every().day.at("03:00").do(self._check_and_calculate_monthly)
         
         # التحقق من المكافآت المعلقة - كل 6 ساعات
-        schedule.every(6).hours.do(self.check_pending_bonuses)
+        self._scheduler.every(6).hours.do(self.check_pending_bonuses)
         
         print("[BonusScheduler] ✓ تم إعداد جدول المكافآت التلقائية")
         print("[BonusScheduler] - مكافآت يومية: 1:00 صباحاً")
@@ -159,7 +160,7 @@ class BonusScheduler:
         
         def run_scheduler():
             while self.is_running:
-                schedule.run_pending()
+                self._scheduler.run_pending()
                 time.sleep(60)  # التحقق كل دقيقة
         
         thread = Thread(target=run_scheduler, daemon=True)
@@ -169,7 +170,7 @@ class BonusScheduler:
     def stop(self):
         """إيقاف المجدول"""
         self.is_running = False
-        schedule.clear()
+        self._scheduler.clear()
         print("[BonusScheduler] ⏸️ توقف مجدول المكافآت")
     
     def run_now(self, task_type='daily'):

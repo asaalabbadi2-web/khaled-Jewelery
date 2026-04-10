@@ -27,6 +27,7 @@ class GoldPriceScheduler:
         self.app = app
         self.is_running = False
         self._last_config: tuple[bool, str, str] | None = None
+        self._scheduler = schedule.Scheduler()
 
     def _read_config(self) -> tuple[bool, str, int]:
         with self.app.app_context():
@@ -43,7 +44,7 @@ class GoldPriceScheduler:
             return enabled, mode, interval_minutes
 
     def _apply_schedule(self, enabled: bool, mode: str, interval_minutes: int) -> None:
-        schedule.clear("gold_price")
+        self._scheduler.clear("gold_price")
         if not enabled:
             print("[GoldPriceScheduler] Auto-update disabled")
             return
@@ -57,7 +58,7 @@ class GoldPriceScheduler:
                 if row:
                     at_time = (getattr(row, "gold_price_auto_update_time", None) or "09:00").strip()
             try:
-                schedule.every().day.at(at_time).do(self.update_from_internet).tag("gold_price")
+                self._scheduler.every().day.at(at_time).do(self.update_from_internet).tag("gold_price")
                 print(f"[GoldPriceScheduler] Auto-update enabled daily at {at_time}")
             except Exception as exc:
                 print(f"[GoldPriceScheduler] Invalid daily time '{at_time}': {exc}")
@@ -71,7 +72,7 @@ class GoldPriceScheduler:
         if minutes < 1:
             minutes = 1
 
-        schedule.every(minutes).minutes.do(self.update_from_internet).tag("gold_price")
+        self._scheduler.every(minutes).minutes.do(self.update_from_internet).tag("gold_price")
         print(f"[GoldPriceScheduler] Auto-update enabled every {minutes} minute(s)")
 
     def update_from_internet(self) -> None:
@@ -116,7 +117,7 @@ class GoldPriceScheduler:
                 except Exception as exc:
                     print(f"[GoldPriceScheduler] Config read failed: {exc}")
 
-                schedule.run_pending()
+                self._scheduler.run_pending()
                 time.sleep(30)
 
         Thread(target=run_loop, daemon=True).start()
@@ -124,7 +125,7 @@ class GoldPriceScheduler:
 
     def stop(self) -> None:
         self.is_running = False
-        schedule.clear("gold_price")
+        self._scheduler.clear("gold_price")
         print("[GoldPriceScheduler] ⏸️ Stopped")
 
 

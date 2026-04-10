@@ -193,6 +193,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
 
   List<JournalLine> _lines = [];
   List<dynamic> _accounts = [];
+  // Account IDs that are directly linked to a SafeBox — selecting one in a manual
+  // JE will NOT create a SafeBoxTransaction (server-side guard).  Show a warning.
+  final Set<int> _safeBoxAccountIds = {};
   final List<int> _supportedKarats = [18, 21, 22, 24];
   int _mainKarat = 21;
   String _currencySymbol = 'ر.س';
@@ -478,6 +481,16 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     }
 
     _calculateTotals(); // Calculate totals after all data is fetched/initialized
+
+    // Load safe box account IDs in the background so we can warn users.
+    _apiService.getSafeBoxes().then((boxes) {
+      if (!mounted) return;
+      setState(() {
+        _safeBoxAccountIds.addAll(boxes.map((b) => b.accountId));
+      });
+    }).catchError((_) {
+      // Non-critical — silently ignore if safe boxes can't be loaded.
+    });
   }
 
   Future<void> _fetchAccounts() async {
@@ -670,6 +683,27 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         }
       }
     });
+
+    // Warn if this account belongs to a safe box — manual JEs touching safe-box
+    // accounts do NOT update the SafeBox sub-ledger.  Physical cash movements
+    // must go through a Payment Voucher instead.
+    if (accountId != null && _safeBoxAccountIds.contains(accountId)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'تنبيه: هذا الحساب مرتبط بخزينة.\n'
+              'القيود اليدوية لا تُحدّث سجل حركات الخزينة تلقائياً.\n'
+              'للتحويل النقدي استخدم سند صرف/قبض بدلاً من ذلك.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      });
+    }
+
     _calculateTotals();
   }
 

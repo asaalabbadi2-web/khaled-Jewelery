@@ -228,14 +228,13 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
       لكن عند الحفظ كمسودة لا يُنشأ سند ولا SafeBoxTransaction.
       فعند الترحيل لاحقاً: ذمم العميل تظل مدينة والنقد لا يدخل الخزينة!
 
-    الحل:
-      لكل InvoicePayment لم تُسجَّل SafeBoxTransaction خاصة بها بعد:
-        1. ننشئ SafeBoxTransaction (لرصيد الخزينة في لوحة التحكم)
-        2. ننشئ JournalEntry:
-             مدين خزينة / دائن ذمم العميل   (للبيع - cash in)
-             مدين ذمم المورد / دائن خزينة   (للشراء - cash out)
-      → ذمم العميل/المورد تصفر تلقائياً.
+    الحل (قيد مجمّع):
+      نجمع كل الدفعات التي لم يُنشأ لها قيد بعد ← ننشئ قيداً واحداً
+      يحتوي سطراً لكل دفعة (مدين خزينة / دائن ذمم أو العكس).
+      هذا يحل مشكلة تطابق المبالغ بين دفعات مختلفة بنفس القيمة
+      (لأن القيد مرتبط بالفاتورة ككل وليس بكل دفعة منفردة).
     """
+
     payments = list(getattr(invoice, 'payments', []) or [])
     if not payments:
         return
@@ -256,6 +255,10 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
     except Exception:
         pass
 
+    # ── فحص الدفعات وتجهيز البيانات ──
+    # lines_to_create: قائمة بتفاصيل كل دفعة تحتاج قيد
+    lines_to_create = []
+
     for pay in payments:
         try:
             pay_id = int(getattr(pay, 'id', 0) or 0)
@@ -264,13 +267,7 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         if pay_id <= 0:
             continue
 
-        # Idempotency (prevent duplicates): handle legacy rows too.
-        # A payment may have been recorded via voucher flow (receipt/payment voucher),
-        # or via legacy deferred-payment recovery (ref_type=invoice_payment).
-        # - Prefer invoice_payment_id when present.
-        # - Fall back to ref_type/ref_id for older rows.
-        # CRITICAL: always restrict to the current invoice_id to avoid picking up
-        # stale rows from a previous DB cycle that share the same invoice_payment ID.
+        # ── SafeBoxTransaction idempotency ──
         existing_safe_tx = (
             SafeBoxTransaction.query
             .filter(
@@ -287,82 +284,6 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             .first()
         )
 
-        # JournalEntry idempotency:
-        # - New format uses reference_type='invoice_payment' and reference_id=pay_id
-        # - Older formats used entry_number prefix DEF-{invoice_id}-{pay_id}-...
-        existing_je = (
-            JournalEntry.query
-            .filter(JournalEntry.is_deleted == False)
-            .filter(
-                or_(
-                    and_(JournalEntry.reference_type == 'invoice_payment', JournalEntry.reference_id == pay_id),
-                    JournalEntry.entry_number.like(f'PAY-{invoice.id}-{pay_id}-%'),
-                    JournalEntry.entry_number.like(f'DEF-{invoice.id}-{pay_id}-%'),
-                )
-            )
-            .first()
-        )
-
-        # Voucher-based payments create a JournalEntry with reference_type='voucher'.
-        # Those entries are legitimate and should prevent creating a duplicate
-        # deferred-payment recovery entry.
-        try:
-            from models import Voucher
-
-            # Prefer explicit note linkage when available; otherwise fall back
-            # to (invoice_id + amount) which is stable in many legacy DBs.
-            note_like = or_(
-                Voucher.notes.like(f'%\"invoice_payment_id\": {pay_id}%'),
-                Voucher.notes.like(f'%\"invoice_payment_id\":{pay_id}%'),
-                Voucher.notes.like(f'%\"invoice_payment_id\"%{pay_id}%'),
-            )
-
-            voucher_filters = [
-                Voucher.reference_type == 'invoice',
-                Voucher.reference_id == int(invoice.id),
-                # Some DBs support soft-delete semantics via voucher status.
-                Voucher.status != 'cancelled',
-            ]
-            # Best-effort: if the Voucher model has an is_deleted column (some installs),
-            # respect it.
-            try:
-                if hasattr(Voucher, 'is_deleted'):
-                    voucher_filters.append(Voucher.is_deleted == False)
-            except Exception:
-                pass
-
-            voucher_for_payment = (
-                Voucher.query
-                .filter(
-                    *voucher_filters,
-                    or_(
-                        note_like,
-                        and_(
-                            Voucher.amount_cash.isnot(None),
-                            func.abs(func.coalesce(Voucher.amount_cash, 0.0) - float(getattr(pay, 'amount', 0.0) or 0.0)) < 0.01,
-                        ),
-                    ),
-                )
-                .order_by(Voucher.id.desc())
-                .first()
-            )
-            if voucher_for_payment and getattr(voucher_for_payment, 'journal_entry_id', None):
-                voucher_je_id = int(voucher_for_payment.journal_entry_id)
-                voucher_je = (
-                    JournalEntry.query
-                    .filter(JournalEntry.is_deleted == False)
-                    .filter(JournalEntry.id == voucher_je_id)
-                    .first()
-                )
-                if voucher_je is not None:
-                    existing_je = existing_je or voucher_je
-        except Exception:
-            pass
-
-        # If both artifacts exist, nothing to do.
-        if existing_safe_tx and existing_je:
-            continue
-
         pm_obj = None
         try:
             pm_id = getattr(pay, 'payment_method_id', None)
@@ -374,7 +295,7 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         if _is_receivable_pm(pm_obj):
             continue  # دفع آجل: لا حركة خزينة
 
-        # استرجاع safe_box_id المحفوظ مسبقاً في حقل notes أو invoice
+        # استرجاع safe_box_id والـ notes
         explicit_safe_box_id = None
         notes_user = None
         try:
@@ -389,7 +310,6 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         except Exception:
             notes_user = getattr(pay, 'notes', None)
 
-        # If we already have a safe transaction, trust its safe_box_id.
         safe_box_id = None
         if existing_safe_tx and getattr(existing_safe_tx, 'safe_box_id', None):
             try:
@@ -411,9 +331,6 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
             print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} غير موجودة - دفعة #{pay_id}')
             continue
 
-        # Always use the payment record's amount for JE/SafeBox.
-        # Using existing_safe_tx.amount_cash is unsafe: if a stale transaction
-        # from another invoice is (incorrectly) matched, it would inflate the amount.
         try:
             amount_cash = float(getattr(pay, 'amount', 0.0) or 0.0)
         except Exception:
@@ -422,7 +339,7 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
         if amount_cash <= 0:
             continue
 
-        # 1) SafeBoxTransaction (create only if missing)
+        # 1) SafeBoxTransaction (create only if missing) — always per payment
         if existing_safe_tx is None:
             db.session.add(SafeBoxTransaction(
                 safe_box_id=int(safe_box_id),
@@ -437,133 +354,164 @@ def _create_deferred_payment_entries(invoice: Invoice, posted_by: str) -> None:
                 created_by=posted_by,
             ))
 
-        # 2) JournalEntry: مدين خزينة / دائن ذمم -- أو العكس للشراء
+        # 2) تجهيز سطر القيد — نجمعها جميعاً بعد الحلقة
         safe_account_id = getattr(sb, 'account_id', None)
         if not safe_account_id:
-            print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} لا تحتوي على account_id - لن يُنشأ قيد')
+            print(f'[deferred_payment] تحذير: الخزينة {safe_box_id} لا تحتوي على account_id - لن يُنشأ سطر')
             continue
 
-        # Extra idempotency for legacy data:
-        # If the invoice already has a posted journal entry (reference_type='invoice')
-        # that already hit the same safe account with the same cash amount,
-        # do NOT create a duplicate deferred-payment JE.
-        #
-        # This covers legacy queued/unposted invoices where the invoice JE was
-        # originally built to debit/credit the SafeBox directly; when those
-        # invoices are posted later, we should not add a second cash movement.
-        try:
-            safe_account_id_int = int(safe_account_id)
-        except Exception:
-            safe_account_id_int = None
+        lines_to_create.append({
+            'pay_id': pay_id,
+            'safe_account_id': int(safe_account_id),
+            'amount_cash': amount_cash,
+        })
 
+    # ── إنشاء قيد واحد مجمّع لجميع الدفعات ──
+    if not lines_to_create:
+        return
+
+    # Idempotency: هل يوجد قيد مجمّع سابق لهذه الفاتورة؟
+    existing_consolidated_je = (
+        JournalEntry.query
+        .filter(JournalEntry.is_deleted == False)
+        .filter(
+            or_(
+                # الصيغة الجديدة (قيد مجمّع)
+                and_(JournalEntry.reference_type == 'invoice_payments', JournalEntry.reference_id == int(invoice.id)),
+                # الصيغة القديمة (قيد منفرد لأي دفعة) — نتعامل مع البيانات القديمة
+                JournalEntry.entry_number.like(f'PAY-{invoice.id}-%'),
+                JournalEntry.entry_number.like(f'DEF-{invoice.id}-%'),
+                and_(JournalEntry.reference_type == 'invoice_payment',
+                     JournalEntry.reference_id.in_([l['pay_id'] for l in lines_to_create])),
+            )
+        )
+        .first()
+    )
+
+    # فحص القيود المرتبطة عبر سندات (vouchers)
+    if existing_consolidated_je is None:
         try:
-            if safe_account_id_int and amount_cash > 0:
+            from models import Voucher
+            pay_ids = [l['pay_id'] for l in lines_to_create]
+            for pid in pay_ids:
+                note_like = or_(
+                    Voucher.notes.like(f'%"invoice_payment_id": {pid}%'),
+                    Voucher.notes.like(f'%"invoice_payment_id":{pid}%'),
+                    Voucher.notes.like(f'%"invoice_payment_id"%{pid}%'),
+                )
+                voucher_filters = [
+                    Voucher.reference_type == 'invoice',
+                    Voucher.reference_id == int(invoice.id),
+                    Voucher.status != 'cancelled',
+                ]
+                try:
+                    if hasattr(Voucher, 'is_deleted'):
+                        voucher_filters.append(Voucher.is_deleted == False)
+                except Exception:
+                    pass
+                v = (
+                    Voucher.query
+                    .filter(*voucher_filters, note_like)
+                    .order_by(Voucher.id.desc())
+                    .first()
+                )
+                if v and getattr(v, 'journal_entry_id', None):
+                    vje = (
+                        JournalEntry.query
+                        .filter(JournalEntry.is_deleted == False, JournalEntry.id == int(v.journal_entry_id))
+                        .first()
+                    )
+                    if vje is not None:
+                        existing_consolidated_je = vje
+                        break
+        except Exception:
+            pass
+
+    # فحص إضافي: هل القيد الرئيسي للفاتورة يحتوي أصلاً على أسطر الخزينة؟
+    if existing_consolidated_je is None:
+        try:
+            for line_info in lines_to_create:
+                sa_id = line_info['safe_account_id']
+                amt = line_info['amount_cash']
                 eps = 0.01
                 if direction == 'in':
-                    safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
+                    safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amt)) < eps
                 else:
-                    safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
+                    safe_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amt)) < eps
 
-                # 1) Safe-only check (legacy cash invoices)
-                invoice_cash_je = (
+                match = (
                     JournalEntry.query
                     .join(JournalEntryLine, JournalEntryLine.journal_entry_id == JournalEntry.id)
                     .filter(JournalEntry.is_deleted == False)
                     .filter(JournalEntryLine.is_deleted == False)
                     .filter(JournalEntry.reference_type == 'invoice', JournalEntry.reference_id == int(invoice.id))
-                    .filter(JournalEntryLine.account_id == safe_account_id_int)
+                    .filter(JournalEntryLine.account_id == sa_id)
                     .filter(safe_amt_cond)
                     .first()
                 )
-                if invoice_cash_je is not None:
-                    existing_je = existing_je or invoice_cash_je
-
-                # 2) Safe + party check (newer behavior, keep as a refinement)
-                if existing_je is None:
-                    credit_acc = party_account_id or safe_account_id_int
-                    if credit_acc:
-                        if direction == 'in':
-                            party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_credit, 0.0) - float(amount_cash)) < eps
-                        else:
-                            party_amt_cond = func.abs(func.coalesce(JournalEntryLine.cash_debit, 0.0) - float(amount_cash)) < eps
-
-                        invoice_cash_je_2 = (
-                            JournalEntry.query
-                            .join(JournalEntryLine, JournalEntryLine.journal_entry_id == JournalEntry.id)
-                            .filter(JournalEntry.is_deleted == False)
-                            .filter(JournalEntryLine.is_deleted == False)
-                            .filter(JournalEntry.reference_type == 'invoice', JournalEntry.reference_id == int(invoice.id))
-                            .filter(JournalEntryLine.account_id == safe_account_id_int)
-                            .filter(safe_amt_cond)
-                            .filter(
-                                JournalEntry.lines.any(
-                                    and_(
-                                        JournalEntryLine.is_deleted == False,
-                                        JournalEntryLine.account_id == int(credit_acc),
-                                        party_amt_cond,
-                                    )
-                                )
-                            )
-                            .first()
-                        )
-                        if invoice_cash_je_2 is not None:
-                            existing_je = existing_je or invoice_cash_je_2
+                if match is not None:
+                    existing_consolidated_je = match
+                    break
         except Exception:
             pass
 
-        # 2) JournalEntry (create only if missing)
-        if existing_je is None:
-            ts = datetime.now().strftime('%Y%m%d%H%M%S')
-            # NOTE: This journal entry represents posting a previously persisted invoice payment
-            # for an unposted/approval-gated invoice. It is not a credit (آجل) invoice payment.
-            entry_number = f'PAY-{invoice.id}-{pay_id}-{ts}'
-            je = JournalEntry(
-                entry_number=entry_number,
-                date=getattr(invoice, 'date', None) or datetime.now(),
-                description=(
-                    f'ترحيل دفعة فاتورة - فاتورة #{getattr(invoice, "invoice_number", None) or invoice.id}'
-                ),
-                reference_type='invoice_payment',
-                reference_id=pay_id,
-                reference_number=(getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', '') or '')),
-                is_posted=True,
-                posted_at=datetime.now(),
-                posted_by=posted_by,
-                created_by=posted_by,
-            )
-            db.session.add(je)
-            db.session.flush()
+    if existing_consolidated_je is not None:
+        return  # قيد موجود بالفعل — لا نكرر
 
-            if direction == 'in':
-                # بيع: مدين خزينة ← دائن ذمم عميل
-                db.session.add(JournalEntryLine(
-                    journal_entry_id=je.id,
-                    account_id=int(safe_account_id),
-                    cash_debit=amount_cash,
-                    description=f'استلام نقد - دفعة #{pay_id}',
-                ))
-                credit_acc = party_account_id or int(safe_account_id)
-                db.session.add(JournalEntryLine(
-                    journal_entry_id=je.id,
-                    account_id=credit_acc,
-                    cash_credit=amount_cash,
-                    description=f'تسوية ذمم عميل - دفعة #{pay_id}',
-                ))
-            else:
-                # شراء: مدين ذمم مورد ← دائن خزينة
-                debit_acc = party_account_id or int(safe_account_id)
-                db.session.add(JournalEntryLine(
-                    journal_entry_id=je.id,
-                    account_id=debit_acc,
-                    cash_debit=amount_cash,
-                    description=f'تسوية ذمم مورد - دفعة #{pay_id}',
-                ))
-                db.session.add(JournalEntryLine(
-                    journal_entry_id=je.id,
-                    account_id=int(safe_account_id),
-                    cash_credit=amount_cash,
-                    description=f'صرف نقد - دفعة #{pay_id}',
-                ))
+    # ── إنشاء القيد المجمّع ──
+    ts = datetime.now().strftime('%Y%m%d%H%M%S')
+    inv_num = getattr(invoice, 'invoice_number', None) or str(invoice.id)
+    pay_ids_str = ','.join(str(l['pay_id']) for l in lines_to_create)
+    je = JournalEntry(
+        entry_number=f'PAY-{invoice.id}-ALL-{ts}',
+        date=getattr(invoice, 'date', None) or datetime.now(),
+        description=f'دفعات فاتورة {inv_num} (دفعات: {pay_ids_str})',
+        reference_type='invoice_payments',
+        reference_id=int(invoice.id),
+        reference_number=inv_num,
+        is_posted=True,
+        posted_at=datetime.now(),
+        posted_by=posted_by,
+        created_by=posted_by,
+    )
+    db.session.add(je)
+    db.session.flush()
+
+    for line_info in lines_to_create:
+        sa_id = line_info['safe_account_id']
+        amt = line_info['amount_cash']
+        pid = line_info['pay_id']
+
+        if direction == 'in':
+            # بيع: مدين خزينة ← دائن ذمم عميل
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=sa_id,
+                cash_debit=amt,
+                description=f'استلام نقد - دفعة #{pid}',
+            ))
+            credit_acc = party_account_id or sa_id
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=credit_acc,
+                cash_credit=amt,
+                description=f'تسوية ذمم عميل - دفعة #{pid}',
+            ))
+        else:
+            # شراء: مدين ذمم مورد ← دائن خزينة
+            debit_acc = party_account_id or sa_id
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=debit_acc,
+                cash_debit=amt,
+                description=f'تسوية ذمم مورد - دفعة #{pid}',
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=sa_id,
+                cash_credit=amt,
+                description=f'صرف نقد - دفعة #{pid}',
+            ))
 
 
 def _resolve_cash_safe_box_id_for_invoice(
