@@ -18,10 +18,10 @@ import json
 import tempfile
 import zipfile
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, joinedload
-from sqlalchemy import func, or_, and_, case, cast, String, Integer
+from sqlalchemy import func, or_, and_, not_, case, cast, String, Integer
 from gold_price import fetch_gold_price, save_gold_price
 from models import (
     GoldPrice,
@@ -7424,8 +7424,16 @@ def get_invoices():
 
     # Filtering parameters
     search = request.args.get('search')
+    search_type = (request.args.get('search_type') or 'all').strip().lower()
     status = request.args.get('status')
     invoice_type = request.args.get('invoice_type')
+    invoice_types = request.args.get('invoice_types')
+    invoice_group = request.args.get('invoice_group')
+    party = request.args.get('party')
+    creator = request.args.get('creator')
+    employee_id = request.args.get('employee_id', type=int)
+    karat = request.args.get('karat')
+    gold_type = request.args.get('gold_type')
     date_from_str = request.args.get('date_from')
     date_to_str = request.args.get('date_to')
 
@@ -7434,6 +7442,7 @@ def get_invoices():
 
     customer_joined = False
     supplier_joined = False
+    employee_joined = False
 
     def _ensure_party_outerjoins():
         nonlocal query, customer_joined, supplier_joined
@@ -7444,34 +7453,304 @@ def get_invoices():
             query = query.outerjoin(Supplier, Invoice.supplier_id == Supplier.id)
             supplier_joined = True
 
+    def _ensure_employee_outerjoin():
+        nonlocal query, employee_joined
+        if not employee_joined:
+            query = query.outerjoin(Employee, Invoice.employee_id == Employee.id)
+            employee_joined = True
+
+    def _is_return_clause():
+        return or_(
+            Invoice.invoice_type.ilike('%مرتجع%'),
+            Invoice.invoice_type.ilike('%return%'),
+        )
+
+    def _is_sale_clause():
+        return and_(
+            not_(_is_return_clause()),
+            or_(
+                Invoice.invoice_type.ilike('%بيع%'),
+                Invoice.invoice_type.ilike('%sale%'),
+                Invoice.invoice_type == 'sell',
+            ),
+        )
+
+    def _is_purchase_clause():
+        return and_(
+            not_(_is_return_clause()),
+            or_(
+                Invoice.invoice_type.ilike('%شراء%'),
+                Invoice.invoice_type.ilike('%purchase%'),
+                Invoice.invoice_type == 'buy',
+            ),
+        )
+
+    def _is_customer_purchase_clause():
+        return and_(
+            _is_purchase_clause(),
+            or_(
+                Invoice.customer_id.isnot(None),
+                Invoice.invoice_type.in_(['شراء من عميل', 'شراء خردة', 'شراء مستعمل']),
+            ),
+            Invoice.supplier_id.is_(None),
+        )
+
+    def _is_supplier_purchase_clause():
+        return and_(
+            _is_purchase_clause(),
+            or_(
+                Invoice.supplier_id.isnot(None),
+                Invoice.invoice_type == 'شراء',
+            ),
+        )
+
+    creator_name_cache = {}
+
+    def _resolve_invoice_creator_name(invoice):
+        try:
+            if getattr(invoice, 'employee', None) and getattr(invoice.employee, 'name', None):
+                return str(invoice.employee.name).strip()
+        except Exception:
+            pass
+
+        posted_by_raw = str(getattr(invoice, 'posted_by', '') or '').strip()
+        if not posted_by_raw:
+            return None
+
+        posted_by_key = posted_by_raw.lower()
+        if posted_by_key in creator_name_cache:
+            return creator_name_cache[posted_by_key]
+
+        resolved_name = None
+        try:
+            from models import AppUser
+
+            app_user = AppUser.query.filter(
+                func.lower(func.trim(AppUser.username)) == posted_by_key
+            ).first()
+            if app_user and getattr(app_user, 'employee', None) and getattr(app_user.employee, 'name', None):
+                resolved_name = str(app_user.employee.name).strip()
+        except Exception:
+            resolved_name = None
+
+        creator_name_cache[posted_by_key] = resolved_name or posted_by_raw
+        return creator_name_cache[posted_by_key]
+
     # Filtering
     if search:
         search = (search or '').strip()
         if search:
-            _ensure_party_outerjoins()
             like = f'%{search}%'
-            clauses = [
-                Invoice.invoice_type.ilike(like),
-                Customer.name.ilike(like),
-                Supplier.name.ilike(like),
-            ]
+            clauses = []
 
-            try:
-                search_int = int(search)
+            if search_type in ('all', 'name'):
+                _ensure_party_outerjoins()
                 clauses.extend([
-                    Invoice.id == search_int,
-                    Invoice.invoice_type_id == search_int,
+                    Customer.name.ilike(like),
+                    Supplier.name.ilike(like),
                 ])
+
+            if search_type == 'all':
+                clauses.append(Invoice.invoice_type.ilike(like))
+
+            normalized_numeric_search = search.replace(',', '').strip()
+            try:
+                search_number = float(normalized_numeric_search)
+                if search_type in ('all', 'amount'):
+                    clauses.append(
+                        func.abs(func.coalesce(Invoice.total, 0) - search_number) < 0.0001
+                    )
+                if search_type in ('all', 'weight'):
+                    clauses.append(
+                        func.abs(func.coalesce(Invoice.total_weight, 0) - search_number) < 0.0001
+                    )
             except Exception:
                 pass
 
-            query = query.filter(or_(*clauses))
+            if search_type in ('all', 'number'):
+                try:
+                    search_int = int(search)
+                    clauses.extend([
+                        Invoice.id == search_int,
+                        Invoice.invoice_type_id == search_int,
+                    ])
+                except Exception:
+                    tail = search.split('-')[-1].strip()
+                    try:
+                        search_tail_int = int(tail)
+                        clauses.extend([
+                            Invoice.id == search_tail_int,
+                            Invoice.invoice_type_id == search_tail_int,
+                        ])
+                    except Exception:
+                        pass
+
+            if clauses:
+                query = query.filter(or_(*clauses))
+            else:
+                query = query.filter(Invoice.id == -1)
 
     if status and status != 'all':
-        query = query.filter(Invoice.status == status)
+        normalized_status = (status or '').strip().lower()
+        if normalized_status in ('paid_full', 'paid'):
+            query = query.filter(Invoice.status == 'paid')
+        elif normalized_status == 'remaining':
+            query = query.filter(Invoice.status.in_(['unpaid', 'partially_paid']))
+        else:
+            query = query.filter(Invoice.status == status)
+
+    if invoice_group and invoice_group not in ('all', 'الكل'):
+        group_value = (invoice_group or '').strip().lower()
+        if group_value == 'sales':
+            query = query.filter(_is_sale_clause())
+        elif group_value == 'customer_purchase':
+            query = query.filter(_is_customer_purchase_clause())
+        elif group_value == 'supplier_purchase':
+            query = query.filter(_is_supplier_purchase_clause())
+        elif group_value == 'returns':
+            query = query.filter(_is_return_clause())
+
+    def _expand_invoice_type_aliases(values):
+        alias_map = {
+            'بيع': {'بيع', 'sell', 'sale'},
+            'sell': {'بيع', 'sell', 'sale'},
+            'sale': {'بيع', 'sell', 'sale'},
+            'شراء من عميل': {
+                'شراء من عميل',
+                'buy',
+                'customer purchase',
+                'purchase from customer',
+                'شراء خردة',
+                'شراء مستعمل',
+            },
+            'buy': {
+                'شراء من عميل',
+                'buy',
+                'customer purchase',
+                'purchase from customer',
+                'شراء خردة',
+                'شراء مستعمل',
+            },
+            'شراء': {'شراء', 'شراء من مورد'},
+            'شراء من مورد': {'شراء', 'شراء من مورد'},
+            'supplier purchase': {'شراء', 'شراء من مورد', 'supplier purchase'},
+            'purchase': {'شراء', 'شراء من مورد', 'supplier purchase'},
+            'مرتجع بيع': {'مرتجع بيع', 'sales return', 'sale return'},
+            'sales return': {'مرتجع بيع', 'sales return', 'sale return'},
+            'sale return': {'مرتجع بيع', 'sales return', 'sale return'},
+            'مرتجع شراء': {
+                'مرتجع شراء',
+                'مرتجع شراء من عميل',
+                'purchase return',
+                'customer purchase return',
+            },
+            'مرتجع شراء من عميل': {
+                'مرتجع شراء',
+                'مرتجع شراء من عميل',
+                'purchase return',
+                'customer purchase return',
+            },
+            'purchase return': {
+                'مرتجع شراء',
+                'مرتجع شراء من عميل',
+                'purchase return',
+                'customer purchase return',
+            },
+            'مرتجع شراء (مورد)': {'مرتجع شراء (مورد)', 'مرتجع شراء من مورد'},
+            'مرتجع شراء من مورد': {'مرتجع شراء (مورد)', 'مرتجع شراء من مورد'},
+            'supplier purchase return': {
+                'مرتجع شراء (مورد)',
+                'مرتجع شراء من مورد',
+                'supplier purchase return',
+            },
+        }
+        expanded = []
+        seen = set()
+        for raw_value in values:
+            value = (raw_value or '').strip()
+            if not value:
+                continue
+            for alias in alias_map.get(value, {value}):
+                if alias not in seen:
+                    seen.add(alias)
+                    expanded.append(alias)
+        return expanded
 
     if invoice_type and invoice_type not in ('الكل', 'all'):
-        query = query.filter(Invoice.invoice_type == invoice_type)
+        expanded_invoice_types = _expand_invoice_type_aliases([invoice_type])
+        if len(expanded_invoice_types) == 1:
+            query = query.filter(Invoice.invoice_type == expanded_invoice_types[0])
+        elif expanded_invoice_types:
+            query = query.filter(Invoice.invoice_type.in_(expanded_invoice_types))
+
+    if invoice_types:
+        parsed_invoice_types = [
+            value.strip()
+            for value in (invoice_types or '').split(',')
+            if value.strip()
+        ]
+        if parsed_invoice_types:
+            query = query.filter(
+                Invoice.invoice_type.in_(_expand_invoice_type_aliases(parsed_invoice_types))
+            )
+
+    if gold_type and gold_type not in ('all', 'الكل'):
+        normalized_gold_type = (gold_type or '').strip().lower()
+        query = query.filter(func.lower(func.coalesce(Invoice.gold_type, 'new')) == normalized_gold_type)
+
+    if party:
+        party = (party or '').strip()
+        if party:
+            _ensure_party_outerjoins()
+            query = query.filter(
+                or_(
+                    Customer.name.ilike(f'%{party}%'),
+                    Supplier.name.ilike(f'%{party}%'),
+                )
+            )
+
+    if employee_id:
+        query = query.filter(Invoice.employee_id == employee_id)
+
+    creator_source_query = query
+    available_creators = []
+    try:
+        creator_rows = creator_source_query.order_by(None).all()
+        seen_creator_names = set()
+        creator_filter_value = (creator or '').strip().lower()
+        matching_creator_ids = []
+
+        for invoice in creator_rows:
+            creator_name = _resolve_invoice_creator_name(invoice)
+            if creator_name:
+                creator_name = creator_name.strip()
+            if creator_name and creator_name not in seen_creator_names:
+                seen_creator_names.add(creator_name)
+                available_creators.append({'name': creator_name})
+            if creator_filter_value and creator_name and creator_name.lower() == creator_filter_value:
+                matching_creator_ids.append(int(invoice.id))
+
+        available_creators.sort(key=lambda entry: entry['name'])
+
+        if creator_filter_value:
+            if matching_creator_ids:
+                query = query.filter(Invoice.id.in_(matching_creator_ids))
+            else:
+                query = query.filter(Invoice.id == -1)
+    except Exception:
+        available_creators = []
+
+    if karat:
+        try:
+            karat_value = float(karat)
+            query = query.filter(
+                or_(
+                    Invoice.items.any(InvoiceItem.karat == karat_value),
+                    Invoice.karat_lines.any(InvoiceKaratLine.karat == karat_value),
+                )
+            )
+        except Exception:
+            pass
 
     def _parse_iso_date(v: str):
         if not v:
@@ -7512,6 +7791,30 @@ def get_invoices():
         else:
             query = query.order_by(Invoice.total.asc(), Invoice.date.desc(), Invoice.id.desc())
         order = None
+    elif sort_by == 'weight':
+        if sort_order == 'desc':
+            query = query.order_by(Invoice.total_weight.desc(), Invoice.date.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(Invoice.total_weight.asc(), Invoice.date.desc(), Invoice.id.asc())
+        order = None
+    elif sort_by == 'status':
+        if sort_order == 'desc':
+            query = query.order_by(Invoice.status.desc(), Invoice.date.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(Invoice.status.asc(), Invoice.date.desc(), Invoice.id.asc())
+        order = None
+    elif sort_by == 'type':
+        if sort_order == 'desc':
+            query = query.order_by(Invoice.gold_type.desc(), Invoice.invoice_type.desc(), Invoice.date.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(Invoice.gold_type.asc(), Invoice.invoice_type.asc(), Invoice.date.desc(), Invoice.id.asc())
+        order = None
+    elif sort_by == 'number':
+        if sort_order == 'desc':
+            query = query.order_by(Invoice.invoice_type.desc(), Invoice.invoice_type_id.desc(), Invoice.id.desc())
+        else:
+            query = query.order_by(Invoice.invoice_type.asc(), Invoice.invoice_type_id.asc(), Invoice.id.asc())
+        order = None
     else:
         query = query.order_by(Invoice.date.desc(), Invoice.id.desc())
         order = None
@@ -7526,6 +7829,11 @@ def get_invoices():
             'search': bool(search),
             'status': status if status else None,
             'invoice_type': invoice_type if invoice_type else None,
+            'invoice_group': invoice_group if invoice_group else None,
+            'party': party if party else None,
+            'creator': creator if creator else None,
+            'karat': karat if karat else None,
+            'gold_type': gold_type if gold_type else None,
             'date_from': date_from_str if date_from_str else None,
             'date_to': date_to_str if date_to_str else None,
         },
@@ -7587,6 +7895,8 @@ def get_invoices():
         'supplier_purchase': _empty_bucket(),
         'returns': _empty_bucket(),
     }
+    current_summary = _empty_bucket()
+    available_employees = []
 
     def _classify_tab(invoice_type_value, supplier_id_value):
         t = (invoice_type_value or '').strip()
@@ -7623,6 +7933,7 @@ def get_invoices():
 
             bucket = tab_summary[tab_key]
             bucket['total_invoices'] += 1
+            current_summary['total_invoices'] += 1
 
             status_value = (row[1] or '').strip().lower()
             if status_value == 'cancelled' or status_value == 'ملغاة':
@@ -7643,17 +7954,49 @@ def get_invoices():
             bucket['vat_total'] += tax_value
             bucket['sold_weight_total'] += weight_value
 
+            current_summary['total_amount'] += total_value
+            current_summary['paid_amount'] += paid_clamped
+            current_summary['unpaid_amount'] += remaining_value
+            current_summary['vat_total'] += tax_value
+            current_summary['sold_weight_total'] += weight_value
+
         for _, bucket in tab_summary.items():
             bucket['total_amount'] = round(float(bucket['total_amount']), 2)
             bucket['paid_amount'] = round(float(bucket['paid_amount']), 2)
             bucket['unpaid_amount'] = round(float(bucket['unpaid_amount']), 2)
             bucket['vat_total'] = round(float(bucket['vat_total']), 2)
             bucket['sold_weight_total'] = round(float(bucket['sold_weight_total']), 4)
+        current_summary['total_amount'] = round(float(current_summary['total_amount']), 2)
+        current_summary['paid_amount'] = round(float(current_summary['paid_amount']), 2)
+        current_summary['unpaid_amount'] = round(float(current_summary['unpaid_amount']), 2)
+        current_summary['vat_total'] = round(float(current_summary['vat_total']), 2)
+        current_summary['sold_weight_total'] = round(float(current_summary['sold_weight_total']), 4)
         # Keep legacy 'purchase' key for backwards compatibility
         tab_summary['purchase'] = tab_summary['customer_purchase']
     except Exception:
         # Non-fatal; frontend falls back to current-page aggregation.
         pass
+
+    try:
+        _ensure_employee_outerjoin()
+        employee_rows = (
+            query.order_by(None)
+            .with_entities(Invoice.employee_id, Employee.name)
+            .filter(Invoice.employee_id.isnot(None), Employee.name.isnot(None))
+            .distinct()
+            .all()
+        )
+        available_employees = [
+            {
+                'id': int(employee_id),
+                'name': str(employee_name).strip(),
+            }
+            for employee_id, employee_name in employee_rows
+            if employee_id is not None and str(employee_name or '').strip()
+        ]
+        available_employees.sort(key=lambda entry: entry['name'])
+    except Exception:
+        available_employees = []
 
     # Pagination
     paginated_invoices = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -7699,6 +8042,9 @@ def get_invoices():
         'meta': {
             'audit': audit,
             'tab_summary': tab_summary,
+            'current_summary': current_summary,
+            'available_creators': available_creators,
+            'available_employees': available_employees,
         },
     })
 
@@ -16106,57 +16452,316 @@ def delete_account(id):
     return jsonify({'result': 'success'})
 
 # Journal Entries CRUD
+def _parse_journal_entries_query_datetime(value, *, end_of_day=False):
+    if not value:
+        return None
+
+    try:
+        normalized = str(value).strip().replace('Z', '+00:00')
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        if end_of_day and parsed.hour == 0 and parsed.minute == 0 and parsed.second == 0 and parsed.microsecond == 0:
+            parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+        return parsed
+    except Exception:
+        return None
+
+
+def _journal_entry_line_to_dict(line):
+    account_name = line.account.name if line.account else f'حساب محذوف (ID: {line.account_id})'
+    return {
+        'id': line.id,
+        'account_id': line.account_id,
+        'account_name': account_name,
+        'cash_debit': float(line.cash_debit or 0.0),
+        'cash_credit': float(line.cash_credit or 0.0),
+        'debit_18k': float(line.debit_18k or 0.0),
+        'credit_18k': float(line.credit_18k or 0.0),
+        'debit_21k': float(line.debit_21k or 0.0),
+        'credit_21k': float(line.credit_21k or 0.0),
+        'debit_22k': float(line.debit_22k or 0.0),
+        'credit_22k': float(line.credit_22k or 0.0),
+        'debit_24k': float(line.debit_24k or 0.0),
+        'credit_24k': float(line.credit_24k or 0.0),
+    }
+
+
+def _journal_entry_totals(lines):
+    cash_debit = 0.0
+    cash_credit = 0.0
+    gold_debit_main = 0.0
+    gold_credit_main = 0.0
+
+    for line in lines:
+        cash_debit += float(line.get('cash_debit') or 0.0)
+        cash_credit += float(line.get('cash_credit') or 0.0)
+
+        gold_debit_main += convert_to_main_karat(float(line.get('debit_18k') or 0.0), 18)
+        gold_debit_main += convert_to_main_karat(float(line.get('debit_21k') or 0.0), 21)
+        gold_debit_main += convert_to_main_karat(float(line.get('debit_22k') or 0.0), 22)
+        gold_debit_main += convert_to_main_karat(float(line.get('debit_24k') or 0.0), 24)
+
+        gold_credit_main += convert_to_main_karat(float(line.get('credit_18k') or 0.0), 18)
+        gold_credit_main += convert_to_main_karat(float(line.get('credit_21k') or 0.0), 21)
+        gold_credit_main += convert_to_main_karat(float(line.get('credit_22k') or 0.0), 22)
+        gold_credit_main += convert_to_main_karat(float(line.get('credit_24k') or 0.0), 24)
+
+    return {
+        'cash_debit': round(cash_debit, 2),
+        'cash_credit': round(cash_credit, 2),
+        'cash_total': round(max(cash_debit, cash_credit), 2),
+        'gold_debit_main_karat': round(gold_debit_main, 6),
+        'gold_credit_main_karat': round(gold_credit_main, 6),
+        'gold_total_main_karat': round(max(gold_debit_main, gold_credit_main), 6),
+    }
+
+
+def _serialize_journal_entry_list_item(entry):
+    lines = [
+        _journal_entry_line_to_dict(line)
+        for line in entry.lines
+        if not getattr(line, 'is_deleted', False)
+    ]
+    totals = _journal_entry_totals(lines)
+    account_names = []
+    seen_names = set()
+    for line in lines:
+        account_name = (line.get('account_name') or '').strip()
+        if not account_name or account_name in seen_names:
+            continue
+        seen_names.add(account_name)
+        account_names.append(account_name)
+
+    creator_name = (getattr(entry, 'created_by', None) or getattr(entry, 'posted_by', None) or '').strip()
+    reference_display = ' - '.join(
+        part for part in [
+            (getattr(entry, 'reference_type', None) or '').strip(),
+            (getattr(entry, 'reference_number', None) or '').strip(),
+        ]
+        if part
+    )
+
+    return {
+        'id': entry.id,
+        'entry_number': entry.entry_number,
+        'date': entry.date.isoformat(),
+        'description': entry.description,
+        'entry_type': getattr(entry, 'entry_type', None) or 'عادي',
+        'status': 'posted' if bool(getattr(entry, 'is_posted', False)) else 'unposted',
+        'is_draft': bool(getattr(entry, 'is_draft', False)) and not bool(getattr(entry, 'is_posted', False)),
+        'is_posted': bool(getattr(entry, 'is_posted', False)),
+        'posted_at': entry.posted_at.isoformat() if getattr(entry, 'posted_at', None) else None,
+        'posted_by': getattr(entry, 'posted_by', None),
+        'created_by': getattr(entry, 'created_by', None),
+        'creator_name': creator_name or None,
+        'reference_type': getattr(entry, 'reference_type', None),
+        'reference_id': getattr(entry, 'reference_id', None),
+        'reference_number': getattr(entry, 'reference_number', None),
+        'reference_display': reference_display or None,
+        'line_count': len(lines),
+        'accounts_count': len(account_names),
+        'accounts_preview': account_names[:3],
+        'lines': lines,
+        **totals,
+    }
+
+
 @api.route('/journal_entries', methods=['GET'])
 @require_permission('journal.view')
 def get_journal_entries():
-    # إخفاء القيود المحذوفة افتراضياً
-    entries = (
+    page = request.args.get('page', 1, type=int) or 1
+    per_page = request.args.get('per_page', 20, type=int) or 20
+    per_page = max(1, min(per_page, 100))
+
+    search = (request.args.get('search') or '').strip()
+    search_type = (request.args.get('search_type') or 'all').strip().lower()
+    status = (request.args.get('status') or 'all').strip().lower()
+    entry_type = (request.args.get('entry_type') or 'all').strip()
+    creator = (request.args.get('creator') or '').strip()
+    sort_by = (request.args.get('sort_by') or 'date').strip().lower()
+    sort_order = (request.args.get('sort_order') or 'desc').strip().lower()
+    account_id = request.args.get('account_id', type=int)
+    min_cash = _coerce_float(request.args.get('min_cash'), None)
+    max_cash = _coerce_float(request.args.get('max_cash'), None)
+    date_from = _parse_journal_entries_query_datetime(request.args.get('date_from'))
+    date_to = _parse_journal_entries_query_datetime(request.args.get('date_to'), end_of_day=True)
+    response_format = (request.args.get('format') or '').strip().lower()
+    paginate_response = response_format != 'list' and (request.args.get('paginate') or 'true').strip().lower() not in ('0', 'false', 'no')
+
+    query = (
         JournalEntry.query
-        .filter_by(is_deleted=False)
-        .order_by(JournalEntry.date.desc(), JournalEntry.id.desc())
-        .all()
+        .options(joinedload(JournalEntry.lines).joinedload(JournalEntryLine.account))
+        .filter(JournalEntry.is_deleted == False)
     )
-    result = []
-    for entry in entries:
-        lines = []
-        for line in entry.lines:
-            if not line.is_deleted:  # تخطي الأسطر المحذوفة
-                # التعامل مع الحسابات المحذوفة
-                account_name = line.account.name if line.account else f'حساب محذوف (ID: {line.account_id})'
-                
-                lines.append({
-                    'id': line.id,
-                    'account_id': line.account_id,
-                    'account_name': account_name,
-                    'cash_debit': line.cash_debit,
-                    'cash_credit': line.cash_credit,
-                    'debit_18k': line.debit_18k,
-                    'credit_18k': line.credit_18k,
-                    'debit_21k': line.debit_21k,
-                    'credit_21k': line.credit_21k,
-                    'debit_22k': line.debit_22k,
-                    'credit_22k': line.credit_22k,
-                    'debit_24k': line.debit_24k,
-                    'credit_24k': line.credit_24k,
-                })
-        result.append({
-            'id': entry.id,
-            'date': entry.date.isoformat(),
-            'description': entry.description,
-            'entry_number': entry.entry_number,
-            'entry_type': getattr(entry, 'entry_type', None),
-            # Draft system is deprecated in favor of posting.
-            # Keep `is_draft` for backward compatibility, but ensure posted entries aren't flagged as drafts.
-            'is_draft': bool(getattr(entry, 'is_draft', False)) and not bool(getattr(entry, 'is_posted', False)),
-            'is_posted': bool(getattr(entry, 'is_posted', False)),
-            'posted_at': entry.posted_at.isoformat() if getattr(entry, 'posted_at', None) else None,
-            'posted_by': getattr(entry, 'posted_by', None),
-            'reference_type': getattr(entry, 'reference_type', None),
-            'reference_id': getattr(entry, 'reference_id', None),
-            'reference_number': getattr(entry, 'reference_number', None),
-            'lines': lines
-        })
-    return jsonify(result)
+
+    if status == 'posted':
+        query = query.filter(JournalEntry.is_posted == True)
+    elif status == 'unposted':
+        query = query.filter(JournalEntry.is_posted == False)
+
+    if entry_type and entry_type != 'all':
+        query = query.filter(JournalEntry.entry_type == entry_type)
+
+    if account_id:
+        query = query.filter(
+            JournalEntry.lines.any(
+                and_(
+                    JournalEntryLine.account_id == account_id,
+                    JournalEntryLine.is_deleted == False,
+                )
+            )
+        )
+
+    if date_from is not None:
+        query = query.filter(JournalEntry.date >= date_from)
+    if date_to is not None:
+        query = query.filter(JournalEntry.date <= date_to)
+
+    if search:
+        id_query = search.replace('#', '').strip()
+        base_search_filters = [
+            JournalEntry.entry_number.ilike(f'%{search}%'),
+            JournalEntry.description.ilike(f'%{search}%'),
+            JournalEntry.reference_number.ilike(f'%{search}%'),
+            JournalEntry.reference_type.ilike(f'%{search}%'),
+            JournalEntry.entry_type.ilike(f'%{search}%'),
+            JournalEntry.created_by.ilike(f'%{search}%'),
+            JournalEntry.posted_by.ilike(f'%{search}%'),
+        ]
+
+        if id_query.isdigit():
+            base_search_filters.append(cast(JournalEntry.id, String) == id_query)
+
+        if search_type == 'id' and id_query.isdigit():
+            query = query.filter(cast(JournalEntry.id, String) == id_query)
+        elif search_type == 'number':
+            query = query.filter(JournalEntry.entry_number.ilike(f'%{search}%'))
+        elif search_type == 'description':
+            query = query.filter(JournalEntry.description.ilike(f'%{search}%'))
+        elif search_type == 'reference':
+            query = query.filter(
+                or_(
+                    JournalEntry.reference_number.ilike(f'%{search}%'),
+                    JournalEntry.reference_type.ilike(f'%{search}%'),
+                )
+            )
+        elif search_type == 'creator':
+            query = query.filter(
+                or_(
+                    JournalEntry.created_by.ilike(f'%{search}%'),
+                    JournalEntry.posted_by.ilike(f'%{search}%'),
+                )
+            )
+        elif search_type != 'amount' and search_type != 'gold':
+            query = query.filter(or_(*base_search_filters))
+
+    entries = query.order_by(JournalEntry.date.desc(), JournalEntry.id.desc()).all()
+    serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in entries]
+
+    if creator:
+        serialized_entries = [
+            entry for entry in serialized_entries
+            if (entry.get('creator_name') or '').strip() == creator
+        ]
+
+    if search:
+        normalized_search = search.strip().lower()
+        numeric_search = _coerce_float(normalized_search, None)
+
+        if search_type == 'amount':
+            serialized_entries = [
+                entry for entry in serialized_entries
+                if (
+                    numeric_search is not None and abs(float(entry.get('cash_total') or 0.0) - numeric_search) < 0.0001
+                ) or normalized_search in f"{float(entry.get('cash_total') or 0.0):.2f}".lower()
+            ]
+        elif search_type == 'gold':
+            serialized_entries = [
+                entry for entry in serialized_entries
+                if (
+                    numeric_search is not None and abs(float(entry.get('gold_total_main_karat') or 0.0) - numeric_search) < 0.0001
+                ) or normalized_search in f"{float(entry.get('gold_total_main_karat') or 0.0):.6f}".lower()
+            ]
+
+    if min_cash is not None:
+        serialized_entries = [
+            entry for entry in serialized_entries
+            if float(entry.get('cash_total') or 0.0) >= min_cash
+        ]
+    if max_cash is not None:
+        serialized_entries = [
+            entry for entry in serialized_entries
+            if float(entry.get('cash_total') or 0.0) <= max_cash
+        ]
+
+    reverse = sort_order != 'asc'
+
+    def _sort_key(entry):
+        if sort_by == 'id':
+            return int(entry.get('id') or 0)
+        if sort_by == 'number':
+            return (entry.get('entry_number') or '').strip().lower()
+        if sort_by == 'description':
+            return (entry.get('description') or '').strip().lower()
+        if sort_by == 'status':
+            return (entry.get('status') or '').strip().lower()
+        if sort_by == 'type':
+            return (entry.get('entry_type') or '').strip().lower()
+        if sort_by == 'cash':
+            return float(entry.get('cash_total') or 0.0)
+        if sort_by == 'gold':
+            return float(entry.get('gold_total_main_karat') or 0.0)
+        if sort_by == 'reference':
+            return (entry.get('reference_display') or '').strip().lower()
+        if sort_by == 'creator':
+            return (entry.get('creator_name') or '').strip().lower()
+        return (
+            entry.get('date') or '',
+            int(entry.get('id') or 0),
+        )
+
+    serialized_entries.sort(key=_sort_key, reverse=reverse)
+
+    current_summary = {
+        'total_entries': len(serialized_entries),
+        'posted_count': sum(1 for entry in serialized_entries if entry.get('is_posted') == True),
+        'unposted_count': sum(1 for entry in serialized_entries if entry.get('is_posted') != True),
+        'total_cash': round(sum(float(entry.get('cash_total') or 0.0) for entry in serialized_entries), 2),
+        'total_gold_main_karat': round(sum(float(entry.get('gold_total_main_karat') or 0.0) for entry in serialized_entries), 6),
+    }
+
+    available_creators = sorted({
+        (entry.get('creator_name') or '').strip()
+        for entry in serialized_entries
+        if (entry.get('creator_name') or '').strip()
+    })
+    available_entry_types = sorted({
+        (entry.get('entry_type') or '').strip()
+        for entry in serialized_entries
+        if (entry.get('entry_type') or '').strip()
+    })
+
+    if not paginate_response:
+        return jsonify(serialized_entries)
+
+    total_entries = len(serialized_entries)
+    total_pages = max(1, (total_entries + per_page - 1) // per_page) if total_entries else 1
+    current_page = min(max(page, 1), total_pages)
+    start = (current_page - 1) * per_page
+    end = start + per_page
+    page_items = serialized_entries[start:end]
+
+    return jsonify({
+        'journal_entries': page_items,
+        'total': total_entries,
+        'pages': total_pages,
+        'current_page': current_page,
+        'per_page': per_page,
+        'current_summary': current_summary,
+        'available_creators': [{'name': name} for name in available_creators],
+        'available_entry_types': [{'name': name} for name in available_entry_types],
+    })
 
 def get_main_karat():
     settings = Settings.query.first()
@@ -24076,31 +24681,87 @@ def get_vouchers():
     - reference_type: string (invoice, voucher, journal_entry, manual)
     - reference_id: int
     """
-    # Pagination parameters
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
+    def _empty_summary():
+        return {
+            'total_vouchers': 0,
+            'receipt_count': 0,
+            'payment_count': 0,
+            'adjustment_count': 0,
+            'pending_count': 0,
+            'approved_count': 0,
+            'cancelled_count': 0,
+            'rejected_count': 0,
+            'total_cash': 0.0,
+            'total_gold': 0.0,
+            'total_gold_main_karat': 0.0,
+        }
 
-    query = Voucher.query
+    def _normalize_text(value):
+        return (value or '').strip()
 
-    # Filters
-    voucher_type = request.args.get('type')
+    def _resolve_party_name(voucher):
+        if voucher.customer and voucher.customer.name:
+            return voucher.customer.name.strip()
+        if voucher.supplier and voucher.supplier.name:
+            return voucher.supplier.name.strip()
+        if voucher.employee and voucher.employee.name:
+            return voucher.employee.name.strip()
+        if voucher.party_name:
+            return voucher.party_name.strip()
+        return ''
+
+    page = max(request.args.get('page', 1, type=int) or 1, 1)
+    per_page = request.args.get('per_page', 20, type=int) or 20
+    per_page = max(1, min(per_page, 100))
+
+    sort_by = _normalize_text(request.args.get('sort_by')).lower() or 'date'
+    sort_order = _normalize_text(request.args.get('sort_order')).lower() or 'desc'
+    search_type = _normalize_text(request.args.get('search_type')).lower() or 'all'
+    creator = _normalize_text(request.args.get('creator'))
+    party = _normalize_text(request.args.get('party'))
+
+    query = Voucher.query.options(
+        joinedload(Voucher.customer),
+        joinedload(Voucher.supplier),
+        joinedload(Voucher.employee),
+        joinedload(Voucher.journal_entry),
+    )
+
+    joined_party_tables = False
+
+    def _ensure_party_joins(base_query):
+        nonlocal joined_party_tables
+        if joined_party_tables:
+            return base_query
+        joined_party_tables = True
+        return (
+            base_query
+            .outerjoin(Customer, Voucher.customer_id == Customer.id)
+            .outerjoin(Supplier, Voucher.supplier_id == Supplier.id)
+            .outerjoin(Employee, Voucher.employee_id == Employee.id)
+        )
+
+    voucher_type = _normalize_text(request.args.get('type')).lower()
     if voucher_type and voucher_type != 'all':
         query = query.filter(Voucher.voucher_type == voucher_type)
 
-    party_type = request.args.get('party_type')
-    if party_type:
+    party_type = _normalize_text(request.args.get('party_type')).lower()
+    if party_type and party_type != 'all':
         query = query.filter(Voucher.party_type == party_type)
 
-    status = request.args.get('status')
+    status = _normalize_text(request.args.get('status')).lower()
     if status and status != 'all':
-        query = query.filter(Voucher.status == status)
+        if status == 'active':
+            query = query.filter(Voucher.status.in_(['pending', 'approved']))
+        else:
+            query = query.filter(Voucher.status == status)
 
     date_from = request.args.get('date_from')
     if date_from:
         try:
             date_from_obj = datetime.fromisoformat(date_from)
             query = query.filter(Voucher.date >= date_from_obj)
-        except:
+        except Exception:
             pass
 
     date_to = request.args.get('date_to')
@@ -24108,7 +24769,7 @@ def get_vouchers():
         try:
             date_to_obj = datetime.fromisoformat(date_to)
             query = query.filter(Voucher.date <= date_to_obj)
-        except:
+        except Exception:
             pass
 
     customer_id = request.args.get('customer_id')
@@ -24119,8 +24780,8 @@ def get_vouchers():
     if supplier_id:
         query = query.filter(Voucher.supplier_id == int(supplier_id))
 
-    reference_type = request.args.get('reference_type')
-    if reference_type:
+    reference_type = _normalize_text(request.args.get('reference_type')).lower()
+    if reference_type and reference_type != 'all':
         query = query.filter(Voucher.reference_type == reference_type)
 
     reference_id = request.args.get('reference_id')
@@ -24129,30 +24790,171 @@ def get_vouchers():
             query = query.filter(Voucher.reference_id == int(reference_id))
         except Exception:
             pass
-        
-    search = request.args.get('search')
-    if search:
-        search_term = f'%{search}%'
+
+    if creator:
+        query = query.filter(func.lower(func.coalesce(Voucher.created_by, '')) == creator.lower())
+
+    if party:
+        query = _ensure_party_joins(query)
+        party_term = f'%{party}%'
         query = query.filter(
-            (Voucher.voucher_number.ilike(search_term)) |
-            (Voucher.description.ilike(search_term))
+            or_(
+                Customer.name.ilike(party_term),
+                Supplier.name.ilike(party_term),
+                Employee.name.ilike(party_term),
+                Voucher.party_name.ilike(party_term),
+            )
         )
 
-    # Default order: newest created first (better UX for approvals)
-    query = query.order_by(Voucher.created_at.desc(), Voucher.id.desc())
+    search = _normalize_text(request.args.get('search'))
+    if search:
+        search_term = f'%{search}%'
+        numeric_search = None
+        try:
+            numeric_search = float(search)
+        except Exception:
+            numeric_search = None
 
-    # Pagination
+        if search_type == 'number':
+            query = query.filter(Voucher.voucher_number.ilike(search_term))
+        elif search_type == 'party':
+            query = _ensure_party_joins(query)
+            query = query.filter(
+                or_(
+                    Customer.name.ilike(search_term),
+                    Supplier.name.ilike(search_term),
+                    Employee.name.ilike(search_term),
+                    Voucher.party_name.ilike(search_term),
+                )
+            )
+        elif search_type == 'description':
+            query = query.filter(
+                or_(
+                    Voucher.description.ilike(search_term),
+                    Voucher.notes.ilike(search_term),
+                    Voucher.reference_number.ilike(search_term),
+                )
+            )
+        elif search_type == 'reference':
+            query = query.filter(
+                or_(
+                    Voucher.reference_number.ilike(search_term),
+                    Voucher.reference_type.ilike(search_term),
+                    cast(Voucher.reference_id, String).ilike(search_term),
+                )
+            )
+        elif search_type == 'amount' and numeric_search is not None:
+            query = query.filter(
+                or_(
+                    Voucher.amount_cash == numeric_search,
+                    Voucher.amount_gold == numeric_search,
+                )
+            )
+        else:
+            query = _ensure_party_joins(query)
+            amount_match = []
+            if numeric_search is not None:
+                amount_match = [
+                    Voucher.amount_cash == numeric_search,
+                    Voucher.amount_gold == numeric_search,
+                ]
+            query = query.filter(
+                or_(
+                    Voucher.voucher_number.ilike(search_term),
+                    Voucher.description.ilike(search_term),
+                    Voucher.notes.ilike(search_term),
+                    Voucher.reference_number.ilike(search_term),
+                    Customer.name.ilike(search_term),
+                    Supplier.name.ilike(search_term),
+                    Employee.name.ilike(search_term),
+                    Voucher.party_name.ilike(search_term),
+                    *amount_match,
+                )
+            )
+
+    filtered_vouchers = query.order_by(None).all()
+
+    current_summary = _empty_summary()
+    creator_names = set()
+    party_names = set()
+    for voucher in filtered_vouchers:
+        current_summary['total_vouchers'] += 1
+        if voucher.voucher_type == 'receipt':
+            current_summary['receipt_count'] += 1
+        elif voucher.voucher_type == 'payment':
+            current_summary['payment_count'] += 1
+        elif voucher.voucher_type == 'adjustment':
+            current_summary['adjustment_count'] += 1
+
+        normalized_status = (voucher.status or '').strip().lower()
+        if normalized_status == 'pending':
+            current_summary['pending_count'] += 1
+        elif normalized_status == 'approved':
+            current_summary['approved_count'] += 1
+        elif normalized_status == 'cancelled':
+            current_summary['cancelled_count'] += 1
+        elif normalized_status == 'rejected':
+            current_summary['rejected_count'] += 1
+
+        current_summary['total_cash'] += float(voucher.amount_cash or 0.0)
+
+        gold_summary = voucher._gold_display_summary()
+        current_summary['total_gold'] += float(gold_summary.get('amount_gold_display') or 0.0)
+        current_summary['total_gold_main_karat'] += float(gold_summary.get('amount_gold_main_karat') or 0.0)
+
+        creator_name = (voucher.created_by or '').strip()
+        if creator_name:
+            creator_names.add(creator_name)
+
+        party_name = _resolve_party_name(voucher)
+        if party_name:
+            party_names.add(party_name)
+
+    current_summary['total_cash'] = round(float(current_summary['total_cash']), 2)
+    current_summary['total_gold'] = round(float(current_summary['total_gold']), 6)
+    current_summary['total_gold_main_karat'] = round(float(current_summary['total_gold_main_karat']), 6)
+
+    available_creators = [{'name': name} for name in sorted(creator_names)]
+    available_parties = [{'name': name} for name in sorted(party_names)]
+
+    if sort_by == 'number':
+        sort_expr = Voucher.voucher_number
+    elif sort_by == 'party':
+        query = _ensure_party_joins(query)
+        sort_expr = func.coalesce(Customer.name, Supplier.name, Employee.name, Voucher.party_name, '')
+    elif sort_by == 'type':
+        sort_expr = Voucher.voucher_type
+    elif sort_by == 'cash':
+        sort_expr = Voucher.amount_cash
+    elif sort_by == 'gold':
+        sort_expr = Voucher.amount_gold
+    elif sort_by == 'status':
+        sort_expr = Voucher.status
+    elif sort_by == 'creator':
+        sort_expr = func.coalesce(Voucher.created_by, '')
+    elif sort_by == 'reference':
+        sort_expr = func.coalesce(Voucher.reference_number, '')
+    else:
+        sort_expr = Voucher.date
+
+    if sort_order == 'asc':
+        query = query.order_by(sort_expr.asc(), Voucher.id.asc())
+    else:
+        query = query.order_by(sort_expr.desc(), Voucher.id.desc())
+
     paginated_vouchers = query.paginate(page=page, per_page=per_page, error_out=False)
-    vouchers = paginated_vouchers.items
 
     result = {
-        'vouchers': [v.to_dict() for v in vouchers],
+        'vouchers': [v.to_dict() for v in paginated_vouchers.items],
         'total': paginated_vouchers.total,
         'pages': paginated_vouchers.pages,
         'current_page': paginated_vouchers.page,
-        'per_page': paginated_vouchers.per_page
+        'per_page': paginated_vouchers.per_page,
+        'current_summary': current_summary,
+        'available_creators': available_creators,
+        'available_parties': available_parties,
     }
-    
+
     return jsonify(result)
 
 

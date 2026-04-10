@@ -1,14 +1,22 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
+
 import '../api_service.dart';
+import '../app_route_observer.dart';
+import '../providers/auth_provider.dart';
+import '../providers/settings_provider.dart';
 import '../widgets/account_picker_sheet.dart';
 import 'journal_entry_form.dart';
-import '../providers/settings_provider.dart';
-import '../theme/app_theme.dart';
-import '../app_route_observer.dart';
+import 'journal_entry_print_screen.dart';
 
-/// Enhanced Journal Entries List Screen with professional features
+enum _JournalEntriesListView { table, cards }
+
+enum _JournalEntryRowAction { preview, edit, post, unpost, print, delete }
+
 class JournalEntriesListScreen extends StatefulWidget {
   final bool isArabic;
 
@@ -20,38 +28,57 @@ class JournalEntriesListScreen extends StatefulWidget {
 }
 
 class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
-  with RouteAware {
+    with RouteAware {
   final ApiService _apiService = ApiService();
-  List<dynamic> _allEntries = [];
-  List<dynamic> _filteredEntries = [];
-  List<dynamic> _accounts = [];
+  final TextEditingController _searchController = TextEditingController();
+  final ScrollController _contentScrollController = ScrollController();
+  final ScrollController _tableHorizontalController = ScrollController();
+  final GlobalKey _topChromeKey = GlobalKey();
+
+  List<Map<String, dynamic>> _entries = const [];
+  List<Map<String, dynamic>> _accounts = const [];
+  List<String> _availableCreators = const [];
+  List<String> _availableEntryTypes = const [];
+  Map<String, dynamic> _currentSummary = const {};
+
   bool _isLoading = true;
-  int _mainKarat = 21;
+  String? _error;
+
   String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
+  int _mainKarat = 21;
 
-  // Search & Filters
-  bool _isSearching = false;
-  final TextEditingController _searchController = TextEditingController();
-
-  // Advanced Filters
-  DateTimeRange? _dateRange;
-  int? _selectedAccountId;
-  double? _minAmount;
-  double? _maxAmount;
-  String _sortBy =
-      'date_desc'; // date_desc, date_asc, amount_desc, amount_asc, id_desc, id_asc
-
-  // Statistics
-  double _totalCash = 0.0;
-  double _totalGold = 0.0;
+  int _currentPage = 1;
+  int _totalPages = 1;
   int _totalEntries = 0;
+  int _perPage = 25;
+
+  String _searchType = 'all';
+  String _status = 'all';
+  String _entryType = 'all';
+  String _sortBy = 'date';
+  bool _sortAscending = false;
+  String? _selectedCreator;
+  int? _selectedAccountId;
+  double? _minCash;
+  double? _maxCash;
+  DateTimeRange? _dateRange;
+
+  _JournalEntriesListView _viewMode = _JournalEntriesListView.table;
+  Timer? _searchDebounce;
+  double _topChromeHeight = 0;
+  double _topChromeCollapseOffset = 0;
 
   @override
   void initState() {
     super.initState();
-    _refreshData();
-    _searchController.addListener(_applyFilters);
+    _searchController.addListener(() {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+    _contentScrollController.addListener(_onContentScroll);
+    _loadEntries();
   }
 
   @override
@@ -62,902 +89,2407 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     if (route is PageRoute) {
       routeObserver.subscribe(this, route);
     }
+    _syncSettings();
+  }
 
-    final settings = Provider.of<SettingsProvider>(context);
-
-    final newSymbol = settings.currencySymbol;
-    final newDecimals = settings.decimalPlaces;
-    final newMainKarat = settings.mainKarat;
-    final needsUpdate =
-        newSymbol != _currencySymbol ||
-        newDecimals != _currencyDecimalPlaces ||
-        newMainKarat != _mainKarat;
-
-    if (needsUpdate) {
-      setState(() {
-        _currencySymbol = newSymbol;
-        _currencyDecimalPlaces = newDecimals;
-        _mainKarat = newMainKarat;
-      });
-
-      if (_allEntries.isNotEmpty) {
-        _applyFilters();
-      }
-    }
+  @override
+  void didPopNext() {
+    _loadEntries(forceRefresh: true);
   }
 
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
-    _searchController.removeListener(_applyFilters);
+    _searchDebounce?.cancel();
     _searchController.dispose();
+    _contentScrollController.dispose();
+    _tableHorizontalController.dispose();
     super.dispose();
   }
 
-  @override
-  void didPopNext() {
-    // Returned to this screen; refresh so posting status is up-to-date.
-    _refreshData();
-  }
+  void _syncSettings() {
+    final settings = context.read<SettingsProvider>();
+    final nextSymbol = settings.currencySymbol;
+    final nextDecimals = settings.decimalPlaces;
+    final nextMainKarat = settings.mainKarat;
 
-  Future<void> _refreshData() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
-
-    try {
-      final results = await Future.wait([
-        _apiService.getJournalEntries(),
-        _apiService.getAccounts(),
-      ]);
-
-      final List<dynamic> entries = results[0];
-      final List<dynamic> accounts = results[1];
-
-      if (mounted) {
-        setState(() {
-          _allEntries = entries;
-          _accounts = accounts;
-          _isLoading = false;
-        });
-        _applyFilters();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        _showSnackBar('فشل تحميل البيانات: ${e.toString()}', isError: true);
-      }
-    }
-  }
-
-  void _applyFilters() {
-    List<dynamic> filtered = List.from(_allEntries);
-
-    // Search filter
-    final query = _searchController.text.toLowerCase();
-    if (query.isNotEmpty) {
-      final isNumericQuery = RegExp(r'^\d+$').hasMatch(query);
-      final numericQuery = query.replaceFirst('#', '');
-      filtered = filtered.where((entry) {
-        final id = (entry['id'] as int? ?? 0).toString();
-        final entryNumber =
-            (entry['entry_number'] as String? ?? '').toLowerCase();
-        // Pure number → exact ID match only (avoids matching years/amounts in descriptions)
-        if (isNumericQuery) {
-          return id == numericQuery;
-        }
-        // '#N' prefix → exact ID match
-        if (query.startsWith('#')) {
-          return id == numericQuery;
-        }
-        // Text → search description and entry_number
-        final description = (entry['description'] as String? ?? '')
-            .toLowerCase();
-        return description.contains(query) || entryNumber.contains(query);
-      }).toList();
-    }
-
-    // Date range filter
-    if (_dateRange != null) {
-      filtered = filtered.where((entry) {
-        final entryDate = DateTime.parse(entry['date']);
-        return entryDate.isAfter(
-              _dateRange!.start.subtract(Duration(days: 1)),
-            ) &&
-            entryDate.isBefore(_dateRange!.end.add(Duration(days: 1)));
-      }).toList();
-    }
-
-    // Account filter
-    if (_selectedAccountId != null) {
-      filtered = filtered.where((entry) {
-        final lines = entry['lines'] as List<dynamic>? ?? [];
-        return lines.any((line) => line['account_id'] == _selectedAccountId);
-      }).toList();
-    }
-
-    // Amount filter
-    if (_minAmount != null || _maxAmount != null) {
-      filtered = filtered.where((entry) {
-        final totals = _calculateEntryTotals(entry);
-        final totalCash = totals['cash']!;
-
-        if (_minAmount != null && totalCash < _minAmount!) return false;
-        if (_maxAmount != null && totalCash > _maxAmount!) return false;
-        return true;
-      }).toList();
-    }
-
-    // Sort
-    _sortEntries(filtered);
-
-    // Calculate statistics
-    _calculateStatistics(filtered);
-
-    setState(() {
-      _filteredEntries = filtered;
-    });
-  }
-
-  void _sortEntries(List<dynamic> entries) {
-    switch (_sortBy) {
-      case 'date_desc':
-        entries.sort(
-          (a, b) {
-            final byDate = DateTime.parse(b['date']).compareTo(
-              DateTime.parse(a['date']),
-            );
-            if (byDate != 0) return byDate;
-            return (b['id'] as int).compareTo(a['id'] as int);
-          },
-        );
-        break;
-      case 'date_asc':
-        entries.sort(
-          (a, b) {
-            final byDate = DateTime.parse(a['date']).compareTo(
-              DateTime.parse(b['date']),
-            );
-            if (byDate != 0) return byDate;
-            return (a['id'] as int).compareTo(b['id'] as int);
-          },
-        );
-        break;
-      case 'amount_desc':
-        entries.sort((a, b) {
-          final totalA = _calculateEntryTotals(a)['cash']!;
-          final totalB = _calculateEntryTotals(b)['cash']!;
-          return totalB.compareTo(totalA);
-        });
-        break;
-      case 'amount_asc':
-        entries.sort((a, b) {
-          final totalA = _calculateEntryTotals(a)['cash']!;
-          final totalB = _calculateEntryTotals(b)['cash']!;
-          return totalA.compareTo(totalB);
-        });
-        break;
-      case 'id_desc':
-        entries.sort((a, b) => (b['id'] as int).compareTo(a['id'] as int));
-        break;
-      case 'id_asc':
-        entries.sort((a, b) => (a['id'] as int).compareTo(b['id'] as int));
-        break;
-    }
-  }
-
-  void _calculateStatistics(List<dynamic> entries) {
-    double totalCash = 0.0;
-    double totalGold = 0.0;
-
-    for (var entry in entries) {
-      final totals = _calculateEntryTotals(entry);
-      totalCash += totals['cash']!;
-      totalGold += totals['gold']!;
-    }
-
-    _totalCash = totalCash;
-    _totalGold = totalGold;
-    _totalEntries = entries.length;
-  }
-
-  String _formatCash(double amount, {bool includeSymbol = true}) {
-    final format = NumberFormat.currency(
-      symbol: includeSymbol ? _currencySymbol : '',
-      decimalDigits: _currencyDecimalPlaces,
-    );
-    final formatted = format.format(amount);
-    return includeSymbol ? formatted : formatted.trim();
-  }
-
-  String _formatAmountForChip(double amount) {
-    // Replace non-breaking spaces that NumberFormat may introduce
-    return _formatCash(amount).replaceAll('\u00A0', ' ');
-  }
-
-  Map<String, double> _calculateEntryTotals(dynamic entry) {
-    double totalCash = 0;
-    double totalGoldNormalized = 0;
-    final lines = entry['lines'] as List<dynamic>? ?? [];
-
-    for (var line in lines) {
-      totalCash += (line['cash_debit'] as double? ?? 0.0);
-      totalGoldNormalized += _convertToMainKarat(
-        line['debit_18k'] as double? ?? 0.0,
-        18,
-      );
-      totalGoldNormalized += _convertToMainKarat(
-        line['debit_21k'] as double? ?? 0.0,
-        21,
-      );
-      totalGoldNormalized += _convertToMainKarat(
-        line['debit_22k'] as double? ?? 0.0,
-        22,
-      );
-      totalGoldNormalized += _convertToMainKarat(
-        line['debit_24k'] as double? ?? 0.0,
-        24,
-      );
-    }
-
-    return {'cash': totalCash, 'gold': totalGoldNormalized};
-  }
-
-  double _convertToMainKarat(double weight, int fromKarat) {
-    if (fromKarat == 0 || _mainKarat == 0) return 0;
-    return (weight * fromKarat) / _mainKarat;
-  }
-
-  Color _getEntryTypeColor(String? entryType) {
-    switch (entryType) {
-      case 'افتتاحي':
-        return Colors.blue;
-      case 'دوري':
-        return Colors.purple;
-      case 'إقفال':
-        return Colors.red;
-      case 'تسوية':
-        return Colors.orange;
-      case 'تعديل':
-        return Colors.teal;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Future<void> _deleteEntry(int id, String description) async {
-    final entry = _allEntries.whereType<Map>().cast<Map>().firstWhere(
-      (e) => e['id'] == id,
-      orElse: () => <dynamic, dynamic>{},
-    );
-    final bool isPosted = entry.isNotEmpty && entry['is_posted'] == true;
-    if (isPosted) {
-      _showSnackBar('لا يمكن حذف قيد مُرحّل', isError: true);
+    if (_currencySymbol == nextSymbol &&
+        _currencyDecimalPlaces == nextDecimals &&
+        _mainKarat == nextMainKarat) {
       return;
     }
 
-    // خطوة 1: طلب سبب الحذف
-    final reason = await _showDeleteReasonDialog();
-    if (reason == null || reason.trim().isEmpty) return;
+    setState(() {
+      _currencySymbol = nextSymbol;
+      _currencyDecimalPlaces = nextDecimals;
+      _mainKarat = nextMainKarat;
+    });
+  }
 
-    // خطوة 2: تأكيد الحذف
-    final confirmed = await _showDeleteConfirmation(description, reason);
-    if (!confirmed) return;
+  void _onContentScroll() {
+    final nextOffset = _contentScrollController.hasClients
+        ? _contentScrollController.offset.clamp(0.0, _topChromeHeight)
+        : 0.0;
+    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
+      return;
+    }
+    setState(() {
+      _topChromeCollapseOffset = nextOffset;
+    });
+  }
+
+  void _measureTopChrome() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final context = _topChromeKey.currentContext;
+      if (context == null) {
+        return;
+      }
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderBox) {
+        return;
+      }
+      final height = renderObject.size.height;
+      if (height <= 0 || (height - _topChromeHeight).abs() < 0.5) {
+        return;
+      }
+      setState(() {
+        _topChromeHeight = height;
+        if (_topChromeCollapseOffset > height) {
+          _topChromeCollapseOffset = height;
+        }
+      });
+    });
+  }
+
+  Map<String, dynamic> _stringKeyMap(dynamic raw) {
+    if (raw is! Map) {
+      return <String, dynamic>{};
+    }
+    return raw.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  Future<void> _loadEntries({int? page, bool forceRefresh = false}) async {
+    if (!mounted) {
+      return;
+    }
+
+    final targetPage = page ?? _currentPage;
+    setState(() {
+      _isLoading = true;
+      if (forceRefresh) {
+        _error = null;
+      }
+    });
 
     try {
-      final result = await _apiService.deleteUnpostedJournalEntry(
-        id,
-        reason: reason,
-      );
-      _showSnackBar(
-        result['message'] ?? 'تم حذف القيد بنجاح (يمكن الاسترجاع)',
-        isError: false,
-      );
-      await _refreshData();
+      final futures = <Future<dynamic>>[
+        _apiService.getJournalEntriesPage(
+          page: targetPage,
+          perPage: _perPage,
+          sortBy: _sortBy,
+          sortOrder: _sortAscending ? 'asc' : 'desc',
+          search: _searchController.text.trim(),
+          searchType: _searchType,
+          status: _status,
+          entryType: _entryType,
+          accountId: _selectedAccountId,
+          creator: _selectedCreator,
+          dateFrom: _dateRange?.start,
+          dateTo: _dateRange?.end,
+          minCash: _minCash,
+          maxCash: _maxCash,
+        ),
+      ];
+
+      final shouldLoadAccounts = _accounts.isEmpty || forceRefresh;
+      if (shouldLoadAccounts) {
+        futures.add(_apiService.getAccounts());
+      }
+
+      final results = await Future.wait(futures);
+      final data = _stringKeyMap(results[0]);
+
+      final entriesRaw = (data['journal_entries'] as List?) ?? const [];
+      final creatorsRaw = (data['available_creators'] as List?) ?? const [];
+      final typesRaw = (data['available_entry_types'] as List?) ?? const [];
+
+      final nextEntries = entriesRaw
+          .map(_stringKeyMap)
+          .where((entry) => entry.isNotEmpty)
+          .toList(growable: false);
+      final nextCreators =
+          creatorsRaw
+              .map(
+                (entry) =>
+                    _stringKeyMap(entry)['name']?.toString().trim() ?? '',
+              )
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
+      final nextEntryTypes =
+          typesRaw
+              .map(
+                (entry) =>
+                    _stringKeyMap(entry)['name']?.toString().trim() ?? '',
+              )
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
+
+      List<Map<String, dynamic>> nextAccounts = _accounts;
+      if (shouldLoadAccounts && results.length > 1) {
+        final rawAccounts = (results[1] as List?) ?? const [];
+        nextAccounts = rawAccounts
+            .map(_stringKeyMap)
+            .where((account) => account.isNotEmpty)
+            .toList(growable: false);
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _entries = nextEntries;
+        _accounts = nextAccounts;
+        _availableCreators = nextCreators;
+        _availableEntryTypes = nextEntryTypes;
+        _currentSummary = _stringKeyMap(data['current_summary']);
+        _totalEntries = _asInt(data['total']) ?? nextEntries.length;
+        _totalPages = math.max(1, _asInt(data['pages']) ?? 1);
+        _currentPage = math.max(1, _asInt(data['current_page']) ?? targetPage);
+        _perPage = _asInt(data['per_page']) ?? _perPage;
+        _error = null;
+        _isLoading = false;
+      });
     } catch (e) {
-      _showSnackBar('فشل حذف القيد: ${e.toString()}', isError: true);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
+      _showSnackBar(
+        widget.isArabic
+            ? 'فشل تحميل قيود اليومية'
+            : 'Failed to load journal entries',
+        isError: true,
+      );
     }
   }
 
-  Future<String?> _showDeleteReasonDialog() async {
-    final controller = TextEditingController();
-    final isAr = widget.isArabic;
+  int? _asInt(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return int.tryParse('${value ?? ''}');
+  }
 
-    return await showDialog<String>(
+  double _asDouble(dynamic value) {
+    if (value is double) {
+      return value;
+    }
+    if (value is num) {
+      return value.toDouble();
+    }
+    return double.tryParse('${value ?? ''}') ?? 0.0;
+  }
+
+  String _formatDate(dynamic raw) {
+    if (raw == null) {
+      return '—';
+    }
+    final parsed = DateTime.tryParse(raw.toString());
+    if (parsed == null) {
+      return raw.toString();
+    }
+    return DateFormat('dd/MM/yyyy').format(parsed);
+  }
+
+  String _formatDateTime(dynamic raw) {
+    if (raw == null) {
+      return '—';
+    }
+    final parsed = DateTime.tryParse(raw.toString());
+    if (parsed == null) {
+      return raw.toString();
+    }
+    return DateFormat('dd/MM/yyyy HH:mm').format(parsed);
+  }
+
+  String _formatCash(dynamic raw) {
+    return NumberFormat.currency(
+      symbol: _currencySymbol,
+      decimalDigits: _currencyDecimalPlaces,
+    ).format(_asDouble(raw));
+  }
+
+  String _formatGold(dynamic raw) {
+    final amount = _asDouble(raw);
+    return '${NumberFormat('#,##0.###', widget.isArabic ? 'ar' : 'en').format(amount)} ${widget.isArabic ? 'غ' : 'g'}';
+  }
+
+  String _searchTypeLabel(String value) {
+    switch (value) {
+      case 'id':
+        return widget.isArabic ? 'المعرف' : 'ID';
+      case 'number':
+        return widget.isArabic ? 'رقم القيد' : 'Entry No.';
+      case 'description':
+        return widget.isArabic ? 'الوصف' : 'Description';
+      case 'reference':
+        return widget.isArabic ? 'المرجع' : 'Reference';
+      case 'creator':
+        return widget.isArabic ? 'المنشئ' : 'Creator';
+      case 'amount':
+        return widget.isArabic ? 'النقد' : 'Cash';
+      case 'gold':
+        return widget.isArabic ? 'الذهب' : 'Gold';
+      default:
+        return widget.isArabic ? 'الكل' : 'All';
+    }
+  }
+
+  String _searchHint() {
+    switch (_searchType) {
+      case 'id':
+        return widget.isArabic ? 'معرف القيد...' : 'Entry ID...';
+      case 'number':
+        return widget.isArabic ? 'رقم القيد...' : 'Entry number...';
+      case 'description':
+        return widget.isArabic ? 'الوصف أو البيان...' : 'Description...';
+      case 'reference':
+        return widget.isArabic ? 'المرجع...' : 'Reference...';
+      case 'creator':
+        return widget.isArabic ? 'اسم المنشئ...' : 'Creator name...';
+      case 'amount':
+        return widget.isArabic ? 'المبلغ النقدي...' : 'Cash amount...';
+      case 'gold':
+        return widget.isArabic ? 'وزن الذهب...' : 'Gold amount...';
+      default:
+        return widget.isArabic
+            ? 'ابحث برقم القيد أو الوصف أو المرجع'
+            : 'Search by number, description, or reference';
+    }
+  }
+
+  int get _activeFiltersCount {
+    int count = 0;
+    if (_searchController.text.trim().isNotEmpty) {
+      count++;
+    }
+    if (_searchType != 'all') {
+      count++;
+    }
+    if (_status != 'all') {
+      count++;
+    }
+    if (_entryType != 'all') {
+      count++;
+    }
+    if (_selectedCreator != null) {
+      count++;
+    }
+    if (_selectedAccountId != null) {
+      count++;
+    }
+    if (_dateRange != null) {
+      count++;
+    }
+    if (_minCash != null || _maxCash != null) {
+      count++;
+    }
+    if (_sortBy != 'date' || _sortAscending) {
+      count++;
+    }
+    return count;
+  }
+
+  String _selectedAccountLabel() {
+    if (_selectedAccountId == null) {
+      return widget.isArabic ? 'الحساب' : 'Account';
+    }
+
+    for (final account in _accounts) {
+      if (_asInt(account['id']) == _selectedAccountId) {
+        return accountLabelOf(account);
+      }
+    }
+    return widget.isArabic ? 'الحساب' : 'Account';
+  }
+
+  void _scheduleSearch() {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 320), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _currentPage = 1;
+      });
+      _loadEntries(page: 1);
+    });
+  }
+
+  Future<void> _openAccountPicker() async {
+    final selected = await showAccountPickerBottomSheet(
       context: context,
-      builder: (dialogContext) {
-        final dialogTheme = Theme.of(dialogContext);
-        final colorScheme = dialogTheme.colorScheme;
-        final hintColor = colorScheme.onSurface.withValues(alpha: 0.45);
+      accounts: _accounts,
+      title: widget.isArabic ? 'اختيار الحساب' : 'Select Account',
+      isArabic: widget.isArabic,
+      selectedId: _selectedAccountId,
+      showTracksWeightFilter: true,
+      showLeafOnlyFilter: true,
+    );
 
-        return AlertDialog(
-          backgroundColor: colorScheme.surface,
-          title: Text(
-            isAr ? 'سبب الحذف' : 'Deletion Reason',
-            style: dialogTheme.textTheme.titleLarge?.copyWith(
-              color: colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _selectedAccountId = _asInt(selected?['id']);
+      _currentPage = 1;
+    });
+    await _loadEntries(page: 1);
+  }
+
+  Future<void> _showCashRangeSheet() async {
+    final minController = TextEditingController(
+      text: _minCash == null
+          ? ''
+          : _minCash!.toStringAsFixed(_currencyDecimalPlaces),
+    );
+    final maxController = TextEditingController(
+      text: _maxCash == null
+          ? ''
+          : _maxCash!.toStringAsFixed(_currencyDecimalPlaces),
+    );
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        final theme = Theme.of(context);
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 8,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
           ),
-          content: Column(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                isAr
-                    ? 'الرجاء كتابة سبب حذف هذا القيد:'
-                    : 'Please enter the reason for deleting this entry:',
-                style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withValues(alpha: 0.75),
+                widget.isArabic ? 'نطاق القيمة النقدية' : 'Cash range',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-              SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                maxLines: 3,
-                style: dialogTheme.textTheme.bodyMedium,
-                decoration: InputDecoration(
-                  hintText: isAr ? 'مثال: خطأ في الإدخال' : 'e.g: Input error',
-                  hintStyle: dialogTheme.textTheme.bodyMedium?.copyWith(
-                    color: hintColor,
-                  ),
-                  filled: true,
-                  fillColor: colorScheme.surfaceContainerHighest.withValues(
-                    alpha: 0.35,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(
-                      color: colorScheme.primary.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(
-                      color: colorScheme.primary.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(
-                      color: colorScheme.primary,
-                      width: 2,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: Text(
-                isAr ? 'إلغاء' : 'Cancel',
-                style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withValues(alpha: 0.7),
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (controller.text.trim().isNotEmpty) {
-                  Navigator.pop(dialogContext, controller.text.trim());
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: colorScheme.primary,
-                foregroundColor: colorScheme.onPrimary,
-              ),
-              child: Text(isAr ? 'متابعة' : 'Continue'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<bool> _showDeleteConfirmation(
-    String description,
-    String reason,
-  ) async {
-    final isAr = widget.isArabic;
-
-    return await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) {
-            final dialogTheme = Theme.of(dialogContext);
-            final colorScheme = dialogTheme.colorScheme;
-
-            return AlertDialog(
-              backgroundColor: colorScheme.surface,
-              title: Row(
+              const SizedBox(height: 12),
+              Row(
                 children: [
-                  Icon(
-                    Icons.warning_amber_rounded,
-                    color: AppColors.warning,
-                    size: 28,
-                  ),
-                  SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      isAr ? 'تأكيد الحذف' : 'Confirm Deletion',
-                      style: dialogTheme.textTheme.titleLarge?.copyWith(
-                        color: colorScheme.primary,
-                        fontWeight: FontWeight.bold,
+                    child: TextField(
+                      controller: minController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: widget.isArabic ? 'من' : 'Min',
+                        suffixText: _currencySymbol,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: maxController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: widget.isArabic ? 'إلى' : 'Max',
+                        suffixText: _currencySymbol,
                       ),
                     ),
                   ),
                 ],
               ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      setState(() {
+                        _minCash = null;
+                        _maxCash = null;
+                        _currentPage = 1;
+                      });
+                      _loadEntries(page: 1);
+                    },
+                    child: Text(widget.isArabic ? 'مسح' : 'Clear'),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(widget.isArabic ? 'إلغاء' : 'Cancel'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      setState(() {
+                        _minCash = double.tryParse(minController.text.trim());
+                        _maxCash = double.tryParse(maxController.text.trim());
+                        _currentPage = 1;
+                      });
+                      _loadEntries(page: 1);
+                    },
+                    child: Text(widget.isArabic ? 'تطبيق' : 'Apply'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    minController.dispose();
+    maxController.dispose();
+  }
+
+  Future<void> _pickDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDateRange: _dateRange,
+    );
+    if (picked == null) {
+      return;
+    }
+    setState(() {
+      _dateRange = picked;
+      _currentPage = 1;
+    });
+    await _loadEntries(page: 1);
+  }
+
+  Future<void> _clearFilters() async {
+    _searchDebounce?.cancel();
+    setState(() {
+      _searchController.clear();
+      _searchType = 'all';
+      _status = 'all';
+      _entryType = 'all';
+      _sortBy = 'date';
+      _sortAscending = false;
+      _selectedCreator = null;
+      _selectedAccountId = null;
+      _dateRange = null;
+      _minCash = null;
+      _maxCash = null;
+      _currentPage = 1;
+    });
+    await _loadEntries(page: 1);
+  }
+
+  Future<void> _changeSort(String sortBy) async {
+    setState(() {
+      if (_sortBy == sortBy) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortBy = sortBy;
+        _sortAscending = false;
+      }
+      _currentPage = 1;
+    });
+    await _loadEntries(page: 1);
+  }
+
+  List<int> _buildPageNumbers() {
+    if (_totalPages <= 7) {
+      return List<int>.generate(_totalPages, (index) => index + 1);
+    }
+
+    final pages = <int>[1];
+    final start = (_currentPage - 2).clamp(2, _totalPages - 1);
+    final end = (_currentPage + 2).clamp(2, _totalPages - 1);
+
+    if (start > 2) {
+      pages.add(-1);
+    }
+    for (int page = start; page <= end; page++) {
+      pages.add(page);
+    }
+    if (end < _totalPages - 1) {
+      pages.add(-1);
+    }
+    pages.add(_totalPages);
+    return pages;
+  }
+
+  Future<void> _openPreview(Map<String, dynamic> entry) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => JournalEntryPrintScreen(
+          journalEntry: Map<String, dynamic>.from(entry),
+          isArabic: widget.isArabic,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openEditor([Map<String, dynamic>? entry]) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            AddEditJournalEntryScreen(entry: entry, isEditMode: entry != null),
+      ),
+    );
+    if (result == true && mounted) {
+      await _loadEntries(page: _currentPage, forceRefresh: true);
+    }
+  }
+
+  Future<void> _postEntry(Map<String, dynamic> entry) async {
+    final auth = context.read<AuthProvider>();
+    final postedBy = auth.username.trim().isNotEmpty
+        ? auth.username.trim()
+        : auth.fullName.trim();
+
+    if (postedBy.isEmpty) {
+      _showSnackBar(
+        widget.isArabic
+            ? 'تعذر تحديد المستخدم الحالي'
+            : 'Unable to resolve current user',
+        isError: true,
+      );
+      return;
+    }
+
+    try {
+      await _apiService.postJournalEntry(_asInt(entry['id']) ?? 0, postedBy);
+      _showSnackBar(
+        widget.isArabic ? 'تم ترحيل القيد' : 'Entry posted successfully',
+      );
+      await _loadEntries(page: _currentPage, forceRefresh: true);
+    } catch (e) {
+      _showSnackBar(
+        widget.isArabic ? 'فشل ترحيل القيد' : 'Failed to post entry',
+        isError: true,
+      );
+    }
+  }
+
+  Future<void> _unpostEntry(Map<String, dynamic> entry) async {
+    final confirmed = await _confirmAction(
+      title: widget.isArabic ? 'فك ترحيل القيد' : 'Unpost entry',
+      message: widget.isArabic
+          ? 'سيتم إزالة تأثير القيد من الأرصدة. هل تريد المتابعة؟'
+          : 'This removes the entry impact from balances. Continue?',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await _apiService.unpostJournalEntry(_asInt(entry['id']) ?? 0);
+      _showSnackBar(
+        widget.isArabic ? 'تم فك ترحيل القيد' : 'Entry unposted successfully',
+      );
+      await _loadEntries(page: _currentPage, forceRefresh: true);
+    } catch (e) {
+      _showSnackBar(
+        widget.isArabic ? 'فشل فك ترحيل القيد' : 'Failed to unpost entry',
+        isError: true,
+      );
+    }
+  }
+
+  Future<void> _deleteEntry(Map<String, dynamic> entry) async {
+    final reason = await _promptDeletionReason();
+    if (reason == null || reason.trim().isEmpty) {
+      return;
+    }
+
+    final confirmed = await _confirmAction(
+      title: widget.isArabic ? 'حذف القيد' : 'Delete entry',
+      message: widget.isArabic
+          ? 'سيتم حذف القيد حذفًا ناعمًا ويمكن استرجاعه لاحقًا.'
+          : 'The entry will be soft-deleted and can be restored later.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await _apiService.deleteUnpostedJournalEntry(
+        _asInt(entry['id']) ?? 0,
+        reason: reason.trim(),
+      );
+      _showSnackBar(
+        widget.isArabic ? 'تم حذف القيد' : 'Entry deleted successfully',
+      );
+      await _loadEntries(page: _currentPage, forceRefresh: true);
+    } catch (e) {
+      _showSnackBar(
+        widget.isArabic ? 'فشل حذف القيد' : 'Failed to delete entry',
+        isError: true,
+      );
+    }
+  }
+
+  Future<String?> _promptDeletionReason() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(widget.isArabic ? 'سبب الحذف' : 'Deletion reason'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: widget.isArabic
+                  ? 'مثال: قيد أُدخل بالخطأ'
+                  : 'Example: created by mistake',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(widget.isArabic ? 'إلغاء' : 'Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: Text(widget.isArabic ? 'متابعة' : 'Continue'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    return result;
+  }
+
+  Future<bool> _confirmAction({
+    required String title,
+    required String message,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(widget.isArabic ? 'إلغاء' : 'Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(widget.isArabic ? 'تأكيد' : 'Confirm'),
+            ),
+          ],
+        );
+      },
+    );
+    return result ?? false;
+  }
+
+  Future<void> _handleRowAction(
+    Map<String, dynamic> entry,
+    _JournalEntryRowAction action,
+  ) async {
+    final isPosted = entry['is_posted'] == true;
+    switch (action) {
+      case _JournalEntryRowAction.preview:
+      case _JournalEntryRowAction.print:
+        await _openPreview(entry);
+        break;
+      case _JournalEntryRowAction.edit:
+        if (!isPosted) {
+          await _openEditor(entry);
+        }
+        break;
+      case _JournalEntryRowAction.post:
+        if (!isPosted) {
+          await _postEntry(entry);
+        }
+        break;
+      case _JournalEntryRowAction.unpost:
+        if (isPosted) {
+          await _unpostEntry(entry);
+        }
+        break;
+      case _JournalEntryRowAction.delete:
+        if (!isPosted) {
+          await _deleteEntry(entry);
+        }
+        break;
+    }
+  }
+
+  void _showSnackBar(String message, {bool isError = false}) {
+    final theme = Theme.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError
+            ? theme.colorScheme.error
+            : Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard({
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    bool emphasize = false,
+  }) {
+    final theme = Theme.of(context);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 180, maxWidth: 250),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: emphasize
+              ? LinearGradient(
+                  colors: [
+                    color.withValues(alpha: 0.14),
+                    theme.colorScheme.surface,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : null,
+          color: emphasize ? null : theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: color.withValues(alpha: emphasize ? 0.28 : 0.16),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    isAr ? 'القيد:' : 'Entry:',
-                    style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.75),
-                      fontWeight: FontWeight.w600,
+                    title,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
-                    '"$description"',
-                    style: dialogTheme.textTheme.titleMedium,
-                  ),
-                  SizedBox(height: 12),
-                  Text(
-                    isAr ? 'السبب:' : 'Reason:',
-                    style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.75),
-                      fontWeight: FontWeight.w600,
+                    value,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
+                      color: color,
                     ),
                   ),
-                  Text(reason, style: dialogTheme.textTheme.bodyMedium),
-                  SizedBox(height: 16),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.62,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatisticsSection() {
+    final totalEntries =
+        _asInt(_currentSummary['total_entries']) ?? _totalEntries;
+    final postedCount =
+        _asInt(_currentSummary['posted_count']) ??
+        _entries.where((entry) => entry['is_posted'] == true).length;
+    final unpostedCount =
+        _asInt(_currentSummary['unposted_count']) ??
+        _entries.where((entry) => entry['is_posted'] != true).length;
+    final totalCash = _asDouble(_currentSummary['total_cash']);
+    final totalGold = _asDouble(_currentSummary['total_gold_main_karat']);
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _buildSummaryCard(
+          title: widget.isArabic ? 'إجمالي القيود' : 'Entries',
+          value: '$totalEntries',
+          subtitle: widget.isArabic
+              ? 'بعد الفلاتر الحالية'
+              : 'After current filters',
+          icon: Icons.receipt_long_outlined,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'قيود مرحلة' : 'Posted',
+          value: '$postedCount',
+          subtitle: widget.isArabic ? 'مرتبطة بالأرصدة' : 'Affects balances',
+          icon: Icons.verified_outlined,
+          color: Colors.green,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'قيود غير مرحلة' : 'Unposted',
+          value: '$unpostedCount',
+          subtitle: widget.isArabic ? 'جاهزة للمراجعة' : 'Ready for review',
+          icon: Icons.pending_actions_outlined,
+          color: Colors.orange,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'إجمالي النقد' : 'Total cash',
+          value: _formatCash(totalCash),
+          subtitle: widget.isArabic
+              ? 'على النتائج المطابقة'
+              : 'Across matching results',
+          icon: Icons.payments_outlined,
+          color: Colors.blue,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'إجمالي الذهب' : 'Total gold',
+          value: _formatGold(totalGold),
+          subtitle: widget.isArabic
+              ? 'بالمكافئ على العيار الرئيسي $_mainKarat'
+              : 'Main karat equivalent $_mainKarat',
+          icon: Icons.scale_outlined,
+          color: const Color(0xFFD4A017),
+          emphasize: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCollapsibleTopChrome() {
+    final content = KeyedSubtree(
+      key: _topChromeKey,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: _buildStatisticsSection(),
+      ),
+    );
+
+    _measureTopChrome();
+
+    if (_topChromeHeight <= 0) {
+      return content;
+    }
+
+    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
+    final visibleHeight = (_topChromeHeight - collapse).clamp(
+      0.0,
+      _topChromeHeight,
+    );
+    if (visibleHeight <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    return ClipRect(
+      child: SizedBox(
+        height: visibleHeight,
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          minHeight: _topChromeHeight,
+          maxHeight: _topChromeHeight,
+          child: Transform.translate(
+            offset: Offset(0, -collapse),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _statusChip({
+    required String value,
+    required String label,
+    required Color color,
+  }) {
+    final theme = Theme.of(context);
+    final selected = _status == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      labelStyle: theme.textTheme.bodySmall?.copyWith(
+        color: selected ? Colors.white : color,
+        fontWeight: FontWeight.w700,
+      ),
+      selectedColor: color,
+      backgroundColor: color.withValues(alpha: 0.08),
+      side: BorderSide(color: color.withValues(alpha: 0.25)),
+      onSelected: (_) async {
+        setState(() {
+          _status = value;
+          _currentPage = 1;
+        });
+        await _loadEntries(page: 1);
+      },
+    );
+  }
+
+  Widget _buildManagementToolbar() {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.14),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _statusChip(
+                      value: 'all',
+                      label: widget.isArabic ? 'الكل' : 'All',
+                      color: theme.colorScheme.primary,
+                    ),
+                    _statusChip(
+                      value: 'posted',
+                      label: widget.isArabic ? 'مرحلة' : 'Posted',
+                      color: Colors.green,
+                    ),
+                    _statusChip(
+                      value: 'unposted',
+                      label: widget.isArabic ? 'غير مرحلة' : 'Unposted',
+                      color: Colors.orange,
+                    ),
+                  ],
+                ),
+              ),
+              if (_activeFiltersCount > 0)
+                TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.close, size: 16),
+                  label: Text(
+                    widget.isArabic ? 'مسح الفلاتر' : 'Clear filters',
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              SizedBox(
+                width: 430,
+                child: TextField(
+                  controller: _searchController,
+                  textInputAction: TextInputAction.search,
+                  onChanged: (_) => _scheduleSearch(),
+                  onSubmitted: (_) {
+                    _searchDebounce?.cancel();
+                    setState(() {
+                      _currentPage = 1;
+                    });
+                    _loadEntries(page: 1);
+                  },
+                  decoration: InputDecoration(
+                    hintText: _searchHint(),
+                    prefixIconConstraints: const BoxConstraints(minWidth: 164),
+                    prefixIcon: Padding(
+                      padding: const EdgeInsetsDirectional.only(
+                        start: 8,
+                        end: 4,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.search, size: 18),
+                          const SizedBox(width: 6),
+                          PopupMenuButton<String>(
+                            initialValue: _searchType,
+                            tooltip: widget.isArabic
+                                ? 'نوع البحث'
+                                : 'Search type',
+                            onSelected: (value) async {
+                              setState(() {
+                                _searchType = value;
+                                _currentPage = 1;
+                              });
+                              await _loadEntries(page: 1);
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem<String>(
+                                value: 'all',
+                                child: Text(widget.isArabic ? 'الكل' : 'All'),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'id',
+                                child: Text(widget.isArabic ? 'المعرف' : 'ID'),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'number',
+                                child: Text(
+                                  widget.isArabic
+                                      ? 'رقم القيد'
+                                      : 'Entry number',
+                                ),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'description',
+                                child: Text(
+                                  widget.isArabic ? 'الوصف' : 'Description',
+                                ),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'reference',
+                                child: Text(
+                                  widget.isArabic ? 'المرجع' : 'Reference',
+                                ),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'creator',
+                                child: Text(
+                                  widget.isArabic ? 'المنشئ' : 'Creator',
+                                ),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'amount',
+                                child: Text(widget.isArabic ? 'النقد' : 'Cash'),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'gold',
+                                child: Text(widget.isArabic ? 'الذهب' : 'Gold'),
+                              ),
+                            ],
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surfaceContainerHighest
+                                    .withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: theme.colorScheme.outline.withValues(
+                                    alpha: 0.16,
+                                  ),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _searchTypeLabel(_searchType),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.arrow_drop_down, size: 18),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    suffixIcon: _searchController.text.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {
+                                _currentPage = 1;
+                              });
+                              _loadEntries(page: 1);
+                            },
+                          ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 180,
+                child: DropdownButtonFormField<String>(
+                  value: _entryType,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: widget.isArabic ? 'نوع القيد' : 'Entry type',
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem<String>(
+                      value: 'all',
+                      child: Text(widget.isArabic ? 'الكل' : 'All'),
+                    ),
+                    ..._availableEntryTypes.map(
+                      (type) => DropdownMenuItem<String>(
+                        value: type,
+                        child: Text(type, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) async {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _entryType = value;
+                      _currentPage = 1;
+                    });
+                    await _loadEntries(page: 1);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 180,
+                child: DropdownButtonFormField<String?>(
+                  value: _selectedCreator,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: widget.isArabic ? 'المنشئ' : 'Creator',
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text(widget.isArabic ? 'الكل' : 'All'),
+                    ),
+                    ..._availableCreators.map(
+                      (creator) => DropdownMenuItem<String?>(
+                        value: creator,
+                        child: Text(creator, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) async {
+                    setState(() {
+                      _selectedCreator = value;
+                      _currentPage = 1;
+                    });
+                    await _loadEntries(page: 1);
+                  },
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: _openAccountPicker,
+                icon: const Icon(Icons.account_tree_outlined, size: 18),
+                label: Text(
+                  _selectedAccountLabel(),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (_selectedAccountId != null)
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    setState(() {
+                      _selectedAccountId = null;
+                      _currentPage = 1;
+                    });
+                    await _loadEntries(page: 1);
+                  },
+                  icon: const Icon(Icons.close, size: 16),
+                  label: Text(widget.isArabic ? 'مسح الحساب' : 'Clear account'),
+                ),
+              OutlinedButton.icon(
+                onPressed: _pickDateRange,
+                icon: const Icon(Icons.date_range_outlined, size: 18),
+                label: Text(
+                  _dateRange == null
+                      ? (widget.isArabic ? 'من - إلى' : 'From - To')
+                      : '${DateFormat('dd/MM/yyyy').format(_dateRange!.start)} - ${DateFormat('dd/MM/yyyy').format(_dateRange!.end)}',
+                ),
+              ),
+              if (_dateRange != null)
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    setState(() {
+                      _dateRange = null;
+                      _currentPage = 1;
+                    });
+                    await _loadEntries(page: 1);
+                  },
+                  icon: const Icon(Icons.close, size: 16),
+                  label: Text(widget.isArabic ? 'مسح التاريخ' : 'Clear date'),
+                ),
+              OutlinedButton.icon(
+                onPressed: _showCashRangeSheet,
+                icon: const Icon(Icons.tune, size: 18),
+                label: Text(
+                  _minCash == null && _maxCash == null
+                      ? (widget.isArabic ? 'قيمة نقدية' : 'Cash range')
+                      : '${_minCash?.toStringAsFixed(_currencyDecimalPlaces) ?? '0'} - ${_maxCash?.toStringAsFixed(_currencyDecimalPlaces) ?? '∞'}',
+                ),
+              ),
+              SizedBox(
+                width: 160,
+                child: DropdownButtonFormField<String>(
+                  value: _sortBy,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: widget.isArabic ? 'الترتيب' : 'Sort by',
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem<String>(
+                      value: 'date',
+                      child: Text(widget.isArabic ? 'التاريخ' : 'Date'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'number',
+                      child: Text(widget.isArabic ? 'رقم القيد' : 'Entry no.'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'description',
+                      child: Text(widget.isArabic ? 'الوصف' : 'Description'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'type',
+                      child: Text(widget.isArabic ? 'نوع القيد' : 'Type'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'creator',
+                      child: Text(widget.isArabic ? 'المنشئ' : 'Creator'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'cash',
+                      child: Text(widget.isArabic ? 'النقد' : 'Cash'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'gold',
+                      child: Text(widget.isArabic ? 'الذهب' : 'Gold'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'status',
+                      child: Text(widget.isArabic ? 'الحالة' : 'Status'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'reference',
+                      child: Text(widget.isArabic ? 'المرجع' : 'Reference'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'id',
+                      child: Text(widget.isArabic ? 'المعرف' : 'ID'),
+                    ),
+                  ],
+                  onChanged: (value) async {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _sortBy = value;
+                      _currentPage = 1;
+                    });
+                    await _loadEntries(page: 1);
+                  },
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  setState(() {
+                    _sortAscending = !_sortAscending;
+                    _currentPage = 1;
+                  });
+                  await _loadEntries(page: 1);
+                },
+                icon: Icon(
+                  _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                  size: 18,
+                ),
+                label: Text(
+                  _sortAscending
+                      ? (widget.isArabic ? 'تصاعدي' : 'Ascending')
+                      : (widget.isArabic ? 'تنازلي' : 'Descending'),
+                ),
+              ),
+              SizedBox(
+                width: 110,
+                child: DropdownButtonFormField<int>(
+                  value: _perPage,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: widget.isArabic ? 'الصفوف' : 'Rows',
+                    isDense: true,
+                  ),
+                  items: const [10, 25, 50, 100]
+                      .map(
+                        (value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text('$value'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) async {
+                    if (value == null || value == _perPage) {
+                      return;
+                    }
+                    setState(() {
+                      _perPage = value;
+                      _currentPage = 1;
+                    });
+                    await _loadEntries(page: 1);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTypeBadge(String type) {
+    final theme = Theme.of(context);
+    Color color;
+    switch (type) {
+      case 'افتتاحي':
+        color = Colors.blue;
+        break;
+      case 'دوري':
+        color = Colors.purple;
+        break;
+      case 'إقفال':
+        color = Colors.redAccent;
+        break;
+      case 'تسوية':
+        color = Colors.teal;
+        break;
+      default:
+        color = theme.colorScheme.primary;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        type,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: color,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusBadge(bool isPosted) {
+    final theme = Theme.of(context);
+    final color = isPosted ? Colors.green : Colors.orange;
+    final label = isPosted
+        ? (widget.isArabic ? 'مرحّل' : 'Posted')
+        : (widget.isArabic ? 'غير مرحّل' : 'Unposted');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isPosted ? Icons.verified_outlined : Icons.pending_actions_outlined,
+            size: 12,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderCell({
+    required String label,
+    required double width,
+    AlignmentGeometry alignment = Alignment.center,
+    VoidCallback? onTap,
+    bool isActive = false,
+    TextAlign textAlign = TextAlign.center,
+    MainAxisAlignment mainAxisAlignment = MainAxisAlignment.center,
+  }) {
+    final theme = Theme.of(context);
+    final child = Container(
+      width: width,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: alignment,
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        mainAxisAlignment: mainAxisAlignment,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: textAlign,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: isActive ? theme.colorScheme.primary : null,
+              ),
+            ),
+          ),
+          if (isActive) ...[
+            const SizedBox(width: 4),
+            Icon(
+              _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+              size: 14,
+              color: theme.colorScheme.primary,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) {
+      return child;
+    }
+
+    return InkWell(onTap: onTap, child: child);
+  }
+
+  Widget _buildMetricHeaderCell({
+    required String label,
+    required String unit,
+    required double width,
+    required IconData icon,
+    required Color color,
+    VoidCallback? onTap,
+    bool isActive = false,
+  }) {
+    final theme = Theme.of(context);
+    final content = Container(
+      width: width,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      alignment: Alignment.center,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: color.withValues(alpha: isActive ? 0.34 : 0.18),
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Icon(icon, size: 14, color: color),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: isActive ? color : Colors.grey.shade800,
+                      height: 1.0,
+                    ),
+                  ),
+                ),
+                if (isActive) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                    size: 13,
+                    color: color,
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              unit,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: color.withValues(alpha: 0.92),
+                fontWeight: FontWeight.w700,
+                height: 1.0,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (onTap == null) {
+      return content;
+    }
+
+    return InkWell(onTap: onTap, child: content);
+  }
+
+  Widget _buildBodyCell({
+    required double width,
+    required Widget child,
+    AlignmentGeometry alignment = Alignment.center,
+  }) {
+    return Container(
+      width: width,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: alignment,
+      child: child,
+    );
+  }
+
+  Widget _buildMetricValueCell({
+    required double width,
+    required String value,
+    required IconData icon,
+    required Color color,
+    required bool emphasize,
+  }) {
+    return _buildBodyCell(
+      width: width,
+      alignment: Alignment.center,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: emphasize ? 0.12 : 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: color.withValues(alpha: emphasize ? 0.26 : 0.14),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
+                  color: emphasize ? color.withValues(alpha: 0.98) : null,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRowActions(Map<String, dynamic> entry) {
+    final isPosted = entry['is_posted'] == true;
+
+    PopupMenuItem<_JournalEntryRowAction> item({
+      required _JournalEntryRowAction value,
+      required IconData icon,
+      required String label,
+      bool enabled = true,
+    }) {
+      return PopupMenuItem<_JournalEntryRowAction>(
+        value: value,
+        enabled: enabled,
+        child: Row(
+          children: [
+            Icon(icon, size: 18),
+            const SizedBox(width: 10),
+            Text(label),
+          ],
+        ),
+      );
+    }
+
+    return PopupMenuButton<_JournalEntryRowAction>(
+      tooltip: widget.isArabic ? 'الإجراءات' : 'Actions',
+      onSelected: (action) => _handleRowAction(entry, action),
+      itemBuilder: (context) => [
+        item(
+          value: _JournalEntryRowAction.preview,
+          icon: Icons.visibility_outlined,
+          label: widget.isArabic ? 'عرض' : 'Preview',
+        ),
+        item(
+          value: _JournalEntryRowAction.edit,
+          icon: Icons.edit_outlined,
+          label: widget.isArabic ? 'تعديل' : 'Edit',
+          enabled: !isPosted,
+        ),
+        item(
+          value: _JournalEntryRowAction.post,
+          icon: Icons.publish_outlined,
+          label: widget.isArabic ? 'ترحيل' : 'Post',
+          enabled: !isPosted,
+        ),
+        item(
+          value: _JournalEntryRowAction.unpost,
+          icon: Icons.undo_outlined,
+          label: widget.isArabic ? 'فك الترحيل' : 'Unpost',
+          enabled: isPosted,
+        ),
+        item(
+          value: _JournalEntryRowAction.print,
+          icon: Icons.print_outlined,
+          label: widget.isArabic ? 'طباعة' : 'Print',
+        ),
+        item(
+          value: _JournalEntryRowAction.delete,
+          icon: Icons.delete_outline,
+          label: widget.isArabic ? 'حذف' : 'Delete',
+          enabled: !isPosted,
+        ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.more_horiz, size: 18),
+      ),
+    );
+  }
+
+  Widget _buildJournalTable() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final viewportWidth = MediaQuery.sizeOf(context).width - 36;
+    const baseColumnWidths = <String, double>{
+      'number': 132,
+      'description': 224,
+      'creator': 104,
+      'date': 104,
+      'type': 96,
+      'accounts': 188,
+      'cash': 148,
+      'gold': 148,
+      'status': 112,
+      'reference': 146,
+      'actions': 52,
+    };
+    const widthDistribution = <String, double>{
+      'description': 0.30,
+      'creator': 0.10,
+      'date': 0.02,
+      'type': 0.08,
+      'accounts': 0.20,
+      'cash': 0.09,
+      'gold': 0.09,
+      'status': 0.04,
+      'reference': 0.08,
+    };
+    final minContentWidth = baseColumnWidths.values.fold<double>(
+      0,
+      (sum, width) => sum + width,
+    );
+    final tableWidth = math.max(viewportWidth, minContentWidth);
+    final extraWidth = math.max(0.0, tableWidth - minContentWidth);
+
+    final widths = <String, double>{
+      for (final entry in baseColumnWidths.entries)
+        entry.key:
+            entry.value + (extraWidth * (widthDistribution[entry.key] ?? 0.0)),
+    };
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tableHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : 520.0;
+
+        return Container(
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: colorScheme.outline.withValues(alpha: 0.12),
+            ),
+          ),
+          child: SingleChildScrollView(
+            controller: _tableHorizontalController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: tableWidth,
+              height: tableHeight,
+              child: Column(
+                children: [
                   Container(
-                    padding: EdgeInsets.all(12),
+                    height: 66,
                     decoration: BoxDecoration(
-                      color: AppColors.info.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: AppColors.info.withValues(alpha: 0.2),
+                      color: colorScheme.surfaceContainerHighest.withValues(
+                        alpha: 0.45,
+                      ),
+                      border: Border(
+                        bottom: BorderSide(
+                          color: colorScheme.outline.withValues(alpha: 0.18),
+                        ),
                       ),
                     ),
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.info_outline,
-                          color: AppColors.info,
-                          size: 20,
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'رقم القيد' : 'Entry no.',
+                          width: widths['number']!,
+                          onTap: () => _changeSort('number'),
+                          isActive: _sortBy == 'number',
                         ),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            isAr
-                                ? 'يمكن استرجاع القيد لاحقاً من قائمة المحذوفات'
-                                : 'Entry can be restored later from deleted list',
-                            style: dialogTheme.textTheme.bodySmall?.copyWith(
-                              color: AppColors.info,
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'الوصف' : 'Description',
+                          width: widths['description']!,
+                          onTap: () => _changeSort('description'),
+                          isActive: _sortBy == 'description',
+                        ),
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'المنشئ' : 'Creator',
+                          width: widths['creator']!,
+                          onTap: () => _changeSort('creator'),
+                          isActive: _sortBy == 'creator',
+                        ),
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'التاريخ' : 'Date',
+                          width: widths['date']!,
+                          alignment: Alignment.center,
+                          onTap: () => _changeSort('date'),
+                          isActive: _sortBy == 'date',
+                          textAlign: TextAlign.center,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                        ),
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'النوع' : 'Type',
+                          width: widths['type']!,
+                          alignment: Alignment.center,
+                          onTap: () => _changeSort('type'),
+                          isActive: _sortBy == 'type',
+                          textAlign: TextAlign.center,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                        ),
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'الحسابات' : 'Accounts',
+                          width: widths['accounts']!,
+                        ),
+                        _buildMetricHeaderCell(
+                          label: widget.isArabic ? 'النقد' : 'Cash',
+                          unit: _currencySymbol,
+                          width: widths['cash']!,
+                          icon: Icons.payments_outlined,
+                          color: Colors.blue.shade700,
+                          onTap: () => _changeSort('cash'),
+                          isActive: _sortBy == 'cash',
+                        ),
+                        _buildMetricHeaderCell(
+                          label: widget.isArabic ? 'وزن الذهب' : 'Gold weight',
+                          unit: widget.isArabic
+                              ? '${_mainKarat}k / غ'
+                              : '${_mainKarat}k / g',
+                          width: widths['gold']!,
+                          icon: Icons.scale_outlined,
+                          color: const Color(0xFFD4A017),
+                          onTap: () => _changeSort('gold'),
+                          isActive: _sortBy == 'gold',
+                        ),
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'الحالة' : 'Status',
+                          width: widths['status']!,
+                          alignment: Alignment.center,
+                          onTap: () => _changeSort('status'),
+                          isActive: _sortBy == 'status',
+                          textAlign: TextAlign.center,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                        ),
+                        _buildHeaderCell(
+                          label: widget.isArabic ? 'المرجع' : 'Reference',
+                          width: widths['reference']!,
+                          onTap: () => _changeSort('reference'),
+                          isActive: _sortBy == 'reference',
+                        ),
+                        _buildHeaderCell(
+                          label: '⋮',
+                          width: widths['actions']!,
+                          alignment: Alignment.center,
+                          textAlign: TextAlign.center,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: () =>
+                          _loadEntries(page: _currentPage, forceRefresh: true),
+                      child: ListView.builder(
+                        controller: _contentScrollController,
+                        padding: EdgeInsets.zero,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: _entries.length,
+                        itemBuilder: (context, index) {
+                          final entry = _entries[index];
+                          final isPosted = entry['is_posted'] == true;
+                          final accountsPreview =
+                              ((entry['accounts_preview'] as List?) ?? const [])
+                                  .map((account) => account.toString())
+                                  .where((account) => account.trim().isNotEmpty)
+                                  .join(' • ');
+                          final lineCount = _asInt(entry['line_count']) ?? 0;
+                          final creator = (entry['creator_name'] ?? '')
+                              .toString()
+                              .trim();
+                          final reference = (entry['reference_display'] ?? '')
+                              .toString()
+                              .trim();
+                          final description = (entry['description'] ?? '')
+                              .toString()
+                              .trim();
+
+                          return Material(
+                            color: index.isEven
+                                ? colorScheme.surfaceContainerHighest
+                                      .withValues(alpha: 0.14)
+                                : colorScheme.surface,
+                            child: InkWell(
+                              onTap: () => _openPreview(entry),
+                              child: Container(
+                                height: 68,
+                                decoration: BoxDecoration(
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: colorScheme.outline.withValues(
+                                        alpha: 0.1,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    _buildBodyCell(
+                                      width: widths['number']!,
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            (entry['entry_number'] ?? '—')
+                                                .toString(),
+                                            textAlign: TextAlign.center,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.bodyMedium
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w800,
+                                                  color: colorScheme.primary,
+                                                ),
+                                          ),
+                                          Text(
+                                            '#${_asInt(entry['id']) ?? 0}',
+                                            textAlign: TextAlign.center,
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: colorScheme.onSurface
+                                                      .withValues(alpha: 0.52),
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['description']!,
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            description.isEmpty
+                                                ? (widget.isArabic
+                                                      ? 'بدون وصف'
+                                                      : 'No description')
+                                                : description,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: theme.textTheme.bodyMedium
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                          Text(
+                                            widget.isArabic
+                                                ? '$lineCount أسطر'
+                                                : '$lineCount lines',
+                                            textAlign: TextAlign.center,
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: colorScheme.onSurface
+                                                      .withValues(alpha: 0.52),
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['creator']!,
+                                      child: Text(
+                                        creator.isEmpty ? '—' : creator,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.bodySmall,
+                                      ),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['date']!,
+                                      alignment: Alignment.center,
+                                      child: Text(_formatDate(entry['date'])),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['type']!,
+                                      alignment: Alignment.center,
+                                      child: _buildTypeBadge(
+                                        (entry['entry_type'] ?? '')
+                                                .toString()
+                                                .trim()
+                                                .isEmpty
+                                            ? (widget.isArabic
+                                                  ? 'عادي'
+                                                  : 'Normal')
+                                            : (entry['entry_type'] ?? '')
+                                                  .toString(),
+                                      ),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['accounts']!,
+                                      child: Text(
+                                        accountsPreview.isEmpty
+                                            ? '—'
+                                            : accountsPreview,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.bodySmall,
+                                      ),
+                                    ),
+                                    _buildMetricValueCell(
+                                      width: widths['cash']!,
+                                      value: _formatCash(entry['cash_total']),
+                                      icon: Icons.payments_outlined,
+                                      color: Colors.blue.shade700,
+                                      emphasize: false,
+                                    ),
+                                    _buildMetricValueCell(
+                                      width: widths['gold']!,
+                                      value: _formatGold(
+                                        entry['gold_total_main_karat'],
+                                      ),
+                                      icon: Icons.scale_outlined,
+                                      color: const Color(0xFFD4A017),
+                                      emphasize: true,
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['status']!,
+                                      alignment: Alignment.center,
+                                      child: _buildStatusBadge(isPosted),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['reference']!,
+                                      child: Text(
+                                        reference.isEmpty ? '—' : reference,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.bodySmall,
+                                      ),
+                                    ),
+                                    _buildBodyCell(
+                                      width: widths['actions']!,
+                                      alignment: Alignment.center,
+                                      child: _buildRowActions(entry),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEntryCard(Map<String, dynamic> entry) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final accountsPreview = ((entry['accounts_preview'] as List?) ?? const [])
+        .map((account) => account.toString())
+        .where((account) => account.trim().isNotEmpty)
+        .join(' • ');
+    final isPosted = entry['is_posted'] == true;
+    final description = (entry['description'] ?? '').toString().trim();
+    final reference = (entry['reference_display'] ?? '').toString().trim();
+    final creator = (entry['creator_name'] ?? '').toString().trim();
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _openPreview(entry),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          (entry['entry_number'] ?? '—').toString(),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '#${_asInt(entry['id']) ?? 0} • ${_formatDateTime(entry['date'])}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurface.withValues(
+                              alpha: 0.56,
                             ),
                           ),
                         ),
                       ],
                     ),
                   ),
+                  _buildStatusBadge(isPosted),
+                  const SizedBox(width: 8),
+                  _buildRowActions(entry),
                 ],
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                  child: Text(
-                    isAr ? 'إلغاء' : 'Cancel',
-                    style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
+              const SizedBox(height: 10),
+              Text(
+                description.isEmpty
+                    ? (widget.isArabic ? 'بدون وصف' : 'No description')
+                    : description,
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildTypeBadge(
+                    (entry['entry_type'] ?? '').toString().trim().isEmpty
+                        ? (widget.isArabic ? 'عادي' : 'Normal')
+                        : (entry['entry_type'] ?? '').toString(),
+                  ),
+                  if (creator.isNotEmpty)
+                    Chip(
+                      label: Text(creator),
+                      avatar: const Icon(Icons.person_outline, size: 16),
+                    ),
+                  if (reference.isNotEmpty)
+                    Chip(
+                      label: Text(reference),
+                      avatar: const Icon(Icons.link_outlined, size: 16),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                accountsPreview.isEmpty
+                    ? (widget.isArabic
+                          ? 'لا توجد معاينة للحسابات'
+                          : 'No account preview')
+                    : accountsPreview,
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildInfoTile(
+                      icon: Icons.payments_outlined,
+                      label: widget.isArabic ? 'النقد' : 'Cash',
+                      value: _formatCash(entry['cash_total']),
+                      accent: Colors.blue.shade700,
                     ),
                   ),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(dialogContext, true),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.warning,
-                    foregroundColor: Colors.white,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildInfoTile(
+                      icon: Icons.scale_outlined,
+                      label: widget.isArabic ? 'وزن الذهب' : 'Gold weight',
+                      value: _formatGold(entry['gold_total_main_karat']),
+                      accent: const Color(0xFFD4A017),
+                      emphasize: true,
+                    ),
                   ),
-                  child: Text(isAr ? 'حذف' : 'Delete'),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
-  }
-
-  void _showSnackBar(String message, {required bool isError}) {
-    final theme = Theme.of(context);
-    final backgroundColor = isError ? AppColors.error : AppColors.success;
-    final foreground = isError
-        ? theme.colorScheme.onError
-        : theme.colorScheme.onPrimary;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: theme.textTheme.bodyMedium?.copyWith(color: foreground),
+                ],
+              ),
+            ],
+          ),
         ),
-        backgroundColor: backgroundColor,
-        behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
-  void _navigateToAddEditScreen([dynamic entry]) {
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute(
-            builder: (context) => AddEditJournalEntryScreen(entry: entry),
-          ),
-        )
-        .then((value) {
-          if (value == true) {
-            _refreshData();
-          }
-        });
-  }
-
-  void _showFilterDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => _FilterDialog(
-        dateRange: _dateRange,
-        selectedAccountId: _selectedAccountId,
-        minAmount: _minAmount,
-        maxAmount: _maxAmount,
-        accounts: _accounts,
-        isArabic: widget.isArabic,
-        currencySymbol: _currencySymbol,
-        currencyDecimalPlaces: _currencyDecimalPlaces,
-        onApply: (dateRange, accountId, minAmt, maxAmt) {
-          setState(() {
-            _dateRange = dateRange;
-            _selectedAccountId = accountId;
-            _minAmount = minAmt;
-            _maxAmount = maxAmt;
-          });
-          _applyFilters();
-        },
-        onClear: () {
-          setState(() {
-            _dateRange = null;
-            _selectedAccountId = null;
-            _minAmount = null;
-            _maxAmount = null;
-          });
-          _applyFilters();
-        },
-      ),
-    );
-  }
-
-  void _showSortDialog() {
-    showDialog(
-      context: context,
-      builder: (dialogContext) {
-        final dialogTheme = Theme.of(dialogContext);
-        final colorScheme = dialogTheme.colorScheme;
-        return AlertDialog(
-          backgroundColor: colorScheme.surface,
-          title: Text(
-            'ترتيب حسب',
-            style: dialogTheme.textTheme.titleLarge?.copyWith(
-              color: colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          content: RadioGroup<String>(
-            groupValue: _sortBy,
-            onChanged: (newValue) {
-              if (newValue == null) return;
-              setState(() => _sortBy = newValue);
-              _applyFilters();
-              Navigator.pop(context);
-            },
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildSortOption('التاريخ (الأحدث أولاً)', 'date_desc'),
-                _buildSortOption('التاريخ (الأقدم أولاً)', 'date_asc'),
-                _buildSortOption('المبلغ (الأعلى أولاً)', 'amount_desc'),
-                _buildSortOption('المبلغ (الأقل أولاً)', 'amount_asc'),
-                _buildSortOption('الرقم (الأعلى أولاً)', 'id_desc'),
-                _buildSortOption('الرقم (الأقل أولاً)', 'id_asc'),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildSortOption(String label, String value) {
-    return RadioListTile<String>(
-      title: Text(label),
-      value: value,
-      activeColor: AppColors.primaryGold,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isAr = widget.isArabic;
+  Widget _buildInfoTile({
+    required IconData icon,
+    required String label,
+    required String value,
+    Color? accent,
+    bool emphasize = false,
+  }) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final gold = colorScheme.primary;
-    final background = theme.scaffoldBackgroundColor;
-    final appBarBackground = theme.appBarTheme.backgroundColor;
-    final fallbackAppBarForeground = () {
-      final bg = appBarBackground ?? colorScheme.surface;
-      final b = ThemeData.estimateBrightnessForColor(bg);
-      return b == Brightness.dark ? Colors.white : Colors.black;
-    }();
-    final appBarForeground =
-        theme.appBarTheme.foregroundColor ?? fallbackAppBarForeground;
-
-    return Scaffold(
-      backgroundColor: background,
-      appBar: AppBar(
-        backgroundColor: appBarBackground,
-        foregroundColor: appBarForeground,
-        title: _isSearching
-            ? TextField(
-                controller: _searchController,
-                autofocus: true,
-                decoration: InputDecoration(
-                  hintText: 'بحث بالوصف، التاريخ، أو الرقم...',
-                  border: InputBorder.none,
-                  filled: true,
-                  fillColor: appBarForeground.withValues(alpha: 0.10),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  hintStyle: TextStyle(
-                    color: appBarForeground.withValues(alpha: 0.6),
-                  ),
-                ),
-                style: TextStyle(color: appBarForeground),
-              )
-            : Text(isAr ? 'قيود اليومية' : 'Journal Entries'),
-        actions: [
-          if (_isSearching)
-            IconButton(
-              icon: Icon(Icons.close),
-              color: appBarForeground,
-              onPressed: () {
-                if (_searchController.text.isEmpty) {
-                  setState(() => _isSearching = false);
-                } else {
-                  _searchController.clear();
-                }
-              },
-            )
-          else ...[
-            IconButton(
-              icon: Icon(Icons.search),
-              tooltip: isAr ? 'بحث' : 'Search',
-              color: appBarForeground,
-              onPressed: () => setState(() => _isSearching = true),
-            ),
-            IconButton(
-              icon: Icon(Icons.filter_list),
-              tooltip: isAr ? 'فلتر' : 'Filter',
-              color: appBarForeground,
-              onPressed: _showFilterDialog,
-            ),
-            IconButton(
-              icon: Icon(Icons.sort),
-              tooltip: isAr ? 'ترتيب' : 'Sort',
-              color: appBarForeground,
-              onPressed: _showSortDialog,
-            ),
-            IconButton(
-              icon: Icon(Icons.add),
-              tooltip: isAr ? 'إضافة قيد' : 'Add Entry',
-              color: appBarForeground,
-              onPressed: () => _navigateToAddEditScreen(),
-            ),
-          ],
-        ],
-      ),
-      body: _isLoading
-          ? Center(child: CircularProgressIndicator(color: gold))
-          : Column(
-              children: [
-                // Statistics Summary Card
-                _buildStatisticsCard(theme, isAr),
-
-                // Active Filters Chips
-                if (_hasActiveFilters()) _buildActiveFiltersChips(theme, gold),
-
-                // Entries List
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _refreshData,
-                    color: gold,
-                    child: _filteredEntries.isEmpty
-                        ? _buildEmptyState(isAr, theme)
-                        : _buildEntriesList(theme, isAr),
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-
-  Widget _buildStatisticsCard(ThemeData theme, bool isAr) {
-    final colorScheme = theme.colorScheme;
-    final onSurface = colorScheme.onSurface;
-
+    final resolvedAccent = accent ?? theme.colorScheme.primary;
     return Container(
-      margin: EdgeInsets.all(12),
-      padding: EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topRight,
-          end: Alignment.bottomLeft,
-          colors: [
-            colorScheme.primary.withValues(alpha: 0.18),
-            colorScheme.primary.withValues(alpha: 0.05),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(16),
+        gradient: emphasize
+            ? LinearGradient(
+                colors: [
+                  resolvedAccent.withValues(alpha: 0.14),
+                  theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.22,
+                  ),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : null,
+        color: emphasize
+            ? null
+            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: colorScheme.primary.withValues(alpha: 0.25),
-          width: 1,
+          color: resolvedAccent.withValues(alpha: emphasize ? 0.22 : 0.10),
         ),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _buildStatItem(
-            theme,
-            Icons.receipt_long,
-            _totalEntries.toString(),
-            isAr ? 'قيد' : 'Entries',
-            colorScheme.primary,
-            onSurface,
-          ),
-          _buildStatItem(
-            theme,
-            Icons.monetization_on,
-            _formatCash(_totalCash),
-            isAr ? 'نقد' : 'Cash',
-            AppColors.success,
-            onSurface,
-          ),
-          _buildStatItem(
-            theme,
-            Icons.balance,
-            '${_totalGold.toStringAsFixed(2)} ${isAr ? 'غ' : 'g'}',
-            isAr ? 'ذهب' : 'Gold',
-            AppColors.darkGold,
-            onSurface,
+          Icon(icon, size: emphasize ? 20 : 18, color: resolvedAccent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: theme.textTheme.bodySmall),
+                Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
+                    color: emphasize ? resolvedAccent : null,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatItem(
-    ThemeData theme,
-    IconData icon,
-    String value,
-    String label,
-    Color iconColor,
-    Color textColor,
-  ) {
-    return Column(
-      children: [
-        Icon(icon, color: iconColor, size: 28),
-        SizedBox(height: 6),
-        Text(
-          value,
-          style: theme.textTheme.titleLarge?.copyWith(
-            color: textColor,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        SizedBox(height: 2),
-        Text(
-          label,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: textColor.withValues(alpha: 0.65),
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
-    );
-  }
+  Widget _buildPaginationStrip() {
+    if (_totalEntries == 0 || _totalPages <= 1) {
+      return const SizedBox.shrink();
+    }
 
-  bool _hasActiveFilters() {
-    return _dateRange != null ||
-        _selectedAccountId != null ||
-        _minAmount != null ||
-        _maxAmount != null;
-  }
+    final theme = Theme.of(context);
+    final pageNumbers = _buildPageNumbers();
+    final start = ((_currentPage - 1) * _perPage) + 1;
+    final end = (_currentPage * _perPage) > _totalEntries
+        ? _totalEntries
+        : (_currentPage * _perPage);
 
-  Widget _buildActiveFiltersChips(ThemeData theme, Color gold) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          if (_dateRange != null)
-            _buildFilterChip(
-              theme,
-              '${DateFormat('yyyy-MM-dd').format(_dateRange!.start)} - ${DateFormat('yyyy-MM-dd').format(_dateRange!.end)}',
-              gold,
-              () {
-                setState(() => _dateRange = null);
-                _applyFilters();
-              },
+    return Align(
+      alignment: AlignmentDirectional.centerEnd,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Text(
+              widget.isArabic
+                  ? 'عرض $start-$end من $_totalEntries'
+                  : 'Showing $start-$end of $_totalEntries',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+              ),
             ),
-          if (_selectedAccountId != null)
-            _buildFilterChip(
-              theme,
-              _accounts.firstWhere(
-                (a) => a['id'] == _selectedAccountId,
-              )['name'],
-              gold,
-              () {
-                setState(() => _selectedAccountId = null);
-                _applyFilters();
-              },
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: IconButton(
+                icon: const Icon(Icons.chevron_left, size: 18),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onPressed: (_isLoading || _currentPage <= 1)
+                    ? null
+                    : () => _loadEntries(page: _currentPage - 1),
+              ),
             ),
-          if (_minAmount != null || _maxAmount != null)
-            _buildFilterChip(
-              theme,
-              '${_minAmount != null ? _formatAmountForChip(_minAmount!) : _formatAmountForChip(0)} - ${_maxAmount != null ? _formatAmountForChip(_maxAmount!) : '∞'}',
-              gold,
-              () {
-                setState(() {
-                  _minAmount = null;
-                  _maxAmount = null;
-                });
-                _applyFilters();
-              },
+            ...pageNumbers.map((page) {
+              if (page == -1) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    '…',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                    ),
+                  ),
+                );
+              }
+
+              final isActive = page == _currentPage;
+              return GestureDetector(
+                onTap: (_isLoading || isActive)
+                    ? null
+                    : () => _loadEntries(page: page),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  width: 30,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? theme.colorScheme.primary
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: isActive
+                        ? null
+                        : Border.all(
+                            color: theme.colorScheme.outline.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$page',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontWeight: isActive
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                      color: isActive
+                          ? Colors.white
+                          : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ),
+              );
+            }),
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: IconButton(
+                icon: const Icon(Icons.chevron_right, size: 18),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onPressed: (_isLoading || _currentPage >= _totalPages)
+                    ? null
+                    : () => _loadEntries(page: _currentPage + 1),
+              ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildFilterChip(
-    ThemeData theme,
-    String label,
-    Color gold,
-    VoidCallback onDelete,
-  ) {
-    final onSurface = theme.colorScheme.onSurface;
-    return Chip(
-      label: Text(
-        label,
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: onSurface,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      deleteIcon: Icon(Icons.close, size: 18, color: gold),
-      onDeleted: onDelete,
-      backgroundColor: gold.withValues(alpha: 0.1),
-      side: BorderSide(color: gold.withValues(alpha: 0.6), width: 1),
-    );
-  }
-
-  Widget _buildEmptyState(bool isAr, ThemeData theme) {
-    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.6);
+  Widget _buildEmptyState() {
+    final theme = Theme.of(context);
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -967,22 +2499,26 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             size: 64,
             color: theme.colorScheme.primary.withValues(alpha: 0.35),
           ),
-          SizedBox(height: 16),
+          const SizedBox(height: 16),
           Text(
-            _isSearching || _hasActiveFilters()
-                ? (isAr ? 'لا توجد نتائج مطابقة' : 'No matching results')
-                : (isAr ? 'لا توجد قيود' : 'No entries'),
+            _activeFiltersCount > 0
+                ? (widget.isArabic
+                      ? 'لا توجد نتائج مطابقة'
+                      : 'No matching entries')
+                : (widget.isArabic
+                      ? 'لا توجد قيود يومية'
+                      : 'No journal entries'),
             style: theme.textTheme.titleMedium?.copyWith(
-              color: muted,
-              fontSize: 18,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
           ),
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
           Text(
-            isAr ? 'قم بإضافة قيد جديد' : 'Add a new entry',
+            widget.isArabic
+                ? 'أضف قيدًا جديدًا أو عدّل الفلاتر الحالية'
+                : 'Add a new entry or adjust the current filters',
             style: theme.textTheme.bodySmall?.copyWith(
-              color: muted.withValues(alpha: 0.7),
-              fontSize: 14,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
             ),
           ),
         ],
@@ -990,552 +2526,125 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     );
   }
 
-  Widget _buildEntriesList(ThemeData theme, bool isAr) {
-    return ListView.builder(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: _filteredEntries.length,
-      itemBuilder: (context, index) {
-        final entry = _filteredEntries[index];
-        return _buildEntryCard(theme, entry, isAr);
-      },
-    );
-  }
-
-  Widget _buildEntryCard(ThemeData theme, dynamic entry, bool isAr) {
-    final colorScheme = theme.colorScheme;
-    final gold = colorScheme.primary;
-    final cardBg = theme.cardColor;
-    final mutedText = colorScheme.onSurface.withValues(alpha: 0.6);
-    final totals = _calculateEntryTotals(entry);
-    final totalCash = totals['cash']!;
-    final totalGold = totals['gold']!;
-    final date = DateTime.parse(entry['date']);
-    final dateStr = DateFormat('yyyy-MM-dd').format(date);
-
-    final bool isPosted = entry['is_posted'] == true;
-
-    return Dismissible(
-      key: ValueKey(entry['id']),
-      direction: isPosted ? DismissDirection.none : DismissDirection.endToStart,
-      confirmDismiss: (direction) async {
-        if (isPosted) {
-          _showSnackBar('لا يمكن حذف قيد مُرحّل', isError: true);
-          return false;
-        }
-        return await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) {
-            final dialogTheme = Theme.of(dialogContext);
-            final dialogScheme = dialogTheme.colorScheme;
-            return AlertDialog(
-              backgroundColor: dialogScheme.surface,
-              title: Text(
-                'تأكيد الحذف',
-                style: dialogTheme.textTheme.titleLarge?.copyWith(
-                  color: AppColors.error,
-                  fontWeight: FontWeight.bold,
-                ),
+  Widget _buildBody() {
+    if (_error != null && _entries.isEmpty && !_isLoading) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                widget.isArabic ? 'تعذر تحميل البيانات' : 'Unable to load data',
+                style: Theme.of(context).textTheme.titleMedium,
               ),
-              content: Text(
-                'هل تريد حذف القيد "${entry['description']}"؟',
-                style: dialogTheme.textTheme.bodyMedium,
+              const SizedBox(height: 8),
+              Text(_error!, textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => _loadEntries(forceRefresh: true),
+                icon: const Icon(Icons.refresh),
+                label: Text(widget.isArabic ? 'إعادة المحاولة' : 'Retry'),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: Text(
-                    'إلغاء',
-                    style: dialogTheme.textTheme.bodyMedium?.copyWith(
-                      color: dialogScheme.onSurface.withValues(alpha: 0.65),
-                    ),
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(true),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.error,
-                    foregroundColor: dialogScheme.onError,
-                  ),
-                  child: Text('حذف'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-      onDismissed: (direction) {
-        _deleteEntry(entry['id'], entry['description']);
-      },
-      background: Container(
-        margin: EdgeInsets.symmetric(vertical: 4),
-        decoration: BoxDecoration(
-          color: AppColors.error,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        alignment: Alignment.centerRight,
-        padding: EdgeInsets.only(right: 20),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Text(
-              'حذف',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-            SizedBox(width: 8),
-            Icon(Icons.delete, color: Colors.white, size: 28),
-          ],
-        ),
-      ),
-      child: Card(
-        margin: EdgeInsets.symmetric(vertical: 4),
-        elevation: 4,
-        color: cardBg,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: gold.withValues(alpha: 0.2), width: 1),
-        ),
-        child: InkWell(
-          onTap: () => _navigateToAddEditScreen(entry),
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header Row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        // ID Badge
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: gold.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: gold, width: 1),
-                          ),
-                          child: Text(
-                            '#${entry['id']}',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              color: gold,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                          // Posting Status Badge (Draft system deprecated)
-                          ...(() {
-                            final hasIsPosted = entry.containsKey('is_posted');
-                            final bool isPosted = hasIsPosted
-                                ? (entry['is_posted'] == true)
-                                : (entry['is_draft'] != true);
-
-                            final Color statusColor =
-                                isPosted ? Colors.green : Colors.orange;
-                            final IconData statusIcon =
-                                isPosted ? Icons.verified : Icons.pending_actions;
-                            final String statusText =
-                                isPosted ? 'مُرحّل' : 'غير مُرحّل';
-
-                            return [
-                              SizedBox(width: 8),
-                              Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: statusColor.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: statusColor,
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(statusIcon, size: 14, color: statusColor),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      statusText,
-                                      style: theme.textTheme.bodySmall?.copyWith(
-                                        color: statusColor,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ];
-                          })(),
-                        if (entry['entry_type'] != null &&
-                            entry['entry_type'] != 'عادي') ...[
-                          SizedBox(width: 8),
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _getEntryTypeColor(
-                                entry['entry_type'],
-                              ).withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: _getEntryTypeColor(entry['entry_type']),
-                                width: 1,
-                              ),
-                            ),
-                            child: Text(
-                              entry['entry_type'],
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: _getEntryTypeColor(entry['entry_type']),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    // Date
-                    Row(
-                      children: [
-                        Icon(Icons.calendar_today, size: 14, color: mutedText),
-                        SizedBox(width: 4),
-                        Text(
-                          dateStr,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: mutedText,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                SizedBox(height: 12),
-
-                // Description
-                Text(
-                  entry['description'] ?? (isAr ? 'بلا وصف' : 'No description'),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: colorScheme.onSurface,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                SizedBox(height: 12),
-
-                // Amounts Row
-                Row(
-                  children: [
-                    if (totalCash > 0) ...[
-                      Icon(
-                        Icons.monetization_on_outlined,
-                        size: 18,
-                        color: AppColors.success,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        _formatCash(totalCash),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: AppColors.success,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      SizedBox(width: 16),
-                    ],
-                    if (totalGold > 0) ...[
-                      Icon(Icons.balance, size: 18, color: AppColors.darkGold),
-                      SizedBox(width: 6),
-                      Text(
-                        '${totalGold.toStringAsFixed(3)} ${isAr ? 'غ' : 'g'}',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: AppColors.darkGold,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
+            ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-// Filter Dialog Widget
-class _FilterDialog extends StatefulWidget {
-  final DateTimeRange? dateRange;
-  final int? selectedAccountId;
-  final double? minAmount;
-  final double? maxAmount;
-  final List<dynamic> accounts;
-  final bool isArabic;
-  final String currencySymbol;
-  final int currencyDecimalPlaces;
-  final Function(DateTimeRange?, int?, double?, double?) onApply;
-  final VoidCallback onClear;
-
-  const _FilterDialog({
-    required this.dateRange,
-    required this.selectedAccountId,
-    required this.minAmount,
-    required this.maxAmount,
-    required this.accounts,
-    required this.isArabic,
-    required this.currencySymbol,
-    required this.currencyDecimalPlaces,
-    required this.onApply,
-    required this.onClear,
-  });
-
-  @override
-  State<_FilterDialog> createState() => _FilterDialogState();
-}
-
-class _FilterDialogState extends State<_FilterDialog> {
-  DateTimeRange? _dateRange;
-  int? _selectedAccountId;
-  final TextEditingController _minAmountController = TextEditingController();
-  final TextEditingController _maxAmountController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _dateRange = widget.dateRange;
-    _selectedAccountId = widget.selectedAccountId;
-    _minAmountController.text = widget.minAmount != null
-        ? widget.minAmount!.toStringAsFixed(widget.currencyDecimalPlaces)
-        : '';
-    _maxAmountController.text = widget.maxAmount != null
-        ? widget.maxAmount!.toStringAsFixed(widget.currencyDecimalPlaces)
-        : '';
-  }
-
-  @override
-  void dispose() {
-    _minAmountController.dispose();
-    _maxAmountController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _selectDateRange() async {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(Duration(days: 365)),
-      initialDateRange: _dateRange,
-      builder: (context, child) {
-        return Theme(
-          data: theme.copyWith(
-            colorScheme: colorScheme.copyWith(
-              primary: colorScheme.primary,
-              onPrimary: colorScheme.onPrimary,
-              surface: colorScheme.surface,
-              onSurface: colorScheme.onSurface,
-            ),
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
-            ),
-          ),
-          child: child ?? SizedBox.shrink(),
-        );
-      },
-    );
-
-    if (picked != null) {
-      setState(() => _dateRange = picked);
+      );
     }
+
+    if (_isLoading && _entries.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_entries.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    if (_viewMode == _JournalEntriesListView.table) {
+      return Column(
+        children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: _buildJournalTable(),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+            child: _buildPaginationStrip(),
+          ),
+        ],
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => _loadEntries(page: _currentPage, forceRefresh: true),
+      child: ListView(
+        controller: _contentScrollController,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        children: [
+          ..._entries.map(_buildEntryCard),
+          const SizedBox(height: 8),
+          _buildPaginationStrip(),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final isAr = widget.isArabic;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final gold = colorScheme.primary;
-    final onSurface = colorScheme.onSurface;
-    final hintColor = onSurface.withValues(alpha: 0.5);
-    final sortedAccounts = List<dynamic>.from(widget.accounts)
-      ..sort((a, b) {
-        final aNum = int.tryParse(a['account_number']?.toString() ?? '0') ?? 0;
-        final bNum = int.tryParse(b['account_number']?.toString() ?? '0') ?? 0;
-        return aNum.compareTo(bNum);
-      });
-
-    final accountsForPicker = sortedAccounts
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList(growable: false);
-
-    return AlertDialog(
-      backgroundColor: colorScheme.surface,
-      title: Text(
-        isAr ? 'تصفية القيود' : 'Filter Entries',
-        style: theme.textTheme.titleLarge?.copyWith(
-          color: gold,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Date Range
-            Text(
-              isAr ? 'نطاق التاريخ' : 'Date Range',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: onSurface.withValues(alpha: 0.75),
+    return Directionality(
+      textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.isArabic ? 'قيود اليومية' : 'Journal Entries'),
+          actions: [
+            IconButton(
+              tooltip: _viewMode == _JournalEntriesListView.table
+                  ? (widget.isArabic ? 'عرض البطاقات' : 'Card view')
+                  : (widget.isArabic ? 'عرض الجدول' : 'Table view'),
+              icon: Icon(
+                _viewMode == _JournalEntriesListView.table
+                    ? Icons.view_agenda_outlined
+                    : Icons.table_rows_outlined,
               ),
+              onPressed: () {
+                setState(() {
+                  _viewMode = _viewMode == _JournalEntriesListView.table
+                      ? _JournalEntriesListView.cards
+                      : _JournalEntriesListView.table;
+                });
+              },
             ),
-            SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _selectDateRange,
-              icon: Icon(Icons.calendar_today, color: gold, size: 18),
-              label: Text(
-                _dateRange == null
-                    ? (isAr ? 'اختر الفترة' : 'Select Period')
-                    : '${DateFormat('yyyy-MM-dd').format(_dateRange!.start)} - ${DateFormat('yyyy-MM-dd').format(_dateRange!.end)}',
-                style: theme.textTheme.bodyMedium?.copyWith(color: onSurface),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: gold),
-                foregroundColor: gold,
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              ),
+            IconButton(
+              tooltip: widget.isArabic ? 'تحديث' : 'Refresh',
+              icon: const Icon(Icons.refresh),
+              onPressed: () =>
+                  _loadEntries(page: _currentPage, forceRefresh: true),
             ),
-            SizedBox(height: 16),
-
-            // Account Filter
-            Text(
-              isAr ? 'الحساب' : 'Account',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: onSurface.withValues(alpha: 0.75),
-              ),
-            ),
-            SizedBox(height: 8),
-            AccountPickerFormField(
-              context: context,
-              accounts: accountsForPicker,
-              value: _selectedAccountId,
-              isArabic: isAr,
-              labelText: isAr ? 'الحساب' : 'Account',
-              hintText: isAr ? 'جميع الحسابات' : 'All Accounts',
-              title: isAr ? 'اختيار حساب' : 'Select Account',
-              allowClear: true,
-              onChanged: (v) => setState(() => _selectedAccountId = v),
-            ),
-            SizedBox(height: 16),
-
-            // Amount Range
-            Text(
-              isAr ? 'نطاق المبلغ النقدي' : 'Cash Amount Range',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: onSurface.withValues(alpha: 0.75),
-              ),
-            ),
-            SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _minAmountController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    style: theme.textTheme.bodyMedium,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'من' : 'Min',
-                      labelStyle: theme.textTheme.bodySmall?.copyWith(
-                        color: hintColor,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: gold),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: gold, width: 2),
-                      ),
-                      suffixText: widget.currencySymbol,
-                    ),
-                  ),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _maxAmountController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    style: theme.textTheme.bodyMedium,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'إلى' : 'Max',
-                      labelStyle: theme.textTheme.bodySmall?.copyWith(
-                        color: hintColor,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: gold),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: gold, width: 2),
-                      ),
-                      suffixText: widget.currencySymbol,
-                    ),
-                  ),
-                ),
-              ],
+            IconButton(
+              tooltip: widget.isArabic ? 'إضافة قيد' : 'Add entry',
+              icon: const Icon(Icons.add),
+              onPressed: () => _openEditor(),
             ),
           ],
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            widget.onClear();
-            Navigator.pop(context);
-          },
-          child: Text(
-            isAr ? 'مسح الكل' : 'Clear All',
-            style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.error),
-          ),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text(
-            isAr ? 'إلغاء' : 'Cancel',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: onSurface.withValues(alpha: 0.7),
+        body: Column(
+          children: [
+            _buildCollapsibleTopChrome(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _buildManagementToolbar(),
             ),
-          ),
+            if (_isLoading && _entries.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+            Expanded(child: _buildBody()),
+          ],
         ),
-        ElevatedButton(
-          onPressed: () {
-            final minAmt = double.tryParse(_minAmountController.text);
-            final maxAmt = double.tryParse(_maxAmountController.text);
-            widget.onApply(_dateRange, _selectedAccountId, minAmt, maxAmt);
-            Navigator.pop(context);
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: gold,
-            foregroundColor: colorScheme.onPrimary,
-          ),
-          child: Text(isAr ? 'تطبيق' : 'Apply'),
-        ),
-      ],
+      ),
     );
   }
 }

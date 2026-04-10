@@ -1081,8 +1081,16 @@ class ApiService {
     String sortBy = 'date',
     String sortOrder = 'desc',
     String search = '',
+    String searchType = 'all',
     String status = 'all',
     String? invoiceType,
+    List<String>? invoiceTypes,
+    String? invoiceGroup,
+    String? party,
+    String? creator,
+    int? employeeId,
+    String? karat,
+    String? goldType,
     DateTime? dateFrom,
     DateTime? dateTo,
   }) async {
@@ -1092,11 +1100,33 @@ class ApiService {
       'sort_by': sortBy,
       'sort_order': sortOrder,
       'search': search,
+      'search_type': searchType,
       'status': status,
     };
 
     if (invoiceType != null && invoiceType != 'الكل') {
       queryParameters['invoice_type'] = invoiceType;
+    }
+    if (invoiceTypes != null && invoiceTypes.isNotEmpty) {
+      queryParameters['invoice_types'] = invoiceTypes.join(',');
+    }
+    if (invoiceGroup != null && invoiceGroup != 'all') {
+      queryParameters['invoice_group'] = invoiceGroup;
+    }
+    if (party != null && party.trim().isNotEmpty) {
+      queryParameters['party'] = party.trim();
+    }
+    if (creator != null && creator.trim().isNotEmpty) {
+      queryParameters['creator'] = creator.trim();
+    }
+    if (employeeId != null) {
+      queryParameters['employee_id'] = employeeId.toString();
+    }
+    if (karat != null && karat.trim().isNotEmpty) {
+      queryParameters['karat'] = karat.trim();
+    }
+    if (goldType != null && goldType != 'all') {
+      queryParameters['gold_type'] = goldType;
     }
     if (dateFrom != null) {
       queryParameters['date_from'] = dateFrom.toIso8601String();
@@ -1810,7 +1840,68 @@ class ApiService {
 
   // Journal Entry Methods
   Future<List<dynamic>> getJournalEntries() async {
-    final response = await _authedGet(Uri.parse('$_baseUrl/journal_entries'));
+    final uri = Uri.parse(
+      '$_baseUrl/journal_entries',
+    ).replace(queryParameters: {'format': 'list'});
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('Failed to load journal entries');
+    }
+  }
+
+  Future<Map<String, dynamic>> getJournalEntriesPage({
+    int page = 1,
+    int perPage = 20,
+    String sortBy = 'date',
+    String sortOrder = 'desc',
+    String search = '',
+    String searchType = 'all',
+    String status = 'all',
+    String entryType = 'all',
+    int? accountId,
+    String? creator,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    double? minCash,
+    double? maxCash,
+  }) async {
+    final Map<String, String> queryParameters = {
+      'page': page.toString(),
+      'per_page': perPage.toString(),
+      'sort_by': sortBy,
+      'sort_order': sortOrder,
+      'search': search,
+      'search_type': searchType,
+      'status': status,
+      'entry_type': entryType,
+    };
+
+    if (accountId != null) {
+      queryParameters['account_id'] = accountId.toString();
+    }
+    if (creator != null && creator.trim().isNotEmpty) {
+      queryParameters['creator'] = creator.trim();
+    }
+    if (dateFrom != null) {
+      queryParameters['date_from'] = dateFrom.toIso8601String();
+    }
+    if (dateTo != null) {
+      queryParameters['date_to'] = dateTo.toIso8601String();
+    }
+    if (minCash != null) {
+      queryParameters['min_cash'] = minCash.toString();
+    }
+    if (maxCash != null) {
+      queryParameters['max_cash'] = maxCash.toString();
+    }
+
+    final uri = Uri.parse(
+      '$_baseUrl/journal_entries',
+    ).replace(queryParameters: queryParameters);
+    final response = await _authedGet(uri);
+
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
@@ -2988,6 +3079,11 @@ class ApiService {
     String? dateFrom,
     String? dateTo,
     String? search,
+    String? searchType,
+    String? creator,
+    String? party,
+    String? sortBy,
+    String? sortOrder,
     String? referenceType, // invoice, voucher, journal_entry, manual
     int? referenceId,
   }) async {
@@ -3010,6 +3106,21 @@ class ApiService {
     }
     if (search != null && search.isNotEmpty) {
       queryParameters['search'] = search;
+    }
+    if (searchType != null && searchType.isNotEmpty && searchType != 'all') {
+      queryParameters['search_type'] = searchType;
+    }
+    if (creator != null && creator.isNotEmpty) {
+      queryParameters['creator'] = creator;
+    }
+    if (party != null && party.isNotEmpty) {
+      queryParameters['party'] = party;
+    }
+    if (sortBy != null && sortBy.isNotEmpty) {
+      queryParameters['sort_by'] = sortBy;
+    }
+    if (sortOrder != null && sortOrder.isNotEmpty) {
+      queryParameters['sort_order'] = sortOrder;
     }
 
     if (referenceType != null && referenceType.isNotEmpty) {

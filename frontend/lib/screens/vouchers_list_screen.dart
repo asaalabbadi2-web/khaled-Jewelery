@@ -26,26 +26,42 @@ class VouchersListScreen extends StatefulWidget {
   State<VouchersListScreen> createState() => _VouchersListScreenState();
 }
 
+enum _VoucherListView { table, cards }
+
 class _VouchersListScreenState extends State<VouchersListScreen>
     with SingleTickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _voucherTableHorizontalController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
+  final GlobalKey _topChromeKey = GlobalKey();
 
   List<dynamic> _vouchers = [];
+  Map<String, dynamic> _currentSummary = const {};
+  List<String> _availableParties = const [];
+  List<String> _availableCreators = const [];
   bool _isLoading = true;
   String? _error;
   int _currentPage = 1;
   int _totalPages = 1;
-  bool _isFetchingMore = false;
+  int _totalVouchers = 0;
+  int _perPage = 20;
   Timer? _debounce;
 
   // Filters
   String _selectedType = 'all'; // all, receipt, payment, adjustment
-  String _selectedStatus = 'all'; // all, active, cancelled
+  String _selectedStatus = 'all';
   DateTime? _dateFrom;
   DateTime? _dateTo;
   String _searchQuery = '';
+  String _selectedSearchType = 'all';
+  String? _selectedCreator;
+  String? _selectedParty;
+  String _sortBy = 'date';
+  bool _sortAscending = false;
+  _VoucherListView _viewMode = _VoucherListView.table;
+  double _topChromeHeight = 0;
+  double _topChromeCollapseOffset = 0;
 
   final NumberFormat _currencyFormat = NumberFormat('#,##0.00', 'ar');
   final NumberFormat _goldFormat = NumberFormat('#,##0.000', 'ar');
@@ -55,9 +71,9 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
-    _scrollController.addListener(_onScroll);
+    _scrollController.addListener(_onContentScroll);
     _searchController.addListener(_onSearchChanged);
 
     // Avoid 403 spam for users without vouchers permissions
@@ -79,18 +95,41 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   void dispose() {
     _tabController.dispose();
     _scrollController.dispose();
+    _voucherTableHorizontalController.dispose();
     _searchController.dispose();
     _debounce?.cancel();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (_scrollController.position.pixels >=
-            _scrollController.position.maxScrollExtent - 200 &&
-        !_isFetchingMore &&
-        _currentPage < _totalPages) {
-      _loadVouchers(page: _currentPage + 1);
+  void _onContentScroll() {
+    final nextOffset = _scrollController.hasClients
+        ? _scrollController.offset.clamp(0.0, _topChromeHeight)
+        : 0.0;
+    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
+      return;
     }
+    setState(() {
+      _topChromeCollapseOffset = nextOffset;
+    });
+  }
+
+  void _measureTopChrome() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _topChromeKey.currentContext;
+      if (context == null) return;
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderBox) return;
+      final measuredHeight = renderObject.size.height;
+      if (measuredHeight <= 0) return;
+      if ((measuredHeight - _topChromeHeight).abs() < 0.5) return;
+      setState(() {
+        _topChromeHeight = measuredHeight;
+        if (_topChromeCollapseOffset > measuredHeight) {
+          _topChromeCollapseOffset = measuredHeight;
+        }
+      });
+    });
   }
 
   void _onSearchChanged() {
@@ -99,8 +138,9 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       if (_searchQuery != _searchController.text) {
         setState(() {
           _searchQuery = _searchController.text;
+          _currentPage = 1;
         });
-        _loadVouchers();
+        _loadVouchers(page: 1);
       }
     });
   }
@@ -118,43 +158,77 @@ class _VouchersListScreenState extends State<VouchersListScreen>
           case 2:
             _selectedType = 'payment';
             break;
+          case 3:
+            _selectedType = 'adjustment';
+            break;
         }
+        _currentPage = 1;
       });
-      _loadVouchers();
+      _loadVouchers(page: 1);
     }
   }
 
   Future<void> _loadVouchers({int page = 1}) async {
-    if (page == 1) {
-      setState(() {
-        _isLoading = true;
-        _vouchers.clear();
-        _currentPage = 1;
+    setState(() {
+      _isLoading = true;
+      if (page == 1) {
         _error = null;
-        _isFetchingMore = true;
-      });
-    }
+      }
+    });
 
     try {
       final data = await _apiService.getVouchers(
         page: page,
+        perPage: _perPage,
         type: _selectedType,
         status: _selectedStatus,
         dateFrom: _dateFrom?.toIso8601String(),
         dateTo: _dateTo?.toIso8601String(),
         search: _searchQuery,
+        searchType: _selectedSearchType,
+        creator: _selectedCreator,
+        party: _selectedParty,
+        sortBy: _sortBy,
+        sortOrder: _sortAscending ? 'asc' : 'desc',
       );
 
       if (!mounted) return;
 
+      final vouchers = data['vouchers'] is List
+          ? List<dynamic>.from(data['vouchers'] as List)
+          : <dynamic>[];
+      final summary = data['current_summary'] is Map
+          ? Map<String, dynamic>.from(data['current_summary'] as Map)
+          : <String, dynamic>{};
+
+      final availableParties =
+          (data['available_parties'] as List?)
+              ?.whereType<Map>()
+              .map((entry) => (entry['name'] ?? '').toString().trim())
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList() ??
+          <String>[];
+      final availableCreators =
+          (data['available_creators'] as List?)
+              ?.whereType<Map>()
+              .map((entry) => (entry['name'] ?? '').toString().trim())
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList() ??
+          <String>[];
+      availableParties.sort();
+      availableCreators.sort();
+
       setState(() {
-        if (page == 1) {
-          _vouchers = data['vouchers'];
-        } else {
-          _vouchers.addAll(data['vouchers']);
-        }
-        _currentPage = data['current_page'];
-        _totalPages = data['pages'];
+        _vouchers = vouchers;
+        _currentPage = (data['current_page'] as num?)?.toInt() ?? page;
+        _totalPages = ((data['pages'] as num?)?.toInt() ?? 1).clamp(1, 999999);
+        _totalVouchers = (data['total'] as num?)?.toInt() ?? vouchers.length;
+        _perPage = (data['per_page'] as num?)?.toInt() ?? _perPage;
+        _currentSummary = summary;
+        _availableParties = availableParties;
+        _availableCreators = availableCreators;
         _error = null;
       });
     } catch (e) {
@@ -166,7 +240,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _isFetchingMore = false;
         });
       }
     }
@@ -313,7 +386,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   Future<void> _approveAllPending() async {
     final pending = _vouchers.where((v) {
       final status = (v['status'] ?? '').toString();
-      return status != 'approved' && status != 'cancelled';
+      return status == 'pending';
     }).toList();
 
     if (pending.isEmpty) {
@@ -439,18 +512,16 @@ class _VouchersListScreenState extends State<VouchersListScreen>
         ),
       ),
       leading: IconButton(
-        icon: Icon(
-          Icons.arrow_back,
-          color: appBarForeground,
-        ),
+        icon: Icon(Icons.arrow_back, color: appBarForeground),
         onPressed: () => Navigator.of(context).pop(),
       ),
       title: SafeArea(
         top: true,
         child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(20, 12, 16, 12),
+          padding: const EdgeInsetsDirectional.fromSTEB(18, 8, 16, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
                 'السندات',
@@ -475,11 +546,9 @@ class _VouchersListScreenState extends State<VouchersListScreen>
         ),
       ),
       bottom: PreferredSize(
-        preferredSize: Size.fromHeight(
-          72 + MediaQuery.of(context).padding.top,
-        ),
+        preferredSize: Size.fromHeight(58 + MediaQuery.of(context).padding.top),
         child: Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 10),
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 8),
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: _withAlpha(Colors.white, 0.22),
@@ -523,9 +592,26 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                 dividerColor: Colors.transparent,
                 tabAlignment: TabAlignment.fill,
                 tabs: [
-                  Tab(icon: Icon(Icons.list_alt, size: 18), height: 48, text: 'الكل'),
-                  Tab(icon: Icon(Icons.call_received, size: 18), height: 48, text: 'قبض'),
-                  Tab(icon: Icon(Icons.call_made, size: 18), height: 48, text: 'صرف'),
+                  Tab(
+                    icon: Icon(Icons.list_alt, size: 17),
+                    height: 42,
+                    text: 'الكل',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.call_received, size: 17),
+                    height: 42,
+                    text: 'قبض',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.call_made, size: 17),
+                    height: 42,
+                    text: 'صرف',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.balance, size: 17),
+                    height: 42,
+                    text: 'تسوية',
+                  ),
                 ],
               ),
             ),
@@ -534,9 +620,21 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       ),
       actions: [
         IconButton(
-          tooltip: 'الفلاتر',
-          icon: const Icon(Icons.filter_alt_outlined),
-          onPressed: _showFiltersDialog,
+          tooltip: _viewMode == _VoucherListView.table
+              ? 'عرض بطاقات'
+              : 'عرض جدول',
+          icon: Icon(
+            _viewMode == _VoucherListView.table
+                ? Icons.view_agenda_outlined
+                : Icons.table_rows_outlined,
+          ),
+          onPressed: () {
+            setState(() {
+              _viewMode = _viewMode == _VoucherListView.table
+                  ? _VoucherListView.cards
+                  : _VoucherListView.table;
+            });
+          },
         ),
         IconButton(
           tooltip: 'تحديث',
@@ -594,30 +692,105 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       return _buildErrorState(themeData);
     }
 
-    return RefreshIndicator(
-      onRefresh: _refresh,
-      color: theme.AppColors.primaryGold,
-      displacement: 80,
-      child: CustomScrollView(
-        controller: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(child: _buildHeaderSection(themeData)),
-          if (_vouchers.isEmpty)
-            SliverToBoxAdapter(child: _buildEmptyState(themeData))
-          else
-            SliverList(
-              delegate: SliverChildBuilderDelegate((context, index) {
-                if (index >= _vouchers.length) {
-                  return _buildPaginationLoader();
-                }
-                return _buildVoucherCard(_vouchers[index], themeData);
-              }, childCount: _vouchers.length + (_isFetchingMore ? 1 : 0)),
-            ),
-          SliverToBoxAdapter(
-            child: SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
+    return Column(
+      children: [
+        _buildCollapsibleTopChrome(themeData),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: _buildManagementToolbar(themeData),
+        ),
+        Expanded(
+          child: _viewMode == _VoucherListView.table
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: _vouchers.isEmpty
+                            ? _buildEmptyState(themeData)
+                            : _buildVoucherTable(themeData),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.only(
+                          top: 8,
+                          bottom: MediaQuery.of(context).padding.bottom + 8,
+                        ),
+                        child: _buildPaginationStrip(themeData),
+                      ),
+                    ],
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _refresh,
+                  color: theme.AppColors.primaryGold,
+                  displacement: 80,
+                  child: ListView(
+                    controller: _scrollController,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.only(
+                      left: 16,
+                      top: 8,
+                      right: 16,
+                      bottom: MediaQuery.of(context).padding.bottom + 24,
+                    ),
+                    children: [
+                      if (_isLoading && _vouchers.isNotEmpty)
+                        _buildPaginationLoader(),
+                      if (_vouchers.isEmpty)
+                        _buildEmptyState(themeData)
+                      else
+                        _buildResultsSection(themeData),
+                      _buildPaginationStrip(themeData),
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCollapsibleTopChrome(ThemeData themeData) {
+    final content = KeyedSubtree(
+      key: _topChromeKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildHeaderSection(themeData),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            child: _buildSummarySection(themeData),
           ),
         ],
+      ),
+    );
+
+    _measureTopChrome();
+
+    if (_topChromeHeight <= 0) {
+      return content;
+    }
+
+    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
+    final visibleHeight = (_topChromeHeight - collapse).clamp(
+      0.0,
+      _topChromeHeight,
+    );
+    if (visibleHeight <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    return ClipRect(
+      child: SizedBox(
+        height: visibleHeight,
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          minHeight: _topChromeHeight,
+          maxHeight: _topChromeHeight,
+          child: Transform.translate(
+            offset: Offset(0, -collapse),
+            child: content,
+          ),
+        ),
       ),
     );
   }
@@ -661,7 +834,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   Widget _buildHeaderSection(ThemeData themeData) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [theme.AppColors.primaryGold, theme.AppColors.mediumGold],
@@ -675,55 +848,127 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSearchCard(themeData),
-          const SizedBox(height: 10),
-          _buildStatusFilters(themeData),
-        ],
+        children: [_buildStatusFilters(themeData)],
       ),
     );
   }
 
-  Widget _buildSearchCard(ThemeData themeData) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      decoration: BoxDecoration(
-        color: themeData.colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: _withAlpha(Colors.black, 0.12),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
+  Widget _buildToolbarSearchField(ThemeData themeData) {
+    final searchType = _selectedSearchType;
+
+    return SizedBox(
+      width: 430,
+      child: TextField(
+        controller: _searchController,
+        textInputAction: TextInputAction.search,
+        onSubmitted: (_) {
+          _debounce?.cancel();
+          setState(() {
+            _searchQuery = _searchController.text;
+            _currentPage = 1;
+          });
+          _loadVouchers(page: 1);
+        },
+        decoration: InputDecoration(
+          hintText: _searchHint(searchType),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 12,
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'بحث سريع',
-            style: themeData.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+          hintStyle: themeData.textTheme.bodyMedium?.copyWith(
+            color: _withAlpha(themeData.colorScheme.onSurface, 0.42),
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'ابحث برقم السند، البيان أو اسم العميل',
-              prefixIcon: Icon(Icons.search, color: theme.AppColors.darkGold),
-              suffixIcon: _searchQuery.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      tooltip: 'مسح البحث',
-                      onPressed: _clearSearch,
+          prefixIconConstraints: const BoxConstraints(minWidth: 164),
+          prefixIcon: Padding(
+            padding: const EdgeInsetsDirectional.only(start: 8, end: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.search, color: theme.AppColors.darkGold, size: 18),
+                const SizedBox(width: 6),
+                PopupMenuButton<String>(
+                  tooltip: 'نوع البحث',
+                  initialValue: searchType,
+                  onSelected: (value) async {
+                    setState(() {
+                      _selectedSearchType = value;
+                      _currentPage = 1;
+                    });
+                    await _loadVouchers(page: 1);
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem<String>(value: 'all', child: Text('الكل')),
+                    PopupMenuItem<String>(
+                      value: 'number',
+                      child: Text('رقم السند'),
                     ),
+                    PopupMenuItem<String>(value: 'party', child: Text('الطرف')),
+                    PopupMenuItem<String>(
+                      value: 'description',
+                      child: Text('البيان'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'amount',
+                      child: Text('المبلغ'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'reference',
+                      child: Text('المرجع'),
+                    ),
+                  ],
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: themeData.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: themeData.colorScheme.outline.withValues(
+                          alpha: 0.16,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _searchTypeLabel(searchType),
+                          style: themeData.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: _withAlpha(
+                              themeData.colorScheme.onSurface,
+                              0.78,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.arrow_drop_down,
+                          size: 18,
+                          color: _withAlpha(
+                            themeData.colorScheme.onSurface,
+                            0.65,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+          suffixIcon: _searchQuery.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear),
+                  tooltip: 'مسح البحث',
+                  onPressed: _clearSearch,
+                ),
+        ),
       ),
     );
   }
@@ -731,13 +976,19 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   Widget _buildStatusFilters(ThemeData themeData) {
     final statuses = [
       {'value': 'all', 'label': 'كل الحالات', 'icon': Icons.all_inclusive},
-      {'value': 'active', 'label': 'نشط', 'icon': Icons.verified_outlined},
+      {
+        'value': 'pending',
+        'label': 'معلق',
+        'icon': Icons.pending_actions_outlined,
+      },
+      {'value': 'approved', 'label': 'معتمد', 'icon': Icons.verified_outlined},
       {'value': 'cancelled', 'label': 'ملغى', 'icon': Icons.cancel_outlined},
+      {'value': 'rejected', 'label': 'مرفوض', 'icon': Icons.gpp_bad_outlined},
     ];
 
     return Wrap(
-      spacing: 12,
-      runSpacing: 12,
+      spacing: 8,
+      runSpacing: 8,
       children: statuses.map((status) {
         final bool selected = _selectedStatus == status['value'];
         // Make the label text gold for all status chips per request.
@@ -752,7 +1003,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
             children: [
               Icon(
                 status['icon'] as IconData,
-                size: 18,
+                size: 16,
                 color: selected
                     ? theme.AppColors.darkGold
                     : _withAlpha(theme.AppColors.darkGold, 0.9),
@@ -772,14 +1023,15 @@ class _VouchersListScreenState extends State<VouchersListScreen>
             if (!value || _selectedStatus == status['value']) return;
             setState(() {
               _selectedStatus = status['value'] as String;
+              _currentPage = 1;
             });
-            _loadVouchers();
+            _loadVouchers(page: 1);
           },
           backgroundColor: background,
           selectedColor: Colors.white,
           pressElevation: 0,
           elevation: 0,
-          labelPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          labelPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           shape: StadiumBorder(
             side: BorderSide(
               color: _withAlpha(Colors.white, selected ? 0 : 0.3),
@@ -790,12 +1042,1219 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     );
   }
 
+  int get _activeFiltersCount {
+    int count = 0;
+    if (_searchController.text.isNotEmpty) count++;
+    if (_selectedSearchType != 'all') count++;
+    if (_selectedStatus != 'all') count++;
+    if (_selectedParty != null) count++;
+    if (_selectedCreator != null) count++;
+    if (_dateFrom != null || _dateTo != null) count++;
+    if (_sortBy != 'date' || _sortAscending) count++;
+    return count;
+  }
+
+  List<int> _buildPageNumbers() {
+    if (_totalPages <= 7) {
+      return List.generate(_totalPages, (i) => i + 1);
+    }
+    final pages = <int>[1];
+    final start = (_currentPage - 2).clamp(2, _totalPages - 1);
+    final end = (_currentPage + 2).clamp(2, _totalPages - 1);
+    if (start > 2) pages.add(-1);
+    for (int page = start; page <= end; page++) {
+      pages.add(page);
+    }
+    if (end < _totalPages - 1) pages.add(-1);
+    pages.add(_totalPages);
+    return pages;
+  }
+
+  Widget _buildSummarySection(ThemeData themeData) {
+    final totalVouchers =
+        (_currentSummary['total_vouchers'] as num?)?.toInt() ?? _totalVouchers;
+    final totalCash = _toDouble(_currentSummary['total_cash']) ?? 0.0;
+    final totalGold =
+        _toDouble(_currentSummary['total_gold_main_karat']) ??
+        _toDouble(_currentSummary['total_gold']) ??
+        0.0;
+    final pendingCount =
+        (_currentSummary['pending_count'] as num?)?.toInt() ?? 0;
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _buildSummaryCard(
+          themeData,
+          title: 'إجمالي السندات',
+          value: '$totalVouchers',
+          subtitle: 'بعد الفلاتر الحالية',
+          icon: Icons.receipt_long_outlined,
+          color: theme.AppColors.darkGold,
+        ),
+        _buildSummaryCard(
+          themeData,
+          title: 'إجمالي النقد',
+          value: '${_currencyFormat.format(totalCash)} ر.س',
+          subtitle: 'لكل النتائج المطابقة',
+          icon: Icons.payments_outlined,
+          color: const Color(0xFF2F80ED),
+        ),
+        _buildSummaryCard(
+          themeData,
+          title: 'إجمالي الذهب',
+          value: '${_goldFormat.format(totalGold)} غ',
+          subtitle: 'بالمكافئ على العيار الرئيسي',
+          icon: Icons.scale_outlined,
+          color: const Color(0xFFD4A017),
+          emphasize: true,
+        ),
+        _buildSummaryCard(
+          themeData,
+          title: 'سندات معلقة',
+          value: '$pendingCount',
+          subtitle: 'جاهزة للمراجعة والاعتماد',
+          icon: Icons.pending_actions_outlined,
+          color: theme.AppColors.info,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryCard(
+    ThemeData themeData, {
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    bool emphasize = false,
+  }) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 180, maxWidth: 250),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: emphasize
+              ? LinearGradient(
+                  colors: [
+                    _withAlpha(color, 0.14),
+                    themeData.colorScheme.surface,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : null,
+          color: emphasize ? null : themeData.colorScheme.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _withAlpha(color, emphasize ? 0.28 : 0.16)),
+          boxShadow: [
+            BoxShadow(
+              color: _withAlpha(Colors.black, 0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: _withAlpha(color, 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: themeData.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    style: themeData.textTheme.titleMedium?.copyWith(
+                      fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: themeData.textTheme.bodySmall?.copyWith(
+                      color: _withAlpha(themeData.colorScheme.onSurface, 0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildManagementToolbar(ThemeData themeData) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: themeData.colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: themeData.colorScheme.outline.withValues(alpha: 0.14),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                'إدارة النتائج: $_totalVouchers سجل',
+                style: themeData.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: themeData.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  'الفلاتر النشطة: $_activeFiltersCount',
+                  style: themeData.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: _withAlpha(themeData.colorScheme.onSurface, 0.72),
+                  ),
+                ),
+              ),
+              if (_activeFiltersCount > 0)
+                TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.close, size: 16),
+                  label: const Text('مسح الفلاتر'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildToolbarSearchField(themeData),
+              SizedBox(
+                width: 200,
+                child: DropdownButtonFormField<String?>(
+                  isExpanded: true,
+                  value: _selectedParty,
+                  decoration: _compactFilterDecoration('الطرف'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('الكل'),
+                    ),
+                    ..._availableParties.map(
+                      (party) => DropdownMenuItem<String?>(
+                        value: party,
+                        child: SizedBox(
+                          width: 180,
+                          child: Text(
+                            party,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) async {
+                    setState(() {
+                      _selectedParty = value;
+                      _currentPage = 1;
+                    });
+                    await _loadVouchers(page: 1);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 190,
+                child: DropdownButtonFormField<String?>(
+                  isExpanded: true,
+                  value: _selectedCreator,
+                  decoration: _compactFilterDecoration('المنشئ'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('الكل'),
+                    ),
+                    ..._availableCreators.map(
+                      (creator) => DropdownMenuItem<String?>(
+                        value: creator,
+                        child: SizedBox(
+                          width: 180,
+                          child: Text(
+                            creator,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) async {
+                    setState(() {
+                      _selectedCreator = value;
+                      _currentPage = 1;
+                    });
+                    await _loadVouchers(page: 1);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 160,
+                child: DropdownButtonFormField<String>(
+                  value: _sortBy,
+                  isExpanded: true,
+                  decoration: _compactFilterDecoration('الترتيب'),
+                  items: const [
+                    DropdownMenuItem(value: 'date', child: Text('التاريخ')),
+                    DropdownMenuItem(value: 'number', child: Text('رقم السند')),
+                    DropdownMenuItem(value: 'party', child: Text('الطرف')),
+                    DropdownMenuItem(value: 'creator', child: Text('المنشئ')),
+                    DropdownMenuItem(
+                      value: 'cash',
+                      child: Text('المبلغ النقدي'),
+                    ),
+                    DropdownMenuItem(value: 'gold', child: Text('الذهب')),
+                    DropdownMenuItem(value: 'status', child: Text('الحالة')),
+                    DropdownMenuItem(value: 'type', child: Text('النوع')),
+                    DropdownMenuItem(value: 'reference', child: Text('المرجع')),
+                  ],
+                  onChanged: (value) async {
+                    if (value == null) return;
+                    setState(() {
+                      _sortBy = value;
+                      _currentPage = 1;
+                    });
+                    await _loadVouchers(page: 1);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 100,
+                child: DropdownButtonFormField<int>(
+                  value: _perPage,
+                  decoration: _compactFilterDecoration('الصفوف'),
+                  items: const [10, 20, 50, 100]
+                      .map(
+                        (value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text('$value'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) async {
+                    if (value == null || value == _perPage) return;
+                    setState(() {
+                      _perPage = value;
+                      _currentPage = 1;
+                    });
+                    await _loadVouchers(page: 1);
+                  },
+                ),
+              ),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  minimumSize: const Size(0, 44),
+                ),
+                onPressed: () async {
+                  final picked = await showDateRangePicker(
+                    context: context,
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                    initialDateRange: _dateFrom != null && _dateTo != null
+                        ? DateTimeRange(start: _dateFrom!, end: _dateTo!)
+                        : null,
+                  );
+                  if (picked == null) return;
+                  setState(() {
+                    _dateFrom = picked.start;
+                    _dateTo = picked.end;
+                    _currentPage = 1;
+                  });
+                  await _loadVouchers(page: 1);
+                },
+                icon: const Icon(Icons.date_range_outlined, size: 18),
+                label: Text(
+                  _dateFrom == null || _dateTo == null
+                      ? 'من - إلى'
+                      : '${DateFormat('dd/MM/yyyy').format(_dateFrom!)} - ${DateFormat('dd/MM/yyyy').format(_dateTo!)}',
+                ),
+              ),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  minimumSize: const Size(0, 44),
+                ),
+                onPressed: () async {
+                  setState(() {
+                    _sortAscending = !_sortAscending;
+                    _currentPage = 1;
+                  });
+                  await _loadVouchers(page: 1);
+                },
+                icon: Icon(
+                  _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                  size: 18,
+                ),
+                label: Text(_sortAscending ? 'تصاعدي' : 'تنازلي'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _compactFilterDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    );
+  }
+
+  Widget _buildResultsSection(ThemeData themeData) {
+    if (_viewMode == _VoucherListView.cards) {
+      return Column(
+        children: _vouchers
+            .map(
+              (voucher) => _buildVoucherCard(
+                Map<String, dynamic>.from(voucher as Map),
+                themeData,
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    return _buildVoucherTable(themeData);
+  }
+
+  Widget _buildVoucherTable(ThemeData themeData) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final widths = <String, double>{
+          'number': 138,
+          'party': 168,
+          'creator': 112,
+          'date': 116,
+          'type': 100,
+          'cash': 146,
+          'gold': 156,
+          'status': 108,
+          'reference': 146,
+          'actions': 56,
+        };
+        final viewportWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width - 36;
+        final tableContentWidth = widths.values.fold<double>(
+          0,
+          (sum, width) => sum + width,
+        );
+        final tableWidth = math.max(viewportWidth, tableContentWidth);
+        final extraWidth = tableWidth - tableContentWidth;
+        if (extraWidth > 0) {
+          widths['party'] = widths['party']! + (extraWidth * 0.45);
+          widths['reference'] = widths['reference']! + (extraWidth * 0.35);
+          widths['creator'] = widths['creator']! + (extraWidth * 0.20);
+        }
+
+        final tableHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : 480.0;
+
+        return Container(
+          decoration: BoxDecoration(
+            color: themeData.colorScheme.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: themeData.colorScheme.outline.withValues(alpha: 0.12),
+            ),
+          ),
+          child: SingleChildScrollView(
+            controller: _voucherTableHorizontalController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: tableWidth,
+              height: tableHeight,
+              child: Column(
+                children: [
+                  _buildVoucherStickyHeader(themeData, widths),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _refresh,
+                      color: theme.AppColors.primaryGold,
+                      child: ListView.builder(
+                        controller: _scrollController,
+                        padding: EdgeInsets.zero,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: _vouchers.length,
+                        itemBuilder: (context, rowIndex) {
+                          final voucher = Map<String, dynamic>.from(
+                            _vouchers[rowIndex] as Map,
+                          );
+                          return _buildVoucherStickyRow(
+                            themeData: themeData,
+                            voucher: voucher,
+                            rowIndex: rowIndex,
+                            widths: widths,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildVoucherStickyHeader(
+    ThemeData themeData,
+    Map<String, double> widths,
+  ) {
+    return Container(
+      height: 64,
+      decoration: BoxDecoration(
+        color: themeData.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.45,
+        ),
+        border: Border(
+          bottom: BorderSide(
+            color: themeData.colorScheme.outline.withValues(alpha: 0.18),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          _buildVoucherHeaderCell(
+            label: 'رقم',
+            width: widths['number']!,
+            onTap: () =>
+                _changeSort('number', !(_sortBy == 'number' && _sortAscending)),
+            isActive: _sortBy == 'number',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: 'الطرف',
+            width: widths['party']!,
+            onTap: () =>
+                _changeSort('party', !(_sortBy == 'party' && _sortAscending)),
+            isActive: _sortBy == 'party',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: 'المنشئ',
+            width: widths['creator']!,
+            onTap: () => _changeSort(
+              'creator',
+              !(_sortBy == 'creator' && _sortAscending),
+            ),
+            isActive: _sortBy == 'creator',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: 'التاريخ',
+            width: widths['date']!,
+            onTap: () =>
+                _changeSort('date', !(_sortBy == 'date' && _sortAscending)),
+            isActive: _sortBy == 'date',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: 'النوع',
+            width: widths['type']!,
+            onTap: () =>
+                _changeSort('type', !(_sortBy == 'type' && _sortAscending)),
+            isActive: _sortBy == 'type',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherMetricHeaderCell(
+            label: 'النقد',
+            unit: 'ر.س',
+            width: widths['cash']!,
+            icon: Icons.payments_outlined,
+            color: const Color(0xFF2F80ED),
+            onTap: () =>
+                _changeSort('cash', !(_sortBy == 'cash' && _sortAscending)),
+            isActive: _sortBy == 'cash',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherMetricHeaderCell(
+            label: 'وزن الذهب',
+            unit: 'غ',
+            width: widths['gold']!,
+            icon: Icons.scale_outlined,
+            color: const Color(0xFFD4A017),
+            onTap: () =>
+                _changeSort('gold', !(_sortBy == 'gold' && _sortAscending)),
+            isActive: _sortBy == 'gold',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: 'الحالة',
+            width: widths['status']!,
+            onTap: () =>
+                _changeSort('status', !(_sortBy == 'status' && _sortAscending)),
+            isActive: _sortBy == 'status',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: 'المرجع',
+            width: widths['reference']!,
+            onTap: () => _changeSort(
+              'reference',
+              !(_sortBy == 'reference' && _sortAscending),
+            ),
+            isActive: _sortBy == 'reference',
+            ascending: _sortAscending,
+          ),
+          _buildVoucherHeaderCell(
+            label: '⋮',
+            width: widths['actions']!,
+            alignment: Alignment.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVoucherStickyRow({
+    required ThemeData themeData,
+    required Map<String, dynamic> voucher,
+    required int rowIndex,
+    required Map<String, double> widths,
+  }) {
+    final status = (voucher['status'] ?? 'pending').toString();
+    final statusVisuals = _resolveVoucherStatusVisuals(status);
+    final visuals = _resolveVoucherVisuals(
+      (voucher['voucher_type'] ?? '').toString(),
+    );
+
+    return Material(
+      color: rowIndex.isEven
+          ? _withAlpha(themeData.colorScheme.surfaceContainerHighest, 0.14)
+          : themeData.colorScheme.surface,
+      child: InkWell(
+        onTap: () => _navigateToVoucherDetails((voucher['id'] as num).toInt()),
+        child: Container(
+          height: 60,
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: themeData.colorScheme.outline.withValues(alpha: 0.1),
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              _buildVoucherBodyCell(
+                width: widths['number']!,
+                child: Text(
+                  (voucher['voucher_number'] ?? '—').toString(),
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: themeData.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: themeData.colorScheme.primary,
+                  ),
+                ),
+              ),
+              _buildVoucherBodyCell(
+                width: widths['party']!,
+                child: Text(
+                  _resolveVoucherPartyName(voucher).isEmpty
+                      ? '—'
+                      : _resolveVoucherPartyName(voucher),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: themeData.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              _buildVoucherBodyCell(
+                width: widths['creator']!,
+                child: Text(
+                  _resolveVoucherCreatorName(voucher),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: themeData.textTheme.bodySmall,
+                ),
+              ),
+              _buildVoucherBodyCell(
+                width: widths['date']!,
+                child: Text(
+                  _formatDate(voucher['date']),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              _buildVoucherBodyCell(
+                width: widths['type']!,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(visuals.icon, size: 16, color: visuals.color),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        visuals.label,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _buildVoucherMetricValueCell(
+                width: widths['cash']!,
+                value: _formatCurrency(voucher['amount_cash']) ?? '—',
+                icon: Icons.payments_outlined,
+                color: const Color(0xFF2F80ED),
+                emphasize: false,
+              ),
+              _buildVoucherMetricValueCell(
+                width: widths['gold']!,
+                value:
+                    _formatEquivalentGold(voucher) ??
+                    _formatGold(voucher['amount_gold']) ??
+                    '—',
+                icon: Icons.scale_outlined,
+                color: const Color(0xFFD4A017),
+                emphasize: true,
+              ),
+              _buildVoucherBodyCell(
+                width: widths['status']!,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _withAlpha(statusVisuals.color, 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    statusVisuals.label,
+                    style: themeData.textTheme.bodySmall?.copyWith(
+                      color: statusVisuals.color,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              _buildVoucherBodyCell(
+                width: widths['reference']!,
+                child: Text(
+                  _buildVoucherReferenceLabel(voucher),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: themeData.textTheme.bodySmall,
+                ),
+              ),
+              _buildVoucherBodyCell(
+                width: widths['actions']!,
+                alignment: Alignment.center,
+                child: _buildVoucherRowActions(voucher),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoucherHeaderCell({
+    required String label,
+    required double width,
+    AlignmentGeometry alignment = Alignment.center,
+    VoidCallback? onTap,
+    bool isActive = false,
+    bool ascending = false,
+  }) {
+    final child = Container(
+      width: width,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: alignment,
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: isActive ? theme.AppColors.darkGold : null,
+              ),
+            ),
+          ),
+          if (isActive) ...[
+            const SizedBox(width: 4),
+            Icon(
+              ascending ? Icons.arrow_upward : Icons.arrow_downward,
+              size: 14,
+              color: theme.AppColors.darkGold,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) return child;
+    return InkWell(onTap: onTap, child: child);
+  }
+
+  Widget _buildVoucherMetricHeaderCell({
+    required String label,
+    required String unit,
+    required double width,
+    required IconData icon,
+    required Color color,
+    VoidCallback? onTap,
+    bool isActive = false,
+    bool ascending = false,
+  }) {
+    final themeData = Theme.of(context);
+    final child = Container(
+      width: width,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      alignment: Alignment.center,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: _withAlpha(color, 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _withAlpha(color, isActive ? 0.30 : 0.18)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Icon(icon, size: 14, color: color),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: themeData.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: isActive ? color : themeData.colorScheme.onSurface,
+                      height: 1.0,
+                    ),
+                  ),
+                ),
+                if (isActive) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    ascending ? Icons.arrow_upward : Icons.arrow_downward,
+                    size: 13,
+                    color: color,
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              unit,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: themeData.textTheme.labelSmall?.copyWith(
+                color: _withAlpha(color, 0.92),
+                fontWeight: FontWeight.w700,
+                height: 1.0,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (onTap == null) return child;
+    return InkWell(onTap: onTap, child: child);
+  }
+
+  Widget _buildVoucherBodyCell({
+    required double width,
+    required Widget child,
+    AlignmentGeometry alignment = Alignment.center,
+  }) {
+    return Container(
+      width: width,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: alignment,
+      child: child,
+    );
+  }
+
+  Widget _buildVoucherMetricValueCell({
+    required double width,
+    required String value,
+    required IconData icon,
+    required Color color,
+    required bool emphasize,
+  }) {
+    return _buildVoucherBodyCell(
+      width: width,
+      alignment: Alignment.center,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: _withAlpha(color, emphasize ? 0.12 : 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _withAlpha(color, emphasize ? 0.26 : 0.14)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoucherRowActions(Map<String, dynamic> voucher) {
+    final status = (voucher['status'] ?? 'pending').toString();
+    final isEditable =
+        status != 'approved' && status != 'cancelled' && status != 'voided';
+    final canApprove = status == 'pending';
+    final voucherId = (voucher['id'] as num).toInt();
+
+    return PopupMenuButton<String>(
+      tooltip: 'إجراءات',
+      onSelected: (value) {
+        switch (value) {
+          case 'details':
+            _navigateToVoucherDetails(voucherId);
+            break;
+          case 'edit':
+            _navigateToEditVoucher(voucher);
+            break;
+          case 'approve':
+            _approveVoucher(voucherId);
+            break;
+          case 'cancel':
+            _cancelVoucher(voucherId);
+            break;
+          case 'delete':
+            _deleteVoucher(voucherId);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem<String>(
+          value: 'details',
+          child: Text('عرض التفاصيل'),
+        ),
+        if (isEditable)
+          const PopupMenuItem<String>(value: 'edit', child: Text('تعديل')),
+        if (canApprove)
+          const PopupMenuItem<String>(value: 'approve', child: Text('اعتماد')),
+        if (status != 'cancelled')
+          const PopupMenuItem<String>(value: 'cancel', child: Text('إلغاء')),
+        const PopupMenuItem<String>(value: 'delete', child: Text('حذف')),
+      ],
+    );
+  }
+
+  Widget _buildPaginationStrip(ThemeData themeData) {
+    if (_totalVouchers == 0 || _totalPages <= 1) {
+      return const SizedBox.shrink();
+    }
+
+    final pageNumbers = _buildPageNumbers();
+    final start = ((_currentPage - 1) * _perPage) + 1;
+    final end = (_currentPage * _perPage) > _totalVouchers
+        ? _totalVouchers
+        : (_currentPage * _perPage);
+
+    return Align(
+      alignment: AlignmentDirectional.centerEnd,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Text(
+              'عرض $start-$end من $_totalVouchers',
+              style: themeData.textTheme.bodySmall?.copyWith(
+                color: _withAlpha(themeData.colorScheme.onSurface, 0.65),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.chevron_left, size: 18),
+                onPressed: (_isLoading || _currentPage <= 1)
+                    ? null
+                    : () => _loadVouchers(page: _currentPage - 1),
+              ),
+            ),
+            ...pageNumbers.map((page) {
+              if (page == -1) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    '…',
+                    style: themeData.textTheme.labelSmall?.copyWith(
+                      color: _withAlpha(themeData.colorScheme.onSurface, 0.4),
+                    ),
+                  ),
+                );
+              }
+
+              final isActive = page == _currentPage;
+              return GestureDetector(
+                onTap: (_isLoading || isActive)
+                    ? null
+                    : () => _loadVouchers(page: page),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  width: 30,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? theme.AppColors.darkGold
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: isActive
+                        ? null
+                        : Border.all(
+                            color: themeData.colorScheme.outline.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$page',
+                    style: themeData.textTheme.labelSmall?.copyWith(
+                      fontWeight: isActive
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                      color: isActive
+                          ? Colors.white
+                          : _withAlpha(themeData.colorScheme.onSurface, 0.7),
+                    ),
+                  ),
+                ),
+              );
+            }),
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.chevron_right, size: 18),
+                onPressed: (_isLoading || _currentPage >= _totalPages)
+                    ? null
+                    : () => _loadVouchers(page: _currentPage + 1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _changeSort(String sortBy, bool ascending) async {
+    setState(() {
+      _sortBy = sortBy;
+      _sortAscending = ascending;
+      _currentPage = 1;
+    });
+    await _loadVouchers(page: 1);
+  }
+
+  Future<void> _clearFilters() async {
+    _debounce?.cancel();
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+      _selectedSearchType = 'all';
+      _selectedStatus = 'all';
+      _selectedParty = null;
+      _selectedCreator = null;
+      _dateFrom = null;
+      _dateTo = null;
+      _sortBy = 'date';
+      _sortAscending = false;
+      _currentPage = 1;
+    });
+    await _loadVouchers(page: 1);
+  }
+
+  String _searchTypeLabel(String value) {
+    switch (value) {
+      case 'number':
+        return 'رقم السند';
+      case 'party':
+        return 'الطرف';
+      case 'description':
+        return 'البيان';
+      case 'amount':
+        return 'المبلغ';
+      case 'reference':
+        return 'المرجع';
+      default:
+        return 'الكل';
+    }
+  }
+
+  String _searchHint(String value) {
+    switch (value) {
+      case 'number':
+        return 'رقم السند...';
+      case 'party':
+        return 'اسم العميل أو المورد أو الطرف...';
+      case 'description':
+        return 'البيان أو الملاحظات...';
+      case 'amount':
+        return 'المبلغ النقدي أو الذهبي...';
+      case 'reference':
+        return 'رقم المرجع أو نوعه...';
+      default:
+        return 'ابحث برقم السند، الطرف، البيان أو المرجع';
+    }
+  }
+
+  String _resolveVoucherPartyName(Map<String, dynamic> voucher) {
+    final customerName = (voucher['customer']?['name'] ?? '').toString().trim();
+    if (customerName.isNotEmpty) return customerName;
+    final supplierName = (voucher['supplier']?['name'] ?? '').toString().trim();
+    if (supplierName.isNotEmpty) return supplierName;
+    final employeeName = (voucher['employee']?['name'] ?? '').toString().trim();
+    if (employeeName.isNotEmpty) return employeeName;
+    final partyName = (voucher['party_name'] ?? '').toString().trim();
+    if (partyName.isNotEmpty) return partyName;
+    return '';
+  }
+
+  String _resolveVoucherCreatorName(Map<String, dynamic> voucher) {
+    final createdBy = (voucher['created_by'] ?? '').toString().trim();
+    return createdBy.isEmpty ? '—' : createdBy;
+  }
+
+  String _buildVoucherReferenceLabel(Map<String, dynamic> voucher) {
+    final referenceNumber = (voucher['reference_number'] ?? '')
+        .toString()
+        .trim();
+    final referenceType = (voucher['reference_type'] ?? '').toString().trim();
+    final referenceId = (voucher['reference_id'] ?? '').toString().trim();
+
+    if (referenceNumber.isNotEmpty) {
+      return referenceNumber;
+    }
+    if (referenceType.isNotEmpty && referenceId.isNotEmpty) {
+      return '$referenceType #$referenceId';
+    }
+    if (referenceType.isNotEmpty) {
+      return referenceType;
+    }
+    return '—';
+  }
+
+  _VoucherStatusVisuals _resolveVoucherStatusVisuals(String status) {
+    switch (status) {
+      case 'approved':
+        return const _VoucherStatusVisuals(label: 'معتمد', color: Colors.green);
+      case 'cancelled':
+        return const _VoucherStatusVisuals(label: 'ملغى', color: Colors.red);
+      case 'rejected':
+        return const _VoucherStatusVisuals(
+          label: 'مرفوض',
+          color: Colors.redAccent,
+        );
+      default:
+        return const _VoucherStatusVisuals(label: 'معلق', color: Colors.orange);
+    }
+  }
+
   Widget _buildVoucherCard(Map<String, dynamic> voucher, ThemeData themeData) {
     final String voucherType = (voucher['voucher_type'] ?? 'unknown')
         .toString();
-    final String status = (voucher['status'] ?? 'active').toString();
+    final String status = (voucher['status'] ?? 'pending').toString();
     final bool isCancelled = status == 'cancelled';
-    final bool isActive = status == 'active';
+    final bool isEditable =
+        status != 'approved' && status != 'cancelled' && status != 'voided';
+    final bool canApprove = status == 'pending';
 
     final bool isAutoGenerated = _isAutoGeneratedVoucher(voucher);
 
@@ -807,9 +2266,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     final String? goldEquivalent = _formatEquivalentGold(voucher);
     final String? goldBreakdown = _formatGoldBreakdown(voucher);
 
-    final String partyName =
-        (voucher['customer']?['name'] ?? voucher['supplier']?['name'] ?? '')
-            .toString();
+    final String partyName = _resolveVoucherPartyName(voucher);
     final String description = (voucher['description'] ?? '').toString();
 
     // Sample the card background (gradient between white and a light gold)
@@ -986,7 +2443,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                               'نقداً: $cashAmount ر.س',
                               style: themeData.textTheme.titleSmall?.copyWith(
                                 fontWeight: FontWeight.w800,
-                                color: visuals.color,
+                                color: const Color(0xFF2F80ED),
                               ),
                             ),
                           if (goldEquivalent != null)
@@ -995,7 +2452,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                               child: Text(
                                 goldEquivalent,
                                 style: themeData.textTheme.bodyMedium?.copyWith(
-                                  color: theme.AppColors.darkGold,
+                                  color: const Color(0xFFD4A017),
                                   fontWeight: FontWeight.w800,
                                 ),
                               ),
@@ -1010,10 +2467,11 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                                   textAlign: TextAlign.end,
                                   maxLines: 3,
                                   overflow: TextOverflow.ellipsis,
-                                  style: themeData.textTheme.bodySmall?.copyWith(
-                                    color: secondaryTextColor,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                  style: themeData.textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: secondaryTextColor,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                 ),
                               ),
                             ),
@@ -1062,21 +2520,13 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                   Row(
                     children: [
                       Expanded(
-                        child: _buildStatusBadges(
-                          themeData,
-                          isActive: isActive,
-                          isCancelled: isCancelled,
-                        ),
+                        child: _buildStatusBadges(themeData, status: status),
                       ),
                       if (!isCancelled)
                         Wrap(
                           spacing: 12,
                           children: [
-                            // Edit button: only when voucher is editable
-                            // (not approved, not cancelled, not voided)
-                            if ((voucher['status'] ?? '') != 'approved' &&
-                                (voucher['status'] ?? '') != 'cancelled' &&
-                                (voucher['status'] ?? '') != 'voided')
+                            if (isEditable)
                               TextButton.icon(
                                 onPressed: () =>
                                     _navigateToEditVoucher(voucher),
@@ -1086,8 +2536,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                                   foregroundColor: theme.AppColors.darkGold,
                                 ),
                               ),
-                            // Approve button for pending vouchers
-                            if ((voucher['status'] ?? '') != 'approved')
+                            if (canApprove)
                               TextButton.icon(
                                 onPressed: () => _approveVoucher(voucher['id']),
                                 icon: const Icon(
@@ -1131,30 +2580,48 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     );
   }
 
-  Widget _buildStatusBadges(
-    ThemeData themeData, {
-    required bool isActive,
-    required bool isCancelled,
-  }) {
+  Widget _buildStatusBadges(ThemeData themeData, {required String status}) {
     final List<Widget> badges = [];
 
-    if (isActive) {
+    if (status == 'pending') {
+      badges.add(
+        _buildStatusBadge(
+          themeData: themeData,
+          icon: Icons.pending_actions_outlined,
+          label: 'معلق',
+          color: theme.AppColors.warning,
+        ),
+      );
+    }
+
+    if (status == 'approved') {
       badges.add(
         _buildStatusBadge(
           themeData: themeData,
           icon: Icons.verified_outlined,
-          label: 'نشط',
+          label: 'معتمد',
           color: theme.AppColors.success,
         ),
       );
     }
 
-    if (isCancelled) {
+    if (status == 'cancelled') {
       badges.add(
         _buildStatusBadge(
           themeData: themeData,
           icon: Icons.cancel_outlined,
           label: 'ملغى',
+          color: theme.AppColors.error,
+        ),
+      );
+    }
+
+    if (status == 'rejected') {
+      badges.add(
+        _buildStatusBadge(
+          themeData: themeData,
+          icon: Icons.gpp_bad_outlined,
+          label: 'مرفوض',
           color: theme.AppColors.error,
         ),
       );
@@ -1328,10 +2795,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          textStyle: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-          ),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
         ),
         icon: Icon(icon, size: 18),
         label: FittedBox(
@@ -1364,8 +2828,9 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     if (_searchQuery.isNotEmpty) {
       setState(() {
         _searchQuery = '';
+        _currentPage = 1;
       });
-      _loadVouchers();
+      _loadVouchers(page: 1);
     }
   }
 
@@ -1481,11 +2946,14 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   String? _formatGoldBreakdown(Map<String, dynamic> voucher) {
     final raw = voucher['gold_breakdown'];
     if (raw is List && raw.isNotEmpty) {
-      return raw.whereType<Map>().map((entry) {
-        final weight = _formatGold(entry['weight']) ?? '0.000';
-        final karat = _toDouble(entry['karat'])?.round() ?? entry['karat'];
-        return '• عيار $karat: $weight غ';
-      }).join('\n');
+      return raw
+          .whereType<Map>()
+          .map((entry) {
+            final weight = _formatGold(entry['weight']) ?? '0.000';
+            final karat = _toDouble(entry['karat'])?.round() ?? entry['karat'];
+            return '• عيار $karat: $weight غ';
+          })
+          .join('\n');
     }
 
     final rawGold = _formatGold(voucher['amount_gold']);
@@ -1535,117 +3003,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
           icon: Icons.help_outline,
         );
     }
-  }
-
-  void _showFiltersDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('فلاتر البحث'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Status Filter
-              const Text('الحالة:'),
-              DropdownButton<String>(
-                value: _selectedStatus,
-                isExpanded: true,
-                items: const [
-                  DropdownMenuItem(value: 'all', child: Text('الكل')),
-                  DropdownMenuItem(value: 'active', child: Text('نشط')),
-                  DropdownMenuItem(value: 'cancelled', child: Text('ملغى')),
-                ],
-                onChanged: (value) {
-                  setState(() {
-                    _selectedStatus = value ?? 'all';
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Date Range
-              const Text('الفترة الزمنية:'),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () async {
-                        final date = await showDatePicker(
-                          context: context,
-                          initialDate: _dateFrom ?? DateTime.now(),
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime(2030),
-                        );
-                        if (date != null) {
-                          setState(() {
-                            _dateFrom = date;
-                          });
-                        }
-                      },
-                      child: Text(
-                        _dateFrom != null
-                            ? DateFormat('yyyy-MM-dd').format(_dateFrom!)
-                            : 'من تاريخ',
-                      ),
-                    ),
-                  ),
-                  const Text(' - '),
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () async {
-                        final date = await showDatePicker(
-                          context: context,
-                          initialDate: _dateTo ?? DateTime.now(),
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime(2030),
-                        );
-                        if (date != null) {
-                          setState(() {
-                            _dateTo = date;
-                          });
-                        }
-                      },
-                      child: Text(
-                        _dateTo != null
-                            ? DateFormat('yyyy-MM-dd').format(_dateTo!)
-                            : 'إلى تاريخ',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-
-              // Clear Filters
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    _selectedStatus = 'all';
-                    _dateFrom = null;
-                    _dateTo = null;
-                  });
-                },
-                child: const Text('مسح الفلاتر'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _loadVouchers();
-            },
-            child: const Text('تطبيق'),
-          ),
-        ],
-      ),
-    );
   }
 
   void _navigateToAddVoucher(String type) async {
@@ -1900,4 +3257,11 @@ class _VoucherVisuals {
     required this.color,
     required this.icon,
   });
+}
+
+class _VoucherStatusVisuals {
+  final String label;
+  final Color color;
+
+  const _VoucherStatusVisuals({required this.label, required this.color});
 }

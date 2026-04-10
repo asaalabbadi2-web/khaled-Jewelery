@@ -20,6 +20,17 @@ import '../pdf/account_statement_pdf_builder.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as app_theme;
 
+enum _StatementDisplayMode { table, cards }
+
+enum _StatementSortColumn {
+  date,
+  description,
+  goldMovement,
+  goldBalance,
+  cashMovement,
+  cashBalance,
+}
+
 class AccountStatementScreen extends StatefulWidget {
   final int accountId;
   final String accountName;
@@ -48,16 +59,22 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
   bool _isRepairingBalances = false;
 
+  final ScrollController _contentScrollController = ScrollController();
   final ScrollController _horizontalController = ScrollController();
   final ScrollController _verticalController = ScrollController();
+  final GlobalKey _topChromeKey = GlobalKey();
 
   int _viewMode = 0; // 0: dual, 1: gold, 2: cash
+  _StatementDisplayMode _displayMode = _StatementDisplayMode.table;
   bool _showOnlyMovement = false;
   bool _includeBreakdown = true;
   bool _isExporting = false;
-  bool _useMergedView = false; // Toggle for merged statement
-  bool _resolvedMergedDefault = false;
   bool _resolvedViewModeDefault = false;
+  _StatementSortColumn? _sortColumn;
+  bool _sortAscending = false;
+
+  double _topChromeHeight = 0;
+  double _topChromeCollapseOffset = 0;
 
   bool _pdfIncludeValuation = true;
   int? _pdfViewModeOverride;
@@ -126,29 +143,6 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       final s = v.trim().toLowerCase();
       return s == 'true' || s == '1' || s == 'yes' || s == 'on';
     }
-    return false;
-  }
-
-  bool _shouldDefaultToMergedView(Map<String, dynamic> account) {
-    // Safe-box accounts that are not gold should not default to merged view.
-    // This avoids showing weight-side memo movements in payment method statements.
-    try {
-      final safeType = (account['safe_box_type'] ?? '')
-          .toString()
-          .trim()
-          .toLowerCase();
-      if (safeType.isNotEmpty && safeType != 'gold') return false;
-    } catch (_) {}
-
-    try {
-      if (_truthy(account['tracks_weight'])) return true;
-    } catch (_) {}
-
-    try {
-      final num = (account['account_number'] ?? '').toString().trim();
-      if (num.startsWith('7')) return true; // memo accounts are typically 7xxxx
-    } catch (_) {}
-
     return false;
   }
 
@@ -323,6 +317,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     super.initState();
     // _fetchAccountStatement(); // We will call this from didChangeDependencies
     _searchController.addListener(_filterLines);
+    _contentScrollController.addListener(_onContentScroll);
+    _verticalController.addListener(_onContentScroll);
   }
 
   @override
@@ -335,9 +331,45 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   void dispose() {
     // Dispose controllers to avoid leaks
     _searchController.dispose();
+    _contentScrollController.dispose();
     _horizontalController.dispose();
     _verticalController.dispose();
     super.dispose();
+  }
+
+  void _onContentScroll() {
+    final activeController = _displayMode == _StatementDisplayMode.cards
+        ? _contentScrollController
+        : _verticalController;
+    final nextOffset = activeController.hasClients
+        ? activeController.offset.clamp(0.0, _topChromeHeight)
+        : 0.0;
+    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
+      return;
+    }
+    setState(() {
+      _topChromeCollapseOffset = nextOffset;
+    });
+  }
+
+  void _measureTopChrome() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _topChromeKey.currentContext;
+      if (context == null) return;
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderBox) return;
+      final measuredHeight = renderObject.size.height;
+      if (measuredHeight <= 0 || (measuredHeight - _topChromeHeight).abs() < 0.5) {
+        return;
+      }
+      setState(() {
+        _topChromeHeight = measuredHeight;
+        if (_topChromeCollapseOffset > measuredHeight) {
+          _topChromeCollapseOffset = measuredHeight;
+        }
+      });
+    });
   }
 
   Future<void> _fetchAccountStatement() async {
@@ -351,32 +383,19 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       } else if (widget.entityType == 'supplier') {
         data = await ApiService().getSupplierStatement(widget.accountId);
       } else {
-        // Auto-default merged view for memo/dual accounts once per screen.
-        if (!_resolvedMergedDefault) {
-          _resolvedMergedDefault = true;
+        if (!_resolvedViewModeDefault) {
+          _resolvedViewModeDefault = true;
           try {
             final account = await ApiService().getAccountById(widget.accountId);
-            final wantsMerged = _shouldDefaultToMergedView(account);
-            if (wantsMerged && mounted) {
-              setState(() => _useMergedView = true);
-            }
-
-            if (!_resolvedViewModeDefault && mounted) {
-              _resolvedViewModeDefault = true;
-              final wantsViewMode = _defaultViewModeForAccount(account);
-              setState(() => _viewMode = wantsViewMode);
+            if (mounted) {
+              setState(() => _viewMode = _defaultViewModeForAccount(account));
             }
           } catch (_) {
-            // If account metadata fetch fails, keep current toggle.
+            // Keep the default dual view if metadata fetch fails.
           }
         }
 
-        // Use merged view if enabled, otherwise regular statement
-        if (_useMergedView) {
-          data = await ApiService().getAccountStatementMerged(widget.accountId);
-        } else {
-          data = await ApiService().getAccountStatement(widget.accountId);
-        }
+        data = await ApiService().getAccountStatement(widget.accountId);
       }
 
       if (!mounted) return;
@@ -596,7 +615,84 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           ),
         );
       }
+
+      _applySort(_filteredLines, mainKarat);
     });
+  }
+
+  double _goldMovementForLine(StatementLine line, double mainKarat) {
+    return _convertToMainKarat(line.debit18k, 18, mainKarat) +
+        _convertToMainKarat(line.debit21k, 21, mainKarat) +
+        _convertToMainKarat(line.debit22k, 22, mainKarat) +
+        _convertToMainKarat(line.debit24k, 24, mainKarat) -
+        _convertToMainKarat(line.credit18k, 18, mainKarat) -
+        _convertToMainKarat(line.credit21k, 21, mainKarat) -
+        _convertToMainKarat(line.credit22k, 22, mainKarat) -
+        _convertToMainKarat(line.credit24k, 24, mainKarat);
+  }
+
+  double _cashMovementForLine(StatementLine line) {
+    return line.cashDebit - line.cashCredit;
+  }
+
+  void _applySort(List<StatementLine> lines, double mainKarat) {
+    final sortColumn = _sortColumn;
+    if (sortColumn == null || lines.length < 2) return;
+
+    final direction = _sortAscending ? 1 : -1;
+
+    int compareLines(StatementLine a, StatementLine b) {
+      late final int result;
+      switch (sortColumn) {
+        case _StatementSortColumn.date:
+          result = a.date.compareTo(b.date);
+          break;
+        case _StatementSortColumn.description:
+          result = a.description.toLowerCase().compareTo(
+            b.description.toLowerCase(),
+          );
+          break;
+        case _StatementSortColumn.goldMovement:
+          result = _goldMovementForLine(a, mainKarat).compareTo(
+            _goldMovementForLine(b, mainKarat),
+          );
+          break;
+        case _StatementSortColumn.goldBalance:
+          result = (a.runningGoldBalance ?? 0).compareTo(
+            b.runningGoldBalance ?? 0,
+          );
+          break;
+        case _StatementSortColumn.cashMovement:
+          result = _cashMovementForLine(a).compareTo(_cashMovementForLine(b));
+          break;
+        case _StatementSortColumn.cashBalance:
+          result = (a.runningCashBalance ?? 0).compareTo(
+            b.runningCashBalance ?? 0,
+          );
+          break;
+      }
+
+      if (result != 0) return result * direction;
+
+      final dateResult = a.date.compareTo(b.date);
+      if (dateResult != 0) return dateResult * direction;
+
+      return a.id.compareTo(b.id) * direction;
+    }
+
+    lines.sort(compareLines);
+  }
+
+  void _toggleSort(_StatementSortColumn column) {
+    setState(() {
+      if (_sortColumn == column) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortColumn = column;
+        _sortAscending = column != _StatementSortColumn.date;
+      }
+    });
+    _filterLines();
   }
 
   bool _matchesSearch({
@@ -1156,6 +1252,29 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       appBar: AppBar(
         title: Text(_statementTitle()),
         actions: [
+          IconButton(
+            tooltip: _displayMode == _StatementDisplayMode.table
+                ? 'عرض البطاقات'
+                : 'عرض الجدول',
+            icon: Icon(
+              _displayMode == _StatementDisplayMode.table
+                  ? Icons.view_agenda_outlined
+                  : Icons.table_rows_outlined,
+            ),
+            onPressed: () {
+              setState(() {
+                _displayMode = _displayMode == _StatementDisplayMode.table
+                    ? _StatementDisplayMode.cards
+                    : _StatementDisplayMode.table;
+              });
+              _onContentScroll();
+            },
+          ),
+          IconButton(
+            tooltip: 'تحديث',
+            icon: const Icon(Icons.refresh),
+            onPressed: _fetchAccountStatement,
+          ),
           if (widget.entityType == 'supplier')
             IconButton(
               icon: const Icon(Icons.build_circle_outlined),
@@ -1177,24 +1296,118 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Widget _buildStatementContent() {
-    return RefreshIndicator(
-      onRefresh: _fetchAccountStatement,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            physics: const AlwaysScrollableScrollPhysics(),
-            children: [
-              _buildSummaryOverview(constraints.maxWidth),
-              const SizedBox(height: 16),
-              _buildToolbar(constraints.maxWidth),
-              const SizedBox(height: 12),
-              _buildFilteredTotalsBar(),
-              const SizedBox(height: 16),
-              _buildStatementTable(),
-            ],
-          );
-        },
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Column(
+          children: [
+            _buildCollapsibleTopChrome(constraints.maxWidth),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _buildToolbar(constraints.maxWidth),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _buildFilteredTotalsBar(),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                child: _buildStatementBody(),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCollapsibleTopChrome(double maxWidth) {
+    final content = KeyedSubtree(
+      key: _topChromeKey,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: _buildSummaryOverview(maxWidth),
+      ),
+    );
+
+    _measureTopChrome();
+
+    if (_topChromeHeight <= 0) {
+      return content;
+    }
+
+    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
+    final visibleHeight = (_topChromeHeight - collapse).clamp(0.0, _topChromeHeight);
+    if (visibleHeight <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    return ClipRect(
+      child: SizedBox(
+        height: visibleHeight,
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          minHeight: _topChromeHeight,
+          maxHeight: _topChromeHeight,
+          child: Transform.translate(
+            offset: Offset(0, -collapse),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatementBody() {
+    if (_filteredLines.isEmpty) {
+      return _buildEmptyLinesState();
+    }
+
+    if (_displayMode == _StatementDisplayMode.cards) {
+      return RefreshIndicator(
+        onRefresh: _fetchAccountStatement,
+        child: ListView.separated(
+          controller: _contentScrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          itemCount: _filteredLines.length,
+          separatorBuilder: (context, index) => const SizedBox(height: 10),
+          itemBuilder: (context, index) {
+            final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
+            return _buildLineCard(_filteredLines[index], mainKarat);
+          },
+        ),
+      );
+    }
+
+    return _buildStatementTable();
+  }
+
+  Widget _buildEmptyLinesState() {
+    final theme = Theme.of(context);
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.receipt_long_outlined,
+            size: 64,
+            color: theme.colorScheme.primary.withValues(alpha: 0.35),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'لا توجد حركات مطابقة',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'عدّل الفلاتر أو ابحث بمعايير أخرى لإظهار النتائج',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.56),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1391,51 +1604,156 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     );
   }
 
+  int get _activeFiltersCount {
+    int count = 0;
+    if (_dateRange != null) count++;
+    if (_searchController.text.trim().isNotEmpty) count++;
+    if (_filterType != 'all') count++;
+    if (_showOnlyMovement) count++;
+    if (!_includeBreakdown) count++;
+    if (_viewMode != 0) count++;
+    return count;
+  }
+
   Widget _buildToolbar(double maxWidth) {
     final isNarrow = maxWidth < 500;
 
     // View-mode labels
     const viewModeLabels = {0: 'مزدوج', 1: 'ذهب فقط', 2: 'نقدي فقط'};
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            ElevatedButton.icon(
-              onPressed: _pickDateRange,
-              icon: const Icon(Icons.date_range, size: 18),
-              label: Text(
-                _dateRange == null
-                    ? 'نطاق التاريخ'
-                    : '${DateFormat('dd/MM/yyyy').format(_dateRange!.start)} - ${DateFormat('dd/MM/yyyy').format(_dateRange!.end)}',
-                overflow: TextOverflow.ellipsis,
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.14)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'النتائج: ${_filteredLines.length}',
+                        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'الفلاتر النشطة: $_activeFiltersCount',
+                        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            // Use a compact dropdown on narrow screens instead of SegmentedButton
-            if (isNarrow)
-              DropdownButton<int>(
-                value: _viewMode,
-                isDense: true,
-                items: viewModeLabels.entries
-                    .map(
-                      (e) =>
-                          DropdownMenuItem(value: e.key, child: Text(e.value)),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() => _viewMode = value);
-                  _filterLines();
-                },
-              )
-            else
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxWidth),
-                child: SegmentedButton<int>(
+              if (_activeFiltersCount > 0)
+                TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.close, size: 16),
+                  label: const Text('مسح الفلاتر'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 420,
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              _filterLines();
+                            },
+                          ),
+                    hintText: isNarrow
+                        ? 'بحث...'
+                        : 'ابحث بالبيان أو المرجع أو رقم القيد أو المبلغ',
+                    isDense: isNarrow,
+                  ),
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: _pickDateRange,
+                icon: const Icon(Icons.date_range, size: 18),
+                label: Text(
+                  _dateRange == null
+                      ? 'نطاق التاريخ'
+                      : '${DateFormat('dd/MM/yyyy').format(_dateRange!.start)} - ${DateFormat('dd/MM/yyyy').format(_dateRange!.end)}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              SizedBox(
+                width: 120,
+                child: DropdownButtonFormField<String>(
+                  value: _filterType,
+                  decoration: const InputDecoration(
+                    labelText: 'النوع',
+                    isDense: true,
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text('الكل')),
+                    DropdownMenuItem(value: 'debit', child: Text('مدين')),
+                    DropdownMenuItem(value: 'credit', child: Text('دائن')),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _filterType = value;
+                    });
+                    _filterLines();
+                  },
+                ),
+              ),
+              if (isNarrow)
+                SizedBox(
+                  width: 130,
+                  child: DropdownButtonFormField<int>(
+                    value: _viewMode,
+                    decoration: const InputDecoration(
+                      labelText: 'العرض',
+                      isDense: true,
+                    ),
+                    items: viewModeLabels.entries
+                        .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _viewMode = value);
+                      _filterLines();
+                    },
+                  ),
+                )
+              else
+                SegmentedButton<int>(
                   segments: const [
                     ButtonSegment(value: 0, label: Text('مزدوج')),
                     ButtonSegment(value: 1, label: Text('ذهب فقط')),
@@ -1447,98 +1765,30 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                     _filterLines();
                   },
                 ),
-              ),
-            if (widget.entityType == 'account')
               FilterChip(
-                label: const Text('دمج الحسابين'),
-                avatar: Icon(
-                  _useMergedView ? Icons.merge : Icons.call_split,
-                  size: 18,
-                ),
-                selected: _useMergedView,
+                label: const Text('حركات فقط'),
+                selected: _showOnlyMovement,
                 onSelected: (value) {
                   setState(() {
-                    _useMergedView = value;
+                    _showOnlyMovement = value;
                   });
-                  _fetchAccountStatement();
+                  _filterLines();
                 },
               ),
-            FilterChip(
-              label: const Text('حركات فقط'),
-              selected: _showOnlyMovement,
-              onSelected: (value) {
-                setState(() {
-                  _showOnlyMovement = value;
-                  _filterLines();
-                });
-              },
-            ),
-            FilterChip(
-              label: const Text('تفصيل العيارات'),
-              selected: _includeBreakdown,
-              onSelected: (value) {
-                setState(() => _includeBreakdown = value);
-              },
-            ),
-            OutlinedButton.icon(
-              onPressed:
-                  (_dateRange != null ||
-                      _searchController.text.isNotEmpty ||
-                      _filterType != 'all' ||
-                      _showOnlyMovement)
-                  ? _clearFilters
-                  : null,
-              icon: const Icon(Icons.filter_alt_off, size: 18),
-              label: const Text('مسح الفلاتر'),
-            ),
-            _buildExportMenu(),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _searchController.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            _searchController.clear();
-                            _filterLines();
-                          },
-                        ),
-                  hintText: isNarrow
-                      ? 'بحث...'
-                      : 'ابحث بالبيان / رقم المرجع / المبلغ',
-                  border: const OutlineInputBorder(),
-                  isDense: isNarrow,
-                ),
+              FilterChip(
+                label: const Text('تفصيل العيارات'),
+                selected: _includeBreakdown,
+                onSelected: (value) {
+                  setState(() {
+                    _includeBreakdown = value;
+                  });
+                },
               ),
-            ),
-            const SizedBox(width: 8),
-            DropdownButton<String>(
-              value: _filterType,
-              isDense: true,
-              items: const [
-                DropdownMenuItem(value: 'all', child: Text('الكل')),
-                DropdownMenuItem(value: 'debit', child: Text('مدين')),
-                DropdownMenuItem(value: 'credit', child: Text('دائن')),
-              ],
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() {
-                  _filterType = value;
-                  _filterLines();
-                });
-              },
-            ),
-          ],
-        ),
-      ],
+              _buildExportMenu(),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -1560,173 +1810,491 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     final theme = Theme.of(context);
     final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
     final cashLabel = (_statement?.isMerged ?? false) ? 'القيمة' : 'النقد';
-
-    final positiveColor = theme.colorScheme.primary;
-    final negativeColor = theme.colorScheme.error;
-    final balanceColor = theme.colorScheme.onSurfaceVariant;
-
-    Text heading(String text) {
-      return Text(text, style: const TextStyle(fontWeight: FontWeight.bold));
+    final viewportWidth = MediaQuery.sizeOf(context).width - 48;
+    final widths = <String, double>{
+      'date': 120,
+      'description': 340,
+      if (_viewMode != 2) 'gold_movement': 150,
+      if (_viewMode != 2) 'gold_balance': 140,
+      if (_viewMode != 1) 'cash_movement': 150,
+      if (_viewMode != 1) 'cash_balance': 150,
+      if (_includeBreakdown && _viewMode != 2) 'breakdown': 170,
+      'actions': 56,
+    };
+    final baseWidth = widths.values.fold<double>(0, (sum, width) => sum + width);
+    final tableWidth = viewportWidth > baseWidth ? viewportWidth : baseWidth;
+    final extraWidth = tableWidth - baseWidth;
+    if (extraWidth > 0) {
+      widths['description'] = (widths['description'] ?? 0) + extraWidth;
     }
 
-    final List<DataColumn> columns = [
-      DataColumn(label: heading('التاريخ')),
-      DataColumn(label: heading('البيان')),
-    ];
+    Widget headerCell({
+      required String label,
+      required double width,
+      AlignmentGeometry alignment = AlignmentDirectional.centerStart,
+      _StatementSortColumn? sortColumn,
+    }) {
+      final isSortable = sortColumn != null;
+      final isActive = sortColumn != null && _sortColumn == sortColumn;
+      final indicatorColor = isActive
+          ? theme.colorScheme.primary
+          : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
 
-    if (_viewMode != 2) {
-      columns.addAll([
-        DataColumn(label: heading('حركة الذهب (+/-)')),
-        DataColumn(label: heading('رصيد الذهب')),
-      ]);
-    }
-
-    if (_viewMode != 1) {
-      columns.addAll([
-        DataColumn(label: heading('حركة $cashLabel (+/-)')),
-        DataColumn(label: heading('رصيد $cashLabel')),
-      ]);
-    }
-
-    if (_includeBreakdown && _viewMode != 2) {
-      columns.add(
-        const DataColumn(
-          label: Text(
-            'العيارات',
-            style: TextStyle(fontWeight: FontWeight.bold),
+      return SizedBox(
+        width: width,
+        height: double.infinity,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: isSortable ? () => _toggleSort(sortColumn) : null,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: alignment,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: isActive
+                            ? theme.colorScheme.primary
+                            : null,
+                      ),
+                    ),
+                  ),
+                  if (isSortable) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      isActive
+                          ? (_sortAscending
+                                ? Icons.arrow_upward_rounded
+                                : Icons.arrow_downward_rounded)
+                          : Icons.unfold_more_rounded,
+                      size: 16,
+                      color: indicatorColor,
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       );
     }
 
-    final rows = List<DataRow>.generate(_filteredLines.length, (index) {
-      final line = _filteredLines[index];
-      final debitMain =
-          _convertToMainKarat(line.debit18k, 18, mainKarat) +
-          _convertToMainKarat(line.debit21k, 21, mainKarat) +
-          _convertToMainKarat(line.debit22k, 22, mainKarat) +
-          _convertToMainKarat(line.debit24k, 24, mainKarat);
-      final creditMain =
-          _convertToMainKarat(line.credit18k, 18, mainKarat) +
-          _convertToMainKarat(line.credit21k, 21, mainKarat) +
-          _convertToMainKarat(line.credit22k, 22, mainKarat) +
-          _convertToMainKarat(line.credit24k, 24, mainKarat);
-
-      final goldMovement = debitMain - creditMain;
-      final cashMovement = line.cashDebit - line.cashCredit;
-
-      final cells = <DataCell>[
-        DataCell(Text(DateFormat('yyyy-MM-dd').format(line.date))),
-        DataCell(_buildDescriptionCell(line)),
-      ];
-
-      if (_viewMode != 2) {
-        cells.addAll([
-          DataCell(
-            _signedNumCell(
-              goldMovement,
-              positiveColor: positiveColor,
-              negativeColor: negativeColor,
-              fractionDigits: 3,
-            ),
-          ),
-          DataCell(
-            _numCell(
-              line.runningGoldBalance,
-              color: balanceColor,
-              fractionDigits: 3,
-            ),
-          ),
-        ]);
-      }
-
-      if (_viewMode != 1) {
-        cells.addAll([
-          DataCell(
-            _signedNumCell(
-              cashMovement,
-              positiveColor: positiveColor,
-              negativeColor: negativeColor,
-              fractionDigits: 2,
-            ),
-          ),
-          DataCell(
-            _numCell(
-              line.runningCashBalance,
-              color: balanceColor,
-              fractionDigits: 2,
-            ),
-          ),
-        ]);
-      }
-
-      if (_includeBreakdown && _viewMode != 2) {
-        cells.add(
-          DataCell(
-            Tooltip(
-              message: 'تفاصيل العيارات',
-              child: IconButton(
-                icon: const Icon(Icons.tune, size: 20),
-                onPressed: () => _showLineDetails(line, mainKarat),
-              ),
-            ),
-          ),
-        );
-      }
-
-      return DataRow(
-        color: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return Theme.of(context).colorScheme.primaryContainer;
-          }
-          return index.isEven
-              ? Theme.of(context).colorScheme.surface
-              : Theme.of(
-                  context,
-                ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.35);
-        }),
-        cells: cells,
-        onSelectChanged: (_) => _handleRowTap(line, mainKarat),
+    Widget bodyCell({
+      required double width,
+      required Widget child,
+      AlignmentGeometry alignment = AlignmentDirectional.centerStart,
+    }) {
+      return Container(
+        width: width,
+        height: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: alignment,
+        child: child,
       );
-    });
+    }
 
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Scrollbar(
-            controller: _horizontalController,
-            thumbVisibility: true,
-            notificationPredicate: (notification) =>
-                notification.metrics.axis == Axis.horizontal,
-            child: SingleChildScrollView(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Scrollbar(
               controller: _horizontalController,
-              scrollDirection: Axis.horizontal,
-              child: Scrollbar(
-                controller: _verticalController,
-                thumbVisibility: true,
-                child: SingleChildScrollView(
-                  controller: _verticalController,
-                  child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(
-                      Theme.of(context).colorScheme.surfaceContainerHighest
-                          .withValues(alpha: 0.5),
-                    ),
-                    headingRowHeight: 48,
-                    columnSpacing: 18,
-                    dataRowMinHeight: 56,
-                    dataRowMaxHeight: 84,
-                    columns: columns,
-                    rows: rows,
+              thumbVisibility: true,
+              notificationPredicate: (notification) =>
+                  notification.metrics.axis == Axis.horizontal,
+              child: SingleChildScrollView(
+                controller: _horizontalController,
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: tableWidth,
+                  child: Column(
+                    children: [
+                      Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                          border: Border(
+                            bottom: BorderSide(
+                              color: theme.colorScheme.outline.withValues(alpha: 0.14),
+                            ),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            headerCell(
+                              label: 'التاريخ',
+                              width: widths['date']!,
+                              alignment: Alignment.center,
+                              sortColumn: _StatementSortColumn.date,
+                            ),
+                            headerCell(
+                              label: 'البيان',
+                              width: widths['description']!,
+                              sortColumn: _StatementSortColumn.description,
+                            ),
+                            if (_viewMode != 2)
+                              headerCell(
+                                label: 'حركة الذهب (+/-)',
+                                width: widths['gold_movement']!,
+                                alignment: AlignmentDirectional.centerEnd,
+                                sortColumn: _StatementSortColumn.goldMovement,
+                              ),
+                            if (_viewMode != 2)
+                              headerCell(
+                                label: 'رصيد الذهب',
+                                width: widths['gold_balance']!,
+                                alignment: AlignmentDirectional.centerEnd,
+                                sortColumn: _StatementSortColumn.goldBalance,
+                              ),
+                            if (_viewMode != 1)
+                              headerCell(
+                                label: 'حركة $cashLabel (+/-)',
+                                width: widths['cash_movement']!,
+                                alignment: AlignmentDirectional.centerEnd,
+                                sortColumn: _StatementSortColumn.cashMovement,
+                              ),
+                            if (_viewMode != 1)
+                              headerCell(
+                                label: 'رصيد $cashLabel',
+                                width: widths['cash_balance']!,
+                                alignment: AlignmentDirectional.centerEnd,
+                                sortColumn: _StatementSortColumn.cashBalance,
+                              ),
+                            if (_includeBreakdown && _viewMode != 2)
+                              headerCell(label: 'العيارات', width: widths['breakdown']!, alignment: Alignment.center),
+                            headerCell(label: '⋮', width: widths['actions']!, alignment: Alignment.center),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: RefreshIndicator(
+                          onRefresh: _fetchAccountStatement,
+                          child: ListView.builder(
+                            controller: _verticalController,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: EdgeInsets.zero,
+                            itemCount: _filteredLines.length,
+                            itemBuilder: (context, index) {
+                              final line = _filteredLines[index];
+                              final goldMovement = _goldMovementForLine(
+                                line,
+                                mainKarat,
+                              );
+                              final cashMovement = _cashMovementForLine(line);
+
+                              return Material(
+                                color: index.isEven
+                                    ? theme.colorScheme.surface
+                                    : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.22),
+                                child: InkWell(
+                                  onTap: () => _handleRowTap(line, mainKarat),
+                                  child: Container(
+                                    height: 72,
+                                    decoration: BoxDecoration(
+                                      border: Border(
+                                        bottom: BorderSide(
+                                          color: theme.colorScheme.outline.withValues(alpha: 0.08),
+                                        ),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        bodyCell(
+                                          width: widths['date']!,
+                                          alignment: Alignment.center,
+                                          child: Text(
+                                            DateFormat('yyyy-MM-dd').format(line.date),
+                                            style: theme.textTheme.bodySmall,
+                                          ),
+                                        ),
+                                        bodyCell(
+                                          width: widths['description']!,
+                                          child: _buildDescriptionCell(line),
+                                        ),
+                                        if (_viewMode != 2)
+                                          bodyCell(
+                                            width: widths['gold_movement']!,
+                                            alignment: AlignmentDirectional.centerEnd,
+                                            child: _signedNumCell(
+                                              goldMovement,
+                                              positiveColor: theme.colorScheme.primary,
+                                              negativeColor: theme.colorScheme.error,
+                                              fractionDigits: 3,
+                                            ),
+                                          ),
+                                        if (_viewMode != 2)
+                                          bodyCell(
+                                            width: widths['gold_balance']!,
+                                            alignment: AlignmentDirectional.centerEnd,
+                                            child: _numCell(
+                                              line.runningGoldBalance,
+                                              color: theme.colorScheme.onSurfaceVariant,
+                                              fractionDigits: 3,
+                                            ),
+                                          ),
+                                        if (_viewMode != 1)
+                                          bodyCell(
+                                            width: widths['cash_movement']!,
+                                            alignment: AlignmentDirectional.centerEnd,
+                                            child: _signedNumCell(
+                                              cashMovement,
+                                              positiveColor: theme.colorScheme.primary,
+                                              negativeColor: theme.colorScheme.error,
+                                              fractionDigits: 2,
+                                            ),
+                                          ),
+                                        if (_viewMode != 1)
+                                          bodyCell(
+                                            width: widths['cash_balance']!,
+                                            alignment: AlignmentDirectional.centerEnd,
+                                            child: _numCell(
+                                              line.runningCashBalance,
+                                              color: theme.colorScheme.onSurfaceVariant,
+                                              fractionDigits: 2,
+                                            ),
+                                          ),
+                                        if (_includeBreakdown && _viewMode != 2)
+                                          bodyCell(
+                                            width: widths['breakdown']!,
+                                            alignment: Alignment.center,
+                                            child: OutlinedButton(
+                                              onPressed: () => _showLineDetails(line, mainKarat),
+                                              style: OutlinedButton.styleFrom(
+                                                minimumSize: const Size(0, 36),
+                                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                              ),
+                                              child: const Text('تفصيل'),
+                                            ),
+                                          ),
+                                        bodyCell(
+                                          width: widths['actions']!,
+                                          alignment: Alignment.center,
+                                          child: PopupMenuButton<String>(
+                                            onSelected: (value) {
+                                              if (value == 'details') {
+                                                _showLineDetails(line, mainKarat);
+                                              } else if (value == 'copy') {
+                                                Clipboard.setData(
+                                                  ClipboardData(text: _buildLineSummary(line, mainKarat)),
+                                                );
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text('تم نسخ ملخص الحركة')),
+                                                );
+                                              }
+                                            },
+                                            itemBuilder: (context) => const [
+                                              PopupMenuItem(value: 'details', child: Text('التفاصيل')),
+                                              PopupMenuItem(value: 'copy', child: Text('نسخ الملخص')),
+                                            ],
+                                            child: Container(
+                                              padding: const EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                              child: const Icon(Icons.more_horiz, size: 18),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
-          if (_statement != null) _buildClosingBreakdown(mainKarat),
-        ],
+        ),
+        if (_statement != null) _buildClosingBreakdown(mainKarat),
+      ],
+    );
+  }
+
+  Widget _buildLineCard(StatementLine line, double mainKarat) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final goldMovement =
+        _convertToMainKarat(line.debit18k, 18, mainKarat) +
+        _convertToMainKarat(line.debit21k, 21, mainKarat) +
+        _convertToMainKarat(line.debit22k, 22, mainKarat) +
+        _convertToMainKarat(line.debit24k, 24, mainKarat) -
+        _convertToMainKarat(line.credit18k, 18, mainKarat) -
+        _convertToMainKarat(line.credit21k, 21, mainKarat) -
+        _convertToMainKarat(line.credit22k, 22, mainKarat) -
+        _convertToMainKarat(line.credit24k, 24, mainKarat);
+    final cashMovement = line.cashDebit - line.cashCredit;
+    final subtitle = _subtitleForLine(line);
+
+    Widget metricTile({
+      required String label,
+      required String movement,
+      required String balance,
+      required Color color,
+      required IconData icon,
+    }) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: theme.textTheme.bodySmall),
+                    Text(
+                      movement,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: color,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'الرصيد: $balance',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _handleRowTap(line, mainKarat),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(_iconForLine(line), color: colorScheme.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          line.description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${DateFormat('dd/MM/yyyy').format(line.date)}${subtitle.isEmpty ? '' : ' • $subtitle'}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    onSelected: (value) {
+                      if (value == 'details') {
+                        _showLineDetails(line, mainKarat);
+                      } else if (value == 'copy') {
+                        Clipboard.setData(
+                          ClipboardData(text: _buildLineSummary(line, mainKarat)),
+                        );
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('تم نسخ ملخص الحركة')),
+                        );
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(value: 'details', child: Text('التفاصيل')),
+                      PopupMenuItem(value: 'copy', child: Text('نسخ الملخص')),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (_viewMode != 2)
+                    metricTile(
+                      label: 'حركة الذهب',
+                      movement: goldMovement.toStringAsFixed(3),
+                      balance: (line.runningGoldBalance ?? 0).toStringAsFixed(3),
+                      color: const Color(0xFFD4A017),
+                      icon: Icons.auto_awesome_outlined,
+                    ),
+                  if (_viewMode != 2 && _viewMode != 1) const SizedBox(width: 8),
+                  if (_viewMode != 1)
+                    metricTile(
+                      label: (_statement?.isMerged ?? false) ? 'حركة القيمة' : 'حركة النقد',
+                      movement: cashMovement.toStringAsFixed(2),
+                      balance: (line.runningCashBalance ?? 0).toStringAsFixed(2),
+                      color: Colors.green,
+                      icon: Icons.payments_outlined,
+                    ),
+                ],
+              ),
+              if (_includeBreakdown && _viewMode != 2) ...[
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (line.debit18k != 0 || line.credit18k != 0)
+                      _buildKaratChip('18k', line.debit18k, line.credit18k),
+                    if (line.debit21k != 0 || line.credit21k != 0)
+                      _buildKaratChip('21k', line.debit21k, line.credit21k),
+                    if (line.debit22k != 0 || line.credit22k != 0)
+                      _buildKaratChip('22k', line.debit22k, line.credit22k),
+                    if (line.debit24k != 0 || line.credit24k != 0)
+                      _buildKaratChip('24k', line.debit24k, line.credit24k),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
