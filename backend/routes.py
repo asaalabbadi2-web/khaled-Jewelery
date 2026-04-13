@@ -2758,6 +2758,7 @@ def _reset_balances_only():
     try:
         SafeBoxTransaction.query.delete()
         db.session.commit()
+        _try_process_due_auto_clearing_settlements(payment_method_ids=[pm_id])
     except Exception as e:
         db.session.rollback()
         raise e
@@ -7771,52 +7772,54 @@ def get_invoices():
             query = query.filter(Invoice.date <= date_to)
 
     # Sorting
+    created_sort_expr = func.coalesce(Invoice.created_at, Invoice.date)
+
     if sort_by == 'date':
         if sort_order == 'desc':
-            query = query.order_by(Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(Invoice.date.asc(), Invoice.id.asc())
+            query = query.order_by(created_sort_expr.asc(), Invoice.id.asc())
         order = None
     elif sort_by == 'customer':
         _ensure_party_outerjoins()
         party_name = func.coalesce(Customer.name, Supplier.name, '')
         if sort_order == 'desc':
-            query = query.order_by(party_name.desc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(party_name.desc(), created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(party_name.asc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(party_name.asc(), created_sort_expr.desc(), Invoice.id.desc())
         order = None
     elif sort_by == 'amount':
         if sort_order == 'desc':
-            query = query.order_by(Invoice.total.desc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(Invoice.total.desc(), created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(Invoice.total.asc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(Invoice.total.asc(), created_sort_expr.desc(), Invoice.id.desc())
         order = None
     elif sort_by == 'weight':
         if sort_order == 'desc':
-            query = query.order_by(Invoice.total_weight.desc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(Invoice.total_weight.desc(), created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(Invoice.total_weight.asc(), Invoice.date.desc(), Invoice.id.asc())
+            query = query.order_by(Invoice.total_weight.asc(), created_sort_expr.desc(), Invoice.id.asc())
         order = None
     elif sort_by == 'status':
         if sort_order == 'desc':
-            query = query.order_by(Invoice.status.desc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(Invoice.status.desc(), created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(Invoice.status.asc(), Invoice.date.desc(), Invoice.id.asc())
+            query = query.order_by(Invoice.status.asc(), created_sort_expr.desc(), Invoice.id.asc())
         order = None
     elif sort_by == 'type':
         if sort_order == 'desc':
-            query = query.order_by(Invoice.gold_type.desc(), Invoice.invoice_type.desc(), Invoice.date.desc(), Invoice.id.desc())
+            query = query.order_by(Invoice.gold_type.desc(), Invoice.invoice_type.desc(), created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(Invoice.gold_type.asc(), Invoice.invoice_type.asc(), Invoice.date.desc(), Invoice.id.asc())
+            query = query.order_by(Invoice.gold_type.asc(), Invoice.invoice_type.asc(), created_sort_expr.desc(), Invoice.id.asc())
         order = None
     elif sort_by == 'number':
         if sort_order == 'desc':
-            query = query.order_by(Invoice.invoice_type.desc(), Invoice.invoice_type_id.desc(), Invoice.id.desc())
+            query = query.order_by(Invoice.invoice_type.desc(), Invoice.invoice_type_id.desc(), created_sort_expr.desc(), Invoice.id.desc())
         else:
-            query = query.order_by(Invoice.invoice_type.asc(), Invoice.invoice_type_id.asc(), Invoice.id.asc())
+            query = query.order_by(Invoice.invoice_type.asc(), Invoice.invoice_type_id.asc(), created_sort_expr.asc(), Invoice.id.asc())
         order = None
     else:
-        query = query.order_by(Invoice.date.desc(), Invoice.id.desc())
+        query = query.order_by(created_sort_expr.desc(), Invoice.id.desc())
         order = None
 
     if order is not None:
@@ -15372,6 +15375,15 @@ def add_invoice():
             print(f"⚠️ safe-box SBT sync skipped: {exc}")
 
         db.session.commit()
+        try:
+            created_payment_method_ids = {
+                int(payment.payment_method_id)
+                for payment in (getattr(new_invoice, 'payments', None) or [])
+                if getattr(payment, 'payment_method_id', None) not in (None, '', False)
+            }
+        except Exception:
+            created_payment_method_ids = set()
+        _try_process_due_auto_clearing_settlements(payment_method_ids=created_payment_method_ids)
         return jsonify(new_invoice.to_dict()), 201
 
     except (ValueError, IntegrityError) as e:
@@ -16173,35 +16185,90 @@ def check_can_return(invoice_id):
 @api.route('/invoices/returnable', methods=['GET'])
 def get_returnable_invoices():
     """
-    الحصول على جميع الفواتير القابلة للإرجاع
+    الحصول على جميع الفواتير القابلة للإرجاع.
+    - إذا كان المستخدم لا يملك مطلق الصلاحية (admin أو invoices.edit_others)،
+      يتم إرجاع الفواتير التي أنشأها هو فقط (posted_by == username).
+    - يدعم البحث النصي (search) والفلترة بالتاريخ (date_from / date_to).
     """
-    # الأنواع القابلة للإرجاع
     returnable_types = ['بيع', 'شراء من عميل', 'شراء']
-    
-    # فلترة حسب النوع إذا تم تحديده
+
     invoice_type_filter = request.args.get('invoice_type')
     customer_id = request.args.get('customer_id', type=int)
     supplier_id = request.args.get('supplier_id', type=int)
-    
+    search = (request.args.get('search') or '').strip()
+    date_from_str = (request.args.get('date_from') or '').strip()
+    date_to_str = (request.args.get('date_to') or '').strip()
+
     query = Invoice.query.filter(Invoice.invoice_type.in_(returnable_types))
-    
+
+    # --- User-based scoping ---
+    _current_user = getattr(g, 'current_user', None)
+    _is_admin = bool(getattr(_current_user, 'is_admin', False))
+    _has_view_others = _is_admin or (
+        _current_user is not None
+        and callable(getattr(_current_user, 'has_permission', None))
+        and _current_user.has_permission('invoices.edit_others')
+    )
+    if not _has_view_others and _current_user is not None:
+        _username = getattr(_current_user, 'username', None)
+        if _username:
+            query = query.filter(
+                func.lower(func.coalesce(Invoice.posted_by, '')) == _username.strip().lower()
+            )
+    # ---
+
     if invoice_type_filter:
-        query = query.filter_by(invoice_type=invoice_type_filter)
-    
+        query = query.filter(Invoice.invoice_type == invoice_type_filter)
+
     if customer_id:
-        query = query.filter_by(customer_id=customer_id)
-    
+        query = query.filter(Invoice.customer_id == customer_id)
+
     if supplier_id:
-        query = query.filter_by(supplier_id=supplier_id)
-    
+        query = query.filter(Invoice.supplier_id == supplier_id)
+
+    if search:
+        like = f'%{search}%'
+        search_clauses = []
+        query = query.outerjoin(Customer, Invoice.customer_id == Customer.id)
+        query = query.outerjoin(Supplier, Invoice.supplier_id == Supplier.id)
+        search_clauses.extend([
+            Customer.name.ilike(like),
+            Supplier.name.ilike(like),
+        ])
+        try:
+            search_clauses.append(Invoice.id == int(search))
+        except (ValueError, TypeError):
+            pass
+        # البحث بالمبلغ أو الوزن
+        try:
+            numeric_val = float(search.replace(',', ''))
+            search_clauses.append(func.abs(func.coalesce(Invoice.total, 0) - numeric_val) < 0.01)
+            search_clauses.append(func.abs(func.coalesce(Invoice.total_weight, 0) - numeric_val) < 0.001)
+        except (ValueError, TypeError):
+            pass
+        query = query.filter(or_(*search_clauses))
+
+    if date_from_str:
+        try:
+            _date_from = datetime.fromisoformat(date_from_str.replace('Z', '+00:00'))
+            query = query.filter(Invoice.date >= _date_from)
+        except Exception:
+            pass
+
+    if date_to_str:
+        try:
+            _date_to = datetime.fromisoformat(date_to_str.replace('Z', '+00:00'))
+            query = query.filter(Invoice.date <= _date_to)
+        except Exception:
+            pass
+
     invoices = query.order_by(Invoice.date.desc()).all()
-    
+
     result = []
     for inv in invoices:
-        # حساب المرتجعات الموجودة
         existing_returns = Invoice.query.filter_by(original_invoice_id=inv.id).all()
         total_returned = sum(r.total for r in existing_returns)
-        
+
         result.append({
             'id': inv.id,
             'invoice_type_id': inv.invoice_type_id,
@@ -16213,12 +16280,12 @@ def get_returnable_invoices():
             'can_return': (inv.total - total_returned) > 0,
             'customer_name': inv.customer.name if inv.customer else None,
             'supplier_name': inv.supplier.name if inv.supplier else None,
-            'items_count': len(inv.items)
+            'items_count': len(inv.items),
         })
-    
+
     return jsonify({
         'invoices': result,
-        'total_count': len(result)
+        'total_count': len(result),
     })
 
 @api.route('/accounts/next-number/<parent_number>', methods=['GET'])
@@ -16546,6 +16613,7 @@ def _serialize_journal_entry_list_item(entry):
         'id': entry.id,
         'entry_number': entry.entry_number,
         'date': entry.date.isoformat(),
+        'created_at': entry.created_at.isoformat() if getattr(entry, 'created_at', None) else None,
         'description': entry.description,
         'entry_type': getattr(entry, 'entry_type', None) or 'عادي',
         'status': 'posted' if bool(getattr(entry, 'is_posted', False)) else 'unposted',
@@ -16565,6 +16633,48 @@ def _serialize_journal_entry_list_item(entry):
         'lines': lines,
         **totals,
     }
+
+
+def _try_process_due_auto_clearing_settlements(*, payment_method_ids=None):
+    """Best-effort trigger for due auto settlements after payment creation."""
+    method_ids = set()
+    for raw_value in payment_method_ids or []:
+        try:
+            method_ids.add(int(raw_value))
+        except Exception:
+            continue
+
+    if not method_ids:
+        return None
+
+    try:
+        has_enabled_method = (
+            PaymentMethod.query
+            .filter(
+                PaymentMethod.id.in_(sorted(method_ids)),
+                PaymentMethod.is_active == True,
+                PaymentMethod.auto_settlement_enabled == True,
+            )
+            .first()
+            is not None
+        )
+    except Exception:
+        has_enabled_method = False
+
+    if not has_enabled_method:
+        return None
+
+    try:
+        from clearing_settlement_scheduler import get_clearing_settlement_scheduler
+
+        scheduler = get_clearing_settlement_scheduler(current_app._get_current_object())
+        return scheduler.process_due_settlements()
+    except Exception:
+        try:
+            current_app.logger.exception('auto_clearing_settlement_trigger_failed')
+        except Exception:
+            pass
+        return None
 
 
 @api.route('/journal_entries', methods=['GET'])
@@ -16656,7 +16766,10 @@ def get_journal_entries():
         elif search_type != 'amount' and search_type != 'gold':
             query = query.filter(or_(*base_search_filters))
 
-    entries = query.order_by(JournalEntry.date.desc(), JournalEntry.id.desc()).all()
+    entries = query.order_by(
+        func.coalesce(JournalEntry.created_at, JournalEntry.date).desc(),
+        JournalEntry.id.desc(),
+    ).all()
     serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in entries]
 
     if creator:
@@ -16717,6 +16830,7 @@ def get_journal_entries():
         if sort_by == 'creator':
             return (entry.get('creator_name') or '').strip().lower()
         return (
+            entry.get('created_at') or entry.get('date') or '',
             entry.get('date') or '',
             int(entry.get('id') or 0),
         )
@@ -24917,6 +25031,8 @@ def get_vouchers():
     available_creators = [{'name': name} for name in sorted(creator_names)]
     available_parties = [{'name': name} for name in sorted(party_names)]
 
+    created_sort_expr = func.coalesce(Voucher.created_at, Voucher.date)
+
     if sort_by == 'number':
         sort_expr = Voucher.voucher_number
     elif sort_by == 'party':
@@ -24935,12 +25051,12 @@ def get_vouchers():
     elif sort_by == 'reference':
         sort_expr = func.coalesce(Voucher.reference_number, '')
     else:
-        sort_expr = Voucher.date
+        sort_expr = created_sort_expr
 
     if sort_order == 'asc':
-        query = query.order_by(sort_expr.asc(), Voucher.id.asc())
+        query = query.order_by(sort_expr.asc(), created_sort_expr.asc(), Voucher.id.asc())
     else:
-        query = query.order_by(sort_expr.desc(), Voucher.id.desc())
+        query = query.order_by(sort_expr.desc(), created_sort_expr.desc(), Voucher.id.desc())
 
     paginated_vouchers = query.paginate(page=page, per_page=per_page, error_out=False)
 

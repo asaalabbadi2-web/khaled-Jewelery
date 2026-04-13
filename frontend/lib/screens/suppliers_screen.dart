@@ -5,12 +5,13 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as app_theme;
-
 import 'account_statement_screen.dart';
-import 'add_voucher_screen.dart';
 import 'add_supplier_screen.dart';
+import 'add_voucher_screen.dart';
 import 'purchase_invoice_screen.dart';
 import 'supplier_ledger_screen.dart';
+
+enum _SuppliersViewMode { cards, compact }
 
 class SuppliersScreen extends StatefulWidget {
   final ApiService api;
@@ -23,18 +24,36 @@ class SuppliersScreen extends StatefulWidget {
 }
 
 class SuppliersScreenState extends State<SuppliersScreen> {
-  late Future<List<dynamic>> _suppliersFuture;
-
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _topChromeKey = GlobalKey();
+
+  List<Map<String, dynamic>> _allSuppliers = const [];
+  List<Map<String, dynamic>> _filteredSuppliers = const [];
+
+  bool _isLoading = true;
+  String? _error;
 
   bool _filterNonZero = false;
+  bool _onlyActive = false;
+  bool _onlyClosingOffices = false;
+  String _sortBy = 'name';
+  bool _sortAscending = true;
+  _SuppliersViewMode _viewMode = _SuppliersViewMode.cards;
 
   int _mainKarat = 21;
+  double _topChromeHeight = 0;
+  double _topChromeCollapseOffset = 0;
+
+  static const double _epsCash = 0.01;
+  static const double _epsGold = 0.0005;
 
   @override
   void initState() {
     super.initState();
-    _loadSuppliers();
+    _searchController.addListener(_filterSuppliers);
+    _scrollController.addListener(_onContentScroll);
+    _fetchSuppliers();
   }
 
   @override
@@ -43,21 +62,79 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     final settings = context.watch<SettingsProvider>();
     final newMainKarat = settings.mainKarat;
     if (newMainKarat != _mainKarat) {
-      setState(() {
-        _mainKarat = newMainKarat;
-      });
+      _mainKarat = newMainKarat;
+      if (_allSuppliers.isNotEmpty) {
+        _filterSuppliers();
+      }
     }
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void _loadSuppliers() {
+  Future<void> _fetchSuppliers() async {
     setState(() {
-      _suppliersFuture = widget.api.getSuppliers();
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final suppliers = await widget.api.getSuppliers();
+      if (!mounted) return;
+
+      _allSuppliers = suppliers
+          .whereType<Map>()
+          .map((entry) => entry.map((key, value) => MapEntry(key.toString(), value)))
+          .toList(growable: false);
+      _filterSuppliers();
+
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+        _allSuppliers = const [];
+        _filteredSuppliers = const [];
+      });
+    }
+  }
+
+  void _onContentScroll() {
+    final nextOffset = _scrollController.hasClients
+        ? _scrollController.offset.clamp(0.0, _topChromeHeight)
+        : 0.0;
+    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
+      return;
+    }
+    setState(() {
+      _topChromeCollapseOffset = nextOffset;
+    });
+  }
+
+  void _measureTopChrome() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _topChromeKey.currentContext;
+      if (context == null) return;
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderBox) return;
+      final measuredHeight = renderObject.size.height;
+      if (measuredHeight <= 0 || (measuredHeight - _topChromeHeight).abs() < 0.5) {
+        return;
+      }
+      setState(() {
+        _topChromeHeight = measuredHeight;
+        if (_topChromeCollapseOffset > measuredHeight) {
+          _topChromeCollapseOffset = measuredHeight;
+        }
+      });
     });
   }
 
@@ -67,6 +144,38 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     return double.tryParse(value.toString()) ?? 0.0;
   }
 
+  String _supplierName(Map<String, dynamic> supplier) {
+    return (supplier['name'] ?? '').toString().trim();
+  }
+
+  String _supplierCode(Map<String, dynamic> supplier) {
+    return (supplier['supplier_code'] ?? '').toString().trim();
+  }
+
+  String _supplierPhone(Map<String, dynamic> supplier) {
+    return (supplier['phone'] ?? '').toString().trim();
+  }
+
+  String _supplierTaxNumber(Map<String, dynamic> supplier) {
+    return (supplier['tax_number'] ?? '').toString().trim();
+  }
+
+  String _defaultSafeBoxName(Map<String, dynamic> supplier) {
+    return (supplier['default_safe_box_name'] ?? '').toString().trim();
+  }
+
+  bool _isActive(Map<String, dynamic> supplier) {
+    return (supplier['active'] ?? true) == true;
+  }
+
+  bool _isClosingOffice(Map<String, dynamic> supplier) {
+    return (supplier['is_closing_office'] ?? false) == true;
+  }
+
+  double _cashBalance(Map<String, dynamic> supplier) {
+    return _toDouble(supplier['balance_cash']);
+  }
+
   double _goldMainEquivalent(Map<String, dynamic> supplier) {
     final b18 = _toDouble(supplier['balance_gold_18k']);
     final b21 = _toDouble(supplier['balance_gold_21k']);
@@ -74,17 +183,94 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     final b24 = _toDouble(supplier['balance_gold_24k']);
 
     final main = _mainKarat <= 0 ? 21.0 : _mainKarat.toDouble();
-
-    // Convert each karat into main-karat-equivalent weight:
-    // w_main = w * (karat / main)
     return (b18 * (18.0 / main)) +
         (b21 * (21.0 / main)) +
         (b22 * (22.0 / main)) +
         (b24 * (24.0 / main));
   }
 
-  static const double _epsCash = 0.01;
-  static const double _epsGold = 0.0005;
+  bool _hasPendingBalance(Map<String, dynamic> supplier) {
+    return _cashBalance(supplier).abs() > _epsCash ||
+        _goldMainEquivalent(supplier).abs() > _epsGold;
+  }
+
+  void _filterSuppliers() {
+    final query = _searchController.text.trim().toLowerCase();
+    final filtered = _allSuppliers.where((supplier) {
+      final name = _supplierName(supplier).toLowerCase();
+      final code = _supplierCode(supplier).toLowerCase();
+      final phone = _supplierPhone(supplier).toLowerCase();
+      final tax = _supplierTaxNumber(supplier).toLowerCase();
+      final safeBox = _defaultSafeBoxName(supplier).toLowerCase();
+
+      final matchesQuery = query.isEmpty ||
+          name.contains(query) ||
+          code.contains(query) ||
+          phone.contains(query) ||
+          tax.contains(query) ||
+          safeBox.contains(query);
+      if (!matchesQuery) return false;
+      if (_filterNonZero && !_hasPendingBalance(supplier)) return false;
+      if (_onlyActive && !_isActive(supplier)) return false;
+      if (_onlyClosingOffices && !_isClosingOffice(supplier)) return false;
+      return true;
+    }).toList(growable: false);
+
+    filtered.sort((a, b) {
+      int comparison;
+      switch (_sortBy) {
+        case 'code':
+          comparison = _supplierCode(a).compareTo(_supplierCode(b));
+          break;
+        case 'cash':
+          comparison = _cashBalance(a).compareTo(_cashBalance(b));
+          break;
+        case 'gold':
+          comparison = _goldMainEquivalent(a).compareTo(_goldMainEquivalent(b));
+          break;
+        case 'tax':
+          comparison = _supplierTaxNumber(a).compareTo(_supplierTaxNumber(b));
+          break;
+        case 'status':
+          comparison = (_isActive(a) ? 1 : 0).compareTo(_isActive(b) ? 1 : 0);
+          break;
+        default:
+          comparison = _supplierName(a).compareTo(_supplierName(b));
+          break;
+      }
+
+      if (comparison == 0) {
+        comparison = _supplierCode(a).compareTo(_supplierCode(b));
+      }
+      return _sortAscending ? comparison : -comparison;
+    });
+
+    setState(() {
+      _filteredSuppliers = filtered;
+    });
+  }
+
+  int get _activeFiltersCount {
+    int count = 0;
+    if (_searchController.text.trim().isNotEmpty) count++;
+    if (_filterNonZero) count++;
+    if (_onlyActive) count++;
+    if (_onlyClosingOffices) count++;
+    if (_sortBy != 'name' || !_sortAscending) count++;
+    return count;
+  }
+
+  void _clearFilters() {
+    _searchController.clear();
+    setState(() {
+      _filterNonZero = false;
+      _onlyActive = false;
+      _onlyClosingOffices = false;
+      _sortBy = 'name';
+      _sortAscending = true;
+    });
+    _filterSuppliers();
+  }
 
   ({String label, Color color}) _sideLabelForBalance(
     double value, {
@@ -106,8 +292,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     );
   }
 
-  Widget _buildBalancePill({
-    required bool isAr,
+  Widget _buildBalanceMetricCard({
     required IconData icon,
     required String title,
     required double value,
@@ -118,41 +303,136 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     final side = _sideLabelForBalance(value, isCash: isCash);
     final theme = Theme.of(context);
     final isZero = (isCash ? _epsCash : _epsGold) >= value.abs();
-    final pillColor = isZero ? theme.hintColor : side.color;
+    final accent = isZero ? theme.hintColor : side.color;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: pillColor.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: pillColor.withValues(alpha: 0.35), width: 1),
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.18)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: pillColor),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: theme.textTheme.bodySmall?.color,
+          Row(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 14, color: accent),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                side.label,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: accent,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          RichText(
+            text: TextSpan(
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: accent,
+              ),
+              children: [
+                TextSpan(text: formattedAbsValue),
+                TextSpan(
+                  text: ' $unit',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.60),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          Text(
-            '${side.label}: ',
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: pillColor,
-            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBalancePanel({
+    required double cash,
+    required double gold,
+    required String cashFormatted,
+    required String goldFormatted,
+  }) {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.account_balance_wallet_outlined,
+                size: 15,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                widget.isArabic ? 'ملخص الرصيد' : 'Balance summary',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
           ),
-          Text(
-            '$formattedAbsValue $unit',
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: theme.textTheme.bodySmall?.color,
-            ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _buildBalanceMetricCard(
+                  icon: Icons.payments_outlined,
+                  title: widget.isArabic ? 'النقد' : 'Cash',
+                  value: cash,
+                  formattedAbsValue: cashFormatted,
+                  unit: widget.isArabic ? 'ر.س' : 'SAR',
+                  isCash: true,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildBalanceMetricCard(
+                  icon: Icons.scale_outlined,
+                  title: widget.isArabic ? 'الذهب' : 'Gold',
+                  value: gold,
+                  formattedAbsValue: goldFormatted,
+                  unit: widget.isArabic ? 'جم' : 'g',
+                  isCash: false,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -193,7 +473,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     try {
       final result = await widget.api.deleteSupplier(id);
       if (!mounted) return;
-      _loadSuppliers();
+      await _fetchSuppliers();
 
       final action = (result['action'] ?? '').toString();
       final msg = action == 'deactivated'
@@ -203,24 +483,861 @@ class SuppliersScreenState extends State<SuppliersScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to delete supplier: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(isAr ? 'تعذر حذف المورد: $e' : 'Failed to delete supplier: $e')),
+      );
     }
   }
 
-  void _navigateToAddSupplier({Map<String, dynamic>? supplier}) async {
+  Future<void> _navigateToAddSupplier({Map<String, dynamic>? supplier}) async {
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            AddSupplierScreen(api: widget.api, supplier: supplier),
+        builder: (context) => AddSupplierScreen(api: widget.api, supplier: supplier),
       ),
     );
-    if (result == true) {
-      if (!mounted) return;
-      _loadSuppliers();
+    if (result == true && mounted) {
+      await _fetchSuppliers();
     }
+  }
+
+  Future<void> _openPurchaseInvoice(Map<String, dynamic> supplier) async {
+    final supplierId = supplier['id'] as int?;
+    if (supplierId == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PurchaseInvoiceScreen(supplierId: supplierId),
+      ),
+    );
+    if (mounted) await _fetchSuppliers();
+  }
+
+  Future<void> _openPaymentVoucher(Map<String, dynamic> supplier) async {
+    final supplierId = supplier['id'] as int?;
+    if (supplierId == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddVoucherScreen(
+          voucherType: 'payment',
+          initialSupplierId: supplierId,
+        ),
+      ),
+    );
+    if (mounted) await _fetchSuppliers();
+  }
+
+  Future<void> _openSupplierLedger(Map<String, dynamic> supplier) async {
+    final supplierId = supplier['id'] as int?;
+    if (supplierId == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SupplierLedgerScreen(
+          api: widget.api,
+          supplierId: supplierId,
+          supplierName: _supplierName(supplier),
+          isArabic: widget.isArabic,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSupplierStatement(Map<String, dynamic> supplier) async {
+    final supplierId = supplier['id'] as int?;
+    if (supplierId == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AccountStatementScreen(
+          accountId: supplierId,
+          accountName: _supplierName(supplier),
+          entityType: 'supplier',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard({
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+  }) {
+    final theme = Theme.of(context);
+    return Container(
+      constraints: const BoxConstraints(minWidth: 250, maxWidth: 360),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.68),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatisticsSection() {
+    final localeName = Localizations.localeOf(context).toString();
+    final moneyFmt = NumberFormat('#,##0.00', localeName);
+    final weightFmt = NumberFormat('#,##0.000', localeName);
+
+    final totalSuppliers = _filteredSuppliers.length;
+    final activeSuppliers = _filteredSuppliers.where(_isActive).length;
+    final suppliersWithBalance = _filteredSuppliers.where(_hasPendingBalance).length;
+    final totalCashCredit = _filteredSuppliers.fold<double>(0.0, (sum, supplier) {
+      final value = _cashBalance(supplier);
+      return value < 0 ? sum + (-value) : sum;
+    });
+    final totalGoldCredit = _filteredSuppliers.fold<double>(0.0, (sum, supplier) {
+      final value = _goldMainEquivalent(supplier);
+      return value < 0 ? sum + (-value) : sum;
+    });
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _buildSummaryCard(
+          title: widget.isArabic ? 'الموردون المطابقون' : 'Matching suppliers',
+          value: '$totalSuppliers',
+          subtitle: widget.isArabic ? 'بعد الفلاتر الحالية' : 'After current filters',
+          icon: Icons.groups_2_outlined,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'الموردون النشطون' : 'Active suppliers',
+          value: '$activeSuppliers',
+          subtitle: widget.isArabic ? 'جاهزون للحركة والشراء' : 'Ready for transactions',
+          icon: Icons.verified_user_outlined,
+          color: Colors.blue,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'إجمالي النقد الدائن' : 'Total cash credit',
+          value: moneyFmt.format(totalCashCredit),
+          subtitle: widget.isArabic ? 'مستحق للموردين' : 'Due to suppliers',
+          icon: Icons.payments_outlined,
+          color: Colors.green,
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'إجمالي الذهب الدائن (مكافئ $_mainKarat)' : 'Total gold credit ($_mainKarat equiv)',
+          value: weightFmt.format(totalGoldCredit),
+          subtitle: widget.isArabic ? 'موردون بأرصدة وزنية' : 'Weighted supplier balances',
+          icon: Icons.scale_outlined,
+          color: const Color(0xFFD4A017),
+        ),
+        _buildSummaryCard(
+          title: widget.isArabic ? 'موردون برصيد' : 'Suppliers with balance',
+          value: '$suppliersWithBalance',
+          subtitle: widget.isArabic ? 'نقدي أو ذهبي' : 'Cash or gold balances',
+          icon: Icons.account_balance_wallet_outlined,
+          color: Colors.teal,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCollapsibleTopChrome() {
+    final content = KeyedSubtree(
+      key: _topChromeKey,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: _buildStatisticsSection(),
+      ),
+    );
+
+    _measureTopChrome();
+
+    if (_topChromeHeight <= 0) {
+      return content;
+    }
+
+    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
+    final visibleHeight = (_topChromeHeight - collapse).clamp(0.0, _topChromeHeight);
+    if (visibleHeight <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    return ClipRect(
+      child: SizedBox(
+        height: visibleHeight,
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          minHeight: _topChromeHeight,
+          maxHeight: _topChromeHeight,
+          child: Transform.translate(
+            offset: Offset(0, -collapse),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildManagementToolbar() {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.14)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilterChip(
+                      label: Text(widget.isArabic ? 'برصيد فقط' : 'With balance'),
+                      selected: _filterNonZero,
+                      onSelected: (value) {
+                        setState(() {
+                          _filterNonZero = value;
+                        });
+                        _filterSuppliers();
+                      },
+                    ),
+                    FilterChip(
+                      label: Text(widget.isArabic ? 'نشط فقط' : 'Active only'),
+                      selected: _onlyActive,
+                      onSelected: (value) {
+                        setState(() {
+                          _onlyActive = value;
+                        });
+                        _filterSuppliers();
+                      },
+                    ),
+                    FilterChip(
+                      label: Text(widget.isArabic ? 'مكاتب تسكير فقط' : 'Closing offices'),
+                      selected: _onlyClosingOffices,
+                      onSelected: (value) {
+                        setState(() {
+                          _onlyClosingOffices = value;
+                        });
+                        _filterSuppliers();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              if (_activeFiltersCount > 0)
+                TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.close, size: 16),
+                  label: Text(widget.isArabic ? 'مسح الفلاتر' : 'Clear filters'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              SizedBox(
+                width: 420,
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: widget.isArabic
+                        ? 'ابحث بالاسم أو الكود أو الهاتف أو الرقم الضريبي أو الخزنة'
+                        : 'Search by name, code, phone, tax or safe box',
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    suffixIcon: _searchController.text.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              _filterSuppliers();
+                            },
+                          ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 170,
+                child: DropdownButtonFormField<String>(
+                  value: _sortBy,
+                  decoration: InputDecoration(
+                    labelText: widget.isArabic ? 'الترتيب' : 'Sort by',
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem(value: 'name', child: Text(widget.isArabic ? 'الاسم' : 'Name')),
+                    DropdownMenuItem(value: 'code', child: Text(widget.isArabic ? 'الكود' : 'Code')),
+                    DropdownMenuItem(value: 'cash', child: Text(widget.isArabic ? 'الرصيد النقدي' : 'Cash balance')),
+                    DropdownMenuItem(value: 'gold', child: Text(widget.isArabic ? 'الرصيد الذهبي' : 'Gold balance')),
+                    DropdownMenuItem(value: 'status', child: Text(widget.isArabic ? 'الحالة' : 'Status')),
+                    DropdownMenuItem(value: 'tax', child: Text(widget.isArabic ? 'الرقم الضريبي' : 'Tax number')),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _sortBy = value;
+                    });
+                    _filterSuppliers();
+                  },
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _sortAscending = !_sortAscending;
+                  });
+                  _filterSuppliers();
+                },
+                icon: Icon(
+                  _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                  size: 18,
+                ),
+                label: Text(_sortAscending
+                    ? (widget.isArabic ? 'تصاعدي' : 'Ascending')
+                    : (widget.isArabic ? 'تنازلي' : 'Descending')),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  widget.isArabic
+                      ? 'النتائج: ${_filteredSuppliers.length}'
+                      : 'Results: ${_filteredSuppliers.length}',
+                  style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSupplierTag({
+    required String label,
+    required Color color,
+    IconData? icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleSupplierAction(String value, Map<String, dynamic> supplier) async {
+    if (value == 'purchase') {
+      await _openPurchaseInvoice(supplier);
+    } else if (value == 'voucher') {
+      await _openPaymentVoucher(supplier);
+    } else if (value == 'statement') {
+      await _openSupplierStatement(supplier);
+    } else if (value == 'ledger') {
+      await _openSupplierLedger(supplier);
+    } else if (value == 'edit') {
+      await _navigateToAddSupplier(supplier: supplier);
+    } else if (value == 'delete') {
+      await _confirmAndDeleteSupplier(supplier);
+    }
+  }
+
+  Widget _buildSupplierActions(Map<String, dynamic> supplier) {
+    return PopupMenuButton<String>(
+      tooltip: widget.isArabic ? 'الإجراءات' : 'Actions',
+      onSelected: (value) => _handleSupplierAction(value, supplier),
+      itemBuilder: (context) => [
+        PopupMenuItem(value: 'purchase', child: Text(widget.isArabic ? 'فاتورة شراء' : 'Purchase invoice')),
+        PopupMenuItem(value: 'voucher', child: Text(widget.isArabic ? 'سند صرف' : 'Payment voucher')),
+        PopupMenuItem(value: 'statement', child: Text(widget.isArabic ? 'كشف الحساب' : 'Statement')),
+        PopupMenuItem(value: 'ledger', child: Text(widget.isArabic ? 'حركات المورد' : 'Supplier ledger')),
+        PopupMenuItem(value: 'edit', child: Text(widget.isArabic ? 'تعديل' : 'Edit')),
+        PopupMenuItem(value: 'delete', child: Text(widget.isArabic ? 'حذف/تعطيل' : 'Delete/Deactivate')),
+      ],
+    );
+  }
+
+  Widget _buildSupplierCard(Map<String, dynamic> supplier) {
+    final theme = Theme.of(context);
+    final localeName = Localizations.localeOf(context).toString();
+    final moneyFmt = NumberFormat('#,##0.00', localeName);
+    final weightFmt = NumberFormat('#,##0.000', localeName);
+
+    final supplierName = _supplierName(supplier);
+    final supplierCode = _supplierCode(supplier);
+    final phone = _supplierPhone(supplier);
+    final tax = _supplierTaxNumber(supplier);
+    final active = _isActive(supplier);
+    final isClosingOffice = _isClosingOffice(supplier);
+    final safeBoxName = _defaultSafeBoxName(supplier);
+    final cash = _cashBalance(supplier);
+    final gold = _goldMainEquivalent(supplier);
+    final cashFormatted = moneyFmt.format(cash.abs());
+    final goldFormatted = weightFmt.format(gold.abs());
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _openSupplierLedger(supplier),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 900;
+
+              final detailsColumn = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.business_outlined, color: theme.colorScheme.primary),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              supplierName.isEmpty ? (widget.isArabic ? 'بدون اسم' : 'Unnamed') : supplierName,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: active ? null : theme.disabledColor,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              supplierCode.isEmpty
+                                  ? (widget.isArabic ? 'بدون كود' : 'No code')
+                                  : supplierCode,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _buildSupplierActions(supplier),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildSupplierTag(
+                        label: active
+                            ? (widget.isArabic ? 'نشط' : 'Active')
+                            : (widget.isArabic ? 'معطل' : 'Inactive'),
+                        color: active ? Colors.green : Colors.grey,
+                        icon: active ? Icons.check_circle_outline : Icons.block_outlined,
+                      ),
+                      if (isClosingOffice)
+                        _buildSupplierTag(
+                          label: widget.isArabic ? 'مكتب تسكير' : 'Closing office',
+                          color: Colors.blue,
+                          icon: Icons.apartment_outlined,
+                        ),
+                      if (safeBoxName.isNotEmpty)
+                        _buildSupplierTag(
+                          label: widget.isArabic ? 'الخزنة: $safeBoxName' : 'Safe box: $safeBoxName',
+                          color: theme.colorScheme.primary,
+                          icon: Icons.inventory_2_outlined,
+                        ),
+                    ],
+                  ),
+                  if (phone.isNotEmpty || tax.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 6,
+                      children: [
+                        if (phone.isNotEmpty)
+                          Text(
+                            widget.isArabic ? 'الهاتف: $phone' : 'Phone: $phone',
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                        if (tax.isNotEmpty)
+                          Text(
+                            widget.isArabic ? 'الرقم الضريبي: $tax' : 'Tax: $tax',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              );
+
+              final balancePanel = _buildBalancePanel(
+                cash: cash,
+                gold: gold,
+                cashFormatted: cashFormatted,
+                goldFormatted: goldFormatted,
+              );
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isWide)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 6, child: detailsColumn),
+                        const SizedBox(width: 12),
+                        SizedBox(width: 320, child: balancePanel),
+                      ],
+                    )
+                  else ...[
+                    detailsColumn,
+                    const SizedBox(height: 12),
+                    balancePanel,
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => _openSupplierStatement(supplier),
+                          icon: const Icon(Icons.assessment_outlined, size: 18),
+                          label: Text(widget.isArabic ? 'كشف الحساب' : 'Statement'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openPaymentVoucher(supplier),
+                          icon: const Icon(Icons.call_made_outlined, size: 18),
+                          label: Text(widget.isArabic ? 'سند صرف' : 'Payment'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openPurchaseInvoice(supplier),
+                          icon: const Icon(Icons.shopping_cart_outlined, size: 18),
+                          label: Text(widget.isArabic ? 'شراء' : 'Purchase'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompactRow(Map<String, dynamic> supplier) {
+    final theme = Theme.of(context);
+    final localeName = Localizations.localeOf(context).toString();
+    final moneyFmt = NumberFormat('#,##0.00', localeName);
+    final weightFmt = NumberFormat('#,##0.000', localeName);
+
+    final cash = _cashBalance(supplier);
+    final gold = _goldMainEquivalent(supplier);
+    final active = _isActive(supplier);
+
+    return Material(
+      color: theme.colorScheme.surface,
+      child: InkWell(
+        onTap: () => _openSupplierLedger(supplier),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: theme.colorScheme.outline.withValues(alpha: 0.1),
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _supplierName(supplier).isEmpty
+                          ? (widget.isArabic ? 'بدون اسم' : 'Unnamed')
+                          : _supplierName(supplier),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: active ? null : theme.disabledColor,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _supplierCode(supplier).isEmpty
+                          ? (widget.isArabic ? 'بدون كود' : 'No code')
+                          : _supplierCode(supplier),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  '${moneyFmt.format(cash)} ${widget.isArabic ? 'ر.س' : 'SAR'}',
+                  textAlign: TextAlign.end,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.green.shade700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  '${weightFmt.format(gold)} ${widget.isArabic ? 'جم' : 'g'}',
+                  textAlign: TextAlign.end,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFFD4A017),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              _buildSupplierActions(supplier),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    final theme = Theme.of(context);
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.groups_2_outlined,
+            size: 64,
+            color: theme.colorScheme.primary.withValues(alpha: 0.35),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _activeFiltersCount > 0
+                ? (widget.isArabic ? 'لا توجد نتائج مطابقة' : 'No matching suppliers')
+                : (widget.isArabic ? 'لا يوجد موردون للعرض' : 'No suppliers to display'),
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            widget.isArabic
+                ? 'جرّب تعديل البحث أو إزالة بعض الفلاتر الحالية'
+                : 'Try adjusting the search or clearing some filters',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              widget.isArabic ? 'تعذر تحميل الموردين' : 'Unable to load suppliers',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(_error ?? '', textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _fetchSuppliers,
+              icon: const Icon(Icons.refresh),
+              label: Text(widget.isArabic ? 'إعادة المحاولة' : 'Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null && _filteredSuppliers.isEmpty) {
+      return _buildErrorState();
+    }
+
+    if (_filteredSuppliers.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    if (_viewMode == _SuppliersViewMode.compact) {
+      return RefreshIndicator(
+        onRefresh: _fetchSuppliers,
+        child: ListView(
+          controller: _scrollController,
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 4,
+                          child: Text(
+                            widget.isArabic ? 'المورد' : 'Supplier',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            widget.isArabic ? 'نقد' : 'Cash',
+                            textAlign: TextAlign.end,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            widget.isArabic ? 'ذهب' : 'Gold',
+                            textAlign: TextAlign.end,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        const SizedBox(width: 44),
+                      ],
+                    ),
+                  ),
+                  ..._filteredSuppliers.map(_buildCompactRow),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _fetchSuppliers,
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+        itemCount: _filteredSuppliers.length,
+        itemBuilder: (context, index) => _buildSupplierCard(_filteredSuppliers[index]),
+      ),
+    );
   }
 
   @override
@@ -230,638 +1347,43 @@ class SuppliersScreenState extends State<SuppliersScreen> {
         title: Text(widget.isArabic ? 'الموردين' : 'Suppliers'),
         actions: [
           IconButton(
+            tooltip: _viewMode == _SuppliersViewMode.cards
+                ? (widget.isArabic ? 'عرض مضغوط' : 'Compact view')
+                : (widget.isArabic ? 'عرض البطاقات' : 'Cards view'),
+            icon: Icon(
+              _viewMode == _SuppliersViewMode.cards
+                  ? Icons.table_rows_outlined
+                  : Icons.view_agenda_outlined,
+            ),
+            onPressed: () {
+              setState(() {
+                _viewMode = _viewMode == _SuppliersViewMode.cards
+                    ? _SuppliersViewMode.compact
+                    : _SuppliersViewMode.cards;
+              });
+            },
+          ),
+          IconButton(
+            tooltip: widget.isArabic ? 'تحديث' : 'Refresh',
+            icon: const Icon(Icons.refresh),
+            onPressed: _fetchSuppliers,
+          ),
+          IconButton(
+            tooltip: widget.isArabic ? 'إضافة مورد' : 'Add supplier',
             icon: const Icon(Icons.add),
             onPressed: () => _navigateToAddSupplier(),
           ),
         ],
       ),
-      body: FutureBuilder<List<dynamic>>(
-        future: _suppliersFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          } else if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('لا يوجد موردين'));
-          }
-
-          final rawSuppliers = snapshot.data!;
-          final isAr = widget.isArabic;
-          final localeName = Localizations.localeOf(context).toString();
-          final moneyFmt = NumberFormat('#,##0.00', localeName);
-          final weightFmt = NumberFormat('#,##0.000', localeName);
-
-          final query = _searchController.text.trim().toLowerCase();
-          final suppliers = rawSuppliers
-              .whereType<Map<String, dynamic>>()
-              .where((s) {
-                if (query.isEmpty) return true;
-                final name = (s['name'] ?? '').toString().toLowerCase();
-                final code = (s['supplier_code'] ?? '')
-                    .toString()
-                    .toLowerCase();
-                final phone = (s['phone'] ?? '').toString().toLowerCase();
-                final tax = (s['tax_number'] ?? '').toString().toLowerCase();
-                return name.contains(query) ||
-                    code.contains(query) ||
-                    phone.contains(query) ||
-                    tax.contains(query);
-              })
-              .where((s) {
-                if (!_filterNonZero) return true;
-                final cash = _toDouble(s['balance_cash']);
-                final goldMain = _goldMainEquivalent(s);
-                return cash.abs() > 0.01 || goldMain.abs() > 0.0005;
-              })
-              .toList();
-
-          final totalCashCredit = suppliers.fold<double>(0.0, (sum, s) {
-            final v = _toDouble(s['balance_cash']);
-            return v < 0 ? sum + (-v) : sum;
-          });
-          final totalGoldCreditMain = suppliers.fold<double>(0.0, (sum, s) {
-            final v = _goldMainEquivalent(s);
-            return v < 0 ? sum + (-v) : sum;
-          });
-          final activeSuppliersCount = suppliers
-              .where((s) => (s['active'] ?? true) == true)
-              .length;
-
-          Widget buildSummaryCard({
-            required Color background,
-            required Color foreground,
-            required String title,
-            required String value,
-          }) {
-            final tintedBg = background.withValues(alpha: 0.12);
-            final tintedBorder = background.withValues(alpha: 0.25);
-            return Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: tintedBg,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: tintedBorder, width: 1),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: foreground,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
-                    textAlign: isAr ? TextAlign.right : TextAlign.left,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      color: foreground,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 18,
-                    ),
-                    textAlign: isAr ? TextAlign.right : TextAlign.left,
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: _searchController,
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        prefixIcon: const Icon(Icons.search),
-                        hintText: isAr
-                            ? 'بحث بالاسم / الكود / الهاتف / الرقم الضريبي'
-                            : 'Search by name/code/phone/tax',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        FilterChip(
-                          label: Text(isAr ? 'غير صفري' : 'Non-zero'),
-                          selected: _filterNonZero,
-                          onSelected: (v) => setState(() => _filterNonZero = v),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: buildSummaryCard(
-                            background: app_theme.AppColors.primaryGold,
-                            foreground: Colors.black87,
-                            title: isAr
-                                ? 'إجمالي الذهب الدائن (مكافئ $_mainKarat)'
-                                : 'Total gold credit ($_mainKarat equiv)',
-                            value: weightFmt.format(totalGoldCreditMain),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: buildSummaryCard(
-                            background: app_theme.AppColors.success,
-                            foreground: app_theme.AppColors.success,
-                            title: isAr
-                                ? 'إجمالي النقد الدائن'
-                                : 'Total cash credit',
-                            value: moneyFmt.format(totalCashCredit),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: buildSummaryCard(
-                            background: app_theme.AppColors.info,
-                            foreground: app_theme.AppColors.info,
-                            title: isAr
-                                ? 'الموردون النشطون'
-                                : 'Active suppliers',
-                            value: activeSuppliersCount.toString(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: suppliers.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.filter_alt_off_outlined,
-                                size: 44,
-                                color: Theme.of(context).hintColor,
-                              ),
-                              const SizedBox(height: 10),
-                              Text(
-                                (_filterNonZero && query.isEmpty)
-                                    ? (isAr
-                                          ? 'لا يوجد موردون بأرصدة معلقة حالياً'
-                                          : 'No suppliers with pending balances')
-                                    : (isAr
-                                          ? 'لا توجد نتائج مطابقة حالياً'
-                                          : 'No matching results'),
-                                textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: suppliers.length,
-                        itemBuilder: (context, index) {
-                          final supplier = suppliers[index];
-                          final supplierId = supplier['id'] as int?;
-                          final supplierName = (supplier['name'] ?? '')
-                              .toString();
-                          final supplierCode = (supplier['supplier_code'] ?? '')
-                              .toString();
-                          final phone = (supplier['phone'] ?? '').toString();
-                          final tax = (supplier['tax_number'] ?? '').toString();
-                          final active = (supplier['active'] ?? true) == true;
-
-                          final isClosingOffice =
-                              (supplier['is_closing_office'] ?? false) == true;
-                          final defaultSafeBoxName =
-                              (supplier['default_safe_box_name'] ?? '')
-                                  .toString()
-                                  .trim();
-
-                          final cash = _toDouble(supplier['balance_cash']);
-                          final goldMain = _goldMainEquivalent(supplier);
-
-                          final cashAbs = cash.abs();
-                          final goldAbs = goldMain.abs();
-                          final cashUnit = isAr ? 'ر.س' : 'SAR';
-                          final goldUnit = isAr ? 'جم' : 'g';
-
-                          final theme = Theme.of(context);
-                          final actionsEnabled = supplierId != null;
-
-                          return Card(
-                            margin: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                16,
-                                14,
-                                16,
-                                12,
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: isAr
-                                          ? CrossAxisAlignment.end
-                                          : CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.center,
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                supplierName,
-                                                style: TextStyle(
-                                                  fontSize: 16,
-                                                  fontWeight: FontWeight.w800,
-                                                  color: active
-                                                      ? null
-                                                      : theme.disabledColor,
-                                                ),
-                                                textAlign: isAr
-                                                    ? TextAlign.right
-                                                    : TextAlign.left,
-                                              ),
-                                            ),
-                                            if (supplierCode.isNotEmpty) ...[
-                                              const SizedBox(width: 10),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 6,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: app_theme
-                                                      .AppColors
-                                                      .lightGold
-                                                      .withValues(alpha: 0.35),
-                                                  borderRadius:
-                                                      BorderRadius.circular(10),
-                                                  border: Border.all(
-                                                    color: app_theme
-                                                        .AppColors
-                                                        .darkGold,
-                                                    width: 1,
-                                                  ),
-                                                ),
-                                                child: Text(
-                                                  supplierCode,
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.bold,
-                                                    letterSpacing: 0.3,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-
-                                        if (isClosingOffice ||
-                                            defaultSafeBoxName.isNotEmpty)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 8,
-                                            ),
-                                            child: Wrap(
-                                              spacing: 8,
-                                              runSpacing: 8,
-                                              alignment: isAr
-                                                  ? WrapAlignment.end
-                                                  : WrapAlignment.start,
-                                              children: [
-                                                if (isClosingOffice)
-                                                  Container(
-                                                    padding:
-                                                        const EdgeInsets.symmetric(
-                                                          horizontal: 10,
-                                                          vertical: 6,
-                                                        ),
-                                                    decoration: BoxDecoration(
-                                                      color: app_theme
-                                                          .AppColors
-                                                          .info
-                                                          .withValues(
-                                                            alpha: 0.12,
-                                                          ),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            999,
-                                                          ),
-                                                      border: Border.all(
-                                                        color: app_theme
-                                                            .AppColors
-                                                            .info
-                                                            .withValues(
-                                                              alpha: 0.35,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                    child: Text(
-                                                      isAr
-                                                          ? 'مكتب تسكير'
-                                                          : 'Closing Office',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            fontWeight:
-                                                                FontWeight.w800,
-                                                            color: app_theme
-                                                                .AppColors
-                                                                .info,
-                                                          ),
-                                                    ),
-                                                  ),
-                                                if (defaultSafeBoxName
-                                                    .isNotEmpty)
-                                                  Container(
-                                                    padding:
-                                                        const EdgeInsets.symmetric(
-                                                          horizontal: 10,
-                                                          vertical: 6,
-                                                        ),
-                                                    decoration: BoxDecoration(
-                                                      color: theme
-                                                          .colorScheme
-                                                          .surfaceContainerHighest
-                                                          .withValues(
-                                                            alpha: 0.55,
-                                                          ),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            999,
-                                                          ),
-                                                      border: Border.all(
-                                                        color: theme
-                                                            .dividerColor
-                                                            .withValues(
-                                                              alpha: 0.65,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                    child: Text(
-                                                      isAr
-                                                          ? 'الخزنة: $defaultSafeBoxName'
-                                                          : 'SafeBox: $defaultSafeBoxName',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            fontWeight:
-                                                                FontWeight.w700,
-                                                            color: theme
-                                                                .textTheme
-                                                                .bodySmall
-                                                                ?.color,
-                                                          ),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-
-                                        if (phone.isNotEmpty)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 8,
-                                            ),
-                                            child: Text(
-                                              phone,
-                                              style: theme.textTheme.bodyMedium,
-                                              textAlign: isAr
-                                                  ? TextAlign.right
-                                                  : TextAlign.left,
-                                            ),
-                                          ),
-                                        if (tax.isNotEmpty)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 4,
-                                            ),
-                                            child: Text(
-                                              isAr
-                                                  ? 'الرقم الضريبي: $tax'
-                                                  : 'Tax: $tax',
-                                              style: theme.textTheme.bodySmall
-                                                  ?.copyWith(
-                                                    color: theme.hintColor,
-                                                  ),
-                                              textAlign: isAr
-                                                  ? TextAlign.right
-                                                  : TextAlign.left,
-                                            ),
-                                          ),
-
-                                        const SizedBox(height: 12),
-                                        Wrap(
-                                          spacing: 10,
-                                          runSpacing: 10,
-                                          alignment: isAr
-                                              ? WrapAlignment.end
-                                              : WrapAlignment.start,
-                                          children: [
-                                            _buildBalancePill(
-                                              isAr: isAr,
-                                              icon: Icons.payments_outlined,
-                                              title: isAr ? 'نقد' : 'Cash',
-                                              value: cash,
-                                              formattedAbsValue: moneyFmt
-                                                  .format(cashAbs),
-                                              unit: cashUnit,
-                                              isCash: true,
-                                            ),
-                                            _buildBalancePill(
-                                              isAr: isAr,
-                                              icon: Icons.scale_outlined,
-                                              title: isAr
-                                                  ? 'ذهب (مكافئ $_mainKarat)'
-                                                  : 'Gold ($_mainKarat equiv)',
-                                              value: goldMain,
-                                              formattedAbsValue: weightFmt
-                                                  .format(goldAbs),
-                                              unit: goldUnit,
-                                              isCash: false,
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: theme
-                                          .colorScheme
-                                          .surfaceContainerHighest,
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: theme.dividerColor.withValues(
-                                          alpha: 0.6,
-                                        ),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        IconButton(
-                                          icon: const Icon(
-                                            Icons.shopping_cart_outlined,
-                                          ),
-                                          tooltip: isAr
-                                              ? 'فاتورة شراء'
-                                              : 'Purchase invoice',
-                                          color:
-                                              app_theme.AppColors.primaryGold,
-                                          onPressed: actionsEnabled
-                                              ? () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) =>
-                                                          PurchaseInvoiceScreen(
-                                                            supplierId:
-                                                                supplierId,
-                                                          ),
-                                                    ),
-                                                  );
-                                                }
-                                              : null,
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(Icons.call_made),
-                                          tooltip: isAr
-                                              ? 'سند صرف'
-                                              : 'Payment voucher',
-                                          color: app_theme.AppColors.info,
-                                          onPressed: actionsEnabled
-                                              ? () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) =>
-                                                          AddVoucherScreen(
-                                                            voucherType:
-                                                                'payment',
-                                                            initialSupplierId:
-                                                                supplierId,
-                                                          ),
-                                                    ),
-                                                  );
-                                                }
-                                              : null,
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(Icons.receipt_long),
-                                          tooltip: isAr
-                                              ? 'حركات المورد'
-                                              : 'Supplier movements',
-                                          color: app_theme.AppColors.info,
-                                          onPressed: actionsEnabled
-                                              ? () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) =>
-                                                          SupplierLedgerScreen(
-                                                            api: widget.api,
-                                                            supplierId:
-                                                                supplierId,
-                                                            supplierName:
-                                                                supplierName,
-                                                            isArabic: isAr,
-                                                          ),
-                                                    ),
-                                                  );
-                                                }
-                                              : null,
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(
-                                            Icons.layers_outlined,
-                                          ),
-                                          tooltip: isAr
-                                              ? 'كشف حساب المورد'
-                                              : 'Merged statement (financial + memo)',
-                                          color:
-                                              app_theme.AppColors.primaryGold,
-                                          onPressed: actionsEnabled
-                                              ? () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) =>
-                                                          AccountStatementScreen(
-                                                            accountId:
-                                                                supplierId,
-                                                            accountName:
-                                                                supplierName,
-                                                            entityType:
-                                                                'supplier',
-                                                          ),
-                                                    ),
-                                                  );
-                                                }
-                                              : null,
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(Icons.edit_outlined),
-                                          tooltip: isAr ? 'تعديل' : 'Edit',
-                                          color: app_theme.AppColors.darkGold,
-                                          onPressed: () =>
-                                              _navigateToAddSupplier(
-                                                supplier: supplier,
-                                              ),
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(
-                                            Icons.delete_outline,
-                                          ),
-                                          tooltip: isAr
-                                              ? 'حذف/تعطيل'
-                                              : 'Delete/Deactivate',
-                                          color: app_theme.AppColors.error,
-                                          onPressed: () =>
-                                              _confirmAndDeleteSupplier(
-                                                supplier,
-                                              ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          );
-        },
+      body: Column(
+        children: [
+          _buildCollapsibleTopChrome(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _buildManagementToolbar(),
+          ),
+          Expanded(child: _buildBody()),
+        ],
       ),
     );
   }

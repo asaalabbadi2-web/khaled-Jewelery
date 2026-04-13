@@ -920,6 +920,60 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     }
   }
 
+  Map<String, dynamic>? _findAccountById(int? accountId) {
+    if (accountId == null) {
+      return null;
+    }
+    try {
+      return _accounts.firstWhere(
+        (account) => _coerceAccountId(account['id']) == accountId,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  double? _getLiveAccountCashBalance(int? accountId) {
+    final account = _findAccountById(accountId);
+    if (account == null) {
+      return null;
+    }
+    final balances = account['balances'];
+    if (balances is Map) {
+      final cash = balances['cash'];
+      if (cash is num) {
+        return cash.toDouble();
+      }
+      if (cash != null) {
+        return double.tryParse(cash.toString());
+      }
+    }
+    return null;
+  }
+
+  double? _getLiveAccountWeightBalance(int? accountId, int karat) {
+    final account = _findAccountById(accountId);
+    if (account == null) {
+      return null;
+    }
+    final balances = account['balances'];
+    if (balances is! Map) {
+      return null;
+    }
+    final weight = balances['weight'];
+    if (weight is! Map) {
+      return null;
+    }
+    final raw = weight['${karat}k'];
+    if (raw is num) {
+      return raw.toDouble();
+    }
+    if (raw != null) {
+      return double.tryParse(raw.toString());
+    }
+    return null;
+  }
+
   double _parseLineAmount(dynamic value) {
     if (value == null) return 0.0;
     if (value is num) return value.toDouble();
@@ -962,6 +1016,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   }
 
   double? _getAvailableSafeCash(SafeBoxModel safe) {
+    final liveCash = _getLiveAccountCashBalance(safe.accountId);
+    if (liveCash != null) {
+      return liveCash;
+    }
     final safeId = safe.id;
     if (safeId != null) {
       final ledger = _safeLedgerCashBalance[safeId];
@@ -1983,9 +2041,13 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     ? 'سيتم تسجيل الراتب على ذمم الموظفين (رواتب)'
                     : _selectedTemplateId == 'payment_advance'
                     ? 'سيتم تسجيل السلفة على حساب الموظف ضمن الأصول'
+                    : _selectedTemplateId == 'receipt_safe_transfer'
+                    ? 'اختر الحساب الداخلي المصدر للتحويل إلى الخزينة.'
                     : 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
                 predicate: (a) {
                   final accNum = accountNumberOf(a);
+                  final safeType =
+                      (a['safe_box_type'] ?? '').toString().trim().toLowerCase();
 
                   // Template-driven filters:
                   // - Salary: employee salary payables accounts under 2400xxxx
@@ -1997,6 +2059,12 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     return (accNum.startsWith('170') ||
                             accNum.startsWith('171')) &&
                         accNum.length >= 5;
+                  }
+                  if (_selectedTemplateId == 'receipt_safe_transfer') {
+                    return safeType == 'cash' ||
+                        safeType == 'bank' ||
+                        safeType == 'clearing' ||
+                        safeType == 'check';
                   }
 
                   // Default (expenses / misc / legacy advances)
@@ -2666,7 +2734,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       return const SizedBox.shrink();
     }
 
-    // For cash/bank/clearing safes, prefer ledger balance (loaded on-demand).
+    // For cash/bank/clearing safes, use the unified available-balance source
+    // (live account balance first, then safe-ledger fallback) to avoid UI mismatch.
     final safeType = safe.safeType;
     final isCashLikeSafe =
         safeType == 'cash' || safeType == 'bank' || safeType == 'clearing';
@@ -2693,9 +2762,17 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     bool exceedsBalance;
 
     if (line.amountType == 'gold') {
-      final weightInfo = safe.balance!.weight;
+      final weightInfo = safe.balance?.weight;
       if (weightInfo == null) {
-        return const SizedBox.shrink();
+        final hasAnyLiveWeight = _availableKarats.any(
+          (karat) =>
+              (_getLiveAccountWeightBalance(line.accountId, karat.toInt()) ??
+                  0.0) >
+              0.0001,
+        );
+        if (!hasAnyLiveWeight) {
+          return const SizedBox.shrink();
+        }
       }
 
       final requestedByKarat = <int, double>{};
@@ -2705,6 +2782,13 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       }
 
       double availableForKarat(int karat) {
+        final liveWeight = _getLiveAccountWeightBalance(line.accountId, karat);
+        if (liveWeight != null) {
+          return liveWeight;
+        }
+        if (weightInfo == null) {
+          return 0.0;
+        }
         switch (karat) {
           case 24:
             return weightInfo.karat24;
@@ -2761,11 +2845,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       textColor = exceedsBalance ? Colors.red.shade700 : Colors.green.shade700;
 
       if (available == null) {
-        message = 'رصيد الخزينة غير متاح حالياً لـ "${safe.name}".';
+        message = 'الرصيد الفعلي غير متاح حالياً للحساب المرتبط بـ "${safe.name}".';
       } else {
         message = exceedsBalance
-            ? 'تحذير: المبلغ المدخل (${_formatCash(line.amount)}) يتجاوز الرصيد المتاح ${_formatCash(available)} في "${safe.name}".'
-            : 'الرصيد المتاح في "${safe.name}": ${_formatCash(available)}';
+            ? 'تحذير: المبلغ المدخل (${_formatCash(line.amount)}) يتجاوز الرصيد الفعلي ${_formatCash(available)} في "${safe.name}".'
+            : 'الرصيد الفعلي في "${safe.name}": ${_formatCash(available)}';
       }
     }
 
@@ -3369,7 +3453,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 });
                 _recordSafeUsage(value);
 
-                // If selected account is a SafeBox-backed account, load ledger balance.
+                // If selected account is a SafeBox-backed account, load ledger
+                // balance as a fallback source when live account balance is unavailable.
                 final safe = _findSafeByAccountId(value);
                 if (safe != null &&
                     (safe.safeType == 'cash' ||
@@ -3393,10 +3478,9 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 }
 
                 final safeId = safe.id!;
-                final isLoading = _safeLedgerCashBalanceLoading.contains(
-                  safeId,
-                );
-                final bal = _safeLedgerCashBalance[safeId];
+                final isLoadingFallback = _safeLedgerCashBalanceLoading
+                    .contains(safeId);
+                final bal = _getAvailableSafeCash(safe);
                 final amount = _parseLineAmount(line.amount);
 
                 final isOutflowFromSafe =
@@ -3412,11 +3496,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        isLoading
-                            ? 'جاري تحميل رصيد الخزينة...'
-                            : (bal == null
-                                  ? 'رصيد الخزينة غير متاح'
-                                  : 'رصيد الخزينة الحالي: ${bal.toStringAsFixed(2)} ر.س'),
+                        bal != null
+                            ? 'الرصيد الفعلي الحالي: ${bal.toStringAsFixed(2)} ر.س'
+                            : (isLoadingFallback
+                                  ? 'جاري تحميل الرصيد الاحتياطي للخزنة...'
+                                  : 'الرصيد الفعلي غير متاح'),
                         style: TextStyle(
                           color: insufficient
                               ? AppColors.error

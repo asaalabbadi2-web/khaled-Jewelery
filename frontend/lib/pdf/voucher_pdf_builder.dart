@@ -977,30 +977,19 @@ class VoucherPdfBuilder {
                 ? ' (${voucher['gold_karat'].toString().trim()})'
                 : '';
         final mk = mainKarat > 0 ? mainKarat.toStringAsFixed(0) : '';
-        if (equivWeight > 0) {
-          final totalSub = options.isArabic
-              ? 'الوزن الإجمالي: ${goldFmt.format(goldAmt)} جرام$karatSuffix'
-              : 'Total weight: ${goldFmt.format(goldAmt)} g$karatSuffix';
-          rows.add(
-            amtRow(
-              options.isArabic
-                  ? 'الوزن المكافئ (عيار $mk)'
-                  : 'Equiv. Weight (Karat $mk)',
-              '${goldFmt.format(equivWeight)} ${options.isArabic ? 'جرام' : 'g'}',
-              totalSub,
-              !hasCash,
-            ),
-          );
-        } else {
-          rows.add(
-            amtRow(
-              options.isArabic ? 'وزن الذهب الإجمالي' : 'Total Gold Weight',
-              '${goldFmt.format(goldAmt)} ${options.isArabic ? 'جرام' : 'g'}$karatSuffix',
-              '',
-              !hasCash,
-            ),
-          );
-        }
+        final totalSub = equivWeight > 0
+            ? (options.isArabic
+                  ? 'المكافئ عيار $mk: ${goldFmt.format(equivWeight)} جرام'
+                  : 'Karat $mk equivalent: ${goldFmt.format(equivWeight)} g')
+            : '';
+        rows.add(
+          amtRow(
+            options.isArabic ? 'وزن الذهب الإجمالي' : 'Total Gold Weight',
+            '${goldFmt.format(goldAmt)} ${options.isArabic ? 'جرام' : 'g'}$karatSuffix',
+            totalSub,
+            !hasCash,
+          ),
+        );
       }
 
       if (hasCash) {

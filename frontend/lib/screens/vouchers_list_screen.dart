@@ -1757,8 +1757,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
               _buildVoucherMetricValueCell(
                 width: widths['gold']!,
                 value:
-                    _formatEquivalentGold(voucher) ??
-                    _formatGold(voucher['amount_gold']) ??
+                    _formatPrimaryGoldDisplay(voucher) ??
                     '—',
                 icon: Icons.scale_outlined,
                 color: const Color(0xFFD4A017),
@@ -2263,6 +2262,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     final String voucherNumber = (voucher['voucher_number'] ?? '—').toString();
     final String dateText = _formatDate(voucher['date']);
     final String? cashAmount = _formatCurrency(voucher['amount_cash']);
+    final String? goldPrimary = _formatPrimaryGoldDisplay(voucher);
     final String? goldEquivalent = _formatEquivalentGold(voucher);
     final String? goldBreakdown = _formatGoldBreakdown(voucher);
 
@@ -2446,14 +2446,25 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                                 color: const Color(0xFF2F80ED),
                               ),
                             ),
-                          if (goldEquivalent != null)
+                          if (goldPrimary != null)
                             Padding(
                               padding: const EdgeInsets.only(top: 6),
                               child: Text(
-                                goldEquivalent,
+                                goldPrimary,
                                 style: themeData.textTheme.bodyMedium?.copyWith(
                                   color: const Color(0xFFD4A017),
                                   fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          if (goldEquivalent != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                goldEquivalent,
+                                style: themeData.textTheme.bodySmall?.copyWith(
+                                  color: secondaryTextColor,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -2933,6 +2944,19 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     return _goldFormat.format(amount);
   }
 
+  String? _formatPrimaryGoldDisplay(Map<String, dynamic> voucher) {
+    final String? gold = _formatGold(voucher['amount_gold']);
+    if (gold == null) {
+      return null;
+    }
+
+    final karat = (voucher['gold_karat'] ?? '').toString().trim();
+    if (karat.isEmpty || karat == 'متعدد') {
+      return '$gold غ';
+    }
+    return '$gold غ عيار $karat';
+  }
+
   String? _formatEquivalentGold(Map<String, dynamic> voucher) {
     final double? amount = _toDouble(voucher['amount_gold_main_karat']);
     if (amount == null || amount == 0) {
@@ -2940,7 +2964,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     }
 
     final int mainKarat = (_toDouble(voucher['main_karat']) ?? 21).round();
-    return 'مكافئ عيار $mainKarat: ${_goldFormat.format(amount)} غ';
+    return 'المكافئ عيار $mainKarat: ${_goldFormat.format(amount)} غ';
   }
 
   String? _formatGoldBreakdown(Map<String, dynamic> voucher) {
