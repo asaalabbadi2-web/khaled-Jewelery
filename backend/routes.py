@@ -7772,7 +7772,7 @@ def get_invoices():
             query = query.filter(Invoice.date <= date_to)
 
     # Sorting
-    created_sort_expr = func.coalesce(Invoice.created_at, Invoice.date)
+    created_sort_expr = Invoice.date
 
     if sort_by == 'date':
         if sort_order == 'desc':
@@ -12876,9 +12876,8 @@ def add_invoice():
                 if weight_value is None:
                     weight_value = item_data.get('total_weight')
 
-                quantity_value = _to_float(item_data.get('quantity', 1), 1.0) or 1.0
-                qty_multiplier = 1.0 if is_customer_scrap_purchase else (quantity_value if quantity_value > 0 else 1.0)
-                total_weight_value = _to_float(weight_value, 0.0) * qty_multiplier
+                # weight_value = الوزن الكلي للسطر بالفعل — لا نضربه في الكمية
+                total_weight_value = _to_float(weight_value, 0.0)
 
                 _register_gold_weight(karat_value, total_weight_value)
 
@@ -25291,6 +25290,20 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
         voucher.party_name = data.get('party_name') or (employee.name if employee else None)
     else:
         voucher.party_name = data.get('party_name') if voucher.party_type not in ('customer', 'supplier') else None
+
+    # Fallback: when party_type == 'other' and party_name still not set,
+    # look up the account name from the party-side line in account_lines.
+    if voucher.party_type == 'other' and not voucher.party_name:
+        _party_lt = 'credit' if voucher_type == 'receipt' else 'debit'
+        for _ld in (summary.get('account_lines') or []):
+            if _ld.get('line_type') == _party_lt:
+                try:
+                    _acc = Account.query.get(_ld.get('account_id'))
+                    if _acc and _acc.name:
+                        voucher.party_name = _acc.name.strip()
+                        break
+                except Exception:
+                    pass
     voucher.amount_cash = summary['amount_cash']
     voucher.amount_gold = summary['amount_gold']
     voucher.gold_karat = None
@@ -27793,6 +27806,166 @@ def create_safe_box_transfer_voucher():
         import traceback
         traceback.print_exc()
         return jsonify({'error': 'safe_box_transfer_voucher_failed', 'message': str(e)}), 500
+
+
+# =========================================================================
+# Karat Correction within same Gold Safe Box
+# =========================================================================
+
+@api.route('/safe-boxes/<int:safe_box_id>/correct-karat', methods=['POST'])
+@require_permission('safe_boxes.edit')
+def correct_safe_box_karat(safe_box_id):
+    """تصحيح عيار خاطئ داخل نفس الخزينة الذهبية.
+
+    يُنقَل وزن X غرام من عيار قديم (مسجَّل خطأً) إلى عيار صحيح
+    داخل نفس الخزينة، دون أي تحويل حسابي للوزن.
+
+    Body JSON:
+        - from_karat: int  (18 | 21 | 22 | 24)  — العيار الخاطئ المسجَّل
+        - to_karat:   int  (18 | 21 | 22 | 24)  — العيار الصحيح
+        - weight:     float  (غرام، موجب)
+        - notes:      str  (اختياري)  — سبب التصحيح
+    """
+    data = request.get_json(silent=True) or {}
+
+    _valid_karats = {18, 21, 22, 24}
+
+    try:
+        from_karat = int(data.get('from_karat', 0))
+        to_karat   = int(data.get('to_karat', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid_karat'}), 400
+
+    if from_karat not in _valid_karats or to_karat not in _valid_karats:
+        return jsonify({'error': 'invalid_karat', 'allowed': list(_valid_karats)}), 400
+
+    if from_karat == to_karat:
+        return jsonify({'error': 'same_karat'}), 400
+
+    try:
+        weight = float(data.get('weight') or 0)
+    except (TypeError, ValueError):
+        weight = 0.0
+    if weight <= 0:
+        return jsonify({'error': 'invalid_weight'}), 400
+
+    notes = (data.get('notes') or '').strip() or None
+
+    try:
+        safe = SafeBox.query.filter_by(id=safe_box_id).first()
+        if safe is None:
+            return jsonify({'error': 'safe_box_not_found'}), 404
+        if (safe.safe_type or '').lower() != 'gold':
+            return jsonify({'error': 'not_a_gold_safe'}), 400
+        if not bool(getattr(safe, 'is_active', True)):
+            return jsonify({'error': 'safe_box_inactive'}), 400
+
+        # --- التحقق من رصيد العيار المصدر ---
+        from_col = f'weight_{from_karat}k'
+        q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_box_id)
+        col_attr = getattr(SafeBoxTransaction, from_col)
+        w_in  = float(q.with_entities(func.coalesce(func.sum(col_attr), 0.0))
+                        .filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0)
+        w_out = float(q.with_entities(func.coalesce(func.sum(col_attr), 0.0))
+                        .filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0)
+        available = round(w_in - w_out, 6)
+
+        if weight > available + 1e-6:
+            return jsonify({
+                'error': 'insufficient_balance',
+                'karat': from_karat,
+                'available': round(available, 3),
+            }), 400
+
+        created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'system'
+    except Exception as pre_err:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'pre_validation_failed', 'message': str(pre_err)}), 500
+
+    try:
+        voucher_dt = datetime.now()
+        voucher_number = generate_voucher_number('adjustment', voucher_date=voucher_dt)
+
+        voucher = Voucher(
+            voucher_number=voucher_number,
+            voucher_type='adjustment',
+            date=voucher_dt,
+            party_type=None,
+            description=f"تصحيح عيار: {from_karat}k → {to_karat}k ({weight:.3f} جم) — {safe.name}",
+            amount_cash=0.0,
+            amount_gold=round(weight, 4),
+            reference_type='manual',
+            reference_number=None,
+            notes=notes,
+            created_by=created_by,
+            status='pending',
+        )
+        db.session.add(voucher)
+        db.session.flush()
+
+        # قيد محاسبي: مدين بالعيار الجديد — دائن بالعيار القديم (نفس الحساب)
+        for lt, karat_val in (('debit', float(to_karat)), ('credit', float(from_karat))):
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=safe.account_id,
+                line_type=lt,
+                amount_type='gold',
+                amount=weight,
+                karat=karat_val,
+            ))
+
+        journal_entry = create_journal_entry_from_voucher(voucher)
+        if not journal_entry:
+            raise Exception('فشل إنشاء القيد المحاسبي')
+
+        voucher.status = 'approved'
+        voucher.approved_at = datetime.now()
+        voucher.approved_by = created_by
+        voucher.journal_entry_id = journal_entry.id
+
+        # حركتان في ledger الخزينة: خروج من العيار القديم، دخول للعيار الجديد
+        kw_out = {'amount_cash': 0.0, from_col: round(weight, 6)}
+        kw_in  = {'amount_cash': 0.0, f'weight_{to_karat}k': round(weight, 6)}
+
+        db.session.add(SafeBoxTransaction(
+            safe_box_id=safe_box_id,
+            direction='out',
+            ref_type='voucher',
+            ref_id=voucher.id,
+            created_by=created_by,
+            notes=f'تصحيح عيار — خروج {from_karat}k',
+            **kw_out,
+        ))
+        db.session.add(SafeBoxTransaction(
+            safe_box_id=safe_box_id,
+            direction='in',
+            ref_type='voucher',
+            ref_id=voucher.id,
+            created_by=created_by,
+            notes=f'تصحيح عيار — دخول {to_karat}k',
+            **kw_in,
+        ))
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'تم تصحيح العيار بنجاح',
+            'voucher': voucher.to_dict(),
+            'correction': {
+                'safe_box_id': safe_box_id,
+                'safe_name': safe.name,
+                'from_karat': from_karat,
+                'to_karat': to_karat,
+                'weight': round(weight, 3),
+            },
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'karat_correction_failed', 'message': str(e)}), 500
 
 
 # =========================================================================

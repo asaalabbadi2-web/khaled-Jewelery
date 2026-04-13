@@ -1682,16 +1682,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               final wage = tryParseOptionalDouble(wageController.text) ?? 0;
               final count = int.tryParse(countController.text) ?? 1;
               final manualTotal = tryParseOptionalDouble(totalController.text);
-              // weight في النظام = الوزن الكلي للسطر (v2)
-              // إذا أدخل المستخدم وزن القطعة مع عدد > 1، نحول إلى وزن إجمالي
-              final totalLineWeight = weight * count;
+              // weight = الوزن الكلي للسطر كما أدخله المستخدم
+              // العدد (count) توضيحي فقط ولا يُضرب بالوزن
 
               Navigator.pop(dialogContext, {
                 'name': nameController.text.trim(),
                 'barcode': barcodeController.text.trim(),
                 'count': count,
                 'karat': selectedKarat.toDouble(),
-                'weight': totalLineWeight,
+                'weight': weight,
                 'wage': wage,
                 'total_with_tax': manualTotal,
               });

@@ -2203,6 +2203,20 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     if (employeeName.isNotEmpty) return employeeName;
     final partyName = (voucher['party_name'] ?? '').toString().trim();
     if (partyName.isNotEmpty) return partyName;
+    // Fallback for 'other' party_type: use account name from the party-side line.
+    final partyType = (voucher['party_type'] ?? '').toString().trim();
+    if (partyType == 'other') {
+      final voucherType = (voucher['voucher_type'] ?? '').toString();
+      final partyLineType = voucherType == 'receipt' ? 'credit' : 'debit';
+      final lines = (voucher['account_lines'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      for (final line in lines) {
+        if ((line['line_type'] ?? '') == partyLineType) {
+          final accName =
+              (line['account']?['name'] ?? '').toString().trim();
+          if (accName.isNotEmpty) return accName;
+        }
+      }
+    }
     return '';
   }
 

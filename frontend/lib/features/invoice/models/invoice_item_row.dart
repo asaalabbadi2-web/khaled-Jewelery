@@ -52,8 +52,8 @@ class InvoiceItemRow {
     }
   }
 
-  /// الوزن الإجمالي (مع الكمية)
-  double get totalWeight => weight * count;
+  /// الوزن الإجمالي للسطر (العدد توضيحي فقط ولا يؤثر على الوزن)
+  double get totalWeight => weight;
 
   /// التحقق من وجود قيم يدوية
   bool get hasManualOverride =>

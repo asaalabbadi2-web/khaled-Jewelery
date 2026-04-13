@@ -3253,6 +3253,15 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         voucherData['supplier_id'] = _selectedSupplierId;
       } else if (_partyType == 'employee') {
         voucherData['employee_id'] = _selectedEmployeeId;
+      } else if (_partyType == 'other' && _selectedOtherAccountId != null) {
+        // Resolve and send the account name as party_name so it appears
+        // in the voucher list, detail view, and printed copies.
+        final otherAccount = _findAccountById(_selectedOtherAccountId);
+        final accountName =
+            (otherAccount?['name'] ?? '').toString().trim();
+        if (accountName.isNotEmpty) {
+          voucherData['party_name'] = accountName;
+        }
       }
 
       // Create or update voucher

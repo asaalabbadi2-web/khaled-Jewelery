@@ -139,6 +139,21 @@ class VoucherPdfBuilder {
         if (name != null && name.isNotEmpty) return name;
       }
 
+      // Fallback for 'other' party type: resolve account name from the party-side line.
+      final partyType = (voucher['party_type'] ?? '').toString().trim();
+      if (partyType == 'other') {
+        final vType = (voucher['voucher_type'] ?? '').toString();
+        final partyLT = vType == 'receipt' ? 'credit' : 'debit';
+        final lines = (voucher['account_lines'] as List?) ?? [];
+        for (final line in lines) {
+          if (line is Map && (line['line_type'] ?? '') == partyLT) {
+            final acc = line['account'];
+            final name = (acc is Map ? acc['name'] : null)?.toString().trim();
+            if (name != null && name.isNotEmpty) return name;
+          }
+        }
+      }
+
       final description = voucher['description']?.toString().trim();
       if (description != null && description.isNotEmpty) return description;
       return '';
