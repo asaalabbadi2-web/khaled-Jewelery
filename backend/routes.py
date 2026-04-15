@@ -27204,17 +27204,6 @@ def create_safe_box():
     if not account:
         return jsonify({'error': 'الحساب المحدد غير موجود'}), 404
 
-    # Guardrail: cash/bank/clearing/check safes should have memo accounts for weight-ledger symmetry.
-    try:
-        safe_type_norm = (data.get('safe_type') or '').strip().lower()
-        if safe_type_norm in ('cash', 'bank', 'clearing', 'check'):
-            if not getattr(account, 'memo_account_id', None):
-                account.create_parallel_account()
-                db.session.flush()
-    except Exception:
-        # Non-fatal: will still allow creation, but postings may fall back.
-        pass
-    
     # التحقق من خزينة الذهب: الحساب يجب أن يدعم تتبع الوزن (tracks_weight=True)
     karat = None
     if data['safe_type'] == 'gold':
@@ -27314,15 +27303,7 @@ def update_safe_box(safe_box_id):
                 return jsonify({'error': 'الحساب المحدد غير موجود'}), 404
             safe_box.account_id = data['account_id']
 
-            # Guardrail: ensure memo account exists for cash-like safes.
-            try:
-                safe_type_norm = (safe_box.safe_type or '').strip().lower()
-                if safe_type_norm in ('cash', 'bank', 'clearing', 'check'):
-                    if not getattr(account, 'memo_account_id', None):
-                        account.create_parallel_account()
-                        db.session.flush()
-            except Exception:
-                pass
+            pass  # account updated
         
         if 'karat' in data:
             # ✅ في النظام الموحّد: خزائن الذهب متعددة العيارات دائماً (karat=None).
