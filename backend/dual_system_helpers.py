@@ -80,11 +80,15 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
     """
     Create dual journal entry with cash and weight.
     Must be called from routes.py where db is already in context.
-    
-    🆕 القاعدة الذهبية:
-    - إذا كان الحساب له حساب موازي (memo_account_id)
-    - وتم تمرير قيم نقدية فقط (بدون أوزان)
-    - يتم حساب الأوزان تلقائياً حسب سعر الذهب
+
+    ─────────────────────────────────────────────────────────────────────
+    حارس الفصل بين الحساب النقدي والوزني
+    ─────────────────────────────────────────────────────────────────────
+    القاعدة الصارمة:
+      • حساب cash  → يستقبل نقداً فقط  (أوزان تُعاد توجيهها لـ memo_account_id)
+      • حساب gold  → يستقبل وزناً فقط  (نقد يُعاد توجيهه لـ memo_account_id)
+    التطبيق يتم هنا قبل أي معالجة أخرى، فهو الخط الأخير للدفاع.
+    ─────────────────────────────────────────────────────────────────────
     
     Args:
         apply_golden_rule: تطبيق القاعدة الذهبية (افتراضي True)
@@ -107,6 +111,84 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
     from models import JournalEntryLine, Account, JournalEntry, Invoice, Voucher
     
     db = current_app.extensions['sqlalchemy']
+
+    # ─────────────────────────────────────────────────────────────────────
+    # حارس الفصل بين الحساب النقدي والوزني (آلية الإعادة التوجيه التلقائية)
+    # يُنفَّذ قبل أي منطق آخر لضمان عدم تخزين قيم خاطئة.
+    # ─────────────────────────────────────────────────────────────────────
+    _has_weight = any([weight_18k_debit, weight_18k_credit,
+                       weight_21k_debit, weight_21k_credit,
+                       weight_22k_debit, weight_22k_credit,
+                       weight_24k_debit, weight_24k_credit])
+    _has_cash = bool(cash_debit or cash_credit)
+
+    if _has_weight or _has_cash:
+        try:
+            _guard_acc = db.session.query(Account).filter_by(id=account_id).first()
+            if _guard_acc:
+                _tx_type = (getattr(_guard_acc, 'transaction_type', None) or 'cash').lower()
+                _memo_id = getattr(_guard_acc, 'memo_account_id', None)
+
+                # حساب نقدي يتلقى قيماً وزنية → أعد التوجيه للحساب الوزني
+                if _tx_type == 'cash' and _has_weight and _memo_id:
+                    _memo_acc = db.session.query(Account).get(int(_memo_id))
+                    if _memo_acc and (getattr(_memo_acc, 'transaction_type', '') or '').lower() == 'gold':
+                        import sys
+                        print(
+                            f"[GUARD] Redirecting weight from cash account "
+                            f"[{_guard_acc.account_number}] → gold account [{_memo_acc.account_number}]  "
+                            f"JE={journal_entry_id}",
+                            file=sys.stderr,
+                        )
+                        # استدعاء نفسنا بالحساب الصحيح للأوزان (بدون نقد)
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry_id,
+                            account_id=int(_memo_id),
+                            weight_18k_debit=weight_18k_debit, weight_18k_credit=weight_18k_credit,
+                            weight_21k_debit=weight_21k_debit, weight_21k_credit=weight_21k_credit,
+                            weight_22k_debit=weight_22k_debit, weight_22k_credit=weight_22k_credit,
+                            weight_24k_debit=weight_24k_debit, weight_24k_credit=weight_24k_credit,
+                            description=description,
+                            customer_id=customer_id, supplier_id=supplier_id,
+                            apply_golden_rule=False,
+                            exclude_from_ledger=exclude_from_ledger,
+                        )
+                        # استمر بالحساب النقدي للنقد فقط (إذا وُجد)
+                        if not _has_cash:
+                            return
+                        weight_18k_debit = weight_18k_credit = 0
+                        weight_21k_debit = weight_21k_credit = 0
+                        weight_22k_debit = weight_22k_credit = 0
+                        weight_24k_debit = weight_24k_credit = 0
+
+                # حساب وزني يتلقى قيماً نقدية → أعد التوجيه للحساب النقدي
+                elif _tx_type == 'gold' and _has_cash and _memo_id:
+                    _memo_acc = db.session.query(Account).get(int(_memo_id))
+                    if _memo_acc and (getattr(_memo_acc, 'transaction_type', '') or '').lower() == 'cash':
+                        import sys
+                        print(
+                            f"[GUARD] Redirecting cash from gold account "
+                            f"[{_guard_acc.account_number}] → cash account [{_memo_acc.account_number}]  "
+                            f"JE={journal_entry_id}",
+                            file=sys.stderr,
+                        )
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry_id,
+                            account_id=int(_memo_id),
+                            cash_debit=cash_debit, cash_credit=cash_credit,
+                            description=description,
+                            customer_id=customer_id, supplier_id=supplier_id,
+                            apply_golden_rule=False,
+                            exclude_from_ledger=exclude_from_ledger,
+                        )
+                        # استمر بالحساب الوزني للوزن فقط (إذا وُجد)
+                        if not _has_weight:
+                            return
+                        cash_debit = cash_credit = 0
+        except Exception as _guard_err:
+            import sys
+            print(f"[GUARD] Error in type-segregation guard: {_guard_err}", file=sys.stderr)
+    # ─────────────────────────────────────────────────────────────────────
 
     if account_id is None:
         raise ValueError(
