@@ -1727,11 +1727,12 @@ def _invoice_weight_mk_v2(invoice: Invoice) -> float:
     if items:
         for ii in items:
             iw = float(getattr(ii, 'weight', 0) or 0)
-            ik = float(getattr(ii, 'karat', 0) or 0)
-            if iw > 0 and ik > 0:
+            ik = float(getattr(ii, 'karat', 0) or 0) or main_karat  # fallback للعيار الرئيسي
+            if iw > 0:
                 w += iw * ik / main_karat
         if w > 0:
             return w
+    # فاتورة بدون بنود — total_weight هو وزن خام بالعيار الرئيسي (يُخزَّن مباشرة)
     return float(getattr(invoice, 'total_weight', 0) or 0)
 
 
@@ -7918,6 +7919,46 @@ def get_invoices():
         return None
 
     try:
+        _mk_val = float(get_main_karat() or 21)
+
+        # Pre-fetch weight (main karat equiv) from karat_lines AND items
+        _all_inv_ids_q = query.order_by(None).with_entities(Invoice.id).all()
+        _all_inv_ids = [r[0] for r in _all_inv_ids_q]
+
+        _kl_weight_map = {}
+        if _all_inv_ids:
+            # 1) من karat_lines (أولوية)
+            _kl_rows = (
+                db.session.query(
+                    InvoiceKaratLine.invoice_id,
+                    func.sum(InvoiceKaratLine.weight_grams * InvoiceKaratLine.karat / _mk_val),
+                )
+                .filter(InvoiceKaratLine.invoice_id.in_(_all_inv_ids))
+                .group_by(InvoiceKaratLine.invoice_id)
+                .all()
+            )
+            for row in _kl_rows:
+                v = float(row[1] or 0.0)
+                if v > 0:
+                    _kl_weight_map[row[0]] = v
+
+            # 2) من InvoiceItem (للفواتير التي لا تملك karat_lines)
+            _missing_ids = [iid for iid in _all_inv_ids if iid not in _kl_weight_map]
+            if _missing_ids:
+                _ii_rows = (
+                    db.session.query(
+                        InvoiceItem.invoice_id,
+                        func.sum(InvoiceItem.weight * func.coalesce(InvoiceItem.karat, _mk_val) / _mk_val),
+                    )
+                    .filter(InvoiceItem.invoice_id.in_(_missing_ids), InvoiceItem.weight > 0)
+                    .group_by(InvoiceItem.invoice_id)
+                    .all()
+                )
+                for row in _ii_rows:
+                    v = float(row[1] or 0.0)
+                    if v > 0:
+                        _kl_weight_map[row[0]] = v
+
         summary_rows = query.order_by(None).with_entities(
             Invoice.invoice_type,
             Invoice.status,
@@ -7927,6 +7968,7 @@ def get_invoices():
             Invoice.amount_paid,
             Invoice.barter_total,
             Invoice.supplier_id,
+            Invoice.id,
         ).all()
 
         for row in summary_rows:
@@ -7944,7 +7986,8 @@ def get_invoices():
 
             total_value = float(row[2] or 0.0)
             tax_value = float(row[3] or 0.0)
-            weight_value = float(row[4] or 0.0)
+            inv_id = row[8]
+            weight_value = _kl_weight_map.get(inv_id, float(row[4] or 0.0))
             paid_cash_value = float(row[5] or 0.0)
             barter_value = float(row[6] or 0.0)
             settled_value = paid_cash_value + barter_value
@@ -7976,8 +8019,9 @@ def get_invoices():
         current_summary['sold_weight_total'] = round(float(current_summary['sold_weight_total']), 4)
         # Keep legacy 'purchase' key for backwards compatibility
         tab_summary['purchase'] = tab_summary['customer_purchase']
-    except Exception:
+    except Exception as _summary_exc:
         # Non-fatal; frontend falls back to current-page aggregation.
+        import traceback as _tb; _tb.print_exc()
         pass
 
     try:
@@ -16766,7 +16810,7 @@ def get_journal_entries():
             query = query.filter(or_(*base_search_filters))
 
     entries = query.order_by(
-        func.coalesce(JournalEntry.created_at, JournalEntry.date).desc(),
+        JournalEntry.date.desc(),
         JournalEntry.id.desc(),
     ).all()
     serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in entries]
@@ -18013,6 +18057,8 @@ def get_sales_overview_report():
 
     sale_types = {
         'بيع': 1,
+        'sell': 1,
+        'sale': 1,
         'مرتجع بيع': -1,
     }
 
@@ -18487,7 +18533,7 @@ def get_sales_by_customer_report():
 
     limit = max(5, min(limit, 200))
 
-    sale_types = {'بيع', 'مرتجع بيع'}
+    sale_types = {'بيع', 'sell', 'sale', 'مرتجع بيع'}
 
     filters = [
         Invoice.invoice_type.in_(sale_types),
@@ -18697,7 +18743,7 @@ def get_sales_by_item_report():
 
     limit = max(5, min(limit, 200))
 
-    sale_types = {'بيع', 'مرتجع بيع'}
+    sale_types = {'بيع', 'sell', 'sale', 'مرتجع بيع'}
 
     filters = [
         Invoice.invoice_type.in_(sale_types),
@@ -18928,7 +18974,7 @@ def get_sales_by_karat_report():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    sale_types = {'بيع', 'مرتجع بيع'}
+    sale_types = {'بيع', 'sell', 'sale', 'مرتجع بيع'}
 
     filters = [Invoice.invoice_type.in_(list(sale_types))]
     if not include_unposted:
@@ -18959,6 +19005,7 @@ def get_sales_by_karat_report():
     totals = {
         'sales_weight': 0.0, 'returns_weight': 0.0,
         'sales_value': 0.0, 'returns_value': 0.0,
+        'sales_weight_main_karat': 0.0, 'returns_weight_main_karat': 0.0,
         'total_documents': 0,
     }
 
@@ -18986,7 +19033,8 @@ def get_sales_by_karat_report():
                     bucket['documents'].add(inv.id)
         else:
             items = getattr(inv, 'items', None) or []
-            # استخدام القيمة الفعلية لكل بند (net) للحصول على القيمة الدقيقة لكل عيار
+            # التوزيع النسبي من inv.total (شامل الضريبة) لضمان التطابق مع sales_overview.
+            # نستخدم item.net كمفتاح للتناسب فقط — لا كقيمة نهائية.
             items_net_total = sum(float(getattr(ii, 'net', 0) or 0) for ii in items)
             for ii in items:
                 iw = float(getattr(ii, 'weight', 0) or 0)
@@ -18994,10 +19042,10 @@ def get_sales_by_karat_report():
                 ik = int(round(float(ik_raw))) if ik_raw else main_karat
                 if iw <= 0:
                     continue
-                # القيمة الفعلية للبند — net إن وُجد، وإلا تناسب من إجمالي الفاتورة
                 item_net = float(getattr(ii, 'net', 0) or 0)
                 if items_net_total > 0:
-                    item_value = item_net
+                    # التناسب من inv.total (شامل الضريبة) — متسق مع sales_overview
+                    item_value = inv_value * (item_net / items_net_total)
                 else:
                     total_items_weight = sum(float(getattr(x, 'weight', 0) or 0) for x in items)
                     item_value = inv_value * (iw / total_items_weight) if total_items_weight > 0 else 0.0
@@ -19010,13 +19058,17 @@ def get_sales_by_karat_report():
                     bucket['sales_value'] += item_value
                     bucket['documents'].add(inv.id)
 
-            if not items and inv_value > 0:
-                # فواتير بدون بنود — تُضاف للعيار الرئيسي
+            if not items:
+                # فواتير بدون بنود — نستخدم total_weight كاحتياط (كما في _invoice_weight_mk_v2)
+                inv_total_w = float(getattr(inv, 'total_weight', 0) or 0)
                 if is_return:
                     by_karat[main_karat]['returns_value'] += inv_value
+                    by_karat[main_karat]['returns_weight'] += inv_total_w
                 else:
                     by_karat[main_karat]['sales_value'] += inv_value
-                    by_karat[main_karat]['documents'].add(inv.id)
+                    by_karat[main_karat]['sales_weight'] += inv_total_w
+                    if inv_value > 0 or inv_total_w > 0:
+                        by_karat[main_karat]['documents'].add(inv.id)
 
     # بناء القائمة
     karats_list = []
@@ -19032,6 +19084,11 @@ def get_sales_by_karat_report():
 
         avg_price = round(sv / sw, 2) if sw > 0 else 0.0
 
+        # الوزن المعادل بالعيار الرئيسي — للمقارنة مع sales_overview.net_gold_weight
+        sales_weight_mk = round(float(convert_to_main_karat(sw, karat_val)), 3)
+        returns_weight_mk = round(float(convert_to_main_karat(rw, karat_val)), 3)
+        net_weight_mk = round(float(convert_to_main_karat(nw, karat_val)), 3)
+
         karats_list.append({
             'karat': karat_val,
             'karat_label': f'عيار {karat_val}',
@@ -19039,6 +19096,9 @@ def get_sales_by_karat_report():
             'sales_weight': sw,
             'returns_weight': rw,
             'net_weight': nw,
+            'sales_weight_main_karat': sales_weight_mk,
+            'returns_weight_main_karat': returns_weight_mk,
+            'net_weight_main_karat': net_weight_mk,
             'sales_value': sv,
             'returns_value': rv,
             'net_value': nv,
@@ -19048,6 +19108,8 @@ def get_sales_by_karat_report():
 
         totals['sales_weight'] += sw
         totals['returns_weight'] += rw
+        totals['sales_weight_main_karat'] += sales_weight_mk
+        totals['returns_weight_main_karat'] += returns_weight_mk
         totals['sales_value'] += sv
         totals['returns_value'] += rv
         totals['total_documents'] += docs
@@ -19060,6 +19122,7 @@ def get_sales_by_karat_report():
         ) if total_nw > 0 else 0.0
 
     totals['net_weight'] = round(totals['sales_weight'] - totals['returns_weight'], 3)
+    totals['net_weight_main_karat'] = round(totals['sales_weight_main_karat'] - totals['returns_weight_main_karat'], 3)
     totals['net_value'] = round(totals['sales_value'] - totals['returns_value'], 2)
     totals['avg_price_per_gram'] = round(
         totals['sales_value'] / totals['sales_weight'], 2
@@ -19070,6 +19133,9 @@ def get_sales_by_karat_report():
             'sales_weight': round(totals['sales_weight'], 3),
             'returns_weight': round(totals['returns_weight'], 3),
             'net_weight': totals['net_weight'],
+            'sales_weight_main_karat': round(totals['sales_weight_main_karat'], 3),
+            'returns_weight_main_karat': round(totals['returns_weight_main_karat'], 3),
+            'net_weight_main_karat': totals['net_weight_main_karat'],
             'sales_value': round(totals['sales_value'], 2),
             'returns_value': round(totals['returns_value'], 2),
             'net_value': totals['net_value'],
@@ -19211,7 +19277,7 @@ def get_inventory_status_report():
         movement_rows = []
 
     purchase_types = {'شراء من عميل', 'شراء'}
-    sale_types = {'بيع', 'فاتورة بيع'}
+    sale_types = {'بيع', 'فاتورة بيع', 'sell', 'sale'}
     sale_return_types = {'مرتجع بيع'}
     purchase_return_types = {'مرتجع شراء', 'مرتجع شراء (مورد)'}
 
@@ -19690,7 +19756,7 @@ def get_low_stock_report():
         )
 
     purchase_types = {'شراء من عميل', 'شراء'}
-    sale_types = {'بيع', 'فاتورة بيع'}
+    sale_types = {'بيع', 'فاتورة بيع', 'sell', 'sale'}
     sale_return_types = {'مرتجع بيع'}
     purchase_return_types = {'مرتجع شراء', 'مرتجع شراء (مورد)'}
 
@@ -20044,7 +20110,7 @@ def get_inventory_movement_report():
     )
 
     purchase_types = {'شراء', 'شراء من عميل'}
-    sale_types = {'بيع', 'فاتورة بيع'}
+    sale_types = {'بيع', 'فاتورة بيع', 'sell', 'sale'}
     sale_return_types = {'مرتجع بيع'}
     purchase_return_types = {'مرتجع شراء', 'مرتجع شراء (مورد)'}
 
@@ -21503,7 +21569,7 @@ def get_sales_vs_purchases_trend():
 
     # Determine invoice direction mapping (reuse logic similar to inventory)
     purchase_types = {'شراء', 'شراء من عميل'}
-    sale_types = {'بيع', 'فاتورة بيع'}
+    sale_types = {'بيع', 'فاتورة بيع', 'sell', 'sale'}
     sale_return_types = {'مرتجع بيع'}
     purchase_return_types = {'مرتجع شراء', 'مرتجع شراء (مورد)'}
 
@@ -27969,6 +28035,304 @@ def correct_safe_box_karat(safe_box_id):
 
 
 # =========================================================================
+# Melting / Renewal Operation  (تكسير وتجديد)
+# =========================================================================
+
+@api.route('/melting-renewal', methods=['POST'])
+@require_permission('safe_boxes.edit')
+def create_melting_renewal():
+    """تسجيل عملية تكسير أو تجديد.
+
+    Body JSON:
+        operation_type : str   — 'melting' | 'renewal'
+        from_safe_box_id : int — الخزينة المصدر (للتكسير: خزينة الذهب المعروض)
+        to_safe_box_id   : int — الخزينة الوجهة  (للتكسير: صندوق الكسر)
+        from_karat       : int — عيار الذهب المكسَّر  (18|21|22|24)
+        to_karat         : int — عيار الذهب الناتج   (18|21|22|24)  [اختياري ← يساوي from_karat إن لم يُحدَّد]
+        gold_weight      : float — وزن الذهب (جم)
+        stones_weight    : float — وزن الفصوص (جم)  [اختياري]
+        stones_revenue_account_id  : int — حساب إيراد الفصوص الداخلة  [اختياري]
+        stones_expense_account_id  : int — حساب مصروف الفصوص الخارجة [اختياري]
+        damage_wage_weight         : float — مبلغ المصنعية التالفة (نقد) [اختياري، تكسير فقط]
+        damage_wage_account_id     : int   — حساب مصروف المصنعية التالفة [اختياري، تكسير فقط]
+        notes            : str — ملاحظات       [اختياري]
+    """
+    data = request.get_json(silent=True) or {}
+
+    operation_type = (data.get('operation_type') or '').strip().lower()
+    if operation_type not in ('melting', 'renewal'):
+        return jsonify({'error': 'invalid_operation_type', 'allowed': ['melting', 'renewal']}), 400
+
+    _valid_karats = {18, 21, 22, 24}
+
+    try:
+        from_safe_id = int(data['from_safe_box_id'])
+        to_safe_id   = int(data['to_safe_box_id'])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': 'missing_safe_box_ids'}), 400
+
+    try:
+        from_karat = int(data.get('from_karat', 21))
+        to_karat   = int(data.get('to_karat') or from_karat)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid_karat'}), 400
+
+    if from_karat not in _valid_karats or to_karat not in _valid_karats:
+        return jsonify({'error': 'invalid_karat', 'allowed': list(_valid_karats)}), 400
+
+    try:
+        gold_weight        = float(data.get('gold_weight') or 0)
+        stones_weight      = float(data.get('stones_weight') or 0)
+        damage_wage_amount = float(data.get('damage_wage_amount') or data.get('damage_wage_weight') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid_weight'}), 400
+
+    if gold_weight <= 0:
+        return jsonify({'error': 'invalid_gold_weight'}), 400
+
+    stones_rev_account_id  = data.get('stones_revenue_account_id')
+    stones_exp_account_id  = data.get('stones_expense_account_id')
+    damage_wage_account_id = data.get('damage_wage_account_id')
+    try:
+        if stones_rev_account_id:
+            stones_rev_account_id = int(stones_rev_account_id)
+        if stones_exp_account_id:
+            stones_exp_account_id = int(stones_exp_account_id)
+        if damage_wage_account_id:
+            damage_wage_account_id = int(damage_wage_account_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid_account_id'}), 400
+
+    notes = (data.get('notes') or '').strip() or None
+
+    # Validate safe boxes + available balance
+    try:
+        from_safe = SafeBox.query.filter_by(id=from_safe_id).first()
+        to_safe   = SafeBox.query.filter_by(id=to_safe_id).first()
+        if not from_safe:
+            return jsonify({'error': 'from_safe_not_found'}), 404
+        if not to_safe:
+            return jsonify({'error': 'to_safe_not_found'}), 404
+        if from_safe_id == to_safe_id:
+            return jsonify({'error': 'same_safe_box'}), 400
+
+        from_col  = f'weight_{from_karat}k'
+        q_src = SafeBoxTransaction.query.filter_by(safe_box_id=from_safe_id)
+        col_a = getattr(SafeBoxTransaction, from_col)
+        w_in  = float(q_src.with_entities(func.coalesce(func.sum(col_a), 0.0))
+                           .filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0)
+        w_out = float(q_src.with_entities(func.coalesce(func.sum(col_a), 0.0))
+                           .filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0)
+        available = round(w_in - w_out, 6)
+
+        if gold_weight > available + 1e-6:
+            return jsonify({
+                'error': 'insufficient_balance',
+                'karat': from_karat,
+                'available': round(available, 3),
+            }), 400
+
+        created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'system'
+
+        # Optional: validate stones accounts exist
+        if stones_rev_account_id:
+            if not Account.query.get(stones_rev_account_id):
+                return jsonify({'error': 'stones_revenue_account_not_found'}), 404
+        if stones_exp_account_id:
+            if not Account.query.get(stones_exp_account_id):
+                return jsonify({'error': 'stones_expense_account_not_found'}), 404
+        if damage_wage_account_id:
+            if not Account.query.get(damage_wage_account_id):
+                return jsonify({'error': 'damage_wage_account_not_found'}), 404
+
+    except Exception as pre_err:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': 'pre_validation_failed', 'message': str(pre_err)}), 500
+
+    try:
+        op_label = 'تكسير' if operation_type == 'melting' else 'تجديد'
+        voucher_dt     = datetime.now()
+        voucher_number = generate_voucher_number('adjustment', voucher_date=voucher_dt)
+
+        desc_parts = [
+            f'{op_label}: {gold_weight:.3f} جم {from_karat}k',
+            f'من: {from_safe.name}',
+            f'إلى: {to_safe.name}',
+        ]
+        if stones_weight > 0:
+            desc_parts.append(f'فصوص: {stones_weight:.3f} جم')
+        if damage_wage_amount > 0 and operation_type == 'melting':
+            desc_parts.append(f'مصنعية تالفة: {damage_wage_amount:.2f}')
+
+        voucher = Voucher(
+            voucher_number=voucher_number,
+            voucher_type='adjustment',
+            date=voucher_dt,
+            description=' | '.join(desc_parts),
+            amount_cash=0.0,
+            amount_gold=round(gold_weight, 4),
+            reference_type='manual',
+            notes=notes,
+            created_by=created_by,
+            status='pending',
+        )
+        db.session.add(voucher)
+        db.session.flush()
+
+        # قيد ذهبي: دائن خزينة المصدر، مدين خزينة الوجهة
+        for lt, acct_id, karat_val in (
+            ('credit', from_safe.account_id, float(from_karat)),
+            ('debit',  to_safe.account_id,   float(to_karat)),
+        ):
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=acct_id,
+                line_type=lt,
+                amount_type='gold',
+                amount=gold_weight,
+                karat=karat_val,
+            ))
+
+        # قيد الفصوص إن وُجدت
+        if stones_weight > 0:
+            # تكسير: مصروف وزني للفصوص الخارجة من الوجهة (صندوق الكسر)
+            if operation_type == 'melting' and stones_exp_account_id:
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=to_safe.account_id,
+                    line_type='debit',
+                    amount_type='gold',
+                    amount=stones_weight,
+                    karat=float(to_karat),
+                    description='فصوص خارجة',
+                ))
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=stones_exp_account_id,
+                    line_type='credit',
+                    amount_type='gold',
+                    amount=stones_weight,
+                    karat=float(to_karat),
+                    description='مصروف فصوص التكسير',
+                ))
+
+            # تجديد: إيراد وزني للفصوص الداخلة
+            if operation_type == 'renewal' and stones_rev_account_id:
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=to_safe.account_id,
+                    line_type='credit',
+                    amount_type='gold',
+                    amount=stones_weight,
+                    karat=float(to_karat),
+                    description='فصوص داخلة',
+                ))
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=stones_rev_account_id,
+                    line_type='debit',
+                    amount_type='gold',
+                    amount=stones_weight,
+                    karat=float(to_karat),
+                    description='إيراد فصوص التجديد',
+                ))
+
+        # قيد المصنعية التالفة (تكسير فقط):
+        # مدين: حساب مصروف المصنعية التالفة (نقد)
+        # دائن: حساب مخزون أجور المصنعية
+        if damage_wage_amount > 0 and operation_type == 'melting' and damage_wage_account_id:
+            wage_inventory_acc_id = _get_manufacturing_wage_inventory_account_id()
+            if not wage_inventory_acc_id:
+                raise Exception('حساب مخزون أجور المصنعية غير موجود. يرجى إنشاؤه أولاً.')
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=damage_wage_account_id,
+                line_type='debit',
+                amount_type='cash',
+                amount=damage_wage_amount,
+                karat=None,
+                description='مصروف مصنعية تالفة',
+            ))
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=wage_inventory_acc_id,
+                line_type='credit',
+                amount_type='cash',
+                amount=damage_wage_amount,
+                karat=None,
+                description='تخفيض مخزون أجور المصنعية - تكسير',
+            ))
+
+        journal_entry = create_journal_entry_from_voucher(voucher)
+        if not journal_entry:
+            raise Exception('فشل إنشاء القيد المحاسبي')
+
+        voucher.status     = 'approved'
+        voucher.approved_at = datetime.now()
+        voucher.approved_by = created_by
+        voucher.journal_entry_id = journal_entry.id
+
+        # SafeBoxTransaction: خروج من المصدر
+        from_col_kw = {'amount_cash': 0.0, f'weight_{from_karat}k': round(gold_weight, 6)}
+        db.session.add(SafeBoxTransaction(
+            safe_box_id=from_safe_id,
+            direction='out',
+            ref_type='voucher',
+            ref_id=voucher.id,
+            created_by=created_by,
+            notes=f'{op_label} — خروج {from_karat}k',
+            **from_col_kw,
+        ))
+
+        # SafeBoxTransaction: دخول إلى الوجهة (الذهب)
+        to_col_kw = {'amount_cash': 0.0, f'weight_{to_karat}k': round(gold_weight, 6)}
+        db.session.add(SafeBoxTransaction(
+            safe_box_id=to_safe_id,
+            direction='in',
+            ref_type='voucher',
+            ref_id=voucher.id,
+            created_by=created_by,
+            notes=f'{op_label} — دخول {to_karat}k',
+            **to_col_kw,
+        ))
+
+        # SafeBoxTransaction إضافية للفصوص (تُسجَّل في وجهة التكسير)
+        if stones_weight > 0 and operation_type == 'melting':
+            stones_kw = {'amount_cash': 0.0, f'weight_{to_karat}k': round(stones_weight, 6)}
+            db.session.add(SafeBoxTransaction(
+                safe_box_id=to_safe_id,
+                direction='in',
+                ref_type='voucher',
+                ref_id=voucher.id,
+                created_by=created_by,
+                notes=f'فصوص داخل صندوق الكسر {to_karat}k',
+                **stones_kw,
+            ))
+
+        db.session.commit()
+
+        return jsonify({
+            'message': f'تم تسجيل عملية {op_label} بنجاح',
+            'voucher': voucher.to_dict(),
+            'operation': {
+                'type': operation_type,
+                'from_safe': from_safe.name,
+                'to_safe': to_safe.name,
+                'from_karat': from_karat,
+                'to_karat': to_karat,
+                'gold_weight': round(gold_weight, 3),
+                'stones_weight': round(stones_weight, 3),
+                'damage_wage_amount': round(damage_wage_amount, 2),
+            },
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        import traceback; traceback.print_exc()
+        return jsonify({'error': 'melting_renewal_failed', 'message': str(e)}), 500
+
+
+# =========================================================================
 # BNPL Settlement (Tabby/Tamara → Bank)
 # =========================================================================
 
@@ -32022,6 +32386,8 @@ def get_admin_dashboard():
     # --- Sales today (posted only) ---
     sale_types = {
         'بيع': 1,
+        'sell': 1,
+        'sale': 1,
         'مرتجع بيع': -1,
     }
     today_invoices = (

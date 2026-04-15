@@ -287,7 +287,7 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
         icon: Icons.scale,
         color: const Color(0xFFFFD700),
         label: isArabic ? 'صافي الوزن' : 'Net Weight',
-        value: _fw(_asDouble(s['net_weight'])),
+        value: _fw(_asDouble(s['net_weight_main_karat'] ?? s['net_weight'])),
         sub: 'عيار $mainK',
       ),
       _SummaryItem(
@@ -504,6 +504,10 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     final nw = _asDouble(km['net_weight']);
     final sw = _asDouble(km['sales_weight']);
     final rw = _asDouble(km['returns_weight']);
+    final nwMk = _asDouble(km['net_weight_main_karat'] ?? km['net_weight']);
+    final swMk = _asDouble(km['sales_weight_main_karat'] ?? km['sales_weight']);
+    final rwMk = _asDouble(km['returns_weight_main_karat'] ?? km['returns_weight']);
+    final mainK = (_report?['summary']?['main_karat'] ?? _mainKarat) as num;
     final nv = _asDouble(km['net_value']);
     final sv = _asDouble(km['sales_value']);
     final rv = _asDouble(km['returns_value']);
@@ -622,23 +626,31 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // وزن صافي — الأكبر
+                // وزن صافي — المكافئ بالعيار الرئيسي هو الرقم الأساسي
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'صافي الوزن',
+                        'صافي الوزن (عيار $mainK)',
                         style: TextStyle(
                             fontSize: 10, color: Colors.grey.shade500),
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        _fw(nw),
+                        _fw(nwMk),
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w900,
                           color: color,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_fw(nw)} جم فعلي',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade500,
                         ),
                       ),
                     ],
@@ -648,14 +660,16 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                 // وزن مبيعات
                 _buildWeightChip(
                     label: 'مبيعات',
-                    value: _fw(sw),
+                    value: _fw(swMk),
+                    sub: _fw(sw),
                     color: Colors.green.shade700),
                 const SizedBox(width: 8),
                 // وزن مرتجعات
                 if (rw > 0)
                   _buildWeightChip(
                       label: 'مرتجع',
-                      value: _fw(rw),
+                      value: _fw(rwMk),
+                      sub: _fw(rw),
                       color: Colors.red.shade600),
               ],
             ),
@@ -717,6 +731,7 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     required String label,
     required String value,
     required Color color,
+    String? sub,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -731,6 +746,11 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
           style: TextStyle(
               fontSize: 12, fontWeight: FontWeight.bold, color: color),
         ),
+        if (sub != null)
+          Text(
+            sub,
+            style: TextStyle(fontSize: 9, color: Colors.grey.shade400),
+          ),
       ],
     );
   }

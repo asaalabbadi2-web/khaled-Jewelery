@@ -11,7 +11,6 @@ import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/account_picker_sheet.dart';
 import 'journal_entry_form.dart';
-import 'journal_entry_print_screen.dart';
 
 enum _JournalEntriesListView { table, cards }
 
@@ -644,14 +643,44 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   }
 
   Future<void> _openPreview(Map<String, dynamic> entry) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => JournalEntryPrintScreen(
-          journalEntry: Map<String, dynamic>.from(entry),
+    // عرض شاشة تحميل مؤقتة
+    var loaderVisible = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    ).then((_) => loaderVisible = false);
+
+    try {
+      final id = entry['id'];
+      final details = await _apiService.getJournalEntryById(id is int ? id : int.parse(id.toString()));
+      if (!mounted) return;
+      if (loaderVisible) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loaderVisible = false;
+      }
+
+      final merged = <String, dynamic>{...entry, ...details};
+
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => _JournalEntryDetailSheet(
+          entry: merged,
           isArabic: widget.isArabic,
+          apiService: _apiService,
+          onEdit: entry['is_posted'] != true ? () { Navigator.pop(ctx); _openEditor(entry); } : null,
+          onPost: entry['is_posted'] != true ? () { Navigator.pop(ctx); _postEntry(entry); } : null,
+          onDelete: entry['is_posted'] != true ? () { Navigator.pop(ctx); _deleteEntry(entry); } : null,
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      if (loaderVisible && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      if (mounted) _showSnackBar(widget.isArabic ? 'فشل تحميل القيد: $e' : 'Failed to load entry: $e', isError: true);
+    }
   }
 
   Future<void> _openEditor([Map<String, dynamic>? entry]) async {
@@ -2646,5 +2675,487 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
         ),
       ),
     );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bottom Sheet - تفاصيل القيد اليومي
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _JournalEntryDetailSheet extends StatelessWidget {
+  final Map<String, dynamic> entry;
+  final bool isArabic;
+  final ApiService apiService;
+  final VoidCallback? onEdit;
+  final VoidCallback? onPost;
+  final VoidCallback? onDelete;
+
+  const _JournalEntryDetailSheet({
+    required this.entry,
+    required this.isArabic,
+    required this.apiService,
+    this.onEdit,
+    this.onPost,
+    this.onDelete,
+  });
+
+  static const Color _gold = Color(0xFFB8860B);
+  static const Color _goldLight = Color(0xFFFFF8E1);
+
+  double _toDouble(dynamic v) =>
+      v == null ? 0.0 : (v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0.0);
+
+  String _fmt(double v, {int decimals = 3}) => v.toStringAsFixed(decimals);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isPosted = entry['is_posted'] == true;
+    final entryNumber = entry['entry_number']?.toString() ?? '-';
+    final date = _parseDate(entry['date']);
+    final description = entry['description']?.toString() ?? '';
+    final entryType = entry['entry_type']?.toString() ?? 'عادي';
+    final createdBy = entry['created_by']?.toString() ?? '-';
+    final lines = _parseLines();
+
+    final totalCashDebit  = lines.fold(0.0, (s, l) => s + _cellVal(l, 'cash_debit'));
+    final totalCashCredit = lines.fold(0.0, (s, l) => s + _cellVal(l, 'cash_credit'));
+    final totalGoldDebit  = lines.fold(0.0, (s, l) => s + _cellVal(l, 'gold_debit'));
+    final totalGoldCredit = lines.fold(0.0, (s, l) => s + _cellVal(l, 'gold_credit'));
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      minChildSize: 0.4,
+      maxChildSize: 0.97,
+      expand: false,
+      builder: (_, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              // ── مقبض السحب ──────────────────────────────────────────
+              _buildHandle(),
+
+              // ── رأس الـ Sheet ────────────────────────────────────────
+              _buildHeader(context, entryNumber, date, isPosted, entryType, createdBy),
+
+              // ── الوصف ────────────────────────────────────────────────
+              if (description.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      description,
+                      style: theme.textTheme.bodyMedium,
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ),
+
+              // ── ملخص المبالغ ─────────────────────────────────────────
+              _buildTotalsRow(context, totalCashDebit, totalCashCredit, totalGoldDebit, totalGoldCredit, lines),
+
+              // ── جدول البنود ──────────────────────────────────────────
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                  children: [
+                    const SizedBox(height: 8),
+                    _buildLinesHeader(context),
+                    const Divider(height: 1),
+                    ...lines.map((l) => _buildLineRow(context, l)),
+                    const SizedBox(height: 16),
+                    // معلومات إضافية
+                    _buildMetaBox(context),
+                  ],
+                ),
+              ),
+
+              // ── أزرار الإجراءات ──────────────────────────────────────
+              _buildActions(context, isPosted),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHandle() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    child: Center(
+      child: Container(
+        width: 40,
+        height: 4,
+        decoration: BoxDecoration(
+          color: Colors.grey[300],
+          borderRadius: BorderRadius.circular(2),
+        ),
+      ),
+    ),
+  );
+
+  Widget _buildHeader(BuildContext context, String number, String date,
+      bool isPosted, String type, String creator) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [_gold, const Color(0xFFA07010)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.receipt_long, color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        '${ isArabic ? "قيد يومي" : "Journal Entry"} $number',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    _chip(date, Icons.calendar_today, Colors.white70),
+                    const SizedBox(width: 8),
+                    _chip(type, Icons.label_outline, Colors.white70),
+                    const SizedBox(width: 8),
+                    _chip(creator, Icons.person_outline, Colors.white70),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: isPosted ? Colors.green[700] : Colors.orange[700],
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              isArabic
+                  ? (isPosted ? 'مرحَّل' : 'غير مرحَّل')
+                  : (isPosted ? 'Posted' : 'Unposted'),
+              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(String label, IconData icon, Color color) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 11, color: color),
+      const SizedBox(width: 3),
+      Text(label, style: TextStyle(fontSize: 11, color: color)),
+    ],
+  );
+
+  Widget _buildTotalsRow(BuildContext context, double cashDebit, double cashCredit, double goldDebit, double goldCredit, List<Map<String, dynamic>> lines) {
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _goldLight,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE6C800).withOpacity(0.4)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _totalCard(isArabic ? 'مدين نقد' : 'Cash Debit', _fmt(cashDebit, decimals: 2),
+              isArabic ? 'ر.س' : 'SAR', Colors.green[700]!),
+          Container(width: 1, height: 40, color: Colors.grey[300]),
+          _totalCard(isArabic ? 'دائن نقد' : 'Cash Credit', _fmt(cashCredit, decimals: 2),
+              isArabic ? 'ر.س' : 'SAR', Colors.red[700]!),
+          Container(width: 1, height: 40, color: Colors.grey[300]),
+          _totalCard(isArabic ? 'مدين ذهب' : 'Gold Debit', _fmt(goldDebit),
+              isArabic ? 'جم' : 'g', _gold),
+          Container(width: 1, height: 40, color: Colors.grey[300]),
+          _totalCard(isArabic ? 'دائن ذهب' : 'Gold Credit', _fmt(goldCredit),
+              isArabic ? 'جم' : 'g', Colors.orange[700]!),
+        ],
+      ),
+    );
+  }
+
+  Widget _totalCard(String label, String value, String unit, Color color) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+      const SizedBox(height: 2),
+      RichText(text: TextSpan(
+        children: [
+          TextSpan(text: value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color)),
+          TextSpan(text: ' $unit', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ],
+      )),
+    ],
+  );
+
+  Widget _buildLinesHeader(BuildContext context) {
+    final style = TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey[700]);
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Row(
+          children: [
+            Expanded(flex: 3, child: Text(isArabic ? 'الحساب' : 'Account', style: style)),
+            SizedBox(width: 80, child: Text(isArabic ? 'مدين نقد' : 'Dr Cash', style: style, textAlign: TextAlign.center)),
+            SizedBox(width: 80, child: Text(isArabic ? 'دائن نقد' : 'Cr Cash', style: style, textAlign: TextAlign.center)),
+            SizedBox(width: 90, child: Text(isArabic ? 'مدين ذهب' : 'Dr Gold', style: style, textAlign: TextAlign.center)),
+            SizedBox(width: 90, child: Text(isArabic ? 'دائن ذهب' : 'Cr Gold', style: style, textAlign: TextAlign.center)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLineRow(BuildContext context, Map<String, dynamic> line) {
+    final accountName = line['account_name']?.toString() ??
+        line['account']?.toString() ?? '-';
+    final accountNumber = line['account_number']?.toString() ?? '';
+    final desc = line['description']?.toString() ?? '';
+    final drCash = _cellVal(line, 'cash_debit');
+    final crCash = _cellVal(line, 'cash_credit');
+    final drGoldStr = _goldKaratStr(line, 'debit');
+    final crGoldStr = _goldKaratStr(line, 'credit');
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        decoration: BoxDecoration(
+          color: Colors.grey[50],
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.grey[200]!),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    accountNumber.isNotEmpty ? '$accountNumber - $accountName' : accountName,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (desc.isNotEmpty)
+                    Text(desc, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+                ],
+              ),
+            ),
+            _amountCell(drCash > 0 ? _fmt(drCash, decimals: 2) : '-', Colors.green[700]!, 80),
+            _amountCell(crCash > 0 ? _fmt(crCash, decimals: 2) : '-', Colors.red[700]!, 80),
+            _amountCell(drGoldStr.isNotEmpty ? drGoldStr : '-', Colors.amber[800]!, 90),
+            _amountCell(crGoldStr.isNotEmpty ? crGoldStr : '-', Colors.orange[800]!, 90),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _amountCell(String text, Color color, double width) => SizedBox(
+    width: width,
+    child: Text(
+      text,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 11,
+        color: text == '-' ? Colors.grey[400] : color,
+        fontWeight: text == '-' ? FontWeight.normal : FontWeight.bold,
+      ),
+    ),
+  );
+
+  Widget _buildMetaBox(BuildContext context) {
+    final refType = entry['reference_type']?.toString() ?? '';
+    final refNumber = entry['reference_number']?.toString() ?? '';
+    final notes = entry['notes']?.toString() ?? '';
+    if (refType.isEmpty && refNumber.isEmpty && notes.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue[100]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (refType.isNotEmpty || refNumber.isNotEmpty) ...[
+            Row(children: [
+              const Icon(Icons.link, size: 14, color: Colors.blueGrey),
+              const SizedBox(width: 4),
+              Text(
+                '${isArabic ? "مرجع" : "Ref"}: $refType ${refNumber.isNotEmpty ? "($refNumber)" : ""}'.trim(),
+                style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
+              ),
+            ]),
+          ],
+          if (notes.isNotEmpty) ...[
+            if (refType.isNotEmpty) const SizedBox(height: 4),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.note_outlined, size: 14, color: Colors.blueGrey),
+              const SizedBox(width: 4),
+              Expanded(child: Text(notes, style: const TextStyle(fontSize: 12, color: Colors.blueGrey))),
+            ]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActions(BuildContext context, bool isPosted) {
+    if (onEdit == null && onPost == null && onDelete == null) {
+      return Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + 12, top: 8, left: 16, right: 16),
+        child: SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close),
+            label: Text(isArabic ? 'إغلاق' : 'Close'),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).padding.bottom + 12,
+        top: 8, left: 16, right: 16,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close),
+              label: Text(isArabic ? 'إغلاق' : 'Close'),
+            ),
+          ),
+          if (onEdit != null) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_outlined),
+                label: Text(isArabic ? 'تعديل' : 'Edit'),
+              ),
+            ),
+          ],
+          if (onPost != null) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: onPost,
+                style: FilledButton.styleFrom(backgroundColor: Colors.green[700]),
+                icon: const Icon(Icons.check_circle_outline),
+                label: Text(isArabic ? 'ترحيل' : 'Post'),
+              ),
+            ),
+          ],
+          if (onDelete != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline),
+              color: Colors.red[700],
+              tooltip: isArabic ? 'حذف' : 'Delete',
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  List<Map<String, dynamic>> _parseLines() {
+    final linesRaw = entry['lines'];
+    if (linesRaw == null) return [];
+    if (linesRaw is List) {
+      return linesRaw.map((l) => l is Map<String, dynamic> ? l : Map<String, dynamic>.from(l as Map)).toList();
+    }
+    return [];
+  }
+
+  double _cellVal(Map<String, dynamic> line, String key) {
+    // بنية ال API: cash_debit / cash_credit / debit_18k / debit_21k / debit_22k / debit_24k
+    switch (key) {
+      case 'cash_debit':  return _toDouble(line['cash_debit']);
+      case 'cash_credit': return _toDouble(line['cash_credit']);
+      case 'gold_debit':
+        return _toDouble(line['debit_18k']) + _toDouble(line['debit_21k'])
+             + _toDouble(line['debit_22k']) + _toDouble(line['debit_24k']);
+      case 'gold_credit':
+        return _toDouble(line['credit_18k']) + _toDouble(line['credit_21k'])
+             + _toDouble(line['credit_22k']) + _toDouble(line['credit_24k']);
+    }
+    // fallback: amount_type / line_type pattern
+    final lineType   = line['line_type']?.toString() ?? '';
+    final amountType = line['amount_type']?.toString() ?? 'cash';
+    final amount     = _toDouble(line['amount'] ?? 0);
+    if (key == 'cash_debit'  && lineType == 'debit'  && amountType == 'cash')  return amount;
+    if (key == 'cash_credit' && lineType == 'credit' && amountType == 'cash')  return amount;
+    if (key == 'gold_debit'  && lineType == 'debit'  && amountType == 'gold')  return amount;
+    if (key == 'gold_credit' && lineType == 'credit' && amountType == 'gold')  return amount;
+    return 0.0;
+  }
+
+  /// يُرجع نص العيار الدائن/المدين بشكل "خا0k: X جم"
+  String _goldKaratStr(Map<String, dynamic> line, String prefix) {
+    final parts = <String>[];
+    for (final k in [18, 21, 22, 24]) {
+      final v = _toDouble(line['${prefix}_${k}k']);
+      if (v > 0.0001) parts.add('عيار $k: ${_fmt(v)}');
+    }
+    return parts.join('  ');
+  }
+
+  String _parseDate(dynamic raw) {
+    if (raw == null) return '-';
+    final s = raw.toString();
+    try {
+      final dt = DateTime.parse(s);
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return s;
+    }
   }
 }

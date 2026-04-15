@@ -625,12 +625,36 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     return double.tryParse(value.toString()) ?? 0.0;
   }
 
+  /// الوزن المعادل بالعيار الرئيسي — يُستخدم للعرض الرئيسي ويتطابق مع تقرير المبيعات.
   double _extractInvoiceTotalWeight(Map<String, dynamic> invoice) {
+    // الأولوية: total_weight_main_karat الذي يُرسله الـ backend مباشرة
+    final mk = _tryParseDouble(invoice['total_weight_main_karat']);
+    if (mk > 0) return mk;
+
+    // احتياط: احسب يدوياً من karat_lines إن وُجدت (عيار رئيسي افتراضي 21)
+    final karatLines = invoice['karat_lines'];
+    if (karatLines is List && karatLines.isNotEmpty) {
+      var sum = 0.0;
+      const mainK = 21.0;
+      for (final kl in karatLines) {
+        if (kl is Map) {
+          final lw = _tryParseDouble(kl['weight_grams'] ?? kl['weight']);
+          final lk = _tryParseDouble(kl['karat']) > 0
+              ? _tryParseDouble(kl['karat'])
+              : mainK;
+          sum += lw * lk / mainK;
+        }
+      }
+      if (sum > 0) return sum;
+    }
+
+    // احتياط نهائي: الوزن الخام من البنود أو total_weight
+    return _extractInvoiceRawWeight(invoice);
+  }
+
+  /// الوزن الخام الفعلي بالجرام — يُعرض ثانوياً.
+  double _extractInvoiceRawWeight(Map<String, dynamic> invoice) {
     final items = invoice['items'];
-    // Prefer deriving from items when available.
-    // Some backends/legacy invoices store `total_weight` already multiplied by
-    // quantity; the invoice details view shows per-line weight, so the list
-    // should match that and avoid qty multiplication.
     if (items is List && items.isNotEmpty) {
       var sum = 0.0;
       for (final entry in items) {
@@ -643,13 +667,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
           );
         }
       }
-      return sum;
+      if (sum > 0) return sum;
     }
-
-    final direct = _tryParseDouble(invoice['total_weight']);
-    if (direct > 0) return direct;
-
-    return 0.0;
+    return _tryParseDouble(invoice['total_weight']);
   }
 
   String? _extractInvoiceKaratLabel(Map<String, dynamic> invoice) {
@@ -2254,6 +2274,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
             .trim() ??
         (isAr ? 'غير محدد' : 'N/A');
     final totalWeight = _extractInvoiceTotalWeight(invoice);
+    final rawWeight = _extractInvoiceRawWeight(invoice);
+    final showRaw = (rawWeight - totalWeight).abs() > 0.001;
     final amount = _tryParseDouble(invoice['total']);
     final karat = _extractInvoiceKaratLabel(invoice) ?? '—';
     final employeeName = _extractInvoiceEmployeeName(invoice) ?? '—';
@@ -2328,6 +2350,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                   '#,##0.###',
                   isAr ? 'ar' : 'en',
                 ).format(totalWeight),
+                sub: showRaw
+                    ? NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(rawWeight)
+                    : null,
                 icon: Icons.scale_outlined,
                 color: const Color(0xFFD4A017),
                 emphasize: true,
@@ -2503,6 +2528,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     required IconData icon,
     required Color color,
     required bool emphasize,
+    String? sub,
   }) {
     return _buildStickyBodyCell(
       width: width,
@@ -2523,15 +2549,32 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
             Icon(icon, size: 15, color: color),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
-                  color: emphasize ? color.withValues(alpha: 0.98) : color,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
+                      color: emphasize ? color.withValues(alpha: 0.98) : color,
+                    ),
+                  ),
+                  if (sub != null)
+                    Text(
+                      sub,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Colors.grey.shade500,
+                        fontSize: 9,
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
@@ -2774,6 +2817,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                     '#,##0.###',
                     isAr ? 'ar' : 'en',
                   ).format(tabStats['sold_weight_total']),
+                  sub: isAr ? 'جم (عيار رئيسي مكافئ)' : 'g (main karat equiv.)',
                   highlightColor: colorScheme.secondary,
                   emphasize: true,
                 ),
@@ -2791,6 +2835,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     required String value,
     required Color highlightColor,
     bool emphasize = false,
+    String? sub,
   }) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -2859,6 +2904,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                     fontSize: 15,
                   ),
                 ),
+                if (sub != null)
+                  Text(
+                    sub,
+                    style: textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onSurface.withValues(alpha: 0.45),
+                      fontSize: 9,
+                    ),
+                  ),
               ],
             ),
           ),

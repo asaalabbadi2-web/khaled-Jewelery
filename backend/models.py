@@ -1067,13 +1067,29 @@ class Invoice(db.Model):
                 invoice_type_value = 'شراء'
 
         effective_total_weight = self.total_weight
+        effective_total_weight_mk = None  # الوزن المعادل بالعيار الرئيسي
         try:
             if getattr(self, 'karat_lines', None):
                 kl_sum = 0.0
+                kl_sum_mk = 0.0
                 for kl in self.karat_lines:
-                    kl_sum += float(getattr(kl, 'weight_grams', 0.0) or 0.0)
+                    lw = float(getattr(kl, 'weight_grams', 0.0) or 0.0)
+                    lk = float(getattr(kl, 'karat', MAIN_KARAT) or MAIN_KARAT)
+                    kl_sum += lw
+                    kl_sum_mk += lw * lk / MAIN_KARAT
                 if kl_sum > 0:
                     effective_total_weight = round(kl_sum, 4)
+                    effective_total_weight_mk = round(kl_sum_mk, 4)
+            if effective_total_weight_mk is None and getattr(self, 'items', None):
+                ii_sum = 0.0
+                ii_sum_mk = 0.0
+                for ii in self.items:
+                    iw = float(getattr(ii, 'weight', 0.0) or 0.0)
+                    ik = float(getattr(ii, 'karat', 0.0) or 0.0) or MAIN_KARAT
+                    ii_sum += iw
+                    ii_sum_mk += iw * ik / MAIN_KARAT
+                if ii_sum > 0:
+                    effective_total_weight_mk = round(ii_sum_mk, 4)
         except Exception:
             effective_total_weight = self.total_weight
 
@@ -1094,6 +1110,7 @@ class Invoice(db.Model):
             'posted_at': self.posted_at.isoformat() if self.posted_at else None,  # 🆕
             'posted_by': self.posted_by,  # 🆕
             'total_weight': effective_total_weight,
+            'total_weight_main_karat': effective_total_weight_mk,
             'total_tax': self.total_tax,
             'total_cost': self.total_cost,
             'gold_subtotal': self.gold_subtotal,

@@ -1909,6 +1909,16 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getJournalEntryById(int id) async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/journal_entries/$id'));
+    if (response.statusCode == 200) {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) return decoded;
+      return Map<String, dynamic>.from(decoded as Map);
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
   Future<Map<String, dynamic>> addJournalEntry(
     Map<String, dynamic> entryData,
   ) async {
@@ -4747,6 +4757,51 @@ class ApiService {
   /// ملاحظة: هذه الدالة لا تؤثر على أي شاشة/تدفق ما لم يتم استدعاؤها.
   /// تصحيح عيار داخل نفس الخزينة الذهبية (تصحيح خطأ تسجيل).
   /// Endpoint: POST /safe-boxes/<id>/correct-karat
+
+  /// تسجيل عملية تكسير أو تجديد.
+  /// Endpoint: POST /melting-renewal
+  Future<Map<String, dynamic>> createMeltingRenewal({
+    required String operationType, // 'melting' | 'renewal'
+    required int fromSafeBoxId,
+    required int toSafeBoxId,
+    required int fromKarat,
+    int? toKarat,
+    required double goldWeight,
+    double? stonesWeight,
+    int? stonesRevenueAccountId,
+    int? stonesExpenseAccountId,
+    double? damageWageAmount,
+    int? damageWageAccountId,
+    String? notes,
+  }) async {
+    final payload = <String, dynamic>{
+      'operation_type': operationType,
+      'from_safe_box_id': fromSafeBoxId,
+      'to_safe_box_id': toSafeBoxId,
+      'from_karat': fromKarat,
+      if (toKarat != null) 'to_karat': toKarat,
+      'gold_weight': goldWeight,
+      if (stonesWeight != null && stonesWeight > 0) 'stones_weight': stonesWeight,
+      if (stonesRevenueAccountId != null) 'stones_revenue_account_id': stonesRevenueAccountId,
+      if (stonesExpenseAccountId != null) 'stones_expense_account_id': stonesExpenseAccountId,
+      if (damageWageAmount != null && damageWageAmount > 0) 'damage_wage_amount': damageWageAmount,
+      if (damageWageAccountId != null) 'damage_wage_account_id': damageWageAccountId,
+      if (notes != null && notes.isNotEmpty) 'notes': notes,
+    };
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/melting-renewal'),
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: json.encode(payload),
+    );
+    final bodyStr = utf8.decode(response.bodyBytes);
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      final decoded = json.decode(bodyStr);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{'raw': decoded};
+    }
+    throw Exception(bodyStr);
+  }
+
   Future<Map<String, dynamic>> correctSafeBoxKarat({
     required int safeBoxId,
     required int fromKarat,
