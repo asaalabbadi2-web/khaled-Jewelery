@@ -16818,9 +16818,66 @@ def get_journal_entries():
     entries = query.order_by(
         JournalEntry.date.desc(),
         JournalEntry.id.desc(),
-    ).all()
+    )
+
+    # Determine if we need Python-side post-filtering (prevents SQL pagination).
+    needs_python_filter = bool(creator) or (search and search_type in ('amount', 'gold')) or min_cash is not None or max_cash is not None
+
+    if needs_python_filter or not paginate_response:
+        all_entries = entries.all()
+    else:
+        # Fast path: SQL pagination — only fetch summary counts + current page.
+        total_count = entries.with_entities(func.count(JournalEntry.id)).scalar() or 0
+        posted_count = entries.filter(JournalEntry.is_posted == True).with_entities(func.count(JournalEntry.id)).scalar() or 0
+
+        total_pages_sql = max(1, (total_count + per_page - 1) // per_page) if total_count else 1
+        current_page_sql = min(max(page, 1), total_pages_sql)
+        page_entries = entries.offset((current_page_sql - 1) * per_page).limit(per_page).all()
+
+        try:
+            serialized_page = [_serialize_journal_entry_list_item(e) for e in page_entries]
+        except Exception as _ser_exc:
+            import traceback as _tb
+            _tb.print_exc()
+            return jsonify({'error': 'serialization_failed', 'message': str(_ser_exc)}), 500
+
+        page_cash = round(sum(float(e.get('cash_total') or 0.0) for e in serialized_page), 2)
+        page_gold = round(sum(float(e.get('gold_total_main_karat') or 0.0) for e in serialized_page), 6)
+
+        available_creators_q = (
+            JournalEntry.query
+            .filter(JournalEntry.is_deleted == False)
+            .with_entities(JournalEntry.created_by)
+            .distinct()
+            .all()
+        )
+        available_types_q = (
+            JournalEntry.query
+            .filter(JournalEntry.is_deleted == False)
+            .with_entities(JournalEntry.entry_type)
+            .distinct()
+            .all()
+        )
+
+        return jsonify({
+            'journal_entries': serialized_page,
+            'total': total_count,
+            'pages': total_pages_sql,
+            'current_page': current_page_sql,
+            'per_page': per_page,
+            'current_summary': {
+                'total_entries': total_count,
+                'posted_count': posted_count,
+                'unposted_count': total_count - posted_count,
+                'total_cash': page_cash,
+                'total_gold_main_karat': page_gold,
+            },
+            'available_creators': [{'name': (r[0] or '').strip()} for r in available_creators_q if (r[0] or '').strip()],
+            'available_entry_types': [{'name': (r[0] or '').strip()} for r in available_types_q if (r[0] or '').strip()],
+        })
+
     try:
-        serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in entries]
+        serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in all_entries]
     except Exception as _ser_exc:
         import traceback as _tb
         _tb.print_exc()
