@@ -143,31 +143,39 @@ def _build_party_accounts(account_obj) -> PartyAccounts:
 
 def _resolve_weight_account_id(account_id: int) -> int:
     """
-    إذا كان الحساب مالياً (لا يحتوي وزناً)، نُعيد memo_account_id المرتبط به.
-    هذا يضمن أن قيود المخزون الوزني تذهب إلى 71310000 لا 1310000.
+    يُعيد الحساب الوزني (transaction_type='gold') المناسب لتسجيل قيود الوزن.
 
     ترتيب الأولوية:
-    1. إذا كان الحساب وزنياً (tracks_weight=True) → استخدمه مباشرة.
-    2. إذا كان لديه memo_account_id مرتبط → استخدمه.
-    3. بحث عكسي: ابحث عن حساب وزني يشير إلى هذا الحساب عبر memo_account_id.
+    1. إذا كان الحساب نفسه من نوع 'gold' → استخدمه مباشرة.
+    2. إذا كان لديه memo_account_id يشير لحساب 'gold' → استخدم الـ memo.
+    3. بحث عكسي: ابحث عن حساب 'gold' يشير إلى هذا الحساب.
+    4. fallback: أعد الحساب الأصلي.
+
+    Note: نستخدم transaction_type='gold' وليس tracks_weight لأن بعض SafeBox
+    accounts تحمل tracks_weight=True لكنها مالية (cash) وليست وزنية.
     """
     try:
         from models import Account as _Account  # noqa: local import
         acc = _Account.query.get(account_id)
         if acc:
-            # Already a weight-tracking account — use as-is.
-            if getattr(acc, 'tracks_weight', False):
+            # Already a gold/weight account — use as-is.
+            if (getattr(acc, 'transaction_type', 'cash') or 'cash').lower() == 'gold':
                 return account_id
-            # Direct forward link.
+
+            # Forward link: memo_account_id pointing to a gold account.
             memo_id = getattr(acc, 'memo_account_id', None)
             if memo_id:
-                return int(memo_id)
-            # Fallback: reverse lookup — find the weight account that points to this one.
-            # This handles the case where memo_account_id was not set on the financial account
-            # but the weight account still has memo_account_id pointing back to this account.
-            reverse = _Account.query.filter_by(
-                memo_account_id=account_id, tracks_weight=True
-            ).first()
+                memo_acc = _Account.query.get(int(memo_id))
+                if memo_acc and (getattr(memo_acc, 'transaction_type', 'cash') or 'cash').lower() == 'gold':
+                    return int(memo_id)
+
+            # Reverse lookup: find a gold account that points to this one.
+            reverse = (
+                _Account.query
+                .filter(_Account.memo_account_id == account_id)
+                .filter_by(transaction_type='gold')
+                .first()
+            )
             if reverse:
                 return int(reverse.id)
     except Exception:
