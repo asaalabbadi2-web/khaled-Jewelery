@@ -144,14 +144,32 @@ def _build_party_accounts(account_obj) -> PartyAccounts:
 def _resolve_weight_account_id(account_id: int) -> int:
     """
     إذا كان الحساب مالياً (لا يحتوي وزناً)، نُعيد memo_account_id المرتبط به.
-    هذا يضمن أن قيود المخزون الوزني تذهب إلى 7130000 لا 1300.
-    مستخدَمة في apply_je_to_db و weight_entries_for_party.
+    هذا يضمن أن قيود المخزون الوزني تذهب إلى 71310000 لا 1310000.
+
+    ترتيب الأولوية:
+    1. إذا كان الحساب وزنياً (tracks_weight=True) → استخدمه مباشرة.
+    2. إذا كان لديه memo_account_id مرتبط → استخدمه.
+    3. بحث عكسي: ابحث عن حساب وزني يشير إلى هذا الحساب عبر memo_account_id.
     """
     try:
         from models import Account as _Account  # noqa: local import
         acc = _Account.query.get(account_id)
-        if acc and getattr(acc, 'memo_account_id', None):
-            return int(acc.memo_account_id)
+        if acc:
+            # Already a weight-tracking account — use as-is.
+            if getattr(acc, 'tracks_weight', False):
+                return account_id
+            # Direct forward link.
+            memo_id = getattr(acc, 'memo_account_id', None)
+            if memo_id:
+                return int(memo_id)
+            # Fallback: reverse lookup — find the weight account that points to this one.
+            # This handles the case where memo_account_id was not set on the financial account
+            # but the weight account still has memo_account_id pointing back to this account.
+            reverse = _Account.query.filter_by(
+                memo_account_id=account_id, tracks_weight=True
+            ).first()
+            if reverse:
+                return int(reverse.id)
     except Exception:
         pass
     return account_id
