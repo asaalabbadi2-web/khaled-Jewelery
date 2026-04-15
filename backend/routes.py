@@ -16827,8 +16827,9 @@ def get_journal_entries():
         all_entries = entries.all()
     else:
         # Fast path: SQL pagination — only fetch summary counts + current page.
-        total_count = entries.with_entities(func.count(JournalEntry.id)).scalar() or 0
-        posted_count = entries.filter(JournalEntry.is_posted == True).with_entities(func.count(JournalEntry.id)).scalar() or 0
+        base_q = entries.order_by(None)  # strip ORDER BY for count queries
+        total_count = base_q.with_entities(func.count(JournalEntry.id)).scalar() or 0
+        posted_count = base_q.filter(JournalEntry.is_posted == True).with_entities(func.count(JournalEntry.id)).scalar() or 0
 
         total_pages_sql = max(1, (total_count + per_page - 1) // per_page) if total_count else 1
         current_page_sql = min(max(page, 1), total_pages_sql)
