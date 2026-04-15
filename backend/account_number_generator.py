@@ -34,6 +34,27 @@ def _digits_only(value: str) -> str:
     return ''.join(ch for ch in str(value or '').strip() if ch.isdigit())
 
 
+def _common_prefix_for_like(start: int, end: int) -> str:
+    """Return the longest common digit prefix of start and end for a LIKE filter.
+
+    Example:
+      5200, 5290  → "52"   (5200 LIKE "52%" matches ALL accounts 5200-5299)
+      1100000, 1100999 → "1100" (matches ALL 1100xxx accounts)
+      520, 600    → "5"    (fallback to first digit; range check tightens it)
+
+    The old approach `str(start)[:len-1]` was wrong for spaced ranges:
+      "5200"[:3] = "520"  → LIKE "520%" only hits 5200-5209, missing 5210-5290!
+    """
+    sa, sb = str(start), str(end)
+    prefix = ''
+    for a, b in zip(sa, sb):
+        if a == b:
+            prefix += a
+        else:
+            break
+    return prefix or sa[0]  # always at least 1 character to keep the query efficient
+
+
 def _compute_child_range_and_step(parent_account_number: str) -> tuple[int, int, int, int]:
     """Return (start, end, step, child_len) for the next-level children of a parent.
 
@@ -184,7 +205,10 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
     # casting to BIGINT.  This prevents NumericValueOutOfRange on PostgreSQL when unrelated
     # long account numbers (e.g. legacy 7210000020) exist in the same table.
     expected_len = len(str(end_range))
-    prefix_for_like = str(start_range)[:max(1, expected_len - 1)]
+    # Use the COMMON prefix of start and end so the LIKE filter covers the full range.
+    # Old: str(start)[:len-1]  e.g. "5200"[:3]="520" → only matches 5200-5209, misses 5210-5290!
+    # New: common_prefix(5200,5290) = "52" → LIKE "52%" covers all accounts in range.
+    prefix_for_like = _common_prefix_for_like(start_range, end_range)
 
     # ابحث عن آخر رقم حساب مستخدم في هذا النطاق
     last_account = (
@@ -220,7 +244,7 @@ def _first_unused_number_in_range(start_range: int, end_range: int, step: int = 
     """Return the first unused account_number within an integer range."""
 
     expected_len = len(str(end_range))
-    prefix_for_like = str(start_range)[:max(1, expected_len - 1)]
+    prefix_for_like = _common_prefix_for_like(start_range, end_range)
 
     existing_numbers = {
         int(row[0])
@@ -305,7 +329,7 @@ def get_customer_account_capacity(customer_category: str = '1200') -> dict:
 
     # عدد الحسابات المستخدمة
     expected_len = len(str(end_range))
-    prefix_for_like = str(start_range)[:max(1, expected_len - 1)]
+    prefix_for_like = _common_prefix_for_like(start_range, end_range)
     used_count = Account.query.filter(
         db.func.length(Account.account_number) == expected_len,
         Account.account_number.like(f"{prefix_for_like}%"),
