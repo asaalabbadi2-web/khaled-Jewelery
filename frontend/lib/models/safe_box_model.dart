@@ -209,6 +209,15 @@ class SafeBoxModel {
   double get accountGoldBalance21k => balance?.weight?.karat21 ?? 0.0;
   double get accountGoldBalance18k => balance?.weight?.karat18 ?? 0.0;
 
+  /// الوزن المكافئ بالعيار الرئيسي (21) من رصيد الحساب
+  double get accountTotalWeightMainKarat {
+    const mainKarat = 21.0;
+    return accountGoldBalance18k * 18 / mainKarat +
+        accountGoldBalance21k * 21 / mainKarat +
+        accountGoldBalance22k * 22 / mainKarat +
+        accountGoldBalance24k * 24 / mainKarat;
+  }
+
   /// الرصيد الوزني (إن توفر من الـ ledger)
   double get goldBalance24k => weightBalance?['24k'] ?? 0.0;
   double get goldBalance22k => weightBalance?['22k'] ?? 0.0;

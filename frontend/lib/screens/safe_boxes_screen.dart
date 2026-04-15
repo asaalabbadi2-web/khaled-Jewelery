@@ -830,23 +830,55 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                               ),
                               if (safeBox.safeType == 'gold' &&
                                   safeBox.hasNonZeroLedgerWeight)
-                                Text(
-                                  isAr
-                                      ? 'الرصيد الوزني: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}'
-                                      : 'Weight balance: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      widget.isArabic
+                                          ? 'الرصيد الوزني: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}'
+                                          : 'Weight balance: 24k ${safeBox.goldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.goldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.goldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.goldBalance18k.toStringAsFixed(3)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    if ((safeBox.totalWeightMainKarat?.abs() ?? 0) > 1e-6)
+                                      Text(
+                                        widget.isArabic
+                                            ? 'المكافئ (عيار 21): ${safeBox.totalWeightMainKarat!.toStringAsFixed(3)} جم'
+                                            : 'Equiv (21k): ${safeBox.totalWeightMainKarat!.toStringAsFixed(3)} g',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.amber.shade800,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                  ],
                                 )
                               else if (safeBox.safeType == 'gold' &&
                                   safeBox.balance?.weight != null)
-                                Text(
-                                  isAr
-                                      ? 'الرصيد الوزني: 24k ${safeBox.accountGoldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.accountGoldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.accountGoldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.accountGoldBalance18k.toStringAsFixed(3)}'
-                                      : 'Weight balance: 24k ${safeBox.accountGoldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.accountGoldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.accountGoldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.accountGoldBalance18k.toStringAsFixed(3)}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      widget.isArabic
+                                          ? 'الرصيد الوزني: 24k ${safeBox.accountGoldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.accountGoldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.accountGoldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.accountGoldBalance18k.toStringAsFixed(3)}'
+                                          : 'Weight balance: 24k ${safeBox.accountGoldBalance24k.toStringAsFixed(3)} | 22k ${safeBox.accountGoldBalance22k.toStringAsFixed(3)} | 21k ${safeBox.accountGoldBalance21k.toStringAsFixed(3)} | 18k ${safeBox.accountGoldBalance18k.toStringAsFixed(3)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    if (safeBox.accountTotalWeightMainKarat.abs() > 1e-6)
+                                      Text(
+                                        widget.isArabic
+                                            ? 'المكافئ (عيار 21): ${safeBox.accountTotalWeightMainKarat.toStringAsFixed(3)} جم'
+                                            : 'Equiv (21k): ${safeBox.accountTotalWeightMainKarat.toStringAsFixed(3)} g',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.amber.shade800,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                  ],
                                 )
                               else if (safeBox.balance != null)
                                 Text(
