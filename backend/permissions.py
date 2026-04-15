@@ -211,7 +211,10 @@ ROLE_PERMISSIONS = {
 
         # الخزائن (للاختيار داخل الفواتير)
         'safe_boxes.view',
-        
+
+        # القيود اليومية (عرض فقط)
+        'journal.view',
+
         # الطباعة (الفواتير فقط)
         'print.invoices',
     ],
