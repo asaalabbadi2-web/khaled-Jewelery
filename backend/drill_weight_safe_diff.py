@@ -155,7 +155,10 @@ def drill(safe_box_id: int):
                     AND COALESCE(je.is_posted, true) = true
                     AND (
                         (LOWER(COALESCE(sbt.ref_type,'')) = 'journal_entry' AND je.id = sbt.ref_id)
-                     OR (LOWER(COALESCE(sbt.ref_type,'')) IN ('invoice','invoice_payment')
+                     OR (LOWER(COALESCE(sbt.ref_type,'')) LIKE 'invoice%'
+                         AND je.reference_id = sbt.ref_id
+                         AND LOWER(COALESCE(je.reference_type,'')) = 'invoice')
+                     OR (LOWER(COALESCE(sbt.ref_type,'')) = 'invoice_payment'
                          AND je.reference_id = sbt.ref_id)
                      OR (LOWER(COALESCE(sbt.ref_type,'')) IN ('voucher','voucher_reversal')
                          AND je.reference_id = sbt.ref_id)
@@ -207,7 +210,10 @@ def drill(safe_box_id: int):
                       OR sbt.weight_22k != 0 OR sbt.weight_24k != 0)
                     AND (
                         (LOWER(COALESCE(je.reference_type,'')) = 'journal_entry' AND sbt.ref_id = je.id)
-                     OR (LOWER(COALESCE(je.reference_type,'')) IN ('invoice','invoice_payment')
+                     OR (LOWER(COALESCE(je.reference_type,'')) = 'invoice'
+                         AND sbt.ref_id = je.reference_id
+                         AND LOWER(COALESCE(sbt.ref_type,'')) LIKE 'invoice%')
+                     OR (LOWER(COALESCE(je.reference_type,'')) = 'invoice_payment'
                          AND sbt.ref_id = je.reference_id)
                      OR (LOWER(COALESCE(je.reference_type,'')) IN ('voucher','voucher_reversal')
                          AND sbt.ref_id = je.reference_id)
