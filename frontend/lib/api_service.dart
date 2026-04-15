@@ -1905,7 +1905,15 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load journal entries');
+      final body = utf8.decode(response.bodyBytes);
+      String detail = 'Failed to load journal entries';
+      try {
+        final decoded = json.decode(body);
+        if (decoded is Map) {
+          detail = (decoded['message'] ?? decoded['error'] ?? detail).toString();
+        }
+      } catch (_) {}
+      throw Exception('$detail (${response.statusCode})');
     }
   }
 

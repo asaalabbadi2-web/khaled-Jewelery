@@ -16579,21 +16579,24 @@ def _parse_journal_entries_query_datetime(value, *, end_of_day=False):
 
 
 def _journal_entry_line_to_dict(line):
-    account_name = line.account.name if line.account else f'حساب محذوف (ID: {line.account_id})'
+    try:
+        account_name = line.account.name if line.account else f'حساب محذوف (ID: {line.account_id})'
+    except Exception:
+        account_name = f'حساب (ID: {getattr(line, "account_id", "?")})'
     return {
         'id': line.id,
         'account_id': line.account_id,
         'account_name': account_name,
-        'cash_debit': float(line.cash_debit or 0.0),
-        'cash_credit': float(line.cash_credit or 0.0),
-        'debit_18k': float(line.debit_18k or 0.0),
-        'credit_18k': float(line.credit_18k or 0.0),
-        'debit_21k': float(line.debit_21k or 0.0),
-        'credit_21k': float(line.credit_21k or 0.0),
-        'debit_22k': float(line.debit_22k or 0.0),
-        'credit_22k': float(line.credit_22k or 0.0),
-        'debit_24k': float(line.debit_24k or 0.0),
-        'credit_24k': float(line.credit_24k or 0.0),
+        'cash_debit': float(getattr(line, 'cash_debit', None) or 0.0),
+        'cash_credit': float(getattr(line, 'cash_credit', None) or 0.0),
+        'debit_18k': float(getattr(line, 'debit_18k', None) or 0.0),
+        'credit_18k': float(getattr(line, 'credit_18k', None) or 0.0),
+        'debit_21k': float(getattr(line, 'debit_21k', None) or 0.0),
+        'credit_21k': float(getattr(line, 'credit_21k', None) or 0.0),
+        'debit_22k': float(getattr(line, 'debit_22k', None) or 0.0),
+        'credit_22k': float(getattr(line, 'credit_22k', None) or 0.0),
+        'debit_24k': float(getattr(line, 'debit_24k', None) or 0.0),
+        'credit_24k': float(getattr(line, 'credit_24k', None) or 0.0),
     }
 
 
@@ -16628,11 +16631,14 @@ def _journal_entry_totals(lines):
 
 
 def _serialize_journal_entry_list_item(entry):
-    lines = [
-        _journal_entry_line_to_dict(line)
-        for line in entry.lines
-        if not getattr(line, 'is_deleted', False)
-    ]
+    try:
+        lines = [
+            _journal_entry_line_to_dict(line)
+            for line in entry.lines
+            if not getattr(line, 'is_deleted', False)
+        ]
+    except Exception:
+        lines = []
     totals = _journal_entry_totals(lines)
     account_names = []
     seen_names = set()
@@ -16655,7 +16661,7 @@ def _serialize_journal_entry_list_item(entry):
     return {
         'id': entry.id,
         'entry_number': entry.entry_number,
-        'date': entry.date.isoformat(),
+        'date': entry.date.isoformat() if entry.date else None,
         'created_at': entry.created_at.isoformat() if getattr(entry, 'created_at', None) else None,
         'description': entry.description,
         'entry_type': getattr(entry, 'entry_type', None) or 'عادي',
@@ -16813,7 +16819,12 @@ def get_journal_entries():
         JournalEntry.date.desc(),
         JournalEntry.id.desc(),
     ).all()
-    serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in entries]
+    try:
+        serialized_entries = [_serialize_journal_entry_list_item(entry) for entry in entries]
+    except Exception as _ser_exc:
+        import traceback as _tb
+        _tb.print_exc()
+        return jsonify({'error': 'serialization_failed', 'message': str(_ser_exc)}), 500
 
     if creator:
         serialized_entries = [
