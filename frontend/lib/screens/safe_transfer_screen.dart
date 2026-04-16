@@ -8,12 +8,20 @@ class SafeTransferScreen extends StatefulWidget {
   final ApiService api;
   final bool isArabic;
   final String initialMode; // gold | cash
+  final int? initialFromSafeId;
+  final int? initialToSafeId;
+  final String? initialNotes;
+  final bool popOnSuccess;
 
   const SafeTransferScreen({
     super.key,
     required this.api,
     this.isArabic = true,
     this.initialMode = 'gold',
+    this.initialFromSafeId,
+    this.initialToSafeId,
+    this.initialNotes,
+    this.popOnSuccess = false,
   });
 
   @override
@@ -34,7 +42,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
 
   // karat_correction fields
   int _corrFromKarat = 21;
-  int _corrToKarat   = 18;
+  int _corrToKarat = 18;
   final _corrWeightController = TextEditingController();
 
   final _amountCashController = TextEditingController();
@@ -55,6 +63,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
   void initState() {
     super.initState();
     _mode = widget.initialMode;
+    _notesController.text = widget.initialNotes ?? '';
 
     _amountCashController.addListener(_onInputChanged);
     _weight24kController.addListener(_onInputChanged);
@@ -141,12 +150,30 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                 .where((s) => s.id != null)
                 .map((s) => MapEntry<int, SafeBoxModel>(s.id!, s)),
           );
+        final filteredIds = filtered
+            .where((s) => s.id != null)
+            .map((s) => s.id!)
+            .toSet();
+        if (_fromSafeId == null &&
+            widget.initialFromSafeId != null &&
+            filteredIds.contains(widget.initialFromSafeId)) {
+          _fromSafeId = widget.initialFromSafeId;
+        }
+        if (_toSafeId == null &&
+            widget.initialToSafeId != null &&
+            filteredIds.contains(widget.initialToSafeId) &&
+            widget.initialToSafeId != _fromSafeId) {
+          _toSafeId = widget.initialToSafeId;
+        }
         _isLoadingSafes = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoadingSafes = false);
-      _showSnack(widget.isArabic ? 'فشل تحميل الخزائن: $e' : 'Failed to load safes: $e', isError: true);
+      _showSnack(
+        widget.isArabic ? 'فشل تحميل الخزائن: $e' : 'Failed to load safes: $e',
+        isError: true,
+      );
     }
   }
 
@@ -185,10 +212,26 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _karatChip('24k', safe.goldBalance24k, Colors.yellow.shade800),
-                  _karatChip('22k', safe.goldBalance22k, Colors.yellow.shade700),
-                  _karatChip('21k', safe.goldBalance21k, Colors.yellow.shade600),
-                  _karatChip('18k', safe.goldBalance18k, Colors.yellow.shade500),
+                  _karatChip(
+                    '24k',
+                    safe.goldBalance24k,
+                    Colors.yellow.shade800,
+                  ),
+                  _karatChip(
+                    '22k',
+                    safe.goldBalance22k,
+                    Colors.yellow.shade700,
+                  ),
+                  _karatChip(
+                    '21k',
+                    safe.goldBalance21k,
+                    Colors.yellow.shade600,
+                  ),
+                  _karatChip(
+                    '18k',
+                    safe.goldBalance18k,
+                    Colors.yellow.shade500,
+                  ),
                 ],
               ),
             ],
@@ -221,10 +264,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       avatar: Container(
         width: 10,
         height: 10,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-        ),
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       ),
       label: Text(
         '$label: ${_fmtWeight(value)}',
@@ -319,7 +359,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       22 => safe.goldBalance22k,
       21 => safe.goldBalance21k,
       18 => safe.goldBalance18k,
-      _  => 0.0,
+      _ => 0.0,
     };
   }
 
@@ -342,16 +382,27 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     // ── تصحيح العيار ──
     if (_mode == 'karat_correction') {
       if (_fromSafeId == null) {
-        _showSnack(widget.isArabic ? 'يجب اختيار الخزينة' : 'Select a safe', isError: true);
+        _showSnack(
+          widget.isArabic ? 'يجب اختيار الخزينة' : 'Select a safe',
+          isError: true,
+        );
         return;
       }
       if (_corrFromKarat == _corrToKarat) {
-        _showSnack(widget.isArabic ? 'العيار الأصلي والمصحَّح متطابقان' : 'Karats must differ', isError: true);
+        _showSnack(
+          widget.isArabic
+              ? 'العيار الأصلي والمصحَّح متطابقان'
+              : 'Karats must differ',
+          isError: true,
+        );
         return;
       }
       final weight = _parseDouble(_corrWeightController.text);
       if (weight <= 0) {
-        _showSnack(widget.isArabic ? 'يجب إدخال وزن صحيح' : 'Enter a valid weight', isError: true);
+        _showSnack(
+          widget.isArabic ? 'يجب إدخال وزن صحيح' : 'Enter a valid weight',
+          isError: true,
+        );
         return;
       }
       if (_corrOverdraftError() != null) {
@@ -366,46 +417,70 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
           fromKarat: _corrFromKarat,
           toKarat: _corrToKarat,
           weight: weight,
-          notes: _notesController.text.trim().isNotEmpty ? _notesController.text.trim() : null,
+          notes: _notesController.text.trim().isNotEmpty
+              ? _notesController.text.trim()
+              : null,
         );
 
         if (!mounted) return;
-        _showSnack(widget.isArabic ? 'تم تصحيح العيار بنجاح' : 'Karat corrected');
+        _showSnack(
+          widget.isArabic ? 'تم تصحيح العيار بنجاح' : 'Karat corrected',
+        );
         setState(() {
           _fromSafeId = null;
           _corrWeightController.clear();
           _notesController.clear();
         });
 
-        final voucher    = result['voucher']    as Map<String, dynamic>?;
+        final voucher = result['voucher'] as Map<String, dynamic>?;
         final correction = result['correction'] as Map<String, dynamic>?;
         await showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: Text(widget.isArabic ? 'تم تصحيح العيار' : 'Karat Corrected'),
+            title: Text(
+              widget.isArabic ? 'تم تصحيح العيار' : 'Karat Corrected',
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.isArabic ? 'رقم السند: ${voucher?['voucher_number'] ?? '-'}' : 'Voucher: ${voucher?['voucher_number'] ?? '-'}'),
+                Text(
+                  widget.isArabic
+                      ? 'رقم السند: ${voucher?['voucher_number'] ?? '-'}'
+                      : 'Voucher: ${voucher?['voucher_number'] ?? '-'}',
+                ),
                 const SizedBox(height: 6),
-                Text(widget.isArabic
-                    ? 'الخزينة:  ${correction?['safe_name'] ?? '-'}'
-                    : 'Safe: ${correction?['safe_name'] ?? '-'}'),
-                Text(widget.isArabic
-                    ? 'من عيار:  ${correction?['from_karat']}k → إلى عيار: ${correction?['to_karat']}k'
-                    : 'From: ${correction?['from_karat']}k → To: ${correction?['to_karat']}k'),
-                Text(widget.isArabic
-                    ? 'الوزن:  ${correction?['weight']} جم'
-                    : 'Weight: ${correction?['weight']} g'),
+                Text(
+                  widget.isArabic
+                      ? 'الخزينة:  ${correction?['safe_name'] ?? '-'}'
+                      : 'Safe: ${correction?['safe_name'] ?? '-'}',
+                ),
+                Text(
+                  widget.isArabic
+                      ? 'من عيار:  ${correction?['from_karat']}k → إلى عيار: ${correction?['to_karat']}k'
+                      : 'From: ${correction?['from_karat']}k → To: ${correction?['to_karat']}k',
+                ),
+                Text(
+                  widget.isArabic
+                      ? 'الوزن:  ${correction?['weight']} جم'
+                      : 'Weight: ${correction?['weight']} g',
+                ),
               ],
             ),
-            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(widget.isArabic ? 'حسناً' : 'OK'))],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(widget.isArabic ? 'حسناً' : 'OK'),
+              ),
+            ],
           ),
         );
       } catch (e) {
         if (!mounted) return;
-        _showSnack(widget.isArabic ? 'فشل تصحيح العيار: $e' : 'Failed: $e', isError: true);
+        _showSnack(
+          widget.isArabic ? 'فشل تصحيح العيار: $e' : 'Failed: $e',
+          isError: true,
+        );
       } finally {
         if (mounted) setState(() => _isSubmitting = false);
       }
@@ -414,24 +489,42 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
 
     // ── التحويل بين الخزائن (gold / cash) ──
     if (_fromSafeId == null || _toSafeId == null) {
-      _showSnack(widget.isArabic ? 'يجب اختيار خزينة المصدر والوجهة' : 'Select both source and destination', isError: true);
+      _showSnack(
+        widget.isArabic
+            ? 'يجب اختيار خزينة المصدر والوجهة'
+            : 'Select both source and destination',
+        isError: true,
+      );
       return;
     }
 
     if (_fromSafeId == _toSafeId) {
-      _showSnack(widget.isArabic ? 'لا يمكن التحويل إلى نفس الخزينة' : 'Cannot transfer to the same safe', isError: true);
+      _showSnack(
+        widget.isArabic
+            ? 'لا يمكن التحويل إلى نفس الخزينة'
+            : 'Cannot transfer to the same safe',
+        isError: true,
+      );
       return;
     }
 
     if (_mode == 'gold' && !_validateGoldWeights()) {
-      _showSnack(widget.isArabic ? 'يجب إدخال وزن واحد على الأقل' : 'Enter at least one weight', isError: true);
+      _showSnack(
+        widget.isArabic
+            ? 'يجب إدخال وزن واحد على الأقل'
+            : 'Enter at least one weight',
+        isError: true,
+      );
       return;
     }
 
     if (_mode == 'cash') {
       final amount = _parseDouble(_amountCashController.text);
       if (amount <= 0) {
-        _showSnack(widget.isArabic ? 'يجب إدخال مبلغ صحيح' : 'Enter a valid amount', isError: true);
+        _showSnack(
+          widget.isArabic ? 'يجب إدخال مبلغ صحيح' : 'Enter a valid amount',
+          isError: true,
+        );
         return;
       }
 
@@ -475,7 +568,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     setState(() => _isSubmitting = true);
 
     try {
-      final notes = _notesController.text.trim().isNotEmpty ? _notesController.text.trim() : null;
+      final notes = _notesController.text.trim().isNotEmpty
+          ? _notesController.text.trim()
+          : null;
 
       Map<String, dynamic> result;
       if (_mode == 'gold') {
@@ -511,7 +606,11 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
 
       if (!mounted) return;
 
-      _showSnack(widget.isArabic ? 'تم إنشاء سند التحويل بنجاح' : 'Transfer voucher created');
+      _showSnack(
+        widget.isArabic
+            ? 'تم إنشاء سند التحويل بنجاح'
+            : 'Transfer voucher created',
+      );
 
       // Reset
       setState(() {
@@ -531,13 +630,21 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
           final voucher = result['voucher'] as Map<String, dynamic>?;
           final transfer = result['transfer'] as Map<String, dynamic>?;
           return AlertDialog(
-            title: Text(widget.isArabic ? 'تم إنشاء سند التحويل' : 'Transfer Voucher Created'),
+            title: Text(
+              widget.isArabic
+                  ? 'تم إنشاء سند التحويل'
+                  : 'Transfer Voucher Created',
+            ),
             content: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(widget.isArabic ? 'رقم السند: ${voucher?['voucher_number'] ?? '-'}' : 'Voucher: ${voucher?['voucher_number'] ?? '-'}'),
+                  Text(
+                    widget.isArabic
+                        ? 'رقم السند: ${voucher?['voucher_number'] ?? '-'}'
+                        : 'Voucher: ${voucher?['voucher_number'] ?? '-'}',
+                  ),
                   const SizedBox(height: 8),
                   if (_mode == 'cash')
                     Text(
@@ -548,10 +655,18 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                   if (_mode == 'gold') ...[
                     Text(widget.isArabic ? 'الأوزان:' : 'Weights:'),
                     const SizedBox(height: 4),
-                    Text('24k: ${(transfer?['weights']?['24k'] ?? 0).toString()}'),
-                    Text('22k: ${(transfer?['weights']?['22k'] ?? 0).toString()}'),
-                    Text('21k: ${(transfer?['weights']?['21k'] ?? 0).toString()}'),
-                    Text('18k: ${(transfer?['weights']?['18k'] ?? 0).toString()}'),
+                    Text(
+                      '24k: ${(transfer?['weights']?['24k'] ?? 0).toString()}',
+                    ),
+                    Text(
+                      '22k: ${(transfer?['weights']?['22k'] ?? 0).toString()}',
+                    ),
+                    Text(
+                      '21k: ${(transfer?['weights']?['21k'] ?? 0).toString()}',
+                    ),
+                    Text(
+                      '18k: ${(transfer?['weights']?['18k'] ?? 0).toString()}',
+                    ),
                   ],
                 ],
               ),
@@ -565,9 +680,18 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
           );
         },
       );
+
+      if (widget.popOnSuccess && mounted) {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       if (!mounted) return;
-      _showSnack(widget.isArabic ? 'فشل إنشاء سند التحويل: $e' : 'Failed to create transfer: $e', isError: true);
+      _showSnack(
+        widget.isArabic
+            ? 'فشل إنشاء سند التحويل: $e'
+            : 'Failed to create transfer: $e',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -578,7 +702,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     final isAr = widget.isArabic;
 
     final fromSafe = _safeByIdOrNull(_fromSafeId);
-    final toSafe   = _mode != 'karat_correction' ? _safeByIdOrNull(_toSafeId) : null;
+    final toSafe = _mode != 'karat_correction'
+        ? _safeByIdOrNull(_toSafeId)
+        : null;
 
     final cashOverdraft = _cashOverdraftError();
     final goldOver24 = _goldOverdraftError('24k');
@@ -630,7 +756,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                       value: _mode,
                       decoration: InputDecoration(
                         border: const OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.swap_horiz, color: AppColors.darkGold),
+                        prefixIcon: Icon(
+                          Icons.swap_horiz,
+                          color: AppColors.darkGold,
+                        ),
                         filled: true,
                         fillColor: Colors.grey.shade50,
                         labelText: isAr ? 'نوع العملية' : 'Operation Type',
@@ -638,15 +767,27 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                       items: [
                         DropdownMenuItem(
                           value: 'gold',
-                          child: Text(isAr ? 'تحويل ذهب بين الخزائن (بالوزن)' : 'Gold transfer (weights)'),
+                          child: Text(
+                            isAr
+                                ? 'تحويل ذهب بين الخزائن (بالوزن)'
+                                : 'Gold transfer (weights)',
+                          ),
                         ),
                         DropdownMenuItem(
                           value: 'cash',
-                          child: Text(isAr ? 'تحويل نقدي/بنكي (بالمبلغ)' : 'Cash/Bank transfer (amount)'),
+                          child: Text(
+                            isAr
+                                ? 'تحويل نقدي/بنكي (بالمبلغ)'
+                                : 'Cash/Bank transfer (amount)',
+                          ),
                         ),
                         DropdownMenuItem(
                           value: 'karat_correction',
-                          child: Text(isAr ? 'تصحيح عيار (خطأ تسجيل)' : 'Karat correction (entry error)'),
+                          child: Text(
+                            isAr
+                                ? 'تصحيح عيار (خطأ تسجيل)'
+                                : 'Karat correction (entry error)',
+                          ),
                         ),
                       ],
                       onChanged: (value) {
@@ -672,7 +813,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                       value: _fromSafeId,
                       decoration: InputDecoration(
                         border: const OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.inventory_2, color: AppColors.darkGold),
+                        prefixIcon: Icon(
+                          Icons.inventory_2,
+                          color: AppColors.darkGold,
+                        ),
                         filled: true,
                         fillColor: Colors.grey.shade50,
                         labelText: isAr ? 'من خزينة' : 'From Safe',
@@ -690,7 +834,8 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                           )
                           .toList(),
                       onChanged: (value) => setState(() => _fromSafeId = value),
-                      validator: (value) => value == null ? (isAr ? 'مطلوب' : 'Required') : null,
+                      validator: (value) =>
+                          value == null ? (isAr ? 'مطلوب' : 'Required') : null,
                     ),
 
                     if (fromSafe != null) ...[
@@ -709,7 +854,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         value: _toSafeId,
                         decoration: InputDecoration(
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.inventory_2_outlined, color: AppColors.darkGold),
+                          prefixIcon: Icon(
+                            Icons.inventory_2_outlined,
+                            color: AppColors.darkGold,
+                          ),
                           filled: true,
                           fillColor: Colors.grey.shade50,
                           labelText: isAr ? 'إلى خزينة' : 'To Safe',
@@ -731,7 +879,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                           if (_mode == 'karat_correction') return null;
                           if (value == null) return isAr ? 'مطلوب' : 'Required';
                           if (value == _fromSafeId) {
-                            return isAr ? 'لا يمكن نفس الخزينة' : 'Cannot be same safe';
+                            return isAr
+                                ? 'لا يمكن نفس الخزينة'
+                                : 'Cannot be same safe';
                           }
                           return null;
                         },
@@ -740,7 +890,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                       if (toSafe != null) ...[
                         const SizedBox(height: 10),
                         _balanceCard(
-                          title: isAr ? 'رصيد خزينة الوجهة' : 'Destination Balance',
+                          title: isAr
+                              ? 'رصيد خزينة الوجهة'
+                              : 'Destination Balance',
                           safe: toSafe,
                         ),
                       ],
@@ -756,14 +908,20 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                           padding: const EdgeInsets.all(12),
                           child: Row(
                             children: [
-                              Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700),
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: Colors.orange.shade700,
+                              ),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Text(
                                   isAr
                                       ? 'يُستخدم هذا الوضع لتصحيح عيار مُسجَّل خطأً. الوزن لا يتغير — فقط خانة العيار تتصحح.'
                                       : 'Use this to fix a mis-recorded karat. The weight stays the same — only the karat column is corrected.',
-                                  style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange.shade800,
+                                  ),
                                 ),
                               ),
                             ],
@@ -779,31 +937,55 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                               value: _corrFromKarat,
                               decoration: InputDecoration(
                                 border: const OutlineInputBorder(),
-                                labelText: isAr ? 'العيار الخاطئ (من)' : 'Wrong karat (from)',
-                                prefixIcon: Icon(Icons.remove_circle_outline, color: Colors.red.shade400),
+                                labelText: isAr
+                                    ? 'العيار الخاطئ (من)'
+                                    : 'Wrong karat (from)',
+                                prefixIcon: Icon(
+                                  Icons.remove_circle_outline,
+                                  color: Colors.red.shade400,
+                                ),
                               ),
                               items: _karats
-                                  .map((k) => DropdownMenuItem(value: k, child: Text('$k k')))
+                                  .map(
+                                    (k) => DropdownMenuItem(
+                                      value: k,
+                                      child: Text('$k k'),
+                                    ),
+                                  )
                                   .toList(),
                               onChanged: (v) {
-                                if (v != null) setState(() => _corrFromKarat = v);
+                                if (v != null)
+                                  setState(() => _corrFromKarat = v);
                               },
                             ),
                           ),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: Icon(Icons.arrow_forward, color: AppColors.darkGold),
+                            child: Icon(
+                              Icons.arrow_forward,
+                              color: AppColors.darkGold,
+                            ),
                           ),
                           Expanded(
                             child: DropdownButtonFormField<int>(
                               value: _corrToKarat,
                               decoration: InputDecoration(
                                 border: const OutlineInputBorder(),
-                                labelText: isAr ? 'العيار الصحيح (إلى)' : 'Correct karat (to)',
-                                prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green.shade600),
+                                labelText: isAr
+                                    ? 'العيار الصحيح (إلى)'
+                                    : 'Correct karat (to)',
+                                prefixIcon: Icon(
+                                  Icons.add_circle_outline,
+                                  color: Colors.green.shade600,
+                                ),
                               ),
                               items: _karats
-                                  .map((k) => DropdownMenuItem(value: k, child: Text('$k k')))
+                                  .map(
+                                    (k) => DropdownMenuItem(
+                                      value: k,
+                                      child: Text('$k k'),
+                                    ),
+                                  )
                                   .toList(),
                               onChanged: (v) {
                                 if (v != null) setState(() => _corrToKarat = v);
@@ -819,15 +1001,20 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         decoration: InputDecoration(
                           labelText: isAr ? 'الوزن (غرام)' : 'Weight (g)',
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.scale, color: AppColors.darkGold),
+                          prefixIcon: Icon(
+                            Icons.scale,
+                            color: AppColors.darkGold,
+                          ),
                           errorText: corrOverdraft,
                           helperText: fromSafe != null
                               ? (isAr
-                                  ? 'المتاح من عيار ${_corrFromKarat}k: ${_fmtWeight(_corrAvailableBalance())} جم'
-                                  : 'Available ${_corrFromKarat}k: ${_fmtWeight(_corrAvailableBalance())} g')
+                                    ? 'المتاح من عيار ${_corrFromKarat}k: ${_fmtWeight(_corrAvailableBalance())} جم'
+                                    : 'Available ${_corrFromKarat}k: ${_fmtWeight(_corrAvailableBalance())} g')
                               : null,
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -838,10 +1025,15 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         decoration: InputDecoration(
                           labelText: isAr ? 'المبلغ (ر.س)' : 'Amount',
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.payments, color: AppColors.darkGold),
+                          prefixIcon: Icon(
+                            Icons.payments,
+                            color: AppColors.darkGold,
+                          ),
                           errorText: cashOverdraft,
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -857,10 +1049,15 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         decoration: InputDecoration(
                           labelText: isAr ? 'عيار 24' : '24k',
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.diamond, color: Colors.yellow.shade800),
+                          prefixIcon: Icon(
+                            Icons.diamond,
+                            color: Colors.yellow.shade800,
+                          ),
                           errorText: goldOver24,
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       TextField(
@@ -868,10 +1065,15 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         decoration: InputDecoration(
                           labelText: isAr ? 'عيار 22' : '22k',
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.diamond, color: Colors.yellow.shade700),
+                          prefixIcon: Icon(
+                            Icons.diamond,
+                            color: Colors.yellow.shade700,
+                          ),
                           errorText: goldOver22,
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       TextField(
@@ -879,10 +1081,15 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         decoration: InputDecoration(
                           labelText: isAr ? 'عيار 21' : '21k',
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.diamond, color: Colors.yellow.shade600),
+                          prefixIcon: Icon(
+                            Icons.diamond,
+                            color: Colors.yellow.shade600,
+                          ),
                           errorText: goldOver21,
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       TextField(
@@ -890,10 +1097,15 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         decoration: InputDecoration(
                           labelText: isAr ? 'عيار 18' : '18k',
                           border: const OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.diamond, color: Colors.yellow.shade500),
+                          prefixIcon: Icon(
+                            Icons.diamond,
+                            color: Colors.yellow.shade500,
+                          ),
                           errorText: goldOver18,
                         ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -901,7 +1113,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                     TextField(
                       controller: _notesController,
                       decoration: InputDecoration(
-                        labelText: isAr ? 'ملاحظات (اختياري)' : 'Notes (optional)',
+                        labelText: isAr
+                            ? 'ملاحظات (اختياري)'
+                            : 'Notes (optional)',
                         border: const OutlineInputBorder(),
                         prefixIcon: const Icon(Icons.note),
                       ),
@@ -918,7 +1132,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                               height: 20,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
                               ),
                             )
                           : const Icon(Icons.swap_horiz),
@@ -926,8 +1142,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                         _isSubmitting
                             ? (isAr ? 'جاري التنفيذ...' : 'Processing...')
                             : _mode == 'karat_correction'
-                                ? (isAr ? 'تصحيح العيار' : 'Correct Karat')
-                                : (isAr ? 'إنشاء سند التحويل' : 'Create Transfer Voucher'),
+                            ? (isAr ? 'تصحيح العيار' : 'Correct Karat')
+                            : (isAr
+                                  ? 'إنشاء سند التحويل'
+                                  : 'Create Transfer Voucher'),
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.darkGold,

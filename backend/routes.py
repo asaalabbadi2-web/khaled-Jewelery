@@ -8464,6 +8464,7 @@ def approve_invoice(invoice_id: int):
         for je in linked_jes:
             if not je.is_posted:
                 je.is_posted = True
+                je.is_draft = False
                 je.posted_at = now
                 je.posted_by = approved_by
 
@@ -9513,7 +9514,13 @@ def list_safe_box_balances():
                 '21k': round(w21, 3),
                 '22k': round(w22, 3),
                 '24k': round(w24, 3),
-                'total': round(w18 + w21 + w22 + w24, 3),
+                'total': round(
+                    convert_to_main_karat(w18, 18) +
+                    convert_to_main_karat(w21, 21) +
+                    convert_to_main_karat(w22, 22) +
+                    convert_to_main_karat(w24, 24),
+                    3
+                ),
             }
         sb_dict['balance'] = balance
 
@@ -15335,6 +15342,7 @@ def add_invoice():
             pass
 
         journal_entry.is_posted = True
+        journal_entry.is_draft = False
         if hasattr(journal_entry, 'posted_at') and not getattr(journal_entry, 'posted_at', None):
             journal_entry.posted_at = now
         if hasattr(journal_entry, 'posted_by') and not getattr(journal_entry, 'posted_by', None):
@@ -15838,7 +15846,13 @@ def get_accounts():
                 '21k': round(w21, 3),
                 '22k': round(w22, 3),
                 '24k': round(w24, 3),
-                'total': round(w18 + w21 + w22 + w24, 3),
+                'total': round(
+                    convert_to_main_karat(w18, 18) +
+                    convert_to_main_karat(w21, 21) +
+                    convert_to_main_karat(w22, 22) +
+                    convert_to_main_karat(w24, 24),
+                    3
+                ),
             }
         
         # إضافة معلومات الحساب الأب إن وجد
@@ -15915,7 +15929,13 @@ def get_account(id):
             '21k': round(w21, 3),
             '22k': round(w22, 3),
             '24k': round(w24, 3),
-            'total': round(w18 + w21 + w22 + w24, 3),
+            'total': round(
+                convert_to_main_karat(w18, 18) +
+                convert_to_main_karat(w21, 21) +
+                convert_to_main_karat(w22, 22) +
+                convert_to_main_karat(w24, 24),
+                3
+            ),
         }
 
     response = jsonify(payload)
@@ -27140,7 +27160,13 @@ def list_safe_boxes():
                     '21k': round(w21, 3),
                     '22k': round(w22, 3),
                     '24k': round(w24, 3),
-                    'total': round(w18 + w21 + w22 + w24, 3),
+                    'total': round(
+                        convert_to_main_karat(w18, 18) +
+                        convert_to_main_karat(w21, 21) +
+                        convert_to_main_karat(w22, 22) +
+                        convert_to_main_karat(w24, 24),
+                        3
+                    ),
                 }
             sb_dict['balance'] = balance
 
@@ -27176,7 +27202,13 @@ def get_safe_box(safe_box_id):
                 '21k': round(w21, 3),
                 '22k': round(w22, 3),
                 '24k': round(w24, 3),
-                'total': round(w18 + w21 + w22 + w24, 3),
+                'total': round(
+                    convert_to_main_karat(w18, 18) +
+                    convert_to_main_karat(w21, 21) +
+                    convert_to_main_karat(w22, 22) +
+                    convert_to_main_karat(w24, 24),
+                    3
+                ),
             }
         payload['balance'] = balance
 
@@ -27269,7 +27301,13 @@ def create_safe_box():
                 '21k': round(w21, 3),
                 '22k': round(w22, 3),
                 '24k': round(w24, 3),
-                'total': round(w18 + w21 + w22 + w24, 3),
+                'total': round(
+                    convert_to_main_karat(w18, 18) +
+                    convert_to_main_karat(w21, 21) +
+                    convert_to_main_karat(w22, 22) +
+                    convert_to_main_karat(w24, 24),
+                    3
+                ),
             }
         payload['balance'] = balance
 
@@ -27411,7 +27449,13 @@ def update_safe_box(safe_box_id):
                 '21k': round(w21, 3),
                 '22k': round(w22, 3),
                 '24k': round(w24, 3),
-                'total': round(w18 + w21 + w22 + w24, 3),
+                'total': round(
+                    convert_to_main_karat(w18, 18) +
+                    convert_to_main_karat(w21, 21) +
+                    convert_to_main_karat(w22, 22) +
+                    convert_to_main_karat(w24, 24),
+                    3
+                ),
             }
         payload['balance'] = balance
 
@@ -27495,7 +27539,13 @@ def get_default_safe_box(safe_type):
             '21k': round(w21, 3),
             '22k': round(w22, 3),
             '24k': round(w24, 3),
-            'total': round(w18 + w21 + w22 + w24, 3),
+            'total': round(
+                convert_to_main_karat(w18, 18) +
+                convert_to_main_karat(w21, 21) +
+                convert_to_main_karat(w22, 22) +
+                convert_to_main_karat(w24, 24),
+                3
+            ),
         }
     payload['balance'] = balance
 
@@ -27528,7 +27578,13 @@ def get_gold_safe_box_by_karat(karat):
             '21k': round(w21, 3),
             '22k': round(w22, 3),
             '24k': round(w24, 3),
-            'total': round(w18 + w21 + w22 + w24, 3),
+            'total': round(
+                convert_to_main_karat(w18, 18) +
+                convert_to_main_karat(w21, 21) +
+                convert_to_main_karat(w22, 22) +
+                convert_to_main_karat(w24, 24),
+                3
+            ),
         }
     payload['balance'] = balance
 

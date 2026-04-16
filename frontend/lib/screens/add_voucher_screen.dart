@@ -130,12 +130,18 @@ class AddVoucherScreen extends StatefulWidget {
   final String voucherType; // 'receipt' or 'payment'
   final Map<String, dynamic>? existingVoucher; // optional: edit mode
   final int? initialSupplierId; // optional: quick-create for a supplier
+  final String? initialPartyType;
+  final int? initialOtherAccountId;
+  final String? initialDescription;
 
   const AddVoucherScreen({
     super.key,
     required this.voucherType,
     this.existingVoucher,
     this.initialSupplierId,
+    this.initialPartyType,
+    this.initialOtherAccountId,
+    this.initialDescription,
   });
 
   @override
@@ -224,6 +230,31 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       _selectedCustomerId = null;
       _selectedEmployeeId = null;
       _selectedOtherAccountId = null;
+    }
+
+    if (widget.existingVoucher == null) {
+      final initialPartyType = (widget.initialPartyType ?? '').trim();
+      if (initialPartyType.isNotEmpty) {
+        _partyType = initialPartyType;
+        _selectedCustomerId = null;
+        _selectedSupplierId = null;
+        _selectedEmployeeId = null;
+        _selectedOtherAccountId = initialPartyType == 'other'
+            ? widget.initialOtherAccountId
+            : null;
+      } else if (widget.initialOtherAccountId != null) {
+        _partyType = 'other';
+        _selectedCustomerId = null;
+        _selectedSupplierId = null;
+        _selectedEmployeeId = null;
+        _selectedOtherAccountId = widget.initialOtherAccountId;
+      }
+
+      final initialDescription = (widget.initialDescription ?? '').trim();
+      if (initialDescription.isNotEmpty &&
+          _descriptionController.text.trim().isEmpty) {
+        _descriptionController.text = initialDescription;
+      }
     }
 
     if (widget.existingVoucher == null) {
@@ -2046,8 +2077,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     : 'اختر الحساب المناسب (مصروف، سلفة، إلخ)',
                 predicate: (a) {
                   final accNum = accountNumberOf(a);
-                  final safeType =
-                      (a['safe_box_type'] ?? '').toString().trim().toLowerCase();
+                  final safeType = (a['safe_box_type'] ?? '')
+                      .toString()
+                      .trim()
+                      .toLowerCase();
 
                   // Template-driven filters:
                   // - Salary: employee salary payables accounts under 2400xxxx
@@ -2845,7 +2878,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       textColor = exceedsBalance ? Colors.red.shade700 : Colors.green.shade700;
 
       if (available == null) {
-        message = 'الرصيد الفعلي غير متاح حالياً للحساب المرتبط بـ "${safe.name}".';
+        message =
+            'الرصيد الفعلي غير متاح حالياً للحساب المرتبط بـ "${safe.name}".';
       } else {
         message = exceedsBalance
             ? 'تحذير: المبلغ المدخل (${_formatCash(line.amount)}) يتجاوز الرصيد الفعلي ${_formatCash(available)} في "${safe.name}".'
@@ -3257,8 +3291,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         // Resolve and send the account name as party_name so it appears
         // in the voucher list, detail view, and printed copies.
         final otherAccount = _findAccountById(_selectedOtherAccountId);
-        final accountName =
-            (otherAccount?['name'] ?? '').toString().trim();
+        final accountName = (otherAccount?['name'] ?? '').toString().trim();
         if (accountName.isNotEmpty) {
           voucherData['party_name'] = accountName;
         }
