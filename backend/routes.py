@@ -24637,25 +24637,12 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
         je = None
 
     if je is not None:
-        je_lines = [l for l in (getattr(je, 'lines', None) or []) if not getattr(l, 'is_deleted', False)]
+        # Query JE lines fresh from DB to avoid stale relationship cache
+        # (important when called inside a loop that adds lines to a consolidated JE).
+        je_lines = JournalEntryLine.query.filter_by(journal_entry_id=je.id).all()
+        je_lines = [l for l in je_lines if not getattr(l, 'is_deleted', False)]
         if not je_lines:
             return []
-
-        account_ids = list({int(l.account_id) for l in je_lines if getattr(l, 'account_id', None) is not None})
-        safe_by_account_id = {}
-        if account_ids:
-            for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
-                safe_by_account_id[int(sb.account_id)] = sb
-
-        if not safe_by_account_id:
-            return []
-
-        pm_by_safe_id = {}
-        safe_ids = list({sb.id for sb in safe_by_account_id.values()})
-        if safe_ids:
-            for pm in PaymentMethod.query.filter(PaymentMethod.default_safe_box_id.in_(safe_ids)).all():
-                if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe_id:
-                    pm_by_safe_id[pm.default_safe_box_id] = pm.id
 
         linked_invoice_id = None
         linked_invoice_payment_id = None
@@ -24679,6 +24666,31 @@ def _append_safe_transactions_for_voucher(voucher: Voucher, created_by=None):
         except Exception:
             linked_invoice_payment_id = None
             linked_payment_method_id = None
+
+        # When the voucher is linked to a specific invoice payment (consolidated JE
+        # shared by many vouchers), restrict to JE lines that belong to THIS voucher.
+        # The description contains the voucher_number, e.g. "(RV-2026-00116)".
+        _vnum = getattr(voucher, 'voucher_number', None)
+        if _vnum and linked_invoice_payment_id is not None and len(je_lines) > 2:
+            _filtered = [l for l in je_lines if _vnum in (getattr(l, 'description', '') or '')]
+            if _filtered:
+                je_lines = _filtered
+
+        account_ids = list({int(l.account_id) for l in je_lines if getattr(l, 'account_id', None) is not None})
+        safe_by_account_id = {}
+        if account_ids:
+            for sb in SafeBox.query.filter(SafeBox.account_id.in_(account_ids)).all():
+                safe_by_account_id[int(sb.account_id)] = sb
+
+        if not safe_by_account_id:
+            return []
+
+        pm_by_safe_id = {}
+        safe_ids = list({sb.id for sb in safe_by_account_id.values()})
+        if safe_ids:
+            for pm in PaymentMethod.query.filter(PaymentMethod.default_safe_box_id.in_(safe_ids)).all():
+                if pm.default_safe_box_id and pm.default_safe_box_id not in pm_by_safe_id:
+                    pm_by_safe_id[pm.default_safe_box_id] = pm.id
 
         effective_ref_type = 'invoice_payment' if linked_invoice_payment_id else 'voucher'
         eps_cash = 0.005
@@ -28451,48 +28463,33 @@ def create_melting_renewal():
 def _compute_clearing_due_amount(safe_box_id):
     """Compute how much is actually owed in a clearing safe box.
 
-    due = sum(invoice_payment ins) - sum(clearing_settlement outs)
-    This prevents over-settling and duplicate settlements.
+    due = JE_debits - JE_credits  on the clearing safe box's account.
+
+    Using JE balance directly is the most reliable approach because:
+    - Every payment (regardless of age/migration stage) posts a debit to
+      the clearing account via the journal entry.
+    - Every settlement voucher posts a credit to the same account.
+    - InvoicePayment records are incomplete for historical data (pre-IP era),
+      so using IP totals under-counts by the missing records.
     """
-    payments_signed = func.coalesce(
-        func.sum(
-            case(
-                (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
-                else_=-SafeBoxTransaction.amount_cash,
-            )
-        ),
-        0.0,
-    )
-    payments_total = (
-        db.session.query(payments_signed)
-        .filter(
-            SafeBoxTransaction.safe_box_id == safe_box_id,
-            SafeBoxTransaction.ref_type == 'invoice_payment',
-        )
+    clearing_sb_obj = db.session.get(SafeBox, safe_box_id)
+    clearing_acct_id = getattr(clearing_sb_obj, 'account_id', None)
+    if not clearing_acct_id:
+        return 0.0
+
+    debits = (
+        db.session.query(func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0))
+        .filter(JournalEntryLine.account_id == clearing_acct_id)
         .scalar()
     ) or 0.0
 
-    settled_signed = func.coalesce(
-        func.sum(
-            case(
-                (SafeBoxTransaction.direction == 'out', SafeBoxTransaction.amount_cash),
-                else_=-SafeBoxTransaction.amount_cash,
-            )
-        ),
-        0.0,
-    )
-    settled_total = (
-        db.session.query(settled_signed)
-        .join(Voucher, Voucher.id == SafeBoxTransaction.ref_id)
-        .filter(
-            SafeBoxTransaction.safe_box_id == safe_box_id,
-            SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
-            Voucher.reference_type == 'clearing_settlement',
-        )
+    credits = (
+        db.session.query(func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0))
+        .filter(JournalEntryLine.account_id == clearing_acct_id)
         .scalar()
     ) or 0.0
 
-    return round(float(payments_total) - float(settled_total), 2)
+    return round(float(debits) - float(credits), 2)
 
 
 def _create_clearing_settlement_voucher(
@@ -29063,7 +29060,13 @@ def create_per_transaction_clearing_settlement():
     except Exception as exc:
         return jsonify({'error': f'Failed to query transactions: {exc}'}), 500
 
-    # Find already-settled invoice_payment_ids
+    # ----------------------------------------------------------------
+    # Determine which payments are still pending using the same FIFO
+    # hybrid approach as the pending-transactions GET endpoint.
+    # This correctly handles both per-tx and bulk settlements.
+    # ----------------------------------------------------------------
+
+    # (a) Per-tx settled IDs
     settled_ip_ids = set()
     try:
         settled_txs = (
@@ -29086,11 +29089,43 @@ def create_per_transaction_clearing_settlement():
     except Exception:
         pass
 
-    # Filter unsettled
+    # (b) Aggregate settled total from clearing_settlement vouchers
+    aggregate_settled = 0.0
+    try:
+        settled_signed = func.coalesce(
+            func.sum(
+                case(
+                    (SafeBoxTransaction.direction == 'out', SafeBoxTransaction.amount_cash),
+                    else_=-SafeBoxTransaction.amount_cash,
+                )
+            ),
+            0.0,
+        )
+        aggregate_settled = float(
+            db.session.query(settled_signed)
+            .join(Voucher, Voucher.id == SafeBoxTransaction.ref_id)
+            .filter(
+                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
+                Voucher.reference_type == 'clearing_settlement',
+            )
+            .scalar()
+            or 0.0
+        )
+    except Exception:
+        pass
+
+    # (c) FIFO walk: consume bulk-settled amount across non-per-tx payments
+    remaining_bulk_settled = max(aggregate_settled, 0.0)
     pending = []
     for tx in unsettled_txs:
         ip_id = tx.invoice_payment_id or tx.id
         if ip_id in settled_ip_ids:
+            remaining_bulk_settled -= round(float(tx.amount_cash or 0.0), 2)
+            continue
+        tx_amount = round(float(tx.amount_cash or 0.0), 2)
+        if remaining_bulk_settled >= tx_amount - 0.005:
+            remaining_bulk_settled -= tx_amount
             continue
         pending.append(tx)
 
@@ -29197,92 +29232,124 @@ def get_pending_settlement_transactions():
         return jsonify({'error': 'Safe box not found'}), 404
 
     try:
-        all_txs = (
-            SafeBoxTransaction.query
-            .filter_by(
-                safe_box_id=clearing_safe_box_id,
-                ref_type='invoice_payment',
-                direction='in',
-            )
-            .order_by(SafeBoxTransaction.created_at.asc())
+        # Source payments from InvoicePayment (always authoritative) rather than
+        # SafeBoxTransaction, because historical SBTs may carry the wrong
+        # safe_box_id (multi-payment invoice routing bug fixed Apr 2026).
+        all_ips = (
+            InvoicePayment.query
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(PaymentMethod.default_safe_box_id == clearing_safe_box_id)
+            .order_by(InvoicePayment.created_at.asc())
             .all()
         )
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
 
-    # Find settled
+    # ----------------------------------------------------------------
+    # Determine which invoice-payment transactions are still pending.
+    #
+    # Two settlement modes exist:
+    #   1. per_transaction – each voucher is tagged with per_tx:ip_{id}
+    #   2. bulk           – one voucher covers many payments (no per-tx tag)
+    #
+    # Strategy: use a hybrid approach.
+    #   a) Identify individually-settled payment IDs via per_tx notes.
+    #   b) Compute the aggregate settled total (same as _compute_clearing_due_amount).
+    #   c) Walk the remaining (non-per-tx-settled) payments oldest-first,
+    #      consuming the bulk-settled total in FIFO order.
+    #   d) Whatever is left after the bulk total is exhausted is truly pending.
+    # ----------------------------------------------------------------
+
+    # (a) Per-tx settled IDs — read from Voucher.notes directly, not SBT notes,
+    # to avoid dependency on SBT safe_box_id which may be wrong for historical data.
     settled_ip_ids = set()
     try:
-        settled_txs = (
-            db.session.query(SafeBoxTransaction.notes)
-            .join(Voucher, Voucher.id == SafeBoxTransaction.ref_id)
+        clearing_account_id = getattr(clearing_sb, 'account_id', None)
+        per_tx_q = (
+            db.session.query(Voucher.notes)
             .filter(
-                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
-                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
                 Voucher.reference_type == 'clearing_settlement',
-                SafeBoxTransaction.notes.isnot(None),
+                Voucher.notes.isnot(None),
+                Voucher.notes.like('%per_tx:ip_%'),
             )
-            .all()
         )
-        for (note_val,) in settled_txs:
-            if note_val and note_val.startswith('per_tx:ip_'):
+        if clearing_account_id:
+            per_tx_q = per_tx_q.join(
+                VoucherAccountLine, VoucherAccountLine.voucher_id == Voucher.id
+            ).filter(VoucherAccountLine.account_id == clearing_account_id)
+        for (note_val,) in per_tx_q.distinct().all():
+            if note_val and 'per_tx:ip_' in note_val:
                 try:
-                    settled_ip_ids.add(int(note_val.split('per_tx:ip_')[1]))
+                    settled_ip_ids.add(int(note_val.split('per_tx:ip_')[1].split()[0]))
                 except Exception:
                     pass
     except Exception:
         pass
 
+    # (b) Aggregate settled total — sum all clearing_settlement voucher outflows
+    # for this clearing safe's account (via VoucherAccountLine), not via SBT
+    # safe_box_id, to correctly capture historical settlements regardless of SBT routing.
+    aggregate_settled = 0.0
+    try:
+        clearing_account_id_b = getattr(clearing_sb, 'account_id', None)
+        if clearing_account_id_b:
+            # Sum the credit lines on clearing_settlement vouchers for this account.
+            # Credit on clearing account = money flowing OUT (settled to bank).
+            agg = (
+                db.session.query(func.coalesce(func.sum(VoucherAccountLine.amount), 0.0))
+                .join(Voucher, Voucher.id == VoucherAccountLine.voucher_id)
+                .filter(
+                    Voucher.reference_type == 'clearing_settlement',
+                    VoucherAccountLine.account_id == clearing_account_id_b,
+                    VoucherAccountLine.line_type == 'credit',
+                )
+                .scalar()
+            )
+            aggregate_settled = float(agg or 0.0)
+    except Exception:
+        pass
+
+    # (c) FIFO walk: consume bulk-settled amount across non-per-tx payments
+    remaining_bulk_settled = max(aggregate_settled, 0.0)
     pending = []
-    for tx in all_txs:
-        ip_id = tx.invoice_payment_id or tx.id
+    for ip in all_ips:
+        ip_id = ip.id
+        # Skip individually-settled
         if ip_id in settled_ip_ids:
+            remaining_bulk_settled -= round(float(ip.amount or 0.0), 2)
             continue
+        ip_amount = round(float(ip.amount or 0.0), 2)
+        # If bulk-settled total still covers this payment, skip it
+        if remaining_bulk_settled >= ip_amount - 0.005:
+            remaining_bulk_settled -= ip_amount
+            continue
+        # Partially or fully pending
         invoice_number = None
-        if tx.invoice_id:
+        invoice_id = ip.invoice_id
+        if invoice_id:
             try:
-                inv = Invoice.query.get(tx.invoice_id)
+                inv = Invoice.query.get(invoice_id)
                 if inv:
                     invoice_number = inv.invoice_number
             except Exception:
                 pass
         pending.append({
-            'tx_id': tx.id,
-            'invoice_payment_id': tx.invoice_payment_id,
-            'invoice_id': tx.invoice_id,
+            'tx_id': ip.id,
+            'invoice_payment_id': ip.id,
+            'invoice_id': invoice_id,
             'invoice_number': invoice_number,
-            'amount': round(float(tx.amount_cash or 0.0), 2),
-            'date': tx.created_at.isoformat() if tx.created_at else None,
+            'amount': ip_amount,
+            'date': ip.created_at.isoformat() if ip.created_at else None,
         })
 
     # Compute aggregate due_amount for bulk settlement cap
     due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
 
-    # Compute tx_count_for_fee: invoice-payment transactions since last clearing settlement.
-    # This is the count used for fixed-per-transaction commission calculation in bulk mode.
-    tx_count_for_fee = 0
-    try:
-        from sqlalchemy import func as _func
-        last_settlement_dt = (
-            db.session.query(_func.max(Voucher.date))
-            .join(SafeBoxTransaction, SafeBoxTransaction.ref_id == Voucher.id)
-            .filter(
-                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
-                SafeBoxTransaction.ref_type.in_(['voucher', 'voucher_reversal']),
-                Voucher.reference_type == 'clearing_settlement',
-            )
-            .scalar()
-        )
-        tx_q = SafeBoxTransaction.query.filter(
-            SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
-            SafeBoxTransaction.ref_type == 'invoice_payment',
-            SafeBoxTransaction.direction == 'in',
-        )
-        if last_settlement_dt is not None:
-            tx_q = tx_q.filter(SafeBoxTransaction.created_at > last_settlement_dt)
-        tx_count_for_fee = int(tx_q.count() or 0)
-    except Exception:
-        tx_count_for_fee = len(pending)
+    # tx_count_for_fee: number of pending (unsettled) payments — used for
+    # fixed-per-transaction commission calculation in bulk settlement mode.
+    # We reuse the already-computed FIFO-accurate `pending` list instead of
+    # a time-based heuristic (which suffered from UTC vs local tz mismatch).
+    tx_count_for_fee = len(pending)
 
     return jsonify({
         'clearing_safe_box_id': clearing_safe_box_id,

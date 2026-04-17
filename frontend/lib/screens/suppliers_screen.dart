@@ -88,7 +88,10 @@ class SuppliersScreenState extends State<SuppliersScreen> {
 
       _allSuppliers = suppliers
           .whereType<Map>()
-          .map((entry) => entry.map((key, value) => MapEntry(key.toString(), value)))
+          .map(
+            (entry) =>
+                entry.map((key, value) => MapEntry(key.toString(), value)),
+          )
           .toList(growable: false);
       _filterSuppliers();
 
@@ -126,7 +129,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
       final renderObject = context.findRenderObject();
       if (renderObject is! RenderBox) return;
       final measuredHeight = renderObject.size.height;
-      if (measuredHeight <= 0 || (measuredHeight - _topChromeHeight).abs() < 0.5) {
+      if (measuredHeight <= 0 ||
+          (measuredHeight - _topChromeHeight).abs() < 0.5) {
         return;
       }
       setState(() {
@@ -196,25 +200,28 @@ class SuppliersScreenState extends State<SuppliersScreen> {
 
   void _filterSuppliers() {
     final query = _searchController.text.trim().toLowerCase();
-    final filtered = _allSuppliers.where((supplier) {
-      final name = _supplierName(supplier).toLowerCase();
-      final code = _supplierCode(supplier).toLowerCase();
-      final phone = _supplierPhone(supplier).toLowerCase();
-      final tax = _supplierTaxNumber(supplier).toLowerCase();
-      final safeBox = _defaultSafeBoxName(supplier).toLowerCase();
+    final filtered = _allSuppliers
+        .where((supplier) {
+          final name = _supplierName(supplier).toLowerCase();
+          final code = _supplierCode(supplier).toLowerCase();
+          final phone = _supplierPhone(supplier).toLowerCase();
+          final tax = _supplierTaxNumber(supplier).toLowerCase();
+          final safeBox = _defaultSafeBoxName(supplier).toLowerCase();
 
-      final matchesQuery = query.isEmpty ||
-          name.contains(query) ||
-          code.contains(query) ||
-          phone.contains(query) ||
-          tax.contains(query) ||
-          safeBox.contains(query);
-      if (!matchesQuery) return false;
-      if (_filterNonZero && !_hasPendingBalance(supplier)) return false;
-      if (_onlyActive && !_isActive(supplier)) return false;
-      if (_onlyClosingOffices && !_isClosingOffice(supplier)) return false;
-      return true;
-    }).toList(growable: false);
+          final matchesQuery =
+              query.isEmpty ||
+              name.contains(query) ||
+              code.contains(query) ||
+              phone.contains(query) ||
+              tax.contains(query) ||
+              safeBox.contains(query);
+          if (!matchesQuery) return false;
+          if (_filterNonZero && !_hasPendingBalance(supplier)) return false;
+          if (_onlyActive && !_isActive(supplier)) return false;
+          if (_onlyClosingOffices && !_isClosingOffice(supplier)) return false;
+          return true;
+        })
+        .toList(growable: false);
 
     filtered.sort((a, b) {
       int comparison;
@@ -283,12 +290,12 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     if (value < 0) {
       return (
         label: widget.isArabic ? 'له' : 'Credit',
-        color: app_theme.AppColors.success,
+        color: app_theme.AppColors.error,
       );
     }
     return (
       label: widget.isArabic ? 'عليه' : 'Due',
-      color: app_theme.AppColors.error,
+      color: app_theme.AppColors.success,
     );
   }
 
@@ -376,13 +383,24 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     required double gold,
     required String cashFormatted,
     required String goldFormatted,
+    Map<String, double> karatWeights = const {},
   }) {
     final theme = Theme.of(context);
+    final nonZeroKarats = karatWeights.entries
+        .where((e) => e.value.abs() > 0.0001)
+        .toList();
+    // Only show chips when there are 2+ different karats
+    final showChips = nonZeroKarats.length >= 2;
+    final weightFmt = showChips
+        ? NumberFormat('#,##0.000', Localizations.localeOf(context).toString())
+        : null;
 
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.16),
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.16,
+        ),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: theme.colorScheme.outline.withValues(alpha: 0.08),
@@ -434,6 +452,40 @@ class SuppliersScreenState extends State<SuppliersScreen> {
               ),
             ],
           ),
+          if (showChips) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: nonZeroKarats.map((e) {
+                  const chipColor = Color(0xFFC69214);
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: chipColor.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: chipColor.withValues(alpha: 0.28),
+                      ),
+                    ),
+                    child: Text(
+                      '${e.key}: ${weightFmt!.format(e.value.abs())} جم',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: chipColor,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -484,7 +536,11 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(isAr ? 'تعذر حذف المورد: $e' : 'Failed to delete supplier: $e')),
+        SnackBar(
+          content: Text(
+            isAr ? 'تعذر حذف المورد: $e' : 'Failed to delete supplier: $e',
+          ),
+        ),
       );
     }
   }
@@ -493,7 +549,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => AddSupplierScreen(api: widget.api, supplier: supplier),
+        builder: (context) =>
+            AddSupplierScreen(api: widget.api, supplier: supplier),
       ),
     );
     if (result == true && mounted) {
@@ -628,12 +685,20 @@ class SuppliersScreenState extends State<SuppliersScreen> {
 
     final totalSuppliers = _filteredSuppliers.length;
     final activeSuppliers = _filteredSuppliers.where(_isActive).length;
-    final suppliersWithBalance = _filteredSuppliers.where(_hasPendingBalance).length;
-    final totalCashCredit = _filteredSuppliers.fold<double>(0.0, (sum, supplier) {
+    final suppliersWithBalance = _filteredSuppliers
+        .where(_hasPendingBalance)
+        .length;
+    final totalCashCredit = _filteredSuppliers.fold<double>(0.0, (
+      sum,
+      supplier,
+    ) {
       final value = _cashBalance(supplier);
       return value < 0 ? sum + (-value) : sum;
     });
-    final totalGoldCredit = _filteredSuppliers.fold<double>(0.0, (sum, supplier) {
+    final totalGoldCredit = _filteredSuppliers.fold<double>(0.0, (
+      sum,
+      supplier,
+    ) {
       final value = _goldMainEquivalent(supplier);
       return value < 0 ? sum + (-value) : sum;
     });
@@ -645,14 +710,18 @@ class SuppliersScreenState extends State<SuppliersScreen> {
         _buildSummaryCard(
           title: widget.isArabic ? 'الموردون المطابقون' : 'Matching suppliers',
           value: '$totalSuppliers',
-          subtitle: widget.isArabic ? 'بعد الفلاتر الحالية' : 'After current filters',
+          subtitle: widget.isArabic
+              ? 'بعد الفلاتر الحالية'
+              : 'After current filters',
           icon: Icons.groups_2_outlined,
           color: Theme.of(context).colorScheme.primary,
         ),
         _buildSummaryCard(
           title: widget.isArabic ? 'الموردون النشطون' : 'Active suppliers',
           value: '$activeSuppliers',
-          subtitle: widget.isArabic ? 'جاهزون للحركة والشراء' : 'Ready for transactions',
+          subtitle: widget.isArabic
+              ? 'جاهزون للحركة والشراء'
+              : 'Ready for transactions',
           icon: Icons.verified_user_outlined,
           color: Colors.blue,
         ),
@@ -664,9 +733,13 @@ class SuppliersScreenState extends State<SuppliersScreen> {
           color: Colors.green,
         ),
         _buildSummaryCard(
-          title: widget.isArabic ? 'إجمالي الذهب الدائن (مكافئ $_mainKarat)' : 'Total gold credit ($_mainKarat equiv)',
+          title: widget.isArabic
+              ? 'إجمالي الذهب الدائن (مكافئ $_mainKarat)'
+              : 'Total gold credit ($_mainKarat equiv)',
           value: weightFmt.format(totalGoldCredit),
-          subtitle: widget.isArabic ? 'موردون بأرصدة وزنية' : 'Weighted supplier balances',
+          subtitle: widget.isArabic
+              ? 'موردون بأرصدة وزنية'
+              : 'Weighted supplier balances',
           icon: Icons.scale_outlined,
           color: const Color(0xFFD4A017),
         ),
@@ -697,7 +770,10 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     }
 
     final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(0.0, _topChromeHeight);
+    final visibleHeight = (_topChromeHeight - collapse).clamp(
+      0.0,
+      _topChromeHeight,
+    );
     if (visibleHeight <= 0) {
       return const SizedBox.shrink();
     }
@@ -725,7 +801,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.14)),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.14),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -738,7 +816,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                   runSpacing: 8,
                   children: [
                     FilterChip(
-                      label: Text(widget.isArabic ? 'برصيد فقط' : 'With balance'),
+                      label: Text(
+                        widget.isArabic ? 'برصيد فقط' : 'With balance',
+                      ),
                       selected: _filterNonZero,
                       onSelected: (value) {
                         setState(() {
@@ -758,7 +838,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                       },
                     ),
                     FilterChip(
-                      label: Text(widget.isArabic ? 'مكاتب تسكير فقط' : 'Closing offices'),
+                      label: Text(
+                        widget.isArabic ? 'مكاتب تسكير فقط' : 'Closing offices',
+                      ),
                       selected: _onlyClosingOffices,
                       onSelected: (value) {
                         setState(() {
@@ -774,7 +856,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                 TextButton.icon(
                   onPressed: _clearFilters,
                   icon: const Icon(Icons.close, size: 16),
-                  label: Text(widget.isArabic ? 'مسح الفلاتر' : 'Clear filters'),
+                  label: Text(
+                    widget.isArabic ? 'مسح الفلاتر' : 'Clear filters',
+                  ),
                 ),
             ],
           ),
@@ -813,12 +897,36 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                     isDense: true,
                   ),
                   items: [
-                    DropdownMenuItem(value: 'name', child: Text(widget.isArabic ? 'الاسم' : 'Name')),
-                    DropdownMenuItem(value: 'code', child: Text(widget.isArabic ? 'الكود' : 'Code')),
-                    DropdownMenuItem(value: 'cash', child: Text(widget.isArabic ? 'الرصيد النقدي' : 'Cash balance')),
-                    DropdownMenuItem(value: 'gold', child: Text(widget.isArabic ? 'الرصيد الذهبي' : 'Gold balance')),
-                    DropdownMenuItem(value: 'status', child: Text(widget.isArabic ? 'الحالة' : 'Status')),
-                    DropdownMenuItem(value: 'tax', child: Text(widget.isArabic ? 'الرقم الضريبي' : 'Tax number')),
+                    DropdownMenuItem(
+                      value: 'name',
+                      child: Text(widget.isArabic ? 'الاسم' : 'Name'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'code',
+                      child: Text(widget.isArabic ? 'الكود' : 'Code'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'cash',
+                      child: Text(
+                        widget.isArabic ? 'الرصيد النقدي' : 'Cash balance',
+                      ),
+                    ),
+                    DropdownMenuItem(
+                      value: 'gold',
+                      child: Text(
+                        widget.isArabic ? 'الرصيد الذهبي' : 'Gold balance',
+                      ),
+                    ),
+                    DropdownMenuItem(
+                      value: 'status',
+                      child: Text(widget.isArabic ? 'الحالة' : 'Status'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'tax',
+                      child: Text(
+                        widget.isArabic ? 'الرقم الضريبي' : 'Tax number',
+                      ),
+                    ),
                   ],
                   onChanged: (value) {
                     if (value == null) return;
@@ -840,21 +948,30 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                   _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
                   size: 18,
                 ),
-                label: Text(_sortAscending
-                    ? (widget.isArabic ? 'تصاعدي' : 'Ascending')
-                    : (widget.isArabic ? 'تنازلي' : 'Descending')),
+                label: Text(
+                  _sortAscending
+                      ? (widget.isArabic ? 'تصاعدي' : 'Ascending')
+                      : (widget.isArabic ? 'تنازلي' : 'Descending'),
+                ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.55,
+                  ),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   widget.isArabic
                       ? 'النتائج: ${_filteredSuppliers.length}'
                       : 'Results: ${_filteredSuppliers.length}',
-                  style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -896,7 +1013,10 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     );
   }
 
-  Future<void> _handleSupplierAction(String value, Map<String, dynamic> supplier) async {
+  Future<void> _handleSupplierAction(
+    String value,
+    Map<String, dynamic> supplier,
+  ) async {
     if (value == 'purchase') {
       await _openPurchaseInvoice(supplier);
     } else if (value == 'voucher') {
@@ -917,12 +1037,30 @@ class SuppliersScreenState extends State<SuppliersScreen> {
       tooltip: widget.isArabic ? 'الإجراءات' : 'Actions',
       onSelected: (value) => _handleSupplierAction(value, supplier),
       itemBuilder: (context) => [
-        PopupMenuItem(value: 'purchase', child: Text(widget.isArabic ? 'فاتورة شراء' : 'Purchase invoice')),
-        PopupMenuItem(value: 'voucher', child: Text(widget.isArabic ? 'سند صرف' : 'Payment voucher')),
-        PopupMenuItem(value: 'statement', child: Text(widget.isArabic ? 'كشف الحساب' : 'Statement')),
-        PopupMenuItem(value: 'ledger', child: Text(widget.isArabic ? 'حركات المورد' : 'Supplier ledger')),
-        PopupMenuItem(value: 'edit', child: Text(widget.isArabic ? 'تعديل' : 'Edit')),
-        PopupMenuItem(value: 'delete', child: Text(widget.isArabic ? 'حذف/تعطيل' : 'Delete/Deactivate')),
+        PopupMenuItem(
+          value: 'purchase',
+          child: Text(widget.isArabic ? 'فاتورة شراء' : 'Purchase invoice'),
+        ),
+        PopupMenuItem(
+          value: 'voucher',
+          child: Text(widget.isArabic ? 'سند صرف' : 'Payment voucher'),
+        ),
+        PopupMenuItem(
+          value: 'statement',
+          child: Text(widget.isArabic ? 'كشف الحساب' : 'Statement'),
+        ),
+        PopupMenuItem(
+          value: 'ledger',
+          child: Text(widget.isArabic ? 'حركات المورد' : 'Supplier ledger'),
+        ),
+        PopupMenuItem(
+          value: 'edit',
+          child: Text(widget.isArabic ? 'تعديل' : 'Edit'),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: Text(widget.isArabic ? 'حذف/تعطيل' : 'Delete/Deactivate'),
+        ),
       ],
     );
   }
@@ -942,8 +1080,18 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     final safeBoxName = _defaultSafeBoxName(supplier);
     final cash = _cashBalance(supplier);
     final gold = _goldMainEquivalent(supplier);
+    final gold18k = _toDouble(supplier['balance_gold_18k']);
+    final gold21k = _toDouble(supplier['balance_gold_21k']);
+    final gold22k = _toDouble(supplier['balance_gold_22k']);
+    final gold24k = _toDouble(supplier['balance_gold_24k']);
     final cashFormatted = moneyFmt.format(cash.abs());
     final goldFormatted = weightFmt.format(gold.abs());
+    final karatWeights = {
+      '18k': gold18k,
+      '21k': gold21k,
+      '22k': gold22k,
+      '24k': gold24k,
+    };
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -965,10 +1113,15 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.12,
+                          ),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Icon(Icons.business_outlined, color: theme.colorScheme.primary),
+                        child: Icon(
+                          Icons.business_outlined,
+                          color: theme.colorScheme.primary,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -976,7 +1129,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              supplierName.isEmpty ? (widget.isArabic ? 'بدون اسم' : 'Unnamed') : supplierName,
+                              supplierName.isEmpty
+                                  ? (widget.isArabic ? 'بدون اسم' : 'Unnamed')
+                                  : supplierName,
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.w800,
                                 color: active ? null : theme.disabledColor,
@@ -988,7 +1143,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                                   ? (widget.isArabic ? 'بدون كود' : 'No code')
                                   : supplierCode,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.62,
+                                ),
                               ),
                             ),
                           ],
@@ -1007,17 +1164,23 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                             ? (widget.isArabic ? 'نشط' : 'Active')
                             : (widget.isArabic ? 'معطل' : 'Inactive'),
                         color: active ? Colors.green : Colors.grey,
-                        icon: active ? Icons.check_circle_outline : Icons.block_outlined,
+                        icon: active
+                            ? Icons.check_circle_outline
+                            : Icons.block_outlined,
                       ),
                       if (isClosingOffice)
                         _buildSupplierTag(
-                          label: widget.isArabic ? 'مكتب تسكير' : 'Closing office',
+                          label: widget.isArabic
+                              ? 'مكتب تسكير'
+                              : 'Closing office',
                           color: Colors.blue,
                           icon: Icons.apartment_outlined,
                         ),
                       if (safeBoxName.isNotEmpty)
                         _buildSupplierTag(
-                          label: widget.isArabic ? 'الخزنة: $safeBoxName' : 'Safe box: $safeBoxName',
+                          label: widget.isArabic
+                              ? 'الخزنة: $safeBoxName'
+                              : 'Safe box: $safeBoxName',
                           color: theme.colorScheme.primary,
                           icon: Icons.inventory_2_outlined,
                         ),
@@ -1031,14 +1194,20 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                       children: [
                         if (phone.isNotEmpty)
                           Text(
-                            widget.isArabic ? 'الهاتف: $phone' : 'Phone: $phone',
+                            widget.isArabic
+                                ? 'الهاتف: $phone'
+                                : 'Phone: $phone',
                             style: theme.textTheme.bodyMedium,
                           ),
                         if (tax.isNotEmpty)
                           Text(
-                            widget.isArabic ? 'الرقم الضريبي: $tax' : 'Tax: $tax',
+                            widget.isArabic
+                                ? 'الرقم الضريبي: $tax'
+                                : 'Tax: $tax',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.62,
+                              ),
                             ),
                           ),
                       ],
@@ -1052,6 +1221,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                 gold: gold,
                 cashFormatted: cashFormatted,
                 goldFormatted: goldFormatted,
+                karatWeights: karatWeights,
               );
 
               return Column(
@@ -1078,7 +1248,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                         child: FilledButton.icon(
                           onPressed: () => _openSupplierStatement(supplier),
                           icon: const Icon(Icons.assessment_outlined, size: 18),
-                          label: Text(widget.isArabic ? 'كشف الحساب' : 'Statement'),
+                          label: Text(
+                            widget.isArabic ? 'كشف الحساب' : 'Statement',
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -1093,7 +1265,10 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: () => _openPurchaseInvoice(supplier),
-                          icon: const Icon(Icons.shopping_cart_outlined, size: 18),
+                          icon: const Icon(
+                            Icons.shopping_cart_outlined,
+                            size: 18,
+                          ),
                           label: Text(widget.isArabic ? 'شراء' : 'Purchase'),
                         ),
                       ),
@@ -1157,7 +1332,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.62,
+                        ),
                       ),
                     ),
                   ],
@@ -1209,8 +1386,12 @@ class SuppliersScreenState extends State<SuppliersScreen> {
           const SizedBox(height: 16),
           Text(
             _activeFiltersCount > 0
-                ? (widget.isArabic ? 'لا توجد نتائج مطابقة' : 'No matching suppliers')
-                : (widget.isArabic ? 'لا يوجد موردون للعرض' : 'No suppliers to display'),
+                ? (widget.isArabic
+                      ? 'لا توجد نتائج مطابقة'
+                      : 'No matching suppliers')
+                : (widget.isArabic
+                      ? 'لا يوجد موردون للعرض'
+                      : 'No suppliers to display'),
             style: theme.textTheme.titleMedium?.copyWith(
               color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
@@ -1237,7 +1418,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              widget.isArabic ? 'تعذر تحميل الموردين' : 'Unable to load suppliers',
+              widget.isArabic
+                  ? 'تعذر تحميل الموردين'
+                  : 'Unable to load suppliers',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
@@ -1279,16 +1462,26 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                 color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.outline.withValues(alpha: 0.12),
                 ),
               ),
               child: Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withValues(alpha: 0.45),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(16),
+                      ),
                     ),
                     child: Row(
                       children: [
@@ -1296,7 +1489,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                           flex: 4,
                           child: Text(
                             widget.isArabic ? 'المورد' : 'Supplier',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
                           ),
                         ),
                         Expanded(
@@ -1304,7 +1498,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                           child: Text(
                             widget.isArabic ? 'نقد' : 'Cash',
                             textAlign: TextAlign.end,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1313,7 +1508,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                           child: Text(
                             widget.isArabic ? 'ذهب' : 'Gold',
                             textAlign: TextAlign.end,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
                           ),
                         ),
                         const SizedBox(width: 44),
@@ -1335,7 +1531,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
         controller: _scrollController,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
         itemCount: _filteredSuppliers.length,
-        itemBuilder: (context, index) => _buildSupplierCard(_filteredSuppliers[index]),
+        itemBuilder: (context, index) =>
+            _buildSupplierCard(_filteredSuppliers[index]),
       ),
     );
   }

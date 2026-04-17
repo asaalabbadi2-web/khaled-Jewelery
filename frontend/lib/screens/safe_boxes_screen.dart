@@ -739,6 +739,23 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
     }
   }
 
+  IconData _safeTypeIcon(SafeBoxModel safeBox) {
+    switch (safeBox.safeType.trim().toLowerCase()) {
+      case 'cash':
+        return Icons.payments_outlined;
+      case 'bank':
+        return Icons.account_balance_outlined;
+      case 'gold':
+        return Icons.diamond_outlined;
+      case 'check':
+        return Icons.receipt_long_outlined;
+      case 'clearing':
+        return Icons.sync_alt_rounded;
+      default:
+        return Icons.account_balance_wallet_outlined;
+    }
+  }
+
   double _cashSummary(List<SafeBoxModel> safeBoxes) {
     return safeBoxes
         .where((safeBox) => !_isGoldSafe(safeBox))
@@ -1189,14 +1206,10 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
         duration: const Duration(milliseconds: 100),
         curve: Curves.easeOut,
         child: Container(
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isExpanded
-                  ? badgeForeground.withValues(alpha: 0.22)
-                  : Colors.black.withValues(alpha: 0.06),
-            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.05),
@@ -1205,204 +1218,264 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
               ),
             ],
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // -- Row 1: Name + Badge + ⋮ --
-                Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // -- Color strip --
+              Container(
+                height: 4,
+                decoration: BoxDecoration(color: badgeForeground),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      child: Text(
-                        safeBox.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: _textColor,
-                          height: 1.1,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: badgeBackground,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        _safeTypeLabel(safeBox),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
+                    // -- Row 1: Icon + Name + Badge + ⋮ --
+                    Row(
+                      children: [
+                        Icon(
+                          _safeTypeIcon(safeBox),
+                          size: 20,
                           color: badgeForeground,
                         ),
-                      ),
-                    ),
-                    if (safeBox.isDefault) ...[
-                      const SizedBox(width: 6),
-                      _buildCompactMetaPill(
-                        label: widget.isArabic ? 'افتراضي' : 'Default',
-                        color: Colors.amber,
-                        textColor: Colors.amber.shade900,
-                      ),
-                    ],
-                    const Spacer(),
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints.tightFor(
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            safeBox.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: _textColor,
+                              height: 1.1,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: badgeBackground,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            _safeTypeLabel(safeBox),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: badgeForeground,
+                            ),
+                          ),
+                        ),
+                        if (safeBox.isDefault) ...[
+                          const SizedBox(width: 6),
+                          _buildCompactMetaPill(
+                            label: widget.isArabic ? 'افتراضي' : 'Default',
+                            color: Colors.amber,
+                            textColor: Colors.amber.shade900,
+                          ),
+                        ],
+                        const Spacer(),
+                        SizedBox(
                           width: 32,
                           height: 32,
-                        ),
-                        splashRadius: 18,
-                        onPressed: () => _showCardActionsSheet(safeBox),
-                        icon: Icon(
-                          Icons.more_vert,
-                          size: 20,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                // -- Row 2: Balance --
-                Text(
-                  primaryBalanceText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: _balanceColor(primaryBalance),
-                    height: 1.1,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // -- Row 3: Action buttons --
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildCompactIconAction(
-                      icon: Icons.add,
-                      color: _successColor,
-                      backgroundColor: _successColor,
-                      onPressed: () {
-                        if (isGold) {
-                          _openTransferQuickAction(
-                            safeBox,
-                            initialToSafeId: safeBox.id,
-                            note: widget.isArabic
-                                ? 'إضافة رصيد إلى ${safeBox.name}'
-                                : 'Top up ${safeBox.name}',
-                          );
-                          return;
-                        }
-                        _openVoucherQuickAction(
-                          safeBox,
-                          voucherType: 'receipt',
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 6),
-                    _buildCompactIconAction(
-                      icon: Icons.remove,
-                      color: _dangerColor,
-                      outlined: true,
-                      onPressed: () {
-                        if (isGold) {
-                          _openTransferQuickAction(
-                            safeBox,
-                            initialFromSafeId: safeBox.id,
-                            note: widget.isArabic
-                                ? 'سحب من ${safeBox.name}'
-                                : 'Withdraw from ${safeBox.name}',
-                          );
-                          return;
-                        }
-                        _openVoucherQuickAction(
-                          safeBox,
-                          voucherType: 'payment',
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 6),
-                    _buildCompactIconAction(
-                      icon: Icons.swap_horiz,
-                      color: _primaryColor,
-                      outlined: true,
-                      onPressed: () {
-                        _openTransferQuickAction(
-                          safeBox,
-                          initialFromSafeId: safeBox.id,
-                          note: widget.isArabic
-                              ? 'تحويل من ${safeBox.name}'
-                              : 'Transfer from ${safeBox.name}',
-                        );
-                      },
-                    ),
-                  ],
-                ),
-                // -- Expand tap area --
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _toggleCardExpanded(safeBox),
-                  child: AnimatedCrossFade(
-                    duration: const Duration(milliseconds: 200),
-                    crossFadeState: isExpanded
-                        ? CrossFadeState.showSecond
-                        : CrossFadeState.showFirst,
-                    firstChild: const SizedBox(height: 4),
-                    secondChild: Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Divider(
-                            height: 1,
-                            color: Colors.black.withValues(alpha: 0.08),
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 32,
+                              height: 32,
+                            ),
+                            splashRadius: 18,
+                            onPressed: () => _showCardActionsSheet(safeBox),
+                            icon: Icon(
+                              Icons.more_vert,
+                              size: 20,
+                              color: Colors.grey.shade600,
+                            ),
                           ),
-                          const SizedBox(height: 8),
-                          if (accountLine != null) ...[
-                            Text(
-                              accountLine,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade700,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                          ],
-                          if (secondaryLine != null) ...[
-                            Text(
-                              secondaryLine,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                          ],
-                          if (isGold) _buildGoldDetails(safeBox),
-                        ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // -- Row 2: Balance --
+                    Text(
+                      primaryBalanceText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: _balanceColor(primaryBalance),
+                        height: 1.1,
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 8),
+                    // -- Karat chips (gold only) --
+                    if (isGold) ...[
+                      Builder(
+                        builder: (_) {
+                          final chips = _goldBreakdown(
+                            safeBox,
+                          ).where((e) => e.value.abs() > 0.0001).toList();
+                          if (chips.isEmpty) return const SizedBox.shrink();
+                          return Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: chips.map((e) {
+                              final isNeg = e.value < 0;
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isNeg
+                                      ? _dangerColor.withValues(alpha: 0.08)
+                                      : _primaryColor.withValues(alpha: 0.10),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: isNeg
+                                        ? _dangerColor.withValues(alpha: 0.25)
+                                        : _primaryColor.withValues(alpha: 0.30),
+                                  ),
+                                ),
+                                child: Text(
+                                  '${e.key}: ${e.value.toStringAsFixed(2)} جم',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: isNeg ? _dangerColor : _primaryColor,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    // -- Row 3: Action buttons --
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildCompactIconAction(
+                          icon: Icons.add,
+                          color: _successColor,
+                          backgroundColor: _successColor,
+                          onPressed: () {
+                            if (isGold) {
+                              _openTransferQuickAction(
+                                safeBox,
+                                initialToSafeId: safeBox.id,
+                                note: widget.isArabic
+                                    ? 'إضافة رصيد إلى ${safeBox.name}'
+                                    : 'Top up ${safeBox.name}',
+                              );
+                              return;
+                            }
+                            _openVoucherQuickAction(
+                              safeBox,
+                              voucherType: 'receipt',
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        _buildCompactIconAction(
+                          icon: Icons.remove,
+                          color: _dangerColor,
+                          outlined: true,
+                          onPressed: () {
+                            if (isGold) {
+                              _openTransferQuickAction(
+                                safeBox,
+                                initialFromSafeId: safeBox.id,
+                                note: widget.isArabic
+                                    ? 'سحب من ${safeBox.name}'
+                                    : 'Withdraw from ${safeBox.name}',
+                              );
+                              return;
+                            }
+                            _openVoucherQuickAction(
+                              safeBox,
+                              voucherType: 'payment',
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        _buildCompactIconAction(
+                          icon: Icons.swap_horiz,
+                          color: _primaryColor,
+                          outlined: true,
+                          onPressed: () {
+                            _openTransferQuickAction(
+                              safeBox,
+                              initialFromSafeId: safeBox.id,
+                              note: widget.isArabic
+                                  ? 'تحويل من ${safeBox.name}'
+                                  : 'Transfer from ${safeBox.name}',
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    // -- Expand tap area --
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _toggleCardExpanded(safeBox),
+                      child: AnimatedCrossFade(
+                        duration: const Duration(milliseconds: 200),
+                        crossFadeState: isExpanded
+                            ? CrossFadeState.showSecond
+                            : CrossFadeState.showFirst,
+                        firstChild: const SizedBox(height: 4),
+                        secondChild: Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Divider(
+                                height: 1,
+                                color: Colors.black.withValues(alpha: 0.08),
+                              ),
+                              const SizedBox(height: 8),
+                              if (accountLine != null) ...[
+                                Text(
+                                  accountLine,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade700,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              if (secondaryLine != null) ...[
+                                Text(
+                                  secondaryLine,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              if (isGold) _buildGoldDetails(safeBox),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

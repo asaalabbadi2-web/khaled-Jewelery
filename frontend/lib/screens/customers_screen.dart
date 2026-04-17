@@ -141,6 +141,34 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   itemCount: _filteredCustomers.length,
                   itemBuilder: (context, i) {
                     final c = _filteredCustomers[i];
+
+                    double toDoubleVal(dynamic v) => (v == null)
+                        ? 0.0
+                        : double.tryParse(v.toString()) ?? 0.0;
+
+                    final gold18k = toDoubleVal(c['balance_gold_18k']);
+                    final gold21k = toDoubleVal(c['balance_gold_21k']);
+                    final gold22k = toDoubleVal(c['balance_gold_22k']);
+                    final gold24k = toDoubleVal(c['balance_gold_24k']);
+                    final cashBalance = toDoubleVal(c['balance_cash']);
+                    final mainKarat = 21.0;
+                    final goldMain =
+                        (gold18k * (18.0 / mainKarat)) +
+                        (gold21k * (21.0 / mainKarat)) +
+                        (gold22k * (22.0 / mainKarat)) +
+                        (gold24k * (24.0 / mainKarat));
+
+                    final nonZeroKarats = <MapEntry<String, double>>[
+                      MapEntry('18k', gold18k),
+                      MapEntry('21k', gold21k),
+                      MapEntry('22k', gold22k),
+                      MapEntry('24k', gold24k),
+                    ].where((e) => e.value.abs() > 0.0001).toList();
+                    final showKaratChips = nonZeroKarats.length >= 2;
+
+                    final hasBalance =
+                        goldMain.abs() > 0.0001 || cashBalance.abs() > 0.0001;
+
                     return Card(
                       color: cardColor,
                       elevation: theme.cardTheme.elevation ?? 4,
@@ -150,170 +178,345 @@ class _CustomersScreenState extends State<CustomersScreen> {
                           RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10),
                           ),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: gold,
-                          child: Icon(
-                            Icons.person,
-                            color: colorScheme.onPrimary,
-                          ),
-                        ),
-                        title: Row(
-                          children: [
-                            Text(
-                              c['name'] ?? '',
-                              style: textTheme.titleMedium?.copyWith(
-                                color: gold,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            if (c['customer_code'] != null) ...[
-                              SizedBox(width: 8),
-                              Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: gold.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
-                                    color: gold.withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Text(
-                                  c['customer_code'],
-                                  style: textTheme.bodySmall?.copyWith(
-                                    color: gold,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: () {
+                          final customerId = c['id'];
+                          if (customerId != null) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => AccountStatementScreen(
+                                  accountId: customerId,
+                                  accountName: c['name'],
+                                  entityType: 'customer',
                                 ),
                               ),
-                            ],
-                          ],
-                        ),
-                        subtitle: Text(
-                          c['phone'] ?? '',
-                          style: textTheme.bodyMedium?.copyWith(
-                            color: subtitleColor,
-                          ),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: Icon(Icons.edit, color: Colors.blue),
-                              tooltip: isAr ? 'تعديل' : 'Edit',
-                              onPressed: () async {
-                                final result = await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => AddCustomerScreen(
-                                      api: widget.api,
-                                      customer: c,
-                                      isArabic: isAr,
+                            );
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // -- Header row --
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    backgroundColor: gold,
+                                    child: Icon(
+                                      Icons.person,
+                                      color: colorScheme.onPrimary,
                                     ),
                                   ),
-                                );
-                                if (result == true) {
-                                  _refreshCustomers();
-                                }
-                              },
-                            ),
-                            IconButton(
-                              icon: Icon(
-                                Icons.receipt_long,
-                                color: Colors.green,
-                              ),
-                              tooltip: isAr ? 'كشف حساب' : 'Account Statement',
-                              onPressed: () {
-                                // Use customer ID directly for hybrid system
-                                final customerId = c['id'];
-                                if (customerId != null) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) =>
-                                          AccountStatementScreen(
-                                            accountId: customerId,
-                                            accountName: c['name'],
-                                            entityType: 'customer',
-                                          ),
-                                    ),
-                                  );
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        isAr
-                                            ? 'لا يوجد حساب مرتبط بهذا العميل'
-                                            : 'No account linked to this customer',
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
-                            ),
-                            IconButton(
-                              icon: Icon(Icons.delete, color: Colors.red),
-                              tooltip: isAr ? 'حذف' : 'Delete',
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: Text(
-                                      isAr ? 'تأكيد الحذف' : 'Confirm Deletion',
-                                    ),
-                                    content: Text(
-                                      isAr
-                                          ? 'هل أنت متأكد من حذف هذا العميل؟'
-                                          : 'Are you sure you want to delete this customer?',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        child: Text(isAr ? 'إلغاء' : 'Cancel'),
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, false),
-                                      ),
-                                      ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.red,
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                c['name'] ?? '',
+                                                style: textTheme.titleMedium
+                                                    ?.copyWith(
+                                                      color: gold,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                              ),
+                                            ),
+                                            if (c['customer_code'] != null) ...[
+                                              const SizedBox(width: 8),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: gold.withValues(
+                                                    alpha: 0.2,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                  border: Border.all(
+                                                    color: gold.withValues(
+                                                      alpha: 0.5,
+                                                    ),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  c['customer_code'],
+                                                  style: textTheme.bodySmall
+                                                      ?.copyWith(
+                                                        color: gold,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
                                         ),
-                                        child: Text(isAr ? 'حذف' : 'Delete'),
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, true),
+                                        if ((c['phone'] ?? '')
+                                            .toString()
+                                            .isNotEmpty)
+                                          Text(
+                                            c['phone'] ?? '',
+                                            style: textTheme.bodyMedium
+                                                ?.copyWith(
+                                                  color: subtitleColor,
+                                                ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  // Actions
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.edit,
+                                          color: Colors.blue,
+                                        ),
+                                        tooltip: isAr ? 'تعديل' : 'Edit',
+                                        onPressed: () async {
+                                          final result = await Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) =>
+                                                  AddCustomerScreen(
+                                                    api: widget.api,
+                                                    customer: c,
+                                                    isArabic: isAr,
+                                                  ),
+                                            ),
+                                          );
+                                          if (result == true) {
+                                            _refreshCustomers();
+                                          }
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.receipt_long,
+                                          color: Colors.green,
+                                        ),
+                                        tooltip: isAr
+                                            ? 'كشف حساب'
+                                            : 'Account Statement',
+                                        onPressed: () {
+                                          final customerId = c['id'];
+                                          if (customerId != null) {
+                                            Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (context) =>
+                                                    AccountStatementScreen(
+                                                      accountId: customerId,
+                                                      accountName: c['name'],
+                                                      entityType: 'customer',
+                                                    ),
+                                              ),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.delete,
+                                          color: Colors.red,
+                                        ),
+                                        tooltip: isAr ? 'حذف' : 'Delete',
+                                        onPressed: () async {
+                                          final confirm = await showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: Text(
+                                                isAr
+                                                    ? 'تأكيد الحذف'
+                                                    : 'Confirm Deletion',
+                                              ),
+                                              content: Text(
+                                                isAr
+                                                    ? 'هل أنت متأكد من حذف هذا العميل؟'
+                                                    : 'Are you sure you want to delete this customer?',
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  child: Text(
+                                                    isAr ? 'إلغاء' : 'Cancel',
+                                                  ),
+                                                  onPressed: () =>
+                                                      Navigator.pop(ctx, false),
+                                                ),
+                                                ElevatedButton(
+                                                  style:
+                                                      ElevatedButton.styleFrom(
+                                                        backgroundColor:
+                                                            Colors.red,
+                                                      ),
+                                                  child: Text(
+                                                    isAr ? 'حذف' : 'Delete',
+                                                  ),
+                                                  onPressed: () =>
+                                                      Navigator.pop(ctx, true),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (confirm == true) {
+                                            try {
+                                              await widget.api.deleteCustomer(
+                                                c['id'],
+                                              );
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    isAr
+                                                        ? 'تم حذف العميل بنجاح'
+                                                        : 'Customer deleted successfully',
+                                                  ),
+                                                  backgroundColor: Colors.green,
+                                                ),
+                                              );
+                                              _refreshCustomers();
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    '${isAr ? "خطأ في الحذف: " : "Deletion failed: "}${e.toString()}',
+                                                  ),
+                                                  backgroundColor: Colors.red,
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        },
                                       ),
                                     ],
                                   ),
-                                );
-                                if (confirm == true) {
-                                  try {
-                                    await widget.api.deleteCustomer(c['id']);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          isAr
-                                              ? 'تم حذف العميل بنجاح'
-                                              : 'Customer deleted successfully',
+                                ],
+                              ),
+                              // -- Balance section (only if has balance) --
+                              if (hasBalance) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: theme
+                                        .colorScheme
+                                        .surfaceContainerHighest
+                                        .withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: theme.colorScheme.outline
+                                          .withValues(alpha: 0.08),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (cashBalance.abs() > 0.0001) ...[
+                                        Icon(
+                                          Icons.payments_outlined,
+                                          size: 13,
+                                          color: subtitleColor,
                                         ),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                    _refreshCustomers();
-                                  } catch (e) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          '${isAr ? "خطأ في الحذف: " : "Deletion failed: "}${e.toString()}',
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '${cashBalance.toStringAsFixed(2)} ${isAr ? 'ر.س' : 'SAR'}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: cashBalance < 0
+                                                ? const Color(0xFFD32F2F)
+                                                : const Color(0xFF2E7D32),
+                                          ),
                                         ),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
-                                  }
-                                }
-                              },
-                            ),
-                          ],
+                                        const SizedBox(width: 12),
+                                      ],
+                                      if (goldMain.abs() > 0.0001)
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.diamond_outlined,
+                                              size: 13,
+                                              color: const Color(0xFFC69214),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              '${goldMain.toStringAsFixed(3)} ${isAr ? 'جم' : 'g'}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: goldMain < 0
+                                                    ? const Color(0xFFD32F2F)
+                                                    : const Color(0xFFC69214),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                if (showKaratChips) ...[
+                                  const SizedBox(height: 6),
+                                  Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Wrap(
+                                      spacing: 5,
+                                      runSpacing: 4,
+                                      children: nonZeroKarats.map((e) {
+                                        const chipColor = Color(0xFFC69214);
+                                        return Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 7,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: chipColor.withValues(
+                                              alpha: 0.08,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
+                                            border: Border.all(
+                                              color: chipColor.withValues(
+                                                alpha: 0.28,
+                                              ),
+                                            ),
+                                          ),
+                                          child: Text(
+                                            '${e.key}: ${e.value.abs().toStringAsFixed(3)} ${isAr ? 'جم' : 'g'}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: chipColor,
+                                            ),
+                                          ),
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ],
+                          ),
                         ),
                       ),
                     );
