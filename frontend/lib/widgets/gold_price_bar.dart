@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
@@ -35,16 +36,6 @@ class GoldPriceBar extends StatelessWidget {
 
   String _formatPrice(double value) =>
       NumberFormat('#,##0.00', 'en').format(value);
-
-  String _relativeTimeLabel() {
-    if (goldPriceDate == null) return '';
-
-    final diff = DateTime.now().difference(goldPriceDate!);
-    if (diff.inMinutes < 1) return 'منذ لحظات';
-    if (diff.inHours < 1) return 'منذ ${diff.inMinutes} دقيقة';
-    if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
-    return DateFormat('dd/MM HH:mm', 'en').format(goldPriceDate!);
-  }
 
   List<int> _displayKarats() {
     final karats = {..._baseKarats, mainKarat}.toList()..sort();
@@ -156,7 +147,7 @@ class GoldPriceBar extends StatelessWidget {
                       ),
                       _MetaBlock(
                         palette: palette,
-                        relativeTimeLabel: _relativeTimeLabel(),
+                        goldPriceDate: goldPriceDate,
                         showAlert: showAlert,
                         changePercent: changePercent,
                         priceUp: priceUp,
@@ -463,9 +454,9 @@ class _KaratGrid extends StatelessWidget {
   }
 }
 
-class _MetaBlock extends StatelessWidget {
+class _MetaBlock extends StatefulWidget {
   final _GoldPriceBarPalette palette;
-  final String relativeTimeLabel;
+  final DateTime? goldPriceDate;
   final bool showAlert;
   final double? changePercent;
   final bool priceUp;
@@ -473,7 +464,7 @@ class _MetaBlock extends StatelessWidget {
 
   const _MetaBlock({
     required this.palette,
-    required this.relativeTimeLabel,
+    required this.goldPriceDate,
     required this.showAlert,
     required this.changePercent,
     required this.priceUp,
@@ -481,14 +472,47 @@ class _MetaBlock extends StatelessWidget {
   });
 
   @override
+  State<_MetaBlock> createState() => _MetaBlockState();
+}
+
+class _MetaBlockState extends State<_MetaBlock> {
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    // Rebuild every minute so the "منذ X ساعة" label stays current
+    _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  String _relativeTimeLabel() {
+    final date = widget.goldPriceDate;
+    if (date == null) return '';
+    final diff = DateTime.now().difference(date);
+    if (diff.inMinutes < 1) return 'منذ لحظات';
+    if (diff.inHours < 1) return 'منذ ${diff.inMinutes} دقيقة';
+    if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
+    return DateFormat('dd/MM HH:mm', 'en').format(date);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final alertColor = priceUp
+    final relativeTimeLabel = _relativeTimeLabel();
+    final alertColor = widget.priceUp
         ? GoldPriceBarColors.upText
         : GoldPriceBarColors.downText;
-    final alertBg = priceUp
+    final alertBg = widget.priceUp
         ? GoldPriceBarColors.upBg
         : GoldPriceBarColors.downBg;
-    final alertBorder = priceUp
+    final alertBorder = widget.priceUp
         ? GoldPriceBarColors.upBorder
         : GoldPriceBarColors.downBorder;
 
@@ -496,13 +520,13 @@ class _MetaBlock extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 168, maxWidth: 190),
       padding: const EdgeInsets.fromLTRB(12, 12, 16, 12),
       decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: palette.line, width: 0.5)),
+        border: Border(right: BorderSide(color: widget.palette.line, width: 0.5)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (showAlert && changePercent != null) ...[
+          if (widget.showAlert && widget.changePercent != null) ...[
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               decoration: BoxDecoration(
@@ -515,7 +539,7 @@ class _MetaBlock extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
-                    priceUp
+                    widget.priceUp
                         ? Icons.trending_up_rounded
                         : Icons.trending_down_rounded,
                     color: alertColor,
@@ -524,9 +548,9 @@ class _MetaBlock extends StatelessWidget {
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text(
-                      priceUp
-                          ? 'تنبيه سعر: ارتفع ${formatDelta(changePercent!.abs(), suffix: '%', includePlus: false)} - راجع أسعار البيع'
-                          : 'تنبيه سعر: انخفض ${formatDelta(changePercent!.abs(), suffix: '%', includePlus: false)} - راجع أسعار الشراء',
+                      widget.priceUp
+                          ? 'تنبيه سعر: ارتفع ${widget.formatDelta(widget.changePercent!.abs(), suffix: '%', includePlus: false)} - راجع أسعار البيع'
+                          : 'تنبيه سعر: انخفض ${widget.formatDelta(widget.changePercent!.abs(), suffix: '%', includePlus: false)} - راجع أسعار الشراء',
                       style: TextStyle(
                         color: alertColor,
                         fontSize: 9.8,
@@ -546,7 +570,7 @@ class _MetaBlock extends StatelessWidget {
             Text(
               relativeTimeLabel,
               style: TextStyle(
-                color: palette.textMuted,
+                color: widget.palette.textMuted,
                 fontSize: 10,
                 fontFamily: 'Cairo',
               ),
