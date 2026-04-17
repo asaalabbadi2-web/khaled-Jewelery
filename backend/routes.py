@@ -8993,7 +8993,10 @@ def add_invoice_payment(invoice_id: int):
     except Exception:
         resolved_safe_box_id = None
 
-    if resolved_safe_box_id is None:
+    # invoice.safe_box_id is the invoice-level default (usually cash).
+    # For non-cash payment methods (bank transfer, mada, etc.) skip it so the
+    # PM's own default_safe_box_id (bank/clearing) is used instead.
+    if resolved_safe_box_id is None and _is_cash_payment_method(pm_obj):
         resolved_safe_box_id = invoice.safe_box_id
 
     if resolved_safe_box_id is None and _is_cash_payment_method(pm_obj):
@@ -11899,8 +11902,12 @@ def add_invoice():
                             resolved_safe_box_id = int(raw_safe_box_id)
                     except Exception:
                         resolved_safe_box_id = None
-                    if resolved_safe_box_id is None:
+                    # invoice.safe_box_id is the invoice-level default (usually cash).
+                    # For non-cash payment methods (bank transfer, mada, etc.) we must NOT
+                    # use the invoice safe_box because it would route to cash instead of bank.
+                    if resolved_safe_box_id is None and _is_cash_payment_method(pm_obj):
                         resolved_safe_box_id = new_invoice.safe_box_id
+
                     if resolved_safe_box_id is None and _is_cash_payment_method(pm_obj):
                         try:
                             settings_row = Settings.query.first()
