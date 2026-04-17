@@ -28463,25 +28463,22 @@ def create_melting_renewal():
 def _compute_clearing_due_amount(safe_box_id):
     """Compute how much is actually owed in a clearing safe box.
 
-    due = SBT invoice_payment IN - SBT voucher OUT
+    due = IP total (authoritative) - SBT voucher OUT
 
-    Settlement vouchers credit the bank account directly and do NOT
-    post a credit to the clearing account in the GL.  Therefore the
-    JE balance approach over-counts by the full settled amount.
-    Using SBT rows is correct:
-    - 'invoice_payment' / 'in'  rows accumulate every payment received.
-    - 'voucher' / 'out'         rows record each bank settlement.
+    Uses InvoicePayment as the inflow source (same as the FIFO pending-
+    transactions endpoint) to avoid orphan/duplicate SBT records that
+    inflate the total.  Settlement outflows come from SBT voucher/out
+    rows which correctly capture all settlements including legacy ones.
     """
+    # Inflow: authoritative IP total via PaymentMethod routing
     ip_in = (
-        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-        .filter(
-            SafeBoxTransaction.safe_box_id == safe_box_id,
-            SafeBoxTransaction.ref_type == 'invoice_payment',
-            SafeBoxTransaction.direction == 'in',
-        )
+        db.session.query(func.coalesce(func.sum(InvoicePayment.amount), 0.0))
+        .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+        .filter(PaymentMethod.default_safe_box_id == safe_box_id)
         .scalar()
     ) or 0.0
 
+    # Outflow: settlement vouchers recorded in SBT
     voucher_out = (
         db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
         .filter(
@@ -29289,26 +29286,22 @@ def get_pending_settlement_transactions():
     except Exception:
         pass
 
-    # (b) Aggregate settled total — sum all clearing_settlement voucher outflows
-    # for this clearing safe's account (via VoucherAccountLine), not via SBT
-    # safe_box_id, to correctly capture historical settlements regardless of SBT routing.
+    # (b) Aggregate settled total — use SBT voucher-out rows for this clearing safe.
+    # This is consistent with _compute_clearing_due_amount and correctly captures
+    # historical settlements that pre-date VoucherAccountLine (e.g. ADJUSTMENT vouchers
+    # that have a JE but no voucher record in the voucher table).
     aggregate_settled = 0.0
     try:
-        clearing_account_id_b = getattr(clearing_sb, 'account_id', None)
-        if clearing_account_id_b:
-            # Sum the credit lines on clearing_settlement vouchers for this account.
-            # Credit on clearing account = money flowing OUT (settled to bank).
-            agg = (
-                db.session.query(func.coalesce(func.sum(VoucherAccountLine.amount), 0.0))
-                .join(Voucher, Voucher.id == VoucherAccountLine.voucher_id)
-                .filter(
-                    Voucher.reference_type == 'clearing_settlement',
-                    VoucherAccountLine.account_id == clearing_account_id_b,
-                    VoucherAccountLine.line_type == 'credit',
-                )
-                .scalar()
+        agg = (
+            db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(
+                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                SafeBoxTransaction.ref_type == 'voucher',
+                SafeBoxTransaction.direction == 'out',
             )
-            aggregate_settled = float(agg or 0.0)
+            .scalar()
+        )
+        aggregate_settled = float(agg or 0.0)
     except Exception:
         pass
 
