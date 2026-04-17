@@ -12184,7 +12184,12 @@ def add_invoice():
             resolved_safe_box_id = None
             safe_box_obj = None
             if not is_receivable:
-                resolved_safe_box_id = new_invoice.safe_box_id or (getattr(pm_obj, 'default_safe_box_id', None) if pm_obj else None)
+                # invoice.safe_box_id is the cash-level default — only use it for cash PMs.
+                # Non-cash PMs (bank transfer, mada, bnpl) must go to their own default_safe_box_id.
+                if _is_cash_payment_method(pm_obj):
+                    resolved_safe_box_id = new_invoice.safe_box_id
+                if resolved_safe_box_id is None:
+                    resolved_safe_box_id = getattr(pm_obj, 'default_safe_box_id', None) if pm_obj else None
                 if resolved_safe_box_id is None:
                     if _is_cash_payment_method(pm_obj):
                         resolved_safe_box_id = _fallback_cash_safe_box_id()
