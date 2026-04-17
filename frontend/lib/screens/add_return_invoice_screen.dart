@@ -10,6 +10,33 @@ import '../theme/app_theme.dart';
 import '../utils.dart';
 import '../utils/invoice_direct_print.dart';
 
+class _ReturnPaymentEntry {
+  final int paymentMethodId;
+  final String paymentMethodName;
+  final double amount;
+  final double commissionRate;
+  final double commissionAmount;
+  final double netAmount;
+
+  const _ReturnPaymentEntry({
+    required this.paymentMethodId,
+    required this.paymentMethodName,
+    required this.amount,
+    required this.commissionRate,
+    required this.commissionAmount,
+    required this.netAmount,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'payment_method_id': paymentMethodId,
+        'payment_method_name': paymentMethodName,
+        'amount': amount,
+        'commission_rate': commissionRate,
+        'commission_amount': commissionAmount,
+        'net_amount': netAmount,
+      };
+}
+
 /// Screen for creating return invoices (مرتجعات)
 /// Supports: مرتجع بيع, مرتجع شراء, مرتجع شراء (مورد)
 class AddReturnInvoiceScreen extends StatefulWidget {
@@ -150,9 +177,14 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   String currencySymbol = '\$';
   String currencyName = 'USD';
 
-  // Payment
-  String paymentMethod = 'cash';
-  double amountPaid = 0;
+  // Payment — multi-method (mirrors sales screen)
+  List<Map<String, dynamic>> _paymentMethods = [];
+  final List<_ReturnPaymentEntry> _payments = [];
+  int? _selectedPaymentMethodId;
+  final TextEditingController _customAmountController = TextEditingController();
+  // Used when restoring a legacy single-PM edit
+  String? _legacyEditPaymentMethod;
+  double _legacyEditAmount = 0;
 
   bool _uiAutoOpenPrintAfterSave = false;
   String _uiPaperSize = 'A4';
@@ -178,8 +210,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       _isLoadingInvoiceDetails = false;
       _invoiceDetailsError = null;
       returnReason = '';
-      paymentMethod = 'cash';
-      amountPaid = 0;
+      _payments.clear();
+      _selectedPaymentMethodId = null;
+      _customAmountController.clear();
       _returnReasonController.clear();
     });
   }
@@ -199,7 +232,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       _selectedItems.fold(0.0, (sum, item) => sum + item.tax);
   double get grandTotal =>
       _selectedItems.fold(0.0, (sum, item) => sum + item.total);
-  double get amountDue => (grandTotal - amountPaid).clamp(0, double.infinity);
+  double get _totalPayments => _payments.fold(0.0, (s, p) => s + p.amount);
+  double get amountDue => (grandTotal - _totalPayments).clamp(0, double.infinity);
 
   double _parseDouble(dynamic value, [double fallback = 0]) {
     if (value == null) return fallback;
@@ -260,6 +294,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     super.initState();
     _loadCurrencySettings();
     _loadInvoiceUiSettingsFromPrefs();
+    _fetchPaymentMethods();
 
     // If the caller already knows the original invoice, prefill it and load its details.
     final prefilled = widget.prefilledOriginalInvoice;
@@ -295,14 +330,31 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           [];
       returnReason = (editData['return_reason'] ?? '').toString();
       _returnReasonController.text = returnReason;
-      paymentMethod = (editData['payment_method'] ?? 'cash').toString();
-      amountPaid = _parseDouble(editData['amount_paid']);
+      // Restore payments: prefer payments[] array, fall back to legacy string field
+      final savedPayments = editData['payments'];
+      if (savedPayments is List && savedPayments.isNotEmpty) {
+        for (final p in savedPayments.whereType<Map>()) {
+          _payments.add(_ReturnPaymentEntry(
+            paymentMethodId: _parseInt(p['payment_method_id']),
+            paymentMethodName: (p['payment_method_name'] ?? '').toString(),
+            amount: _parseDouble(p['amount']),
+            commissionRate: _parseDouble(p['commission_rate']),
+            commissionAmount: _parseDouble(p['commission_amount']),
+            netAmount: _parseDouble(p['net_amount']),
+          ));
+        }
+      } else {
+        // Resolve after payment methods are fetched
+        _legacyEditPaymentMethod = (editData['payment_method'] ?? 'cash').toString();
+        _legacyEditAmount = _parseDouble(editData['amount_paid']);
+      }
     }
   }
 
   @override
   void dispose() {
     _returnReasonController.dispose();
+    _customAmountController.dispose();
     super.dispose();
   }
 
@@ -454,10 +506,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       setState(() {
         selectedOriginalInvoice = mergedInvoice;
         _returnItems = items;
-        // افتراض أن المبلغ المسدد يساوي الإجمالي المبدئي
-        if (_selectedItems.isNotEmpty) {
-          amountPaid = grandTotal;
-        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -474,6 +522,113 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         });
       }
     }
+  }
+
+  // --- Fetch Payment Methods ---
+  Future<void> _fetchPaymentMethods() async {
+    try {
+      final List<dynamic> methods = await widget.api.getPaymentMethods();
+      if (!mounted) return;
+      final normalized = methods
+          .whereType<Map<String, dynamic>>()
+          .map<Map<String, dynamic>>((m) {
+            final map = Map<String, dynamic>.from(m);
+            return {
+              ...map,
+              'id': _parseInt(map['id']),
+              'commission_rate': _parseDouble(map['commission_rate']),
+              'settlement_days': _parseInt(map['settlement_days']),
+              'display_order': _parseInt(map['display_order'], 999),
+            };
+          })
+          .where((m) => m['id'] != null && m['id'] != 0)
+          .toList()
+        ..sort((a, b) => (a['display_order'] as int).compareTo(b['display_order'] as int));
+
+      if (!mounted) return;
+      setState(() {
+        _paymentMethods = normalized;
+      });
+
+      // Resolve legacy edit-mode payment
+      if (_legacyEditPaymentMethod != null && _legacyEditAmount > 0 && _payments.isEmpty) {
+        final legacy = _legacyEditPaymentMethod!.toLowerCase();
+        final pm = normalized.firstWhere(
+          (m) {
+            final type = (m['payment_type'] ?? '').toString().toLowerCase();
+            final name = (m['name'] ?? '').toString();
+            if (legacy == 'cash' || legacy.contains('نقد')) return type == 'cash' || name.contains('نقد');
+            if (legacy == 'transfer' || legacy.contains('تحويل')) return name.contains('تحويل') || type == 'bank_transfer';
+            if (legacy == 'card' || legacy == 'mada') return type == 'mada' || type == 'card';
+            if (legacy == 'deferred' || legacy.contains('آجل')) return type == 'receivable' || type == 'credit';
+            return false;
+          },
+          orElse: () => normalized.isNotEmpty ? normalized.first : <String, dynamic>{},
+        );
+        if (pm.isNotEmpty) {
+          final rate = pm['commission_rate'] as double;
+          final commission = double.parse((_legacyEditAmount * rate / 100).toStringAsFixed(2));
+          setState(() {
+            _payments.add(_ReturnPaymentEntry(
+              paymentMethodId: pm['id'] as int,
+              paymentMethodName: (pm['name'] ?? '').toString(),
+              amount: _legacyEditAmount,
+              commissionRate: rate,
+              commissionAmount: commission,
+              netAmount: double.parse((_legacyEditAmount - commission).toStringAsFixed(2)),
+            ));
+          });
+        }
+        _legacyEditPaymentMethod = null;
+      }
+    } catch (_) {
+      // non-fatal — payment methods list stays empty
+    }
+  }
+
+  void _addPayment({double? customAmount}) {
+    if (_selectedPaymentMethodId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('اختر وسيلة الدفع أولاً')),
+      );
+      return;
+    }
+    final method = _paymentMethods.firstWhere(
+      (m) => m['id'] == _selectedPaymentMethodId,
+      orElse: () => {},
+    );
+    if (method.isEmpty) return;
+
+    final remaining = amountDue;
+    if (remaining <= 0.005) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تسوية المبلغ بالكامل')),
+      );
+      return;
+    }
+    final amount = (customAmount ?? remaining).clamp(0.0, remaining + 0.01);
+    if (amount <= 0) return;
+
+    final rate = method['commission_rate'] as double;
+    final commission = double.parse((amount * rate / 100).toStringAsFixed(2));
+    final net = double.parse((amount - commission).toStringAsFixed(2));
+
+    setState(() {
+      _payments.add(_ReturnPaymentEntry(
+        paymentMethodId: method['id'] as int,
+        paymentMethodName: (method['name'] ?? '').toString(),
+        amount: amount,
+        commissionRate: rate,
+        commissionAmount: commission,
+        netAmount: net,
+      ));
+      _selectedPaymentMethodId = null;
+      _customAmountController.clear();
+    });
+  }
+
+  void _removePayment(int index) {
+    setState(() => _payments.removeAt(index));
   }
 
   // --- Save Return Invoice ---
@@ -518,8 +673,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       'total_weight': totalWeight,
       'total_tax': totalTax,
       'total_cost': totalCost,
-      'payment_method': paymentMethod,
-      'amount_paid': amountPaid,
+      'amount_paid': _totalPayments,
+      'payments': _payments.map((p) => p.toJson()).toList(),
       'items': returnItems,
     };
 
@@ -1135,68 +1290,231 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   }
 
   Widget _buildPaymentStep() {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
     return Form(
       key: _paymentFormKey,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 16),
-          Text(
-            'طريقة الدفع/الاستلام',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 24),
 
-          DropdownButtonFormField<String>(
-            initialValue: paymentMethod,
-            decoration: const InputDecoration(
-              labelText: 'طريقة الدفع',
-              border: OutlineInputBorder(),
-            ),
-            items: const [
-              DropdownMenuItem(value: 'cash', child: Text('نقداً')),
-              DropdownMenuItem(value: 'card', child: Text('بطاقة')),
-              DropdownMenuItem(value: 'transfer', child: Text('تحويل')),
-              DropdownMenuItem(value: 'deferred', child: Text('آجل')),
-            ],
-            onChanged: (value) {
-              setState(() {
-                paymentMethod = value!;
-              });
-            },
-          ),
-
-          const SizedBox(height: 16),
-
-          TextFormField(
-            decoration: InputDecoration(
-              labelText: 'المبلغ المدفوع/المستلم',
-              border: const OutlineInputBorder(),
-              suffixText: currencySymbol,
-            ),
-            keyboardType: TextInputType.number,
-            inputFormatters: [NormalizeNumberFormatter()],
-            initialValue: amountPaid.toString(),
-            onChanged: (value) {
-              setState(() {
-                amountPaid = double.tryParse(value) ?? 0;
-              });
-            },
-          ),
-
-          const SizedBox(height: 16),
-
-          Card(
-            child: ListTile(
-              title: const Text('المتبقي'),
-              trailing: Text(
-                '${amountDue.toStringAsFixed(2)} $currencySymbol',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
+          // ── Totals chip ──────────────────────────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('وسائل الدفع', style: theme.textTheme.titleLarge),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: isDark ? 0.25 : 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: cs.primary.withValues(alpha: 0.4)),
+                ),
+                child: Text(
+                  'الإجمالي: ${grandTotal.toStringAsFixed(2)} $currencySymbol',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: cs.primary,
+                  ),
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // ── Added payments table ─────────────────────────────────────
+          if (_payments.isNotEmpty) ...[
+            Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: cs.primary.withValues(alpha: 0.4), width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: isDark ? 0.25 : 0.15),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(flex: 3, child: Text('الوسيلة', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold))),
+                        Expanded(flex: 2, child: Text('المبلغ', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
+                        Expanded(flex: 2, child: Text('عمولة', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
+                        Expanded(flex: 2, child: Text('صافي', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
+                        const SizedBox(width: 40),
+                      ],
+                    ),
+                  ),
+                  // Rows
+                  ...List.generate(_payments.length, (i) {
+                    final p = _payments[i];
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: i % 2 == 0
+                            ? theme.colorScheme.surface
+                            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: isDark ? 0.3 : 0.5),
+                        border: Border(bottom: BorderSide(color: theme.dividerColor.withValues(alpha: 0.4))),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(p.paymentMethodName, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                                if (p.commissionRate > 0)
+                                  Text('عمولة ${p.commissionRate}%', style: theme.textTheme.bodySmall?.copyWith(color: Colors.orange)),
+                              ],
+                            ),
+                          ),
+                          Expanded(flex: 2, child: Text('${p.amount.toStringAsFixed(2)} $currencySymbol', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: Colors.green))),
+                          Expanded(flex: 2, child: Text(p.commissionAmount > 0 ? '${p.commissionAmount.toStringAsFixed(2)} $currencySymbol' : '-', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(color: p.commissionAmount > 0 ? Colors.red : theme.disabledColor))),
+                          Expanded(flex: 2, child: Text('${p.netAmount.toStringAsFixed(2)} $currencySymbol', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: cs.primary))),
+                          SizedBox(
+                            width: 40,
+                            child: IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 20),
+                              color: Colors.red,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onPressed: () => _removePayment(i),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  // Totals row
+                  if (_payments.length > 1)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: cs.primary.withValues(alpha: isDark ? 0.15 : 0.08),
+                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(6)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(flex: 3, child: Text('الإجمالي', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold))),
+                          Expanded(flex: 2, child: Text('${_totalPayments.toStringAsFixed(2)} $currencySymbol', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: Colors.green))),
+                          Expanded(flex: 2, child: Text('', textAlign: TextAlign.center)),
+                          Expanded(flex: 2, child: Text('')),
+                          const SizedBox(width: 40),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          // ── Remaining chip ───────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: amountDue > 0.005
+                  ? Colors.orange.withValues(alpha: isDark ? 0.2 : 0.12)
+                  : Colors.green.withValues(alpha: isDark ? 0.2 : 0.12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: amountDue > 0.005
+                    ? Colors.orange.withValues(alpha: 0.5)
+                    : Colors.green.withValues(alpha: 0.5),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  amountDue > 0.005 ? 'المتبقي للتسوية' : '✓ تمت التسوية',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: amountDue > 0.005 ? Colors.orange : Colors.green,
+                  ),
+                ),
+                Text(
+                  '${amountDue.toStringAsFixed(2)} $currencySymbol',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: amountDue > 0.005 ? Colors.orange : Colors.green,
+                  ),
+                ),
+              ],
             ),
           ),
+          const SizedBox(height: 20),
+
+          // ── Add payment row ──────────────────────────────────────────
+          if (amountDue > 0.005) ...[
+            Text('إضافة وسيلة دفع', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if (_paymentMethods.isEmpty)
+              const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
+            else ...[
+              DropdownButtonFormField<int>(
+                value: _selectedPaymentMethodId,
+                decoration: const InputDecoration(
+                  labelText: 'وسيلة الدفع',
+                  border: OutlineInputBorder(),
+                ),
+                items: _paymentMethods.map((m) {
+                  final commission = m['commission_rate'] as double;
+                  final label = commission > 0
+                      ? '${m['name']} (${commission.toStringAsFixed(1)}%)'
+                      : '${m['name']}';
+                  return DropdownMenuItem<int>(value: m['id'] as int, child: Text(label));
+                }).toList(),
+                onChanged: (v) => setState(() => _selectedPaymentMethodId = v),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _customAmountController,
+                      decoration: InputDecoration(
+                        labelText: 'المبلغ (اتركه فارغاً للمتبقي: ${amountDue.toStringAsFixed(2)})',
+                        border: const OutlineInputBorder(),
+                        suffixText: currencySymbol,
+                      ),
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [NormalizeNumberFormatter()],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('إضافة'),
+                    onPressed: () {
+                      final txt = _customAmountController.text.trim();
+                      final custom = txt.isEmpty ? null : double.tryParse(txt.replaceAll(',', '.'));
+                      _addPayment(customAmount: custom);
+                    },
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 8),
+            // Quick-fill buttons
+            if (amountDue > 0.005)
+              Wrap(
+                spacing: 8,
+                children: [
+                  ActionChip(
+                    label: Text('المتبقي كاملاً (${amountDue.toStringAsFixed(2)})'),
+                    onPressed: () => _addPayment(),
+                  ),
+                ],
+              ),
+          ],
         ],
       ),
     );
