@@ -29270,24 +29270,32 @@ def get_pending_settlement_transactions():
     # ----------------------------------------------------------------
     # Determine which invoice-payment transactions are still pending.
     #
-    # Priority: SettlementLine (explicit per-tx links) → fallback to
-    # newest-first due_amount walk for legacy bulk settlements.
+    # Uses SettlementLine amounts (supports partial settlements) to
+    # compute per-IP remaining balance.  An IP is pending when:
+    #   remaining = IP.amount - sum(SL.amount_settled) > 0
     # ----------------------------------------------------------------
 
-    # Check if SettlementLine table has any rows for this safe box's IPs.
     all_ip_ids = [ip.id for ip in all_ips]
-    explicitly_settled_ip_ids = set()
+
+    # Sum settled amount per IP from SettlementLine table.
+    settled_by_ip = {}  # ip_id → total amount already settled
     try:
         if all_ip_ids:
-            sl_q = (
-                db.session.query(SettlementLine.invoice_payment_id)
+            sl_rows = (
+                db.session.query(
+                    SettlementLine.invoice_payment_id,
+                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                )
                 .filter(SettlementLine.invoice_payment_id.in_(all_ip_ids))
+                .group_by(SettlementLine.invoice_payment_id)
+                .all()
             )
-            explicitly_settled_ip_ids = {row[0] for row in sl_q.all()}
+            settled_by_ip = {row[0]: float(row[1]) for row in sl_rows}
     except Exception:
         pass
 
-    # Also check legacy per_tx notes on Voucher (forward compat / transition).
+    # Also check legacy per_tx notes on Voucher (treat as fully settled).
+    legacy_settled_ip_ids = set()
     try:
         clearing_account_id = getattr(clearing_sb, 'account_id', None)
         per_tx_q = (
@@ -29305,21 +29313,23 @@ def get_pending_settlement_transactions():
         for (note_val,) in per_tx_q.distinct().all():
             if note_val and 'per_tx:ip_' in note_val:
                 try:
-                    explicitly_settled_ip_ids.add(int(note_val.split('per_tx:ip_')[1].split()[0]))
+                    legacy_settled_ip_ids.add(int(note_val.split('per_tx:ip_')[1].split()[0]))
                 except Exception:
                     pass
     except Exception:
         pass
 
-    # Collect pending payments: newest-first from due_amount.
+    # Build pending list: IPs with remaining unsettled balance.
     due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
-    remaining_due = max(due_amount, 0.0)
-    non_settled_ips = [ip for ip in all_ips if ip.id not in explicitly_settled_ip_ids]
     pending = []
-    for ip in reversed(non_settled_ips):  # newest first
-        if remaining_due <= 0.005:
-            break
+    for ip in all_ips:  # already ordered by created_at asc
+        if ip.id in legacy_settled_ip_ids:
+            continue
         ip_amount = round(float(ip.amount or 0.0), 2)
+        settled = round(settled_by_ip.get(ip.id, 0.0), 2)
+        remaining = round(ip_amount - settled, 2)
+        if remaining <= 0.005:
+            continue
         invoice_number = None
         invoice_id = ip.invoice_id
         if invoice_id:
@@ -29334,12 +29344,9 @@ def get_pending_settlement_transactions():
             'invoice_payment_id': ip.id,
             'invoice_id': invoice_id,
             'invoice_number': invoice_number,
-            'amount': ip_amount,
+            'amount': remaining,
             'date': ip.created_at.isoformat() if ip.created_at else None,
         })
-        remaining_due -= ip_amount
-    # Display oldest-first among pending
-    pending.reverse()
 
     # tx_count_for_fee: number of pending (unsettled) payments — used for
     # fixed-per-transaction commission calculation in bulk settlement mode.
