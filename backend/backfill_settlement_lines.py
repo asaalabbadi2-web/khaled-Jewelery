@@ -4,15 +4,19 @@
 Strategy:
   1. For each clearing safe box, gather all InvoicePayments (oldest→newest).
   2. Gather all clearing_settlement vouchers for that safe box (oldest→newest).
-  3. Walk vouchers in order, consuming IP amounts via FIFO.
+  3. Walk vouchers in order, consuming IP amounts via FIFO with partial support.
   4. Create SettlementLine rows linking each consumed IP to its voucher.
+  5. Partial consumption: if an IP is larger than the voucher remainder,
+     consume a partial amount and carry the rest to the next voucher.
+
+Flags:
+  --apply       Persist changes (default is dry run)
+  --reset       Delete ALL existing SettlementLine rows first, then re-backfill
 
 Usage:
-  DRY RUN (default):
-    python backfill_settlement_lines.py
-
-  APPLY:
-    python backfill_settlement_lines.py --apply
+  DRY RUN:    python backfill_settlement_lines.py
+  APPLY:      python backfill_settlement_lines.py --apply
+  RE-DO:      python backfill_settlement_lines.py --reset --apply
 """
 import sys
 import os
@@ -28,10 +32,19 @@ from models import (
 from sqlalchemy import func
 
 
-def backfill(apply=False):
+def backfill(apply=False, reset=False):
     with app.app_context():
         # Ensure table exists
         db.create_all()
+
+        if reset:
+            count = SettlementLine.query.count()
+            print(f"🗑  RESET: deleting {count} existing SettlementLine rows")
+            if apply:
+                SettlementLine.query.delete()
+                db.session.flush()
+            else:
+                print("   (dry run — nothing deleted)")
 
         # Find clearing safe boxes
         clearing_sbs = SafeBox.query.filter(
@@ -62,20 +75,27 @@ def backfill(apply=False):
             ip_total = sum(float(ip.amount or 0) for ip in all_ips)
             print(f"  Total IP amount: {ip_total:,.2f}")
 
-            # Already-linked IPs (skip them)
-            existing_sl_ip_ids = set()
-            try:
-                existing = (
-                    db.session.query(SettlementLine.invoice_payment_id)
-                    .filter(SettlementLine.invoice_payment_id.in_([ip.id for ip in all_ips]))
-                    .all()
-                )
-                existing_sl_ip_ids = {row[0] for row in existing}
-            except Exception:
-                pass
+            # Already-linked IPs — gather settled amounts per IP
+            existing_settled = {}  # ip_id → total already settled
+            if not reset:
+                try:
+                    ip_ids = [ip.id for ip in all_ips]
+                    if ip_ids:
+                        rows = (
+                            db.session.query(
+                                SettlementLine.invoice_payment_id,
+                                func.sum(SettlementLine.amount_settled),
+                            )
+                            .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
+                            .group_by(SettlementLine.invoice_payment_id)
+                            .all()
+                        )
+                        existing_settled = {r[0]: float(r[1] or 0) for r in rows}
+                except Exception:
+                    pass
 
-            if existing_sl_ip_ids:
-                print(f"  Already linked (SettlementLine): {len(existing_sl_ip_ids)} IPs — skipping them")
+                if existing_settled:
+                    print(f"  Already linked (SettlementLine): {len(existing_settled)} IPs")
 
             # Clearing settlement vouchers for this safe box, ordered by date
             account_id = sb.account_id
@@ -96,8 +116,14 @@ def backfill(apply=False):
             voucher_total = sum(float(v.amount_cash or 0) for v in vouchers)
             print(f"  Total voucher amount: {voucher_total:,.2f}")
 
-            # FIFO walk: consume IPs against vouchers
-            ip_queue = [ip for ip in all_ips if ip.id not in existing_sl_ip_ids]
+            # Track remaining unsettled amount per IP
+            ip_remaining = {}
+            for ip in all_ips:
+                full = round(float(ip.amount or 0), 2)
+                already = round(existing_settled.get(ip.id, 0.0), 2)
+                ip_remaining[ip.id] = round(full - already, 2)
+
+            # FIFO walk with partial consumption
             ip_idx = 0
             lines_for_sb = 0
 
@@ -106,8 +132,15 @@ def backfill(apply=False):
                 if v_remaining <= 0:
                     continue
 
-                # Compute per-voucher commission info
-                # Read fee from voucher lines (debit to fee account)
+                # Check if this voucher already has settlement lines (skip if not reset)
+                if not reset:
+                    existing_for_v = SettlementLine.query.filter_by(voucher_id=v.id).count()
+                    if existing_for_v > 0:
+                        # Already processed — subtract from budget and advance ip_idx
+                        v_remaining = 0
+                        continue
+
+                # Compute per-voucher commission ratios
                 v_fee = 0.0
                 v_fee_vat = 0.0
                 for vl in v.account_lines.all():
@@ -119,42 +152,48 @@ def backfill(apply=False):
                             else:
                                 v_fee += float(vl.amount or 0)
 
-                v_net = v_remaining  # gross = amount_cash
-                v_fee_ratio = v_fee / v_net if v_net > 0 else 0
-                v_vat_ratio = v_fee_vat / v_net if v_net > 0 else 0
+                v_gross = round(float(v.amount_cash or 0), 2)
+                v_fee_ratio = v_fee / v_gross if v_gross > 0 else 0
+                v_vat_ratio = v_fee_vat / v_gross if v_gross > 0 else 0
 
-                while ip_idx < len(ip_queue) and v_remaining > 0.005:
-                    ip = ip_queue[ip_idx]
-                    ip_amt = round(float(ip.amount or 0), 2)
+                while ip_idx < len(all_ips) and v_remaining > 0.005:
+                    ip = all_ips[ip_idx]
+                    avail = ip_remaining.get(ip.id, 0.0)
 
-                    if ip_amt <= v_remaining + 0.005:
-                        # Fully consumed
-                        settled = ip_amt
-                        v_remaining -= ip_amt
+                    if avail <= 0.005:
                         ip_idx += 1
-                    else:
-                        # Partial — this IP spans two vouchers
-                        # For simplicity, skip partial and move to next voucher
-                        break
+                        continue
+
+                    # Consume min(available, voucher_remaining)
+                    consume = round(min(avail, v_remaining), 2)
 
                     sl = SettlementLine(
                         voucher_id=v.id,
                         invoice_payment_id=ip.id,
-                        amount_settled=round(settled, 2),
-                        commission=round(settled * v_fee_ratio, 2),
-                        commission_vat=round(settled * v_vat_ratio, 2),
+                        amount_settled=consume,
+                        commission=round(consume * v_fee_ratio, 2),
+                        commission_vat=round(consume * v_vat_ratio, 2),
                     )
                     if apply:
                         db.session.add(sl)
                     lines_for_sb += 1
 
+                    tag = '' if abs(consume - float(ip.amount or 0)) < 0.01 else ' [partial]'
                     print(f"    V#{v.id} ({v.voucher_number}) ← IP#{ip.id} "
-                          f"({settled:,.2f}) "
-                          f"[fee={round(settled * v_fee_ratio, 2)}, "
-                          f"vat={round(settled * v_vat_ratio, 2)}]")
+                          f"({consume:,.2f}{tag}) "
+                          f"[fee={round(consume * v_fee_ratio, 2)}, "
+                          f"vat={round(consume * v_vat_ratio, 2)}]")
+
+                    ip_remaining[ip.id] = round(avail - consume, 2)
+                    v_remaining = round(v_remaining - consume, 2)
+
+                    # Advance pointer only if IP is fully consumed
+                    if ip_remaining[ip.id] <= 0.005:
+                        ip_idx += 1
 
             total_created += lines_for_sb
-            unmatched = len(ip_queue) - ip_idx
+            # Count truly unmatched IPs (remaining > 0)
+            unmatched = sum(1 for ip in all_ips if ip_remaining.get(ip.id, 0) > 0.005)
             print(f"  → Created {lines_for_sb} SettlementLine rows")
             print(f"  → Unmatched (pending) IPs: {unmatched}")
 
@@ -168,4 +207,5 @@ def backfill(apply=False):
 
 if __name__ == '__main__':
     do_apply = '--apply' in sys.argv
-    backfill(apply=do_apply)
+    do_reset = '--reset' in sys.argv
+    backfill(apply=do_apply, reset=do_reset)
