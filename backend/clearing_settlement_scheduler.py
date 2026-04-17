@@ -21,7 +21,7 @@ from threading import Thread
 import schedule
 from sqlalchemy import case, func
 
-from models import db, PaymentMethod, SafeBoxTransaction, Voucher
+from models import db, PaymentMethod, SafeBoxTransaction, Voucher, InvoicePayment, SettlementLine
 from services.live_balances import live_balances_by_account_ids
 
 
@@ -151,6 +151,21 @@ class ClearingSettlementScheduler:
         fee_amount = round((gross_amount * rate / 100.0) + (fixed * effective_count), 2)
         return fee_amount, transaction_count
 
+    def _compute_fee_amount_with_count(self, *, pm, gross_amount: float, transaction_count: int) -> tuple[float, int]:
+        """Compute fee using the given transaction_count (for day-level settlement)."""
+        timing = str(getattr(pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+        if timing != 'settlement':
+            return 0.0, 0
+
+        rate = float(getattr(pm, 'commission_rate', 0.0) or 0.0)
+        fixed = float(getattr(pm, 'commission_fixed_amount', 0.0) or 0.0)
+        if rate <= 0.0 and fixed <= 0.0:
+            return 0.0, 0
+
+        effective_count = transaction_count if transaction_count > 0 else 1
+        fee_amount = round((gross_amount * rate / 100.0) + (fixed * effective_count), 2)
+        return fee_amount, transaction_count
+
     # ------------------------------------------------------------------
     # Last-settlement date detection
     # ------------------------------------------------------------------
@@ -176,28 +191,113 @@ class ClearingSettlementScheduler:
     # Due amount for a specific day window
     # ------------------------------------------------------------------
     def _compute_due_for_day(self, safe_box_id: int, day_start: datetime, day_end: datetime) -> float:
-        """Sum invoice-payment amounts in the [day_start, day_end] window that haven't been settled."""
-        payments_signed = func.coalesce(
-            func.sum(
-                case(
-                    (SafeBoxTransaction.direction == 'in', SafeBoxTransaction.amount_cash),
-                    else_=-SafeBoxTransaction.amount_cash,
-                )
-            ),
-            0.0,
-        )
-        amount = (
-            db.session.query(payments_signed)
+        """Sum unsettled invoice-payment amounts in the [day_start, day_end] window.
+
+        Uses InvoicePayment as source and subtracts any SettlementLine amounts
+        to correctly handle partial settlements.
+        """
+        ips = (
+            InvoicePayment.query
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
             .filter(
-                SafeBoxTransaction.safe_box_id == safe_box_id,
-                SafeBoxTransaction.ref_type == 'invoice_payment',
-                SafeBoxTransaction.created_at >= day_start,
-                SafeBoxTransaction.created_at <= day_end,
+                PaymentMethod.default_safe_box_id == safe_box_id,
+                InvoicePayment.created_at >= day_start,
+                InvoicePayment.created_at <= day_end,
             )
-            .scalar()
-            or 0.0
+            .all()
         )
-        return round(float(amount), 2)
+        if not ips:
+            return 0.0
+        ip_ids = [ip.id for ip in ips]
+        settled_by_ip = {}
+        if ip_ids:
+            rows = (
+                db.session.query(
+                    SettlementLine.invoice_payment_id,
+                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                )
+                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
+                .group_by(SettlementLine.invoice_payment_id)
+                .all()
+            )
+            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        total = 0.0
+        for ip in ips:
+            ip_amt = float(ip.amount or 0)
+            sl_amt = settled_by_ip.get(ip.id, 0.0)
+            remaining = ip_amt - sl_amt
+            if remaining > 0.005:
+                total += remaining
+        return round(total, 2)
+
+    def _get_unsettled_ip_ids_for_day(self, safe_box_id: int, day_start: datetime, day_end: datetime) -> list[int]:
+        """Return invoice_payment IDs with unsettled balance in the given day window."""
+        ips = (
+            InvoicePayment.query
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(
+                PaymentMethod.default_safe_box_id == safe_box_id,
+                InvoicePayment.created_at >= day_start,
+                InvoicePayment.created_at <= day_end,
+            )
+            .all()
+        )
+        if not ips:
+            return []
+        ip_ids = [ip.id for ip in ips]
+        settled_by_ip = {}
+        if ip_ids:
+            rows = (
+                db.session.query(
+                    SettlementLine.invoice_payment_id,
+                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                )
+                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
+                .group_by(SettlementLine.invoice_payment_id)
+                .all()
+            )
+            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        result = []
+        for ip in ips:
+            ip_amt = float(ip.amount or 0)
+            sl_amt = settled_by_ip.get(ip.id, 0.0)
+            if ip_amt - sl_amt > 0.005:
+                result.append(ip.id)
+        return result
+
+    def _get_unsettled_ip_ids_up_to(self, safe_box_id: int, cutoff_dt: datetime) -> list[int]:
+        """Return all unsettled IP IDs for a safe box up to cutoff_dt."""
+        ips = (
+            InvoicePayment.query
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(
+                PaymentMethod.default_safe_box_id == safe_box_id,
+                InvoicePayment.created_at <= cutoff_dt,
+            )
+            .all()
+        )
+        if not ips:
+            return []
+        ip_ids = [ip.id for ip in ips]
+        settled_by_ip = {}
+        if ip_ids:
+            rows = (
+                db.session.query(
+                    SettlementLine.invoice_payment_id,
+                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                )
+                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
+                .group_by(SettlementLine.invoice_payment_id)
+                .all()
+            )
+            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        result = []
+        for ip in ips:
+            ip_amt = float(ip.amount or 0)
+            sl_amt = settled_by_ip.get(ip.id, 0.0)
+            if ip_amt - sl_amt > 0.005:
+                result.append(ip.id)
+        return result
 
     def process_due_settlements(self) -> dict:
         """Run auto-settlement for all eligible payment methods.
@@ -344,11 +444,13 @@ class ClearingSettlementScheduler:
 
                         reference_number = f"AUTO-PM-{pm.id}-W-{today.isoformat()}"
 
-                        fee_amount, fee_tx_count = self._compute_bulk_fee_amount(
+                        # Collect all unsettled IP IDs up to cutoff for this safe box
+                        weekly_ip_ids = self._get_unsettled_ip_ids_up_to(clearing_sb.id, cutoff_dt)
+
+                        fee_amount, fee_tx_count = self._compute_fee_amount_with_count(
                             pm=pm,
-                            safe_box_id=clearing_sb.id,
-                            cutoff_dt=cutoff_dt,
                             gross_amount=gross_amount,
+                            transaction_count=len(weekly_ip_ids),
                         )
                         if fee_amount >= gross_amount:
                             _skip(f'fee_exceeds_gross:{fee_amount:.2f}>={gross_amount:.2f}')
@@ -374,6 +476,7 @@ class ClearingSettlementScheduler:
                                 description_override=description,
                                 notes='auto_settlement:weekly',
                                 ensure_unique_reference=True,
+                                invoice_payment_ids=weekly_ip_ids if weekly_ip_ids else None,
                             )
                             if voucher_result.get('skipped'):
                                 db.session.rollback()
@@ -461,11 +564,13 @@ class ClearingSettlementScheduler:
 
                         reference_number = f"AUTO-PM-{pm.id}-{settle_day.isoformat()}"
 
-                        fee_amount_day, fee_tx_count = self._compute_bulk_fee_amount(
+                        # Collect unsettled IP IDs for this day (for SettlementLine creation)
+                        day_ip_ids = self._get_unsettled_ip_ids_for_day(clearing_sb.id, day_start, day_end)
+
+                        fee_amount_day, fee_tx_count = self._compute_fee_amount_with_count(
                             pm=pm,
-                            safe_box_id=clearing_sb.id,
-                            cutoff_dt=day_end,
                             gross_amount=day_amount,
+                            transaction_count=len(day_ip_ids),
                         )
                         if fee_amount_day >= day_amount:
                             continue
@@ -491,6 +596,7 @@ class ClearingSettlementScheduler:
                                 description_override=description,
                                 notes=f'auto_settlement:day={settle_day.isoformat()}',
                                 ensure_unique_reference=True,
+                                invoice_payment_ids=day_ip_ids if day_ip_ids else None,
                             )
                             if voucher_result.get('skipped'):
                                 continue
@@ -551,8 +657,30 @@ class ClearingSettlementScheduler:
         if not unsettled_txs:
             return
 
-        # 2. Detect already-settled payment ids via notes pattern
+        # 2. Detect already-settled payment ids via SettlementLine + legacy notes
         settled_ip_ids: set[int] = set()
+        # Check SettlementLine (fully settled IPs)
+        try:
+            all_ip_ids = [tx.invoice_payment_id for tx in unsettled_txs if tx.invoice_payment_id]
+            if all_ip_ids:
+                sl_rows = (
+                    db.session.query(
+                        SettlementLine.invoice_payment_id,
+                        func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                    )
+                    .filter(SettlementLine.invoice_payment_id.in_(all_ip_ids))
+                    .group_by(SettlementLine.invoice_payment_id)
+                    .all()
+                )
+                # Build map of ip_id → amount for partial check
+                ip_amount_map = {tx.invoice_payment_id: float(tx.amount_cash or 0) for tx in unsettled_txs if tx.invoice_payment_id}
+                for ip_id, sl_total in sl_rows:
+                    ip_amt = ip_amount_map.get(ip_id, 0)
+                    if float(sl_total) >= ip_amt - 0.005:
+                        settled_ip_ids.add(ip_id)
+        except Exception:
+            pass
+        # Also check legacy per_tx notes
         try:
             settled_rows = (
                 db.session.query(SafeBoxTransaction.notes)
@@ -649,6 +777,7 @@ class ClearingSettlementScheduler:
                     description_override=desc,
                     notes=f'per_tx:ip_{ip_id}',
                     ensure_unique_reference=True,
+                    invoice_payment_ids=[ip_id] if ip_id else None,
                 )
                 if result.get('skipped'):
                     continue
