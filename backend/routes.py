@@ -3930,6 +3930,13 @@ def get_account_statement(account_id):
                 or bool(getattr(account, 'bank_name', None))
                 or bool(getattr(account, 'account_number_external', None))
             )
+            # Also treat accounts that are directly linked to a SafeBox as payment
+            # accounts (bank/clearing/cash). These accounts have account_type=None
+            # but they store cash movements and should never use the merged statement.
+            if not is_payment_account:
+                is_payment_account = SafeBox.query.filter_by(
+                    account_id=account.id
+                ).first() is not None
         except Exception:
             is_payment_account = False
 

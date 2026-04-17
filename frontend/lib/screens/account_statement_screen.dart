@@ -70,9 +70,11 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _showOnlyMovement = false;
   bool _includeBreakdown = true;
   bool _isExporting = false;
+  // Default: newest transactions first
+  // (field kept for future use)
   bool _resolvedViewModeDefault = false;
-  _StatementSortColumn? _sortColumn;
-  bool _sortAscending = false;
+  _StatementSortColumn? _sortColumn = _StatementSortColumn.date;
+  bool _sortAscending = false; // newest first by default
 
   double _topChromeHeight = 0;
   double _topChromeCollapseOffset = 0;
