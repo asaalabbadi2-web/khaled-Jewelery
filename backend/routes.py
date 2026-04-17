@@ -28463,33 +28463,36 @@ def create_melting_renewal():
 def _compute_clearing_due_amount(safe_box_id):
     """Compute how much is actually owed in a clearing safe box.
 
-    due = JE_debits - JE_credits  on the clearing safe box's account.
+    due = SBT invoice_payment IN - SBT voucher OUT
 
-    Using JE balance directly is the most reliable approach because:
-    - Every payment (regardless of age/migration stage) posts a debit to
-      the clearing account via the journal entry.
-    - Every settlement voucher posts a credit to the same account.
-    - InvoicePayment records are incomplete for historical data (pre-IP era),
-      so using IP totals under-counts by the missing records.
+    Settlement vouchers credit the bank account directly and do NOT
+    post a credit to the clearing account in the GL.  Therefore the
+    JE balance approach over-counts by the full settled amount.
+    Using SBT rows is correct:
+    - 'invoice_payment' / 'in'  rows accumulate every payment received.
+    - 'voucher' / 'out'         rows record each bank settlement.
     """
-    clearing_sb_obj = db.session.get(SafeBox, safe_box_id)
-    clearing_acct_id = getattr(clearing_sb_obj, 'account_id', None)
-    if not clearing_acct_id:
-        return 0.0
-
-    debits = (
-        db.session.query(func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0))
-        .filter(JournalEntryLine.account_id == clearing_acct_id)
+    ip_in = (
+        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'invoice_payment',
+            SafeBoxTransaction.direction == 'in',
+        )
         .scalar()
     ) or 0.0
 
-    credits = (
-        db.session.query(func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0))
-        .filter(JournalEntryLine.account_id == clearing_acct_id)
+    voucher_out = (
+        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'voucher',
+            SafeBoxTransaction.direction == 'out',
+        )
         .scalar()
     ) or 0.0
 
-    return round(float(debits) - float(credits), 2)
+    return round(float(ip_in) - float(voucher_out), 2)
 
 
 def _create_clearing_settlement_voucher(
