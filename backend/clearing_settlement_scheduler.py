@@ -389,12 +389,31 @@ class ClearingSettlementScheduler:
                     cutoff_date = today - timedelta(days=max(cutoff_days, 0))
                     cutoff_dt = datetime.combine(cutoff_date, time.max)
 
-                    due = self._compute_due_amount(pm.default_safe_box_id, cutoff_dt)
-                    gross_amount = round(max(0.0, due.due_amount), 2)
+                    # Check if there are unsettled IPs (SettlementLine-aware)
+                    unsettled_ip_ids = self._get_unsettled_ip_ids_up_to(pm.default_safe_box_id, cutoff_dt)
+                    if not unsettled_ip_ids:
+                        _skip(f'no_unsettled_ips:cutoff={cutoff_dt.date().isoformat()}')
+                        continue
+
+                    # Compute total unsettled amount from those IPs
+                    _ip_rows = (
+                        db.session.query(
+                            InvoicePayment.id,
+                            InvoicePayment.amount,
+                            func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                        )
+                        .outerjoin(SettlementLine, SettlementLine.invoice_payment_id == InvoicePayment.id)
+                        .filter(InvoicePayment.id.in_(unsettled_ip_ids))
+                        .group_by(InvoicePayment.id)
+                        .all()
+                    )
+                    gross_amount = round(sum(
+                        max(0.0, float(r[1]) - float(r[2])) for r in _ip_rows
+                    ), 2)
 
                     # Nothing due
                     if gross_amount < 0.01:
-                        _skip(f'due_amount_zero:payments={due.payments_up_to_cutoff:.2f},settled={due.settled_total:.2f},cutoff={cutoff_dt.date().isoformat()}')
+                        _skip(f'due_amount_zero_sl:cutoff={cutoff_dt.date().isoformat()}')
                         continue
 
                     # فحص الحد الأدنى للتسوية
@@ -498,31 +517,35 @@ class ClearingSettlementScheduler:
                     # ================================================================
                     # تسوية يومية (days): يوم بيوم عند التأخير
                     # ================================================================
-                    # تحديد الأيام المستحقة: من آخر تسوية حتى cutoff_date
-                    last_settled = self._last_settlement_date_for_safe_box(clearing_sb.id)
-
-                    # أقدم يوم به دفعات لم تُسوَّ
-                    first_payment_date = (
-                        db.session.query(func.min(func.date(SafeBoxTransaction.created_at)))
-                        .filter(
-                            SafeBoxTransaction.safe_box_id == clearing_sb.id,
-                            SafeBoxTransaction.ref_type == 'invoice_payment',
+                    # نبدأ من أقدم عملية غير مسوّاة (بدل last_settlement + 1)
+                    # هذا يضمن التقاط العمليات القديمة التي لم تشملها تسويات سابقة
+                    _unsettled_sub = (
+                        db.session.query(
+                            InvoicePayment.id,
+                            InvoicePayment.created_at,
                         )
-                        .scalar()
+                        .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+                        .outerjoin(SettlementLine, SettlementLine.invoice_payment_id == InvoicePayment.id)
+                        .filter(PaymentMethod.default_safe_box_id == clearing_sb.id)
+                        .group_by(InvoicePayment.id)
+                        .having(
+                            InvoicePayment.amount - func.coalesce(func.sum(SettlementLine.amount_settled), 0.0) > 0.005
+                        )
+                        .subquery()
+                    )
+                    oldest_unsettled_ip = (
+                        db.session.query(func.min(_unsettled_sub.c.created_at)).scalar()
                     )
 
-                    if last_settled:
-                        # ابدأ من اليوم التالي لآخر تسوية
-                        range_start = last_settled + timedelta(days=1)
-                    elif first_payment_date:
-                        if isinstance(first_payment_date, str):
-                            range_start = date.fromisoformat(first_payment_date)
-                        elif isinstance(first_payment_date, datetime):
-                            range_start = first_payment_date.date()
+                    if oldest_unsettled_ip:
+                        if isinstance(oldest_unsettled_ip, datetime):
+                            range_start = oldest_unsettled_ip.date()
+                        elif isinstance(oldest_unsettled_ip, str):
+                            range_start = date.fromisoformat(oldest_unsettled_ip[:10])
                         else:
-                            range_start = first_payment_date
+                            range_start = oldest_unsettled_ip
                     else:
-                        range_start = cutoff_date
+                        range_start = cutoff_date + timedelta(days=1)  # nothing unsettled
 
                     # لا نسوي أيام بعد cutoff_date
                     if range_start > cutoff_date:
