@@ -4897,6 +4897,7 @@ class ApiService {
     String? notes,
     String? description,
     String? createdBy,
+    List<int>? invoicePaymentIds,
   }) async {
     final payload = <String, dynamic>{
       'clearing_safe_box_id': clearingSafeBoxId,
@@ -4910,6 +4911,7 @@ class ApiService {
       if (notes != null) 'notes': notes,
       if (description != null) 'description': description,
       if (createdBy != null) 'created_by': createdBy,
+      if (invoicePaymentIds != null) 'invoice_payment_ids': invoicePaymentIds,
     };
 
     final response = await _authedPost(

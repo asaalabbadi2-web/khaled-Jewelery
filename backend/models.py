@@ -2721,6 +2721,41 @@ class InvoicePayment(db.Model):
         return f'<InvoicePayment Invoice#{self.invoice_id} - {self.amount} via {self.payment_method_id}>'
 
 
+class SettlementLine(db.Model):
+    """Per-transaction clearing settlement link.
+
+    Each row ties one InvoicePayment to the Voucher that settled it,
+    recording the exact amount settled and the commission deducted.
+    Partial settlements are supported (amount_settled < IP.amount).
+    """
+    __tablename__ = 'settlement_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    voucher_id = db.Column(db.Integer, db.ForeignKey('voucher.id', ondelete='CASCADE'), nullable=False, index=True)
+    invoice_payment_id = db.Column(db.Integer, db.ForeignKey('invoice_payment.id', ondelete='CASCADE'), nullable=False, index=True)
+    amount_settled = db.Column(db.Float, nullable=False)
+    commission = db.Column(db.Float, default=0.0)
+    commission_vat = db.Column(db.Float, default=0.0)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    voucher = db.relationship('Voucher', backref=db.backref('settlement_lines', lazy='dynamic'))
+    invoice_payment = db.relationship('InvoicePayment', backref=db.backref('settlement_lines', lazy='dynamic'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'voucher_id': self.voucher_id,
+            'invoice_payment_id': self.invoice_payment_id,
+            'amount_settled': self.amount_settled,
+            'commission': self.commission,
+            'commission_vat': self.commission_vat,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<SettlementLine V#{self.voucher_id} IP#{self.invoice_payment_id} {self.amount_settled}>'
+
+
 class SafeBoxTransaction(db.Model):
     """Ledger movements for SafeBox (رقابة الخزينة).
 

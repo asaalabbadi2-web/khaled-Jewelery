@@ -58,6 +58,7 @@ from models import (
     Category,
     AuditLog,
     SupplierGoldTransaction,
+    SettlementLine,
 )
 from utils import normalize_number
 try:
@@ -28507,6 +28508,7 @@ def _create_clearing_settlement_voucher(
     description_override=None,
     notes=None,
     ensure_unique_reference: bool = False,
+    invoice_payment_ids=None,
 ):
     """Core implementation for clearing settlement.
 
@@ -28786,6 +28788,25 @@ def _create_clearing_settlement_voucher(
     if commission_vat_account:
         commission_vat_account.update_balance(cash_amount=fee_vat)
 
+    # --- Per-transaction settlement lines ---
+    # If the caller provided specific invoice_payment_ids, link them to this
+    # voucher.  Commission is split proportionally across the selected IPs.
+    if invoice_payment_ids:
+        ip_rows = InvoicePayment.query.filter(
+            InvoicePayment.id.in_(invoice_payment_ids)
+        ).all()
+        ip_total = sum(float(ip.amount or 0) for ip in ip_rows) or 1.0
+        for ip in ip_rows:
+            ip_amt = float(ip.amount or 0)
+            ratio = ip_amt / ip_total
+            db.session.add(SettlementLine(
+                voucher_id=voucher.id,
+                invoice_payment_id=ip.id,
+                amount_settled=round(ip_amt, 2),
+                commission=round(fee_amount * ratio, 2),
+                commission_vat=round(fee_vat * ratio, 2),
+            ))
+
     return {
         'success': True,
         'voucher': voucher.to_dict(),
@@ -28855,6 +28876,7 @@ def create_clearing_settlement():
             fee_account_id=data.get('fee_account_id'),
             description_override=description_override,
             notes=(data.get('notes') or ''),
+            invoice_payment_ids=data.get('invoice_payment_ids'),
         )
         db.session.commit()
         return jsonify(result), 201
@@ -29248,21 +29270,24 @@ def get_pending_settlement_transactions():
     # ----------------------------------------------------------------
     # Determine which invoice-payment transactions are still pending.
     #
-    # Two settlement modes exist:
-    #   1. per_transaction – each voucher is tagged with per_tx:ip_{id}
-    #   2. bulk           – one voucher covers many payments (no per-tx tag)
-    #
-    # Strategy: use a hybrid approach.
-    #   a) Identify individually-settled payment IDs via per_tx notes.
-    #   b) Compute the aggregate settled total (same as _compute_clearing_due_amount).
-    #   c) Walk the remaining (non-per-tx-settled) payments oldest-first,
-    #      consuming the bulk-settled total in FIFO order.
-    #   d) Whatever is left after the bulk total is exhausted is truly pending.
+    # Priority: SettlementLine (explicit per-tx links) → fallback to
+    # newest-first due_amount walk for legacy bulk settlements.
     # ----------------------------------------------------------------
 
-    # (a) Per-tx settled IDs — read from Voucher.notes directly, not SBT notes,
-    # to avoid dependency on SBT safe_box_id which may be wrong for historical data.
-    settled_ip_ids = set()
+    # Check if SettlementLine table has any rows for this safe box's IPs.
+    all_ip_ids = [ip.id for ip in all_ips]
+    explicitly_settled_ip_ids = set()
+    try:
+        if all_ip_ids:
+            sl_q = (
+                db.session.query(SettlementLine.invoice_payment_id)
+                .filter(SettlementLine.invoice_payment_id.in_(all_ip_ids))
+            )
+            explicitly_settled_ip_ids = {row[0] for row in sl_q.all()}
+    except Exception:
+        pass
+
+    # Also check legacy per_tx notes on Voucher (forward compat / transition).
     try:
         clearing_account_id = getattr(clearing_sb, 'account_id', None)
         per_tx_q = (
@@ -29280,46 +29305,21 @@ def get_pending_settlement_transactions():
         for (note_val,) in per_tx_q.distinct().all():
             if note_val and 'per_tx:ip_' in note_val:
                 try:
-                    settled_ip_ids.add(int(note_val.split('per_tx:ip_')[1].split()[0]))
+                    explicitly_settled_ip_ids.add(int(note_val.split('per_tx:ip_')[1].split()[0]))
                 except Exception:
                     pass
     except Exception:
         pass
 
-    # (b) Aggregate settled total — use SBT voucher-out rows for this clearing safe.
-    # This is consistent with _compute_clearing_due_amount and correctly captures
-    # historical settlements that pre-date VoucherAccountLine (e.g. ADJUSTMENT vouchers
-    # that have a JE but no voucher record in the voucher table).
-    aggregate_settled = 0.0
-    try:
-        agg = (
-            db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-            .filter(
-                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
-                SafeBoxTransaction.ref_type == 'voucher',
-                SafeBoxTransaction.direction == 'out',
-            )
-            .scalar()
-        )
-        aggregate_settled = float(agg or 0.0)
-    except Exception:
-        pass
-
-    # (c) FIFO walk: consume bulk-settled amount across non-per-tx payments
-    remaining_bulk_settled = max(aggregate_settled, 0.0)
+    # Collect pending payments: newest-first from due_amount.
+    due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
+    remaining_due = max(due_amount, 0.0)
+    non_settled_ips = [ip for ip in all_ips if ip.id not in explicitly_settled_ip_ids]
     pending = []
-    for ip in all_ips:
-        ip_id = ip.id
-        # Skip individually-settled
-        if ip_id in settled_ip_ids:
-            remaining_bulk_settled -= round(float(ip.amount or 0.0), 2)
-            continue
+    for ip in reversed(non_settled_ips):  # newest first
+        if remaining_due <= 0.005:
+            break
         ip_amount = round(float(ip.amount or 0.0), 2)
-        # If bulk-settled total still covers this payment, skip it
-        if remaining_bulk_settled >= ip_amount - 0.005:
-            remaining_bulk_settled -= ip_amount
-            continue
-        # Partially or fully pending
         invoice_number = None
         invoice_id = ip.invoice_id
         if invoice_id:
@@ -29337,9 +29337,9 @@ def get_pending_settlement_transactions():
             'amount': ip_amount,
             'date': ip.created_at.isoformat() if ip.created_at else None,
         })
-
-    # Compute aggregate due_amount for bulk settlement cap
-    due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
+        remaining_due -= ip_amount
+    # Display oldest-first among pending
+    pending.reverse()
 
     # tx_count_for_fee: number of pending (unsettled) payments — used for
     # fixed-per-transaction commission calculation in bulk settlement mode.

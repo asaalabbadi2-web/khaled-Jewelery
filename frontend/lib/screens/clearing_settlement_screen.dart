@@ -940,6 +940,13 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     setState(() => _submitting = true);
 
     try {
+      // Collect IP IDs from pending transactions to create per-tx settlement links
+      final ipIds = _pendingTransactions
+          .map((tx) => tx['invoice_payment_id'] as int?)
+          .where((id) => id != null)
+          .cast<int>()
+          .toList();
+
       final res = await _api.createClearingSettlement(
         clearingSafeBoxId: clearingId,
         bankSafeBoxId: bankId,
@@ -956,6 +963,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
         description: _descriptionController.text.trim().isEmpty
             ? null
             : _descriptionController.text.trim(),
+        invoicePaymentIds: ipIds.isNotEmpty ? ipIds : null,
       );
 
       final voucher = res['voucher'];
