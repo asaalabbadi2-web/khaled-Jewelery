@@ -52,6 +52,34 @@ class ClearingSettlementScheduler:
             pass
         return fallback
 
+    def _compute_sbt_based_due(self, safe_box_id: int) -> float:
+        """Compute total due for a clearing safe box using SBT-based accounting.
+
+        due = sum(IP.amount via PM routing) - sum(SBT voucher_out for this safe box)
+
+        This mirrors _compute_clearing_due_amount() in routes.py and is more
+        reliable than SettlementLine-only approach when legacy settlements exist
+        (SBT records without matching SettlementLine entries).
+        """
+        ip_in = (
+            db.session.query(func.coalesce(func.sum(InvoicePayment.amount), 0.0))
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(PaymentMethod.default_safe_box_id == safe_box_id)
+            .scalar()
+        ) or 0.0
+
+        voucher_out = (
+            db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(
+                SafeBoxTransaction.safe_box_id == safe_box_id,
+                SafeBoxTransaction.ref_type == 'voucher',
+                SafeBoxTransaction.direction == 'out',
+            )
+            .scalar()
+        ) or 0.0
+
+        return round(float(ip_in) - float(voucher_out), 2)
+
     def _compute_due_amount(self, safe_box_id: int, cutoff_dt: datetime) -> _DueAmounts:
         # Sum invoice payments up to cutoff
         payments_signed = func.coalesce(
@@ -460,6 +488,14 @@ class ClearingSettlementScheduler:
                         if gross_amount < 0.01:
                             _skip('gross_after_cap_zero')
                             continue
+                        # Cap to SBT-based due to avoid exceeds_due_amount errors
+                        # caused by SettlementLine vs SBT accounting discrepancies
+                        sbt_due = self._compute_sbt_based_due(clearing_sb.id)
+                        if gross_amount > sbt_due + 0.01:
+                            gross_amount = round(min(gross_amount, max(sbt_due, 0.0)), 2)
+                        if gross_amount < 0.01:
+                            _skip('gross_after_sbt_cap_zero')
+                            continue
 
                         reference_number = f"AUTO-PM-{pm.id}-W-{today.isoformat()}"
 
@@ -563,11 +599,19 @@ class ClearingSettlementScheduler:
                         _skip('no_due_days')
                         continue
 
-                    # محاولة التسوية لكل يوم (cap بالرصيد المتاح)
+                    # محاولة التسوية لكل يوم (cap بالرصيد المتاح وبالمستحق الفعلي)
                     running_balance = clearing_balance
+                    # Track SBT-based remaining due to prevent exceeds_due_amount errors.
+                    # SettlementLine may be missing legacy settlement records that only
+                    # exist as SBT voucher_out rows, causing _compute_due_for_day to
+                    # overestimate the day amount vs what _create_clearing_settlement_voucher allows.
+                    running_sbt_due = self._compute_sbt_based_due(clearing_sb.id)
                     days_settled = 0
 
                     for settle_day in due_days:
+                        if running_sbt_due < 0.01:
+                            break  # nothing left to settle per SBT accounting
+
                         day_start = datetime.combine(settle_day, time.min)
                         day_end = datetime.combine(settle_day, time.max)
 
@@ -584,6 +628,13 @@ class ClearingSettlementScheduler:
                             day_amount = round(running_balance, 2)
                         if day_amount < 0.01:
                             break  # الرصيد نفد
+
+                        # Cap to SBT-based remaining due (handles legacy settlements
+                        # missing from SettlementLine, preventing exceeds_due_amount)
+                        if day_amount > running_sbt_due + 0.01:
+                            day_amount = round(min(day_amount, running_sbt_due), 2)
+                        if day_amount < 0.01:
+                            break
 
                         reference_number = f"AUTO-PM-{pm.id}-{settle_day.isoformat()}"
 
@@ -626,6 +677,7 @@ class ClearingSettlementScheduler:
 
                             db.session.commit()
                             running_balance -= day_amount
+                            running_sbt_due -= day_amount
                             days_settled += 1
                             result['settled_count'] += 1
                             print(
