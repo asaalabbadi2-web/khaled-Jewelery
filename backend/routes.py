@@ -2328,6 +2328,36 @@ def update_settings():
     # re-query safely after commit (avoiding DetachedInstanceError).
     settings_id = settings.id
 
+    # ── Bulk-post existing unposted voucher JEs when auto-post is enabled ──
+    # When the user switches voucher_auto_post or auto_post_entries to True,
+    # retroactively post all voucher-sourced JEs that were created unposted.
+    _bulk_posted_count = 0
+    try:
+        _want_auto_post = (
+            bool(getattr(settings, 'voucher_auto_post', False))
+            or bool(getattr(settings, 'auto_post_entries', False))
+        )
+        if _want_auto_post:
+            _unposted_voucher_jes = (
+                JournalEntry.query
+                .filter(
+                    JournalEntry.reference_type.in_(['voucher', 'invoice']),
+                    func.coalesce(JournalEntry.is_posted, False) == False,
+                )
+                .all()
+            )
+            _now = datetime.now()
+            for _uje in _unposted_voucher_jes:
+                _uje.is_posted = True
+                _uje.is_draft = False
+                if not _uje.posted_at:
+                    _uje.posted_at = _now
+                if not _uje.posted_by:
+                    _uje.posted_by = 'system'
+                _bulk_posted_count += 1
+    except Exception as _bp_err:
+        print(f'[Settings] Bulk-post existing JEs warning: {_bp_err}')
+
     try:
         db.session.commit()
     except Exception as commit_err:
@@ -24486,6 +24516,29 @@ def create_journal_entry_from_voucher(voucher):
             db.session.add(journal_line)
         
         db.session.flush()
+
+        # ── Auto-post: honour the voucher_auto_post / auto_post_entries setting ──
+        # Callers like approve_voucher() may also set is_posted explicitly, but
+        # all the programmatic voucher-creation sites (clearing settlement,
+        # BNPL settlement, safe transfer, payroll, karat correction, etc.) rely
+        # on this function alone. Without the check below, those JEs are created
+        # as unposted (is_posted=False / NULL) and never appear in reports that
+        # filter on is_posted.
+        try:
+            _post_settings = Settings.query.first()
+            _should_auto_post = False
+            if _post_settings:
+                _should_auto_post = (
+                    bool(getattr(_post_settings, 'voucher_auto_post', False))
+                    or bool(getattr(_post_settings, 'auto_post_entries', False))
+                )
+            if _should_auto_post and not journal_entry.is_posted:
+                journal_entry.is_posted = True
+                journal_entry.is_draft = False
+                journal_entry.posted_at = datetime.now()
+                journal_entry.posted_by = voucher.created_by or 'system'
+        except Exception:
+            pass
         
         return journal_entry
         
