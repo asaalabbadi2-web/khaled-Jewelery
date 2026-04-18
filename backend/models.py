@@ -374,6 +374,10 @@ class PaymentMethod(db.Model):
     settlement_schedule_type = db.Column(db.String(20), default='days', nullable=False)
     settlement_weekday = db.Column(db.Integer, nullable=True)
 
+    # عدد أيام تأخير الإيداع بعد يوم التسوية (للجدولة الأسبوعية)
+    # مثال: التسوية السبت (weekday=5) + تأخير 4 أيام = إيداع الأربعاء
+    deposit_delay_days = db.Column(db.Integer, default=0, nullable=False)
+
     # الخزينة البنكية المستهدفة للتسوية التلقائية
     settlement_bank_safe_box_id = db.Column(
         db.Integer,
@@ -454,6 +458,7 @@ class PaymentMethod(db.Model):
             'auto_settlement_enabled': bool(getattr(self, 'auto_settlement_enabled', False)),
             'settlement_schedule_type': getattr(self, 'settlement_schedule_type', 'days') or 'days',
             'settlement_weekday': getattr(self, 'settlement_weekday', None),
+            'deposit_delay_days': int(getattr(self, 'deposit_delay_days', 0) or 0),
             'settlement_bank_safe_box_id': getattr(self, 'settlement_bank_safe_box_id', None),
             'fee_expense_account_id': getattr(self, 'fee_expense_account_id', None),
             'min_settlement_amount': float(getattr(self, 'min_settlement_amount', 0.0) or 0.0),

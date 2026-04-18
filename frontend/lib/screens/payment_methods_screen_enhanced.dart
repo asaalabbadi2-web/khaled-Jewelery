@@ -843,6 +843,17 @@ class _PaymentMethodsScreenEnhancedState
       settlementWeekday = null;
     }
 
+    int depositDelayDays = 0;
+    try {
+      final raw = editingMethod?['deposit_delay_days'];
+      depositDelayDays = raw is int ? raw : int.tryParse(raw?.toString() ?? '0') ?? 0;
+    } catch (_) {
+      depositDelayDays = 0;
+    }
+    final depositDelayController = TextEditingController(
+      text: depositDelayDays.toString(),
+    );
+
     int? settlementBankSafeBoxId;
     try {
       final raw = editingMethod?['settlement_bank_safe_box_id'];
@@ -1283,6 +1294,34 @@ class _PaymentMethodsScreenEnhancedState
                                   return 'مطلوب';
                                 }
                                 return null;
+                              },
+                            ),
+
+                          if (settlementScheduleType == 'weekday')
+                            const SizedBox(height: 12),
+
+                          // حقل تأخير الإيداع (يظهر فقط للجدولة الأسبوعية)
+                          if (settlementScheduleType == 'weekday')
+                            TextFormField(
+                              controller: depositDelayController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: 'أيام تأخير الإيداع بعد التسوية',
+                                hintText: 'مثال: 4 = الإيداع بعد 4 أيام من يوم التسوية',
+                                prefixIcon: Icon(Icons.schedule_send, color: _infoColor),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                                fillColor: Colors.white,
+                              ),
+                              validator: (value) {
+                                final v = int.tryParse(value ?? '0') ?? 0;
+                                if (v < 0 || v > 6) return 'يجب أن تكون بين 0 و 6';
+                                return null;
+                              },
+                              onChanged: (value) {
+                                depositDelayDays = int.tryParse(value) ?? 0;
                               },
                             ),
 
@@ -1867,6 +1906,7 @@ class _PaymentMethodsScreenEnhancedState
                         feeExpenseAccountId: feeExpenseAccountId,
                         minSettlementAmount: minSettlementAmount,
                         settlementMode: selectedSettlementMode,
+                        depositDelayDays: depositDelayDays,
                         isActive: isActive,
                         applicableInvoiceTypes: invoiceTypeList,
                       );
@@ -1887,6 +1927,7 @@ class _PaymentMethodsScreenEnhancedState
                         feeExpenseAccountId: feeExpenseAccountId,
                         minSettlementAmount: minSettlementAmount,
                         settlementMode: selectedSettlementMode,
+                        depositDelayDays: depositDelayDays,
                         isActive: isActive,
                         defaultSafeBoxId: selectedDefaultSafeBoxId,
                         applicableInvoiceTypes: invoiceTypeList,

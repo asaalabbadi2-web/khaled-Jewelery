@@ -406,11 +406,20 @@ class ClearingSettlementScheduler:
                         if configured_weekday < 0 or configured_weekday > 6:
                             _skip(f'weekday_out_of_range:{configured_weekday}')
                             continue
-                        if configured_weekday != weekday:
-                            _skip(f'not_scheduled_today:configured={configured_weekday},today={weekday}')
+
+                        # عدد أيام تأخير الإيداع بعد يوم التسوية
+                        deposit_delay = int(getattr(pm, 'deposit_delay_days', 0) or 0)
+                        if deposit_delay < 0:
+                            deposit_delay = 0
+
+                        # يوم التنفيذ الفعلي = (يوم التسوية + أيام التأخير) % 7
+                        execution_weekday = (configured_weekday + deposit_delay) % 7
+                        if execution_weekday != weekday:
+                            _skip(f'not_scheduled_today:execution={execution_weekday},today={weekday}')
                             continue
-                        # Default weekly: settle up to yesterday (or more if settlement_days>0)
-                        cutoff_days = max(cutoff_days, 1)
+
+                        # cutoff = اليوم - أيام التأخير (= يوم التسوية الأصلي)
+                        cutoff_days = max(int(pm.settlement_days or 0), 1) + deposit_delay
                     else:
                         schedule_type = 'days'
 

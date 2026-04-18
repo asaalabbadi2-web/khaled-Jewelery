@@ -3369,6 +3369,7 @@ class ApiService {
     int? feeExpenseAccountId,
     double minSettlementAmount = 0.0,
     String settlementMode = 'bulk',
+    int depositDelayDays = 0,
     bool isActive = true,
     List<String>? applicableInvoiceTypes,
   }) async {
@@ -3385,6 +3386,7 @@ class ApiService {
       'settlement_bank_safe_box_id': settlementBankSafeBoxId,
       'min_settlement_amount': minSettlementAmount,
       'settlement_mode': settlementMode,
+      'deposit_delay_days': depositDelayDays,
       'is_active': isActive,
     };
     if (defaultSafeBoxId != null) {
@@ -3429,6 +3431,7 @@ class ApiService {
     int? feeExpenseAccountId,
     double minSettlementAmount = 0.0,
     String settlementMode = 'bulk',
+    int depositDelayDays = 0,
     required bool isActive,
     int? defaultSafeBoxId,
     List<String>? applicableInvoiceTypes,
@@ -3466,6 +3469,7 @@ class ApiService {
     payload['fee_expense_account_id'] = feeExpenseAccountId;
     payload['min_settlement_amount'] = minSettlementAmount;
     payload['settlement_mode'] = settlementMode;
+    payload['deposit_delay_days'] = depositDelayDays;
 
     if (applicableInvoiceTypes != null && applicableInvoiceTypes.isNotEmpty) {
       payload['applicable_invoice_types'] = applicableInvoiceTypes;

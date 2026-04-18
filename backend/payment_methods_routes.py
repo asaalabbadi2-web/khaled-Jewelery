@@ -722,6 +722,16 @@ def create_payment_method():
         if settlement_mode not in ('bulk', 'per_transaction'):
             settlement_mode = 'bulk'
 
+        # عدد أيام تأخير الإيداع (للجدولة الأسبوعية)
+        try:
+            deposit_delay_days = int(data.get('deposit_delay_days') or 0)
+        except (ValueError, TypeError):
+            deposit_delay_days = 0
+        if deposit_delay_days < 0:
+            deposit_delay_days = 0
+        if deposit_delay_days > 6:
+            return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 6'}), 400
+
         # إنشاء وسيلة الدفع
         try:
             payment_method = PaymentMethod(
@@ -738,6 +748,7 @@ def create_payment_method():
                 fee_expense_account_id=fee_expense_account_id,
                 min_settlement_amount=min_settlement_amount,
                 settlement_mode=settlement_mode,
+                deposit_delay_days=deposit_delay_days,
                 is_active=data.get('is_active', True),
                 applicable_invoice_types=applicable_invoice_types,
                 default_safe_box_id=default_safe_box_id  # اختياري
@@ -969,6 +980,16 @@ def update_payment_method(id):
             mode = str(data.get('settlement_mode') or 'bulk').strip().lower()
             if mode in ('bulk', 'per_transaction'):
                 payment_method.settlement_mode = mode
+        if 'deposit_delay_days' in data:
+            try:
+                ddv = int(data.get('deposit_delay_days') or 0)
+            except (ValueError, TypeError):
+                ddv = 0
+            if ddv < 0:
+                ddv = 0
+            if ddv > 6:
+                return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 6'}), 400
+            payment_method.deposit_delay_days = ddv
 
         db.session.commit()
         

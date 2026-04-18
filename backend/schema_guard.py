@@ -573,3 +573,23 @@ def ensure_journal_line_dimension_columns(engine: Engine) -> None:
         return
 
     _log_added(columns_added)
+
+
+def ensure_payment_method_columns(engine: Engine) -> None:
+    """Ensure newer payment_method columns exist for legacy databases."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "payment_method",
+                [
+                    ("deposit_delay_days", "INTEGER", "0"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)
