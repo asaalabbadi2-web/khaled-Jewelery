@@ -220,6 +220,10 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
       ? (editingAccount['tracks_weight'] == true)
       : (parentAccount != null ? parentAccount['tracks_weight'] == true : false);
 
+    bool includeInGramProfit = isEditing
+      ? (editingAccount['include_in_gram_profit'] == true)
+      : false;
+
     final accountNumberController = TextEditingController();
     bool isSuggestingNumber = false;
 
@@ -426,6 +430,16 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                                 : 'يتبع الأب: لا يتتبع الوزن',
                           ),
                         ),
+                      const SizedBox(height: 4),
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        value: includeInGramProfit,
+                        title: const Text('يدخل في تقرير ربح الجرام'),
+                        subtitle: const Text(
+                          'تفعيل = يُحسب ضمن الربح الوزني (إيراد أو مصروف)',
+                        ),
+                        onChanged: (v) => setState(() => includeInGramProfit = v),
+                      ),
                     ],
                   ),
                 ),
@@ -477,6 +491,7 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                       'account_number': finalAccountNumber,
                       'type': type,
                       'parent_id': parentId,
+                      'include_in_gram_profit': includeInGramProfit,
                     };
 
                     if (parentId != null) {

@@ -16556,6 +16556,7 @@ def add_account():
         account_number_external=data.get('account_number_external'),
         account_type=data.get('account_type'),
         tracks_weight=bool(desired_tracks_weight),
+        include_in_gram_profit=bool(data.get('include_in_gram_profit', False)),
     )
     db.session.add(new_account)
     db.session.flush()
@@ -16606,6 +16607,8 @@ def update_account(id):
         account.account_number_external = data['account_number_external']
     if 'account_type' in data:
         account.account_type = data['account_type']
+    if 'include_in_gram_profit' in data:
+        account.include_in_gram_profit = bool(data['include_in_gram_profit'])
     
     # Enforce dual-chart convention by numbering.
     is_memo_account = str(account.account_number or '').startswith('7')
@@ -31319,32 +31322,21 @@ def get_income_statement():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 📊  تقرير ربح الجرام (طريقة صناعة الذهب)
+# 📊  تقرير ربح الجرام (طريقة طبقية)
 #
-#  الربح = (متوسط سعر بيع الجرام - متوسط سعر شراء الجرام) × الوزن المباع
-#          - أجور مصنعية
+#  الطبقة ① ربح المتاجرة = (متوسط بيع/جم − متوسط شراء/جم) × الوزن المباع
+#  الطبقة ② إيرادات إضافية (وزنية + نقدية) من حسابات مفعّل عليها العلم
+#  الطبقة ③ مصاريف وزنية مباشرة من حسابات مفعّل عليها العلم
+#  الطبقة ④ مصاريف نقدية محوّلة لوزن من حسابات مفعّل عليها العلم
 #
-#  المشتريات لا تُطرح مباشرة — تُستخدم فقط لحساب متوسط سعر الشراء.
+#  صافي الربح الوزني = ① + ② − ③ − ④
 # ══════════════════════════════════════════════════════════════════════════════
 
 @api.route('/reports/gram_profit', methods=['GET'])
 @require_permission('reports.financial')
 def get_gram_profit_report():
     """
-    تقرير ربح الجرام الذهبي.
-
-    الفترة: start_date / end_date (YYYY-MM-DD) — المطلوبان.
-    يُرجع:
-        weight_sold          الوزن المباع (جم مكافئ 21)
-        weight_purchased     الوزن المشترى (جم مكافئ 21)
-        avg_sell_per_gram    متوسط سعر بيع الجرام (ر.س)
-        avg_buy_per_gram     متوسط سعر شراء الجرام (ر.س)
-        margin_per_gram      فارق الجرام = avg_sell - avg_buy
-        gross_profit         الربح الإجمالي = margin × weight_sold
-        manufacturing_wages  أجور مصنعية الفترة
-        net_profit           صافي الربح = gross_profit - manufacturing_wages
-        total_sales_cash     إجمالي المبيعات النقدية
-        total_purchases_cash إجمالي المشتريات النقدية
+    تقرير ربح الجرام الذهبي — آلية طبقية.
     """
     try:
         start_date_str = request.args.get('start_date')
@@ -31359,22 +31351,14 @@ def get_gram_profit_report():
         main_karat = get_main_karat()  # 21 عادةً
 
         def _to_main(weight, karat):
-            """تحويل الوزن لعيار رئيسي."""
             try:
                 return float(weight or 0.0) * float(karat) / float(main_karat)
             except Exception:
                 return 0.0
 
         def _inv_weight_in_main_karat(inv):
-            """حساب وزن الفاتورة بالعيار الرئيسي.
-
-            1. karat_lines — كل سطر له عيار ووزن خام → نحوّله
-            2. items — كل صنف له عيار ووزن → نحوّله
-            3. fallback: total_weight (خام، يُفترض عيار رئيسي)
-            """
+            """حساب وزن الفاتورة بالعيار الرئيسي."""
             total = 0.0
-
-            # أولاً: karat_lines (V2 invoices)
             kl = getattr(inv, 'karat_lines', None) or []
             if kl:
                 for line in kl:
@@ -31384,11 +31368,6 @@ def get_gram_profit_report():
                         total += w * k / main_karat
                 if total > 0:
                     return total
-
-            # ثانياً: items — نستخدم snapshot الوزن والعيار من InvoiceItem أولاً
-            # (الكتالوج قد يتغير بعد إنشاء الفاتورة)
-            # ملاحظة: weight في InvoiceItem = الوزن الكلي للسطر (وليس لكل قطعة)
-            # لذلك لا نضرب في qty
             inv_items = getattr(inv, 'items', None) or []
             if inv_items:
                 for ii in inv_items:
@@ -31397,26 +31376,29 @@ def get_gram_profit_report():
                     if w > 0 and k > 0:
                         total += w * k / main_karat
                     else:
-                        # fallback: كتالوج الأصناف — weight_in_main_karat هو لقطعة واحدة
                         item_obj = getattr(ii, 'item', None)
                         if item_obj:
                             total += float(item_obj.weight_in_main_karat() or 0)
                 if total > 0:
                     return total
-
-            # fallback: total_weight كما هو (يُفترض معادل رئيسي)
             return float(inv.total_weight or 0.0)
 
-        # ── المبيعات: فواتير البيع المرحّلة ──────────────────────────────────
+        _inv_eager = (
+            joinedload(Invoice.karat_lines),
+            joinedload(Invoice.items).joinedload(InvoiceItem.item),
+        )
+
+        # ══════════════════════════════════════════════════════════════════
+        # الطبقة ① — ربح المتاجرة (من الفواتير فقط)
+        # ══════════════════════════════════════════════════════════════════
+
+        # ── المبيعات ──
         sell_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type.in_(['بيع', 'sell']))
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
-            .options(
-                joinedload(Invoice.karat_lines),
-                joinedload(Invoice.items).joinedload(InvoiceItem.item),
-            )
+            .options(*_inv_eager)
             .all()
         )
         sell_return_invoices = (
@@ -31424,20 +31406,15 @@ def get_gram_profit_report():
             .filter(Invoice.invoice_type.in_(['مرتجع بيع']))
             .filter(Invoice.date >= start_dt, Invoice.date < end_dt)
             .filter(func.coalesce(Invoice.is_posted, False) == True)
-            .options(
-                joinedload(Invoice.karat_lines),
-                joinedload(Invoice.items).joinedload(InvoiceItem.item),
-            )
+            .options(*_inv_eager)
             .all()
         )
 
         total_sales_cash = 0.0
         total_weight_sold = 0.0
-
         for inv in sell_invoices:
             total_sales_cash += float(inv.total or 0.0)
             total_weight_sold += _inv_weight_in_main_karat(inv)
-
         for inv in sell_return_invoices:
             total_sales_cash -= float(inv.total or 0.0)
             total_weight_sold -= _inv_weight_in_main_karat(inv)
@@ -31446,12 +31423,7 @@ def get_gram_profit_report():
             total_sales_cash / total_weight_sold if total_weight_sold > 0 else 0.0
         )
 
-        # ── مشتريات العملاء (شراء من عميل): أساس حساب سعر الشراء/جرام ────────
-        _inv_eager = (
-            joinedload(Invoice.karat_lines),
-            joinedload(Invoice.items).joinedload(InvoiceItem.item),
-        )
-
+        # ── المشتريات (لحساب avg_buy) ──
         customer_buy_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type == 'شراء من عميل')
@@ -31460,7 +31432,6 @@ def get_gram_profit_report():
             .options(*_inv_eager)
             .all()
         )
-        # مرتجعات الشراء من العملاء
         customer_buy_returns = (
             Invoice.query
             .filter(Invoice.invoice_type == 'مرتجع شراء')
@@ -31469,8 +31440,6 @@ def get_gram_profit_report():
             .options(*_inv_eager)
             .all()
         )
-
-        # مشتريات التسكير (مكاتب تسكير): نقد مقابل ذهب — تدخل في حساب معدل الشراء/جرام
         settlement_buy_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type.in_(['شراء', 'buy']))
@@ -31480,8 +31449,6 @@ def get_gram_profit_report():
             .options(*_inv_eager)
             .all()
         )
-
-        # مشتريات الموردين (ذهب مقابل ذهب): لا تدخل في حساب فارق الجرام
         supplier_buy_invoices = (
             Invoice.query
             .filter(Invoice.invoice_type.in_(['شراء', 'buy']))
@@ -31503,25 +31470,21 @@ def get_gram_profit_report():
             .all()
         )
 
-        total_purchases_cash = 0.0       # شراء من عميل
+        total_purchases_cash = 0.0
         total_weight_purchased = 0.0
-
         for inv in customer_buy_invoices:
             total_purchases_cash += float(inv.total or 0.0)
             total_weight_purchased += _inv_weight_in_main_karat(inv)
-
         for inv in customer_buy_returns:
             total_purchases_cash -= float(inv.total or 0.0)
             total_weight_purchased -= _inv_weight_in_main_karat(inv)
 
-        # إضافة مشتريات التسكير (نقد مقابل ذهب)
         settlement_purchases_cash = 0.0
         settlement_weight_purchased = 0.0
         for inv in settlement_buy_invoices:
             settlement_purchases_cash += float(inv.total or 0.0)
             settlement_weight_purchased += _inv_weight_in_main_karat(inv)
 
-        # مشتريات الموردين (ذهب مقابل ذهب) — للعرض فقط
         supplier_purchases_cash = 0.0
         supplier_weight_purchased = 0.0
         for inv in supplier_buy_invoices:
@@ -31531,111 +31494,178 @@ def get_gram_profit_report():
             supplier_purchases_cash -= float(inv.total or 0.0)
             supplier_weight_purchased -= _inv_weight_in_main_karat(inv)
 
-        # معدل الشراء = (عملاء + تسكير) ÷ وزنهما
         cash_for_gold_purchases = total_purchases_cash + settlement_purchases_cash
         cash_for_gold_weight = total_weight_purchased + settlement_weight_purchased
-
         total_all_purchases_cash = cash_for_gold_purchases + supplier_purchases_cash
         total_all_weight_purchased = cash_for_gold_weight + supplier_weight_purchased
 
+        # متوسط الشراء يشمل جميع المصادر (عملاء + موردين + تسويات)
         avg_buy_per_gram = (
-            cash_for_gold_purchases / cash_for_gold_weight
-            if cash_for_gold_weight > 0
-            else 0.0
+            total_all_purchases_cash / total_all_weight_purchased
+            if total_all_weight_purchased > 0 else 0.0
         )
 
-        # ── أجور المصنعية ────────────────────────────────────────────────────
-        manufacturing_wage_acc_id = (
-            get_account_id_for_mapping('بيع', 'manufacturing_wage')
-            or _ensure_manufacturing_wage_expense_account()
-            or get_account_id_by_number('51')
+        margin_per_gram = avg_sell_per_gram - avg_buy_per_gram
+        trading_profit_cash = margin_per_gram * total_weight_sold
+        trading_profit_weight = (
+            trading_profit_cash / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
         )
 
-        manufacturing_wages = 0.0
-        if manufacturing_wage_acc_id:
-            wage_rows = (
-                db.session.query(
-                    func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0),
-                    func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0),
-                )
+        # ══════════════════════════════════════════════════════════════════
+        # الطبقات ② ③ ④ — من القيود اليومية على حسابات include_in_gram_profit
+        # ══════════════════════════════════════════════════════════════════
+
+        flagged_accounts = (
+            Account.query
+            .filter(Account.include_in_gram_profit == True)
+            .all()
+        )
+
+        revenue_account_ids = set()
+        expense_account_ids = set()
+        for acc in flagged_accounts:
+            num = str(acc.account_number or '')
+            if num.startswith('4'):
+                revenue_account_ids.add(acc.id)
+            elif num.startswith('5') or num.startswith('6'):
+                expense_account_ids.add(acc.id)
+
+        all_flagged_ids = revenue_account_ids | expense_account_ids
+
+        # جلب جميع سطور القيود على هذه الحسابات في الفترة
+        flagged_lines = []
+        if all_flagged_ids:
+            flagged_lines = (
+                db.session.query(JournalEntryLine)
                 .join(JournalEntry)
-                .filter(JournalEntryLine.account_id == manufacturing_wage_acc_id)
+                .filter(JournalEntryLine.account_id.in_(all_flagged_ids))
                 .filter(JournalEntry.date >= start_dt, JournalEntry.date < end_dt)
                 .filter(func.coalesce(JournalEntry.is_posted, False) == True)
                 .filter(func.coalesce(JournalEntry.is_deleted, False) == False)
                 .filter(func.coalesce(JournalEntryLine.is_deleted, False) == False)
-                .first()
+                .all()
             )
-            if wage_rows:
-                manufacturing_wages = float(wage_rows[0] or 0.0) - float(wage_rows[1] or 0.0)
 
-        # ── المصاريف التشغيلية الأخرى (5xxx و6xxx عدا أجور المصنعية) ──────
-        expense_accounts = db.session.query(Account).filter(
-            or_(
-                Account.account_number.like('5%'),
-                Account.account_number.like('6%'),
-            ),
-            ~Account.account_number.like('7%'),
-        ).all()
-        expense_ids = {acc.id for acc in expense_accounts}
+        # بناء خريطة account_id → Account object
+        acc_map = {acc.id: acc for acc in flagged_accounts}
 
-        all_expense_lines = (
-            db.session.query(JournalEntryLine)
-            .join(JournalEntry)
-            .filter(JournalEntryLine.account_id.in_(expense_ids))
-            .filter(JournalEntry.date >= start_dt, JournalEntry.date < end_dt)
-            .filter(func.coalesce(JournalEntry.is_posted, False) == True)
-            .filter(func.coalesce(JournalEntry.is_deleted, False) == False)
-            .filter(func.coalesce(JournalEntryLine.is_deleted, False) == False)
-            .all()
+        # ── الطبقة ② — إيرادات إضافية ──
+        extra_revenue_weight = 0.0      # إيرادات وزنية مباشرة (جم 21)
+        extra_revenue_cash = 0.0        # إيرادات نقدية (ر.س)
+        extra_revenue_details = []
+
+        # ── الطبقة ③ — مصاريف وزنية مباشرة ──
+        expense_weight_direct = 0.0     # مصاريف وزنية (جم 21)
+        expense_weight_details = []
+
+        # ── الطبقة ④ — مصاريف نقدية ──
+        expense_cash_total = 0.0        # مصاريف نقدية (ر.س)
+        expense_cash_details = []
+
+        for line in flagged_lines:
+            acc_id = line.account_id
+            acc = acc_map.get(acc_id)
+            if not acc:
+                continue
+            acc_num = str(acc.account_number or '')
+            acc_name = acc.name or ''
+
+            # حساب الوزن المباشر (21k) — طريقة الذهب
+            w_debit = float(getattr(line, 'debit_21k', 0) or 0)
+            w_credit = float(getattr(line, 'credit_21k', 0) or 0)
+
+            # حساب النقد
+            c_debit = float(line.cash_debit or 0)
+            c_credit = float(line.cash_credit or 0)
+
+            if acc_id in revenue_account_ids:
+                # إيرادات: credit = زيادة
+                weight_net = w_credit - w_debit
+                cash_net = c_credit - c_debit
+
+                if abs(weight_net) > 0.0001:
+                    extra_revenue_weight += weight_net
+                    extra_revenue_details.append({
+                        'account_number': acc_num,
+                        'account_name': acc_name,
+                        'type': 'weight',
+                        'weight_grams': round(weight_net, 6),
+                    })
+                if abs(cash_net) > 0.01:
+                    extra_revenue_cash += cash_net
+                    extra_revenue_details.append({
+                        'account_number': acc_num,
+                        'account_name': acc_name,
+                        'type': 'cash',
+                        'cash_amount': round(cash_net, 2),
+                    })
+
+            elif acc_id in expense_account_ids:
+                # مصاريف: debit = زيادة
+                weight_net = w_debit - w_credit
+                cash_net = c_debit - c_credit
+
+                if abs(weight_net) > 0.0001:
+                    expense_weight_direct += weight_net
+                    expense_weight_details.append({
+                        'account_number': acc_num,
+                        'account_name': acc_name,
+                        'type': 'weight',
+                        'weight_grams': round(weight_net, 6),
+                    })
+                if abs(cash_net) > 0.01:
+                    expense_cash_total += cash_net
+                    expense_cash_details.append({
+                        'account_number': acc_num,
+                        'account_name': acc_name,
+                        'type': 'cash',
+                        'cash_amount': round(cash_net, 2),
+                    })
+
+        # تحويل الإيراد النقدي إلى وزن
+        extra_revenue_cash_as_weight = (
+            extra_revenue_cash / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
+        )
+        # تحويل المصروف النقدي إلى وزن
+        expense_cash_as_weight = (
+            expense_cash_total / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
         )
 
-        expenses_by_acc: dict = {}
-        for line in all_expense_lines:
-            expenses_by_acc[line.account_id] = (
-                expenses_by_acc.get(line.account_id, 0.0)
-                + float(line.cash_debit or 0.0)
-                - float(line.cash_credit or 0.0)
-            )
+        # إجمالي الطبقة ② (وزني + نقدي محوّل)
+        total_extra_revenue_weight = extra_revenue_weight + extra_revenue_cash_as_weight
+        # إجمالي الطبقة ③
+        total_expense_weight_direct = expense_weight_direct
+        # إجمالي الطبقة ④ (محوّل لوزن)
+        total_expense_cash_weight = expense_cash_as_weight
 
-        cost_prefixes = ('50', '52')
-        other_expenses = 0.0     # مصاريف تشغيلية غير الأجور وغير COGS
-        cogs_total = 0.0
+        # ══════════════════════════════════════════════════════════════════
+        # النتيجة النهائية
+        # ══════════════════════════════════════════════════════════════════
 
-        acc_id_to_num = {acc.id: (acc.account_number or '') for acc in expense_accounts}
-        for acc_id, amount in expenses_by_acc.items():
-            if acc_id == manufacturing_wage_acc_id:
-                continue  # أُحسبت بالفعل
-            num = acc_id_to_num.get(acc_id, '')
-            if any(num.startswith(p) for p in cost_prefixes):
-                cogs_total += amount
-            else:
-                other_expenses += amount
+        gross_profit = trading_profit_cash
+        gross_profit_weight = trading_profit_weight
 
-        total_operating_expenses = manufacturing_wages + other_expenses
+        net_profit_weight = (
+            trading_profit_weight           # ① ربح المتاجرة
+            + total_extra_revenue_weight    # ② إيرادات إضافية
+            - total_expense_weight_direct   # ③ مصاريف وزنية
+            - total_expense_cash_weight     # ④ مصاريف نقدية (محوّلة)
+        )
 
-        # ── حساب الربح ───────────────────────────────────────────────────────
-        # ربح الجرام = فارق سعر البيع والشراء (عملاء فقط) × الكمية المباعة
-        # المصاريف العامة (إيجار، رواتب...) لا تدخل — مكانها قائمة الدخل
-        margin_per_gram = avg_sell_per_gram - avg_buy_per_gram
-        gross_profit = margin_per_gram * total_weight_sold
-        profit_after_wages = gross_profit - manufacturing_wages
-        net_profit = profit_after_wages  # صافي ربح الجرام = الإجمالي − أجور المصنعية فقط
-
-        # الوزن المعادل للأرباح = الربح النقدي ÷ معدل سعر شراء الجرام
-        # (كم جراماً يمكن شراؤه بهذا الربح)
-        net_profit_weight = net_profit / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
-        profit_after_wages_weight = profit_after_wages / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
-        gross_profit_weight = gross_profit / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
+        # ربح نقدي معادل (للعرض)
+        net_profit_cash = net_profit_weight * avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
 
         net_margin_pct = (
-            (net_profit / total_sales_cash * 100) if total_sales_cash > 0 else 0.0
+            (net_profit_cash / total_sales_cash * 100) if total_sales_cash > 0 else 0.0
         )
 
         return jsonify({
             'start_date': start_date_str,
             'end_date': end_date_str,
             'report_type': 'gram_profit',
+            'main_karat': main_karat,
+
+            # الطبقة ① — ربح المتاجرة
             'weight_sold': round(total_weight_sold, 3),
             'weight_purchased': round(total_all_weight_purchased, 3),
             'weight_purchased_customer': round(total_weight_purchased, 3),
@@ -31643,16 +31673,8 @@ def get_gram_profit_report():
             'avg_sell_per_gram': round(avg_sell_per_gram, 2),
             'avg_buy_per_gram': round(avg_buy_per_gram, 2),
             'margin_per_gram': round(margin_per_gram, 2),
-            'gross_profit': round(gross_profit, 2),
-            'gross_profit_weight': round(gross_profit_weight, 3),
-            'manufacturing_wages': round(manufacturing_wages, 2),
-            'other_expenses': round(other_expenses, 2),
-            'total_operating_expenses': round(total_operating_expenses, 2),
-            'profit_after_wages': round(profit_after_wages, 2),
-            'profit_after_wages_weight': round(profit_after_wages_weight, 3),
-            'net_profit': round(net_profit, 2),
-            'net_profit_weight': round(net_profit_weight, 3),
-            'net_margin_pct': round(net_margin_pct, 2),
+            'trading_profit_cash': round(trading_profit_cash, 2),
+            'trading_profit_weight': round(trading_profit_weight, 3),
             'total_sales_cash': round(total_sales_cash, 2),
             'total_purchases_cash': round(total_all_purchases_cash, 2),
             'customer_purchases_cash': round(total_purchases_cash, 2),
@@ -31660,7 +31682,36 @@ def get_gram_profit_report():
             'settlement_weight_purchased': round(settlement_weight_purchased, 3),
             'supplier_purchases_cash': round(supplier_purchases_cash, 2),
             'supplier_weight_purchased': round(supplier_weight_purchased, 3),
-            'main_karat': main_karat,
+
+            # الطبقة ② — إيرادات إضافية
+            'extra_revenue_weight': round(extra_revenue_weight, 3),
+            'extra_revenue_cash': round(extra_revenue_cash, 2),
+            'extra_revenue_cash_as_weight': round(extra_revenue_cash_as_weight, 3),
+            'total_extra_revenue_weight': round(total_extra_revenue_weight, 3),
+            'extra_revenue_details': extra_revenue_details,
+
+            # الطبقة ③ — مصاريف وزنية مباشرة
+            'expense_weight_direct': round(total_expense_weight_direct, 3),
+            'expense_weight_details': expense_weight_details,
+
+            # الطبقة ④ — مصاريف نقدية (محوّلة)
+            'expense_cash_total': round(expense_cash_total, 2),
+            'expense_cash_as_weight': round(total_expense_cash_weight, 3),
+            'expense_cash_details': expense_cash_details,
+
+            # النتيجة النهائية
+            'gross_profit': round(gross_profit, 2),
+            'gross_profit_weight': round(gross_profit_weight, 3),
+            'net_profit': round(net_profit_cash, 2),
+            'net_profit_weight': round(net_profit_weight, 3),
+            'net_margin_pct': round(net_margin_pct, 2),
+
+            # حقول توافقية (backward compat)
+            'manufacturing_wages': round(expense_cash_total, 2),
+            'other_expenses': 0.0,
+            'total_operating_expenses': round(expense_cash_total + expense_weight_direct * avg_buy_per_gram, 2),
+            'profit_after_wages': round(net_profit_cash, 2),
+            'profit_after_wages_weight': round(net_profit_weight, 3),
         }), 200
 
     except Exception as e:

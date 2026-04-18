@@ -593,3 +593,23 @@ def ensure_payment_method_columns(engine: Engine) -> None:
         return
 
     _log_added(columns_added)
+
+
+def ensure_account_columns(engine: Engine) -> None:
+    """Ensure newer account columns exist for legacy databases."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "account",
+                [
+                    ("include_in_gram_profit", "BOOLEAN", "0"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)

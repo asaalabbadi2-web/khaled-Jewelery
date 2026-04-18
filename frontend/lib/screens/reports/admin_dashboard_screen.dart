@@ -2538,6 +2538,39 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  Widget _layerChip({
+    required String label,
+    required double value,
+    required bool isPositive,
+    required ThemeData theme,
+  }) {
+    final color = isPositive
+        ? (value >= 0 ? const Color(0xFF1B9E4B) : Colors.red.shade600)
+        : Colors.red.shade600;
+    final sign = isPositive ? '+' : '−';
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: _s(9),
+            color: theme.hintColor,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        SizedBox(height: _s(2)),
+        Text(
+          '$sign${_formatWeight(value.abs())}',
+          style: TextStyle(
+            fontSize: _s(11),
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // 3b. GRAM PROFIT KPI  (follows time range)
   // ══════════════════════════════════════════════════════════════════════════
@@ -2570,6 +2603,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final marginPerGram = gd('margin_per_gram');
     final netMarginPct = gd('net_margin_pct');
     final weightSold = gd('weight_sold');
+    final tradingProfitWeight = gd('trading_profit_weight');
+    final extraRevenueWeight = gd('total_extra_revenue_weight');
+    final expenseWeightDirect = gd('expense_weight_direct');
+    final expenseCashWeight = gd('expense_cash_as_weight');
+    final totalExpensesWeight = expenseWeightDirect + expenseCashWeight;
     final mainKarat = g['main_karat']?.toString() ?? '21';
     final isProfit = netProfitWeight >= 0;
 
@@ -2760,6 +2798,53 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
             ],
           ),
+
+          // ── Layer breakdown row ──────────────────────────────
+          if (tradingProfitWeight.abs() > 0.001 || extraRevenueWeight.abs() > 0.001 || totalExpensesWeight.abs() > 0.001) ...[
+            SizedBox(height: _s(12)),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: _s(10), vertical: _s(8)),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(_s(10)),
+                border: Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.10),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _layerChip(
+                      label: isArabic ? 'متاجرة' : 'Trading',
+                      value: tradingProfitWeight,
+                      isPositive: true,
+                      theme: theme,
+                    ),
+                  ),
+                  if (extraRevenueWeight.abs() > 0.001) ...[
+                    SizedBox(width: _s(4)),
+                    Expanded(
+                      child: _layerChip(
+                        label: isArabic ? 'إيرادات' : 'Revenue',
+                        value: extraRevenueWeight,
+                        isPositive: true,
+                        theme: theme,
+                      ),
+                    ),
+                  ],
+                  SizedBox(width: _s(4)),
+                  Expanded(
+                    child: _layerChip(
+                      label: isArabic ? 'مصاريف' : 'Expenses',
+                      value: totalExpensesWeight,
+                      isPositive: false,
+                      theme: theme,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

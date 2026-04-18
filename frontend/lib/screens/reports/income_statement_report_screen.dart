@@ -695,22 +695,20 @@ class _IncomeStatementReportScreenState
     final avgSell         = val('avg_sell_per_gram');
     final avgBuy          = val('avg_buy_per_gram');
     final marginPerGram   = val('margin_per_gram');
-    final grossProfit     = val('gross_profit');
-    final grossProfitWeight = val('gross_profit_weight');
-    final wages           = val('manufacturing_wages');
-    final otherExpenses   = val('other_expenses');
-    final profitAfterWages = val('profit_after_wages');
-    final profitAfterWagesWeight = val('profit_after_wages_weight');
+    final tradingProfitCash   = val('trading_profit_cash');
+    final tradingProfitWeight = val('trading_profit_weight');
+    final extraRevWDirect = val('extra_revenue_weight');
+    final extraRevCash    = val('extra_revenue_cash');
+    final extraRevCashW   = val('extra_revenue_cash_as_weight');
+    final expWeightDirect = val('expense_weight_direct');
+    final expCashTotal    = val('expense_cash_total');
+    final expCashWeight   = val('expense_cash_as_weight');
     final netProfit       = val('net_profit');
     final netProfitWeight = val('net_profit_weight');
     final netMarginPct    = val('net_margin_pct');
     final totalSales      = val('total_sales_cash');
-    final customerPurchases = val('customer_purchases_cash');
-    final supplierPurchases = val('supplier_purchases_cash');
-    final supplierWeight  = val('supplier_weight_purchased');
-    final customerWeight  = val('weight_purchased_customer');
     final mainKarat       = g['main_karat']?.toString() ?? '21';
-    final isProfit        = netProfit >= 0;
+    final isProfit        = netProfitWeight >= 0;
 
     final profitColor = isProfit ? Colors.green.shade600 : Colors.red.shade600;
     final profitBg = isProfit
@@ -793,17 +791,29 @@ class _IncomeStatementReportScreenState
               child: Column(
                 children: [
                   Text(
-                    isArabic ? 'صافي الربح الفعلي' : 'Net Profit',
+                    isArabic ? 'صافي الربح الوزني' : 'Net Weight Profit',
                     style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    _formatCurrency(netProfit),
-                    style: TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.bold,
-                      color: profitColor,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.scale, size: 22, color: profitColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${netProfitWeight.toStringAsFixed(3)} ${isArabic ? "جم" : "g"}',
+                        style: TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.bold,
+                          color: profitColor,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        isArabic ? '(عيار $mainKarat)' : '(K$mainKarat)',
+                        style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
                   Container(
@@ -812,25 +822,13 @@ class _IncomeStatementReportScreenState
                       color: profitColor.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.scale, size: 16, color: profitColor),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${netProfitWeight.toStringAsFixed(3)} ${isArabic ? "جم" : "g"}',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: profitColor,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          isArabic ? '(عيار $mainKarat)' : '(K$mainKarat)',
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                        ),
-                      ],
+                    child: Text(
+                      '≈ ${_formatCurrency(netProfit)}',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: profitColor,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -932,32 +930,50 @@ class _IncomeStatementReportScreenState
                 children: [
                   _ProfitStep(
                     label: isArabic
-                        ? 'إجمالي الربح (فارق × وزن مباع)'
-                        : 'Gross Profit (margin × sold)',
-                    value: grossProfit,
-                    weightEquiv: grossProfitWeight,
+                        ? '① ربح المتاجرة (فارق × وزن مباع)'
+                        : '① Trading Profit (margin × sold)',
+                    value: tradingProfitCash,
+                    weightEquiv: tradingProfitWeight,
                     isFirst: true,
                     isSubtract: false,
                     isDark: isDark,
                   ),
                   _ProfitStep(
-                    label: isArabic ? 'أجور مصنعية' : 'Manufacturing Wages',
-                    value: wages,
-                    isSubtract: true,
-                    isDark: isDark,
-                  ),
-                  _ProfitStep(
-                    label: isArabic ? 'بعد الأجور' : 'After Wages',
-                    value: profitAfterWages,
-                    weightEquiv: profitAfterWagesWeight,
-                    isSubtotalRow: true,
+                    label: isArabic ? '② إيرادات وزنية مباشرة' : '② Weight Revenue (direct)',
+                    value: extraRevWDirect * avgBuy,
+                    weightEquiv: extraRevWDirect,
                     isSubtract: false,
                     isDark: isDark,
                   ),
+                  if (extraRevCash.abs() > 0.01)
+                    _ProfitStep(
+                      label: isArabic ? '② إيرادات نقدية (محوّلة)' : '② Cash Revenue (converted)',
+                      value: extraRevCash,
+                      weightEquiv: extraRevCashW,
+                      isSubtract: false,
+                      isDark: isDark,
+                    ),
                   _ProfitStep(
-                    label: isArabic ? 'مصاريف تشغيلية أخرى' : 'Other Operating Expenses',
-                    value: otherExpenses,
+                    label: isArabic ? '③ مصاريف وزنية مباشرة' : '③ Weight Expenses (direct)',
+                    value: expWeightDirect * avgBuy,
+                    weightEquiv: expWeightDirect,
                     isSubtract: true,
+                    isDark: isDark,
+                  ),
+                  _ProfitStep(
+                    label: isArabic ? '④ مصاريف نقدية (محوّلة)' : '④ Cash Expenses (converted)',
+                    value: expCashTotal,
+                    weightEquiv: expCashWeight,
+                    isSubtract: true,
+                    isDark: isDark,
+                  ),
+                  const Divider(height: 8),
+                  _ProfitStep(
+                    label: isArabic ? 'صافي الربح الوزني' : 'Net Weight Profit',
+                    value: netProfit,
+                    weightEquiv: netProfitWeight,
+                    isSubtotalRow: true,
+                    isSubtract: false,
                     isDark: isDark,
                   ),
                 ],
@@ -981,8 +997,8 @@ class _IncomeStatementReportScreenState
                   Expanded(
                     child: Text(
                       isArabic
-                          ? 'معدل الشراء = (${_formatCurrency(customerPurchases)} عملاء + ${_formatCurrency(supplierPurchases)} تسكير) ÷ (${customerWeight.toStringAsFixed(2)} + ${supplierWeight.toStringAsFixed(2)} جم)'
-                          : 'Avg buy = (${_formatCurrency(customerPurchases)} cust. + ${_formatCurrency(supplierPurchases)} clearing) ÷ (${customerWeight.toStringAsFixed(2)} + ${supplierWeight.toStringAsFixed(2)} g)',
+                          ? 'الربح الوزني = ربح المتاجرة + إيرادات إضافية − مصاريف وزنية − مصاريف نقدية. الحسابات المشاركة تُحدد من شجرة الحسابات (علم "يدخل في ربح الجرام").'
+                          : 'Weight profit = Trading + Extra Revenue − Weight Expenses − Cash Expenses. Participating accounts are flagged in the Chart of Accounts.',
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                     ),
                   ),
