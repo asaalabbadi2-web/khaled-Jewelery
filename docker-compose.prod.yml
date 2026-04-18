@@ -2,6 +2,7 @@ services:
   db:
     image: postgres:16
     container_name: yasargold-db
+    restart: unless-stopped
     env_file: .env.production
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-yasargold}
@@ -20,6 +21,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: yasargold-backend
+    restart: unless-stopped
     env_file: .env.production
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://yasargold:change_me@db:5432/yasargold}
@@ -47,6 +49,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: yasargold-scheduler
+    restart: unless-stopped
     env_file: .env.production
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://yasargold:change_me@db:5432/yasargold}
@@ -73,6 +76,7 @@ services:
         API_BASE_URL: /api
         GOOGLE_WEB_CLIENT_ID: ${GOOGLE_WEB_CLIENT_ID:-}
     container_name: yasargold-nginx
+    restart: unless-stopped
     env_file: .env.production
     ports:
       - "80:80"

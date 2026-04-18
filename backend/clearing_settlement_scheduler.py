@@ -875,9 +875,12 @@ class ClearingSettlementScheduler:
         return settled_count
 
     def setup_schedule(self):
-        # Run once per day at 04:10.
-        self._scheduler.every().day.at('04:10').do(self.process_due_settlements)
-        print('[ClearingSettlementScheduler] ✓ Auto settlement scheduled daily at 04:10')
+        # Run every 2 hours so settlements happen throughout the day,
+        # not just once at 04:10.  The process_due_settlements() method
+        # is idempotent (duplicate_reference guard + SettlementLine tracking),
+        # so running more often is safe.
+        self._scheduler.every(2).hours.do(self.process_due_settlements)
+        print('[ClearingSettlementScheduler] ✓ Auto settlement scheduled every 2 hours')
 
     def start(self):
         if self.is_running:
@@ -888,6 +891,13 @@ class ClearingSettlementScheduler:
         self.is_running = True
 
         def run_scheduler():
+            # Run once immediately on startup so we don't wait 2 hours
+            # after a container restart / deployment.
+            try:
+                self.process_due_settlements()
+            except Exception as exc:
+                print(f'[ClearingSettlementScheduler] ⚠ initial run failed: {exc}')
+
             while self.is_running:
                 self._scheduler.run_pending()
                 # Check every minute
