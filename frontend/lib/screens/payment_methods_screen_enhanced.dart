@@ -1300,14 +1300,16 @@ class _PaymentMethodsScreenEnhancedState
                           if (settlementScheduleType == 'weekday')
                             const SizedBox(height: 12),
 
-                          // حقل تأخير الإيداع (يظهر فقط للجدولة الأسبوعية)
-                          if (settlementScheduleType == 'weekday')
+                          // حقل تأخير الإيداع (يظهر لكلا نمطي الجدولة)
+                          if (autoSettlementEnabled)
                             TextFormField(
                               controller: depositDelayController,
                               keyboardType: TextInputType.number,
                               decoration: InputDecoration(
                                 labelText: 'أيام تأخير الإيداع بعد التسوية',
-                                hintText: 'مثال: 4 = الإيداع بعد 4 أيام من يوم التسوية',
+                                hintText: settlementScheduleType == 'weekday'
+                                    ? 'مثال: 4 = الإيداع بعد 4 أيام من يوم التسوية'
+                                    : 'مثال: 3 = الإيداع بعد 3 أيام إضافية من موعد التسوية',
                                 prefixIcon: Icon(Icons.schedule_send, color: _infoColor),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
@@ -1317,7 +1319,7 @@ class _PaymentMethodsScreenEnhancedState
                               ),
                               validator: (value) {
                                 final v = int.tryParse(value ?? '0') ?? 0;
-                                if (v < 0 || v > 6) return 'يجب أن تكون بين 0 و 6';
+                                if (v < 0 || v > 30) return 'يجب أن تكون بين 0 و 30';
                                 return null;
                               },
                               onChanged: (value) {
@@ -1325,7 +1327,7 @@ class _PaymentMethodsScreenEnhancedState
                               },
                             ),
 
-                          if (settlementScheduleType == 'weekday')
+                          if (autoSettlementEnabled)
                             const SizedBox(height: 12),
 
                           Builder(

@@ -422,6 +422,10 @@ class ClearingSettlementScheduler:
                         cutoff_days = max(int(pm.settlement_days or 0), 1) + deposit_delay
                     else:
                         schedule_type = 'days'
+                        # تأخير الإيداع لنمط الأيام: cutoff يرجع للخلف بأيام التأخير
+                        deposit_delay = int(getattr(pm, 'deposit_delay_days', 0) or 0)
+                        if deposit_delay > 0:
+                            cutoff_days = cutoff_days + deposit_delay
 
                     cutoff_date = today - timedelta(days=max(cutoff_days, 0))
                     cutoff_dt = datetime.combine(cutoff_date, time.max)

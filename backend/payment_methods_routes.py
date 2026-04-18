@@ -729,8 +729,8 @@ def create_payment_method():
             deposit_delay_days = 0
         if deposit_delay_days < 0:
             deposit_delay_days = 0
-        if deposit_delay_days > 6:
-            return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 6'}), 400
+        if deposit_delay_days > 30:
+            return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 30'}), 400
 
         # إنشاء وسيلة الدفع
         try:
@@ -987,8 +987,8 @@ def update_payment_method(id):
                 ddv = 0
             if ddv < 0:
                 ddv = 0
-            if ddv > 6:
-                return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 6'}), 400
+            if ddv > 30:
+                return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 30'}), 400
             payment_method.deposit_delay_days = ddv
 
         db.session.commit()
