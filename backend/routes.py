@@ -31513,13 +31513,31 @@ def get_gram_profit_report():
 
         # ══════════════════════════════════════════════════════════════════
         # الطبقات ② ③ ④ — من القيود اليومية على حسابات include_in_gram_profit
+        # (مع وراثة: تفعيل الأب يشمل جميع أبنائه تلقائياً)
         # ══════════════════════════════════════════════════════════════════
 
-        flagged_accounts = (
+        directly_flagged = (
             Account.query
             .filter(Account.include_in_gram_profit == True)
             .all()
         )
+
+        # جمع الأبناء لكل حساب مُفعّل (بحث تكراري)
+        flagged_ids = {acc.id for acc in directly_flagged}
+        def _collect_descendants(parent_ids):
+            if not parent_ids:
+                return
+            children = Account.query.filter(Account.parent_id.in_(parent_ids)).all()
+            new_ids = set()
+            for ch in children:
+                if ch.id not in flagged_ids:
+                    flagged_ids.add(ch.id)
+                    new_ids.add(ch.id)
+            _collect_descendants(new_ids)
+
+        _collect_descendants(flagged_ids.copy())
+
+        flagged_accounts = Account.query.filter(Account.id.in_(flagged_ids)).all() if flagged_ids else []
 
         revenue_account_ids = set()
         expense_account_ids = set()
