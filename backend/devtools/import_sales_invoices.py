@@ -889,7 +889,9 @@ def _build_invoice_payload(
     for ln in lines:
         qty = ln.quantity if ln.quantity > 0 else 1
         total_w = max(0.0, float(ln.total_weight or 0.0))
-        weight_per_item = round(total_w / qty, 6) if (total_w > 0 and qty > 0) else 0.0
+        # Backend treats 'weight' as total line weight (NOT per-item).
+        # Do NOT divide by qty — send total_w directly.
+        weight_per_item = total_w
 
         raw_line_total = float(ln.line_total or 0.0)
         raw_line_net = float(ln.line_net or 0.0)
@@ -923,7 +925,7 @@ def _build_invoice_payload(
 
         price_per_item = round((line_total / qty), 2) if (qty > 0 and line_total > 0) else 0.0
         tax_per_item = round((line_tax / qty), 2) if (qty > 0 and line_tax > 0) else 0.0
-        wage_per_item = round(float(ln.wage_per_gram or 0.0) * weight_per_item, 2) if weight_per_item > 0 else 0.0
+        wage_per_item = round(float(ln.wage_per_gram or 0.0) * total_w, 2) if total_w > 0 else 0.0
 
         item_payload: Dict[str, Any] = {
             "karat": ln.karat if ln.karat > 0 else 21,
