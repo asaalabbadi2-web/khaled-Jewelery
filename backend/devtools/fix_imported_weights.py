@@ -50,8 +50,7 @@ def main():
     start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
     end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
 
-    from app import create_app  # type: ignore
-    app = create_app()
+    from app import app  # type: ignore
 
     with app.app_context():
         from models import (  # type: ignore
@@ -88,6 +87,7 @@ def main():
             'je_lines_fixed': 0,
             'sbt_fixed': 0,
         }
+        correction_by_karat = defaultdict(float)  # karat -> +grams
 
         affected_account_ids = set()
 
@@ -119,6 +119,7 @@ def main():
                     correction = new_w - old_w
                     stats['weight_correction_grams'] += correction
                     stats['items_fixed'] += 1
+                    correction_by_karat[karat_key] += correction
 
                     print(f"  ITEM {it.id}: {it.name} k{karat_key} qty={qty}")
                     print(f"    weight: {old_w}g -> {new_w}g (+{round(correction, 3)}g)")
@@ -150,7 +151,9 @@ def main():
                 inv.total_weight = new_total_weight
 
             # --- Fix JournalEntryLine gold weights ---
-            je = JournalEntry.query.filter_by(invoice_id=inv.id).first()
+            je = JournalEntry.query.filter_by(
+                reference_type='invoice', reference_id=inv.id
+            ).filter(JournalEntry.is_deleted == False).first()
             if je:
                 fixed = _fix_je_lines(je, old_gold_by_karat, new_gold_by_karat,
                                        args.apply, affected_account_ids)
@@ -220,6 +223,10 @@ def main():
         print(f"  Invoices affected:        {stats['invoices_fixed']}")
         print(f"  InvoiceItems fixed:       {stats['items_fixed']}")
         print(f"  Weight correction:        +{round(stats['weight_correction_grams'], 3)} grams")
+        if correction_by_karat:
+            print(f"  ── Per-karat breakdown:")
+            for k in sorted(correction_by_karat, key=lambda x: int(x)):
+                print(f"     {k}k:  +{round(correction_by_karat[k], 3)} g")
         print(f"  JE lines fixed:           {stats['je_lines_fixed']}")
         print(f"  SafeBoxTxns fixed:        {stats['sbt_fixed']}")
         if args.apply and stats['invoices_fixed'] > 0:

@@ -2097,7 +2097,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     return safeType == 'cash' ||
                         safeType == 'bank' ||
                         safeType == 'clearing' ||
-                        safeType == 'check';
+                        safeType == 'check' ||
+                        safeType == 'gold';
                   }
 
                   // Default (expenses / misc / legacy advances)

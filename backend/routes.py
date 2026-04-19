@@ -13046,6 +13046,28 @@ def add_invoice():
                 except Exception:
                     pass
 
+            # 2b) Fallback: original invoice's employee gold safe (for مرتجع شراء).
+            # The return invoice may not carry employee_id, so check original.
+            if target_gold_safe_id is None:
+                try:
+                    _orig = None
+                    _orig_id = data.get('original_invoice_id')
+                    if _orig_id:
+                        _orig = Invoice.query.get(_orig_id)
+                    orig_emp_id = getattr(_orig, 'employee_id', None) if _orig else None
+                    if orig_emp_id not in (None, '', False):
+                        try:
+                            orig_emp_id = int(orig_emp_id)
+                        except Exception:
+                            orig_emp_id = None
+                    if orig_emp_id:
+                        orig_holder = Employee.query.get(orig_emp_id)
+                        if orig_holder and getattr(orig_holder, 'gold_safe_box_id', None):
+                            target_gold_safe_id = int(orig_holder.gold_safe_box_id)
+                            print(f"\n🔍 SCRAP_RECEIPT: Using ORIGINAL invoice employee {orig_emp_id} gold safe: {target_gold_safe_id}")
+                except Exception:
+                    pass
+
             # 3) Fall back to configured main scrap safe.
             if target_gold_safe_id is None:
                 try:
@@ -31499,10 +31521,10 @@ def get_gram_profit_report():
         total_all_purchases_cash = cash_for_gold_purchases + supplier_purchases_cash
         total_all_weight_purchased = cash_for_gold_weight + supplier_weight_purchased
 
-        # متوسط الشراء يشمل جميع المصادر (عملاء + موردين + تسويات)
+        # متوسط الشراء: عملاء + تسويات فقط (بدون موردين مصنّعة)
         avg_buy_per_gram = (
-            total_all_purchases_cash / total_all_weight_purchased
-            if total_all_weight_purchased > 0 else 0.0
+            cash_for_gold_purchases / cash_for_gold_weight
+            if cash_for_gold_weight > 0 else 0.0
         )
 
         margin_per_gram = avg_sell_per_gram - avg_buy_per_gram
