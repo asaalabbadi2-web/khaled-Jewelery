@@ -951,6 +951,38 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     }
   }
 
+  /// When the party (الطرف) is a safe box, force all lines to match its type:
+  /// gold safe → all lines become gold; cash/bank safe → all lines become cash.
+  void _syncLinesAmountTypeToParty(int? partyAccountId) {
+    final safe = _findSafeByAccountId(partyAccountId);
+    if (safe == null) return;
+
+    final String targetType =
+        safe.safeType == 'gold' ? 'gold' : 'cash';
+
+    for (final line in _accountLines) {
+      if (line.amountType == targetType) continue;
+      line.amountType = targetType;
+      if (targetType == 'gold') {
+        line.ensureGoldEntries(_mainKarat.toDouble());
+        _syncGoldSummary(line);
+      } else {
+        line.goldEntries.clear();
+        line.karat = null;
+      }
+      // Switch the line's account to a matching safe
+      final existingSafe = _findSafeByAccountId(line.accountId);
+      if (existingSafe != null &&
+          !_safeMatchesAmountType(existingSafe, targetType)) {
+        final def = _defaultSafeForAmountType(
+          lineType: line.lineType,
+          amountType: targetType,
+        );
+        line.accountId = def?.accountId;
+      }
+    }
+  }
+
   Map<String, dynamic>? _findAccountById(int? accountId) {
     if (accountId == null) {
       return null;
@@ -2111,6 +2143,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 onChanged: (value) {
                   setState(() {
                     _selectedOtherAccountId = value;
+                    // Auto-switch all lines to match the party safe type
+                    _syncLinesAmountTypeToParty(value);
                   });
                 },
               ),
