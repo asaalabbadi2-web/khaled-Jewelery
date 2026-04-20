@@ -4933,14 +4933,20 @@ def add_customer():
         try:
             from sqlalchemy import func
 
+            # Search regardless of active status — reactivate if found but inactive.
             existing_cash = (
                 Customer.query
-                .filter(Customer.active == True)
                 .filter(func.trim(Customer.name) == requested_name)
-                .order_by(Customer.id.asc())
+                .order_by(
+                    # prefer active records first, then any
+                    Customer.active.desc(),
+                    Customer.id.asc(),
+                )
                 .first()
             )
             if existing_cash is not None:
+                if not existing_cash.active:
+                    existing_cash.active = True  # reactivate if it was disabled
                 ensure_accounts = _boolish(data.get('ensure_accounts'), True)
                 if ensure_accounts:
                     try:
@@ -14081,6 +14087,11 @@ def add_invoice():
                             ))
                 except Exception as _sbt_exc:
                     print(f"⚠️ SBT for sale return scrap failed: {_sbt_exc}")
+
+            # ─── ملاحظة: سندات الصرف (Voucher payment) و SBTs لمرتجع بيع ───
+            # تُنشأ تلقائياً في قسم معالجة الدفعات المشترك (أعلاه)
+            # عبر _direction_for_invoice_type('مرتجع بيع') → 'out' → voucher_type='payment'
+            # ثم _append_safe_transactions_for_voucher. لا حاجة لتكرارها هنا.
 
             # ─── إلغاء/تعديل أمر تسكير الوزن للفاتورة الأصلية ───
             _orig_inv_id = data.get('original_invoice_id')

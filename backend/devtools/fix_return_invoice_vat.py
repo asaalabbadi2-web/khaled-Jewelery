@@ -96,8 +96,8 @@ def _rebuild_balances(db, account_ids: set[int]) -> None:
             )
             .all()
         )
-        total_dr = sum((l.debit_cash or 0) for l in lines)
-        total_cr = sum((l.credit_cash or 0) for l in lines)
+        total_dr = sum((l.cash_debit or 0) for l in lines)
+        total_cr = sum((l.cash_credit or 0) for l in lines)
         acc.balance_cash = round(total_dr - total_cr, 4)
 
     db.session.flush()
@@ -177,7 +177,13 @@ def main() -> int:
         for inv in invoices:
             tax = float(inv.total_tax)
 
-            je = JournalEntry.query.filter_by(invoice_id=inv.id).first()
+            # JournalEntry links to Invoice via reference_type='invoice' + reference_id
+            je = JournalEntry.query.filter_by(
+                reference_type='invoice',
+                reference_id=inv.id,
+            ).filter(
+                JournalEntry.is_deleted.isnot(True),
+            ).first()
             if not je:
                 print(f"  ⚠️  #{inv.id} [{inv.invoice_type}] — no JE found, skipping")
                 skipped += 1
@@ -195,7 +201,7 @@ def main() -> int:
                 # find the DR sales_returns line to reduce
                 sr_line = next(
                     (l for l in lines
-                     if l.account_id == sales_returns_id and (l.debit_cash or 0) > 0),
+                     if l.account_id == sales_returns_id and (l.cash_debit or 0) > 0),
                     None,
                 )
                 if not sr_line:
@@ -208,28 +214,28 @@ def main() -> int:
                     skipped += 1
                     continue
 
-                net = round((sr_line.debit_cash or 0) - tax, 2)
+                net = round((sr_line.cash_debit or 0) - tax, 2)
                 if net < 0:
                     print(
                         f"  ⚠️  #{inv.id} مرتجع بيع — net would be negative "
-                        f"(debit={sr_line.debit_cash}, tax={tax}), skipping"
+                        f"(debit={sr_line.cash_debit}, tax={tax}), skipping"
                     )
                     skipped += 1
                     continue
 
                 print(
-                    f"  🔧 #{inv.id} مرتجع بيع  date={inv.invoice_date}  tax={tax:.2f}"
-                    f"  DR sales_returns: {sr_line.debit_cash:.2f} → {net:.2f}"
+                    f"  🔧 #{inv.id} مرتجع بيع  date={inv.date}  tax={tax:.2f}"
+                    f"  DR sales_returns: {sr_line.cash_debit:.2f} → {net:.2f}"
                     f"  + DR vat_payable: {tax:.2f}"
                 )
 
                 if not dry_run:
-                    sr_line.debit_cash = net
+                    sr_line.cash_debit = net
                     new_line = JournalEntryLine(
                         journal_entry_id=je.id,
                         account_id=vat_payable_id,
-                        debit_cash=tax,
-                        credit_cash=0,
+                        cash_debit=tax,
+                        cash_credit=0,
                         debit_weight=0,
                         credit_weight=0,
                         description="عكس ضريبة القيمة المضافة - مرتجع بيع (إصلاح)",
@@ -248,7 +254,7 @@ def main() -> int:
                 # find the CR purchase_returns line to reduce
                 pr_line = next(
                     (l for l in lines
-                     if l.account_id == purchase_returns_id and (l.credit_cash or 0) > 0),
+                     if l.account_id == purchase_returns_id and (l.cash_credit or 0) > 0),
                     None,
                 )
                 if not pr_line:
@@ -259,28 +265,28 @@ def main() -> int:
                     skipped += 1
                     continue
 
-                net = round((pr_line.credit_cash or 0) - tax, 2)
+                net = round((pr_line.cash_credit or 0) - tax, 2)
                 if net < 0:
                     print(
                         f"  ⚠️  #{inv.id} مرتجع شراء — net would be negative "
-                        f"(credit={pr_line.credit_cash}, tax={tax}), skipping"
+                        f"(credit={pr_line.cash_credit}, tax={tax}), skipping"
                     )
                     skipped += 1
                     continue
 
                 print(
-                    f"  🔧 #{inv.id} مرتجع شراء date={inv.invoice_date}  tax={tax:.2f}"
-                    f"  CR purchase_returns: {pr_line.credit_cash:.2f} → {net:.2f}"
+                    f"  🔧 #{inv.id} مرتجع شراء date={inv.date}  tax={tax:.2f}"
+                    f"  CR purchase_returns: {pr_line.cash_credit:.2f} → {net:.2f}"
                     f"  + CR vat_receivable: {tax:.2f}"
                 )
 
                 if not dry_run:
-                    pr_line.credit_cash = net
+                    pr_line.cash_credit = net
                     new_line = JournalEntryLine(
                         journal_entry_id=je.id,
                         account_id=vat_receivable_id,
-                        debit_cash=0,
-                        credit_cash=tax,
+                        cash_debit=0,
+                        cash_credit=tax,
                         debit_weight=0,
                         credit_weight=0,
                         description="عكس ضريبة القيمة المضافة - مرتجع شراء (إصلاح)",
