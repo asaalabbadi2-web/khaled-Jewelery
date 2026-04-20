@@ -81,6 +81,9 @@ class ReturnItemRow {
   double total;
   double cost;
 
+  /// إذا أدخل المستخدم مبلغاً يدوياً يُخزَّن هنا ويُلغي الحساب التلقائي
+  double? manualTotal;
+
   ReturnItemRow({
     this.originalItemId,
     this.itemId,
@@ -103,12 +106,16 @@ class ReturnItemRow {
 
   void updateWeight(double newWeight) {
     weight = newWeight.clamp(0, originalWeight);
+    // إعادة الحساب التلقائي — يُلغي المبلغ اليدوي عند تغيير الوزن
+    manualTotal = null;
     recalculateTotals();
   }
 
   void updateQuantity(int newQuantity) {
     final clamped = newQuantity.clamp(0, originalQuantity);
     quantity = clamped.toInt();
+    // إعادة الحساب التلقائي — يُلغي المبلغ اليدوي عند تغيير الكمية
+    manualTotal = null;
     recalculateTotals();
   }
 
@@ -116,7 +123,26 @@ class ReturnItemRow {
     wage = newWage;
   }
 
+  /// تعيين مبلغ يدوي — يُلغي الحساب التلقائي
+  void setManualTotal(double? value) {
+    if (value == null || value <= 0) {
+      manualTotal = null;
+      recalculateTotals(); // استرجاع الحساب التلقائي
+    } else {
+      manualTotal = value.clamp(0, originalTotal);
+      // حساب net و tax بنسبة المبلغ اليدوي من الأصلي
+      final ratio = originalTotal > 0 ? manualTotal! / originalTotal : 1.0;
+      net = double.parse((originalNet * ratio).toStringAsFixed(2));
+      tax = double.parse((originalTax * ratio).toStringAsFixed(2));
+      total = manualTotal!;
+      cost = net;
+    }
+  }
+
   void recalculateTotals() {
+    // إذا كان هناك مبلغ يدوي → لا تُطبَّق نسبة الوزن
+    if (manualTotal != null) return;
+
     final ratios = <double>[];
     if (originalWeight > 0) {
       ratios.add((weight / originalWeight).clamp(0.0, 1.0));
@@ -136,7 +162,7 @@ class ReturnItemRow {
   }
 
   Map<String, dynamic> toPayload() {
-    recalculateTotals();
+    if (manualTotal == null) recalculateTotals();
     return {
       'item_id': itemId,
       'original_invoice_item_id': originalItemId,
@@ -148,6 +174,7 @@ class ReturnItemRow {
       'cost': cost,
       'net': net,
       'tax': tax,
+      'tax_amount': tax,
       'price': total,
     };
   }
@@ -1207,6 +1234,49 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
+                      // ── حقل المبلغ اليدوي ───────────────────────────
+                      TextFormField(
+                        key: ValueKey(
+                          'manual-amount-${item.originalItemId}-$index',
+                        ),
+                        initialValue: item.manualTotal != null
+                            ? item.manualTotal!.toStringAsFixed(2)
+                            : '',
+                        decoration: InputDecoration(
+                          labelText: 'مبلغ المرتجع (يدوي)',
+                          hintText:
+                              'اتركه فارغاً للحساب التلقائي (${item.total.toStringAsFixed(2)} $currencySymbol)',
+                          helperText: item.manualTotal != null
+                              ? '⚠️ مبلغ يدوي — الحساب التلقائي مُعطَّل'
+                              : 'تلقائي: ${item.total.toStringAsFixed(2)} $currencySymbol',
+                          helperStyle: TextStyle(
+                            color: item.manualTotal != null
+                                ? Colors.orange.shade700
+                                : Colors.grey,
+                          ),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: item.manualTotal != null
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear, size: 18),
+                                  tooltip: 'إلغاء المبلغ اليدوي',
+                                  onPressed: () => setState(
+                                    () => item.setManualTotal(null),
+                                  ),
+                                )
+                              : null,
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [NormalizeNumberFormatter()],
+                        onChanged: (value) {
+                          final parsed = double.tryParse(
+                            value.replaceAll(',', '.'),
+                          );
+                          setState(() => item.setManualTotal(parsed));
+                        },
+                      ),
+                      const SizedBox(height: 12),
                       Wrap(
                         spacing: 12,
                         runSpacing: 8,
@@ -1231,8 +1301,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                           _buildItemSummaryChip(
                             icon: Icons.summarize,
                             label: 'الإجمالي',
-                            value:
-                                '${item.total.toStringAsFixed(2)} $currencySymbol',
+                            value: item.manualTotal != null
+                                ? '${item.total.toStringAsFixed(2)} $currencySymbol ✏️'
+                                : '${item.total.toStringAsFixed(2)} $currencySymbol',
                           ),
                         ],
                       ),

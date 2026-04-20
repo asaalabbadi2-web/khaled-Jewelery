@@ -13448,6 +13448,9 @@ def add_invoice():
             )
             if _total_tax_for_je < 0:
                 _total_tax_for_je = abs(_total_tax_for_je)
+            # Fallback: total_tax المحسوب من karat_lines ومخزّن في الفاتورة
+            if _total_tax_for_je == 0.0:
+                _total_tax_for_je = float(new_invoice.total_tax or 0.0)
 
             # ─── مجموع المدفوع + العمولات (تُخصم من مبلغ الذمم لتوازن القيد) ───
             paid_amount_total = 0.0
@@ -13866,24 +13869,29 @@ def add_invoice():
             new_invoice.profit_gold = round(_purchase_profit_gold, 3)
 
         elif invoice_type == 'مرتجع بيع':
-            # 3. مرتجع بيع (عكس البيع)
-            # من حـ/ المخزون [مدين]
-            # من حـ/ مردودات المبيعات [مدين]
-            #     إلى حـ/ العميل (أو الصندوق) [دائن]
-            
-            # 🔥 استخدام الربط المحاسبي
-            cash_acc_id = get_account_id_for_mapping('مرتجع بيع', 'cash')
-            customers_acc_id = get_account_id_for_mapping('مرتجع بيع', 'customers')
+            # 3. مرتجع بيع — عكس كامل لفاتورة البيع الأصلية
+            # ══════════════════════════════════════════════════════════
+            # القيود النقدية:
+            #   مدين  مردودات المبيعات (بدون ضريبة)
+            #   مدين  ضريبة القيمة المضافة (عكس الدائن في البيع)
+            #   دائن  العميل/الصندوق (المبلغ الكامل المسترد)
+            # القيود الوزنية:
+            #   مدين  المخزون الوزني (ذهب يعود)
+            #   دائن  وزن العميل (يخرج من رصيده)
+            # ══════════════════════════════════════════════════════════
+
+            cash_acc_id          = get_account_id_for_mapping('مرتجع بيع', 'cash')
+            customers_acc_id     = get_account_id_for_mapping('مرتجع بيع', 'customers')
             sales_returns_acc_id = get_account_id_for_mapping('مرتجع بيع', 'sales_returns')
-            # Fallback: مردودات مبيعات (420) ← ثم إيرادات المبيعات (400)
             if not sales_returns_acc_id:
                 sales_returns_acc_id = (
                     get_account_id_by_number('420')
                     or get_account_id_for_mapping('بيع', 'revenue')
                     or get_account_id_for_mapping('بيع', 'sales_gold_new')
                 )
-            
-            # حسابات المخزون: دعم التوحيد (حساب واحد لكل العيارات)
+            vat_payable_acc_id = get_account_id_for_mapping('بيع', 'vat_payable')
+
+            # حسابات المخزون
             inventory_accounts = {}
             unified_inventory_acc_id = _resolve_inventory_account_id_for_invoice(invoice_type, gold_type)
             if unified_inventory_acc_id:
@@ -13893,55 +13901,210 @@ def add_invoice():
                     inv_acc_id = get_account_id_for_mapping('مرتجع بيع', f'inventory_{karat}k')
                     if inv_acc_id:
                         inventory_accounts[karat] = inv_acc_id
-            
-            # Use explicit total_cost if provided; otherwise default to total_cash.
-            total_cost = data.get('total_cost') or total_cash
-            
-            # في نظام je_engine_v2: المخزون حسابات وزنية فقط (لا نقد).
-            # القيود النقدية: مردودات مبيعات (مدين) + عميل (دائن).
-            # القيود الوزنية: عبر weight_entries_for_party أدناه.
 
-            # Line 1: مدين مردودات المبيعات (القيمة الكاملة)
-            if sales_returns_acc_id:
-                create_dual_journal_entry(
-                    journal_entry_id=journal_entry.id,
-                    account_id=sales_returns_acc_id,
-                    cash_debit=total_cash,
-                    apply_golden_rule=False,
-                    description="مردودات المبيعات"
-                )
-            
-            # Line 2: دائن العميل/الصندوق
-            acc_id = customers_acc_id or cash_acc_id or party_account.id
-            create_dual_journal_entry(
-                journal_entry_id=journal_entry.id,
-                account_id=acc_id,
-                cash_credit=total_cash,
-                apply_golden_rule=False,
-                description="استرداد نقدي للعميل"
+            # ─── الضريبة ───
+            # المصدر الأول: items المُرسلة من الفرونت (tax_amount)
+            _total_tax_ret = sum(
+                _to_float(item_data.get('tax_amount', item_data.get('tax', 0.0)), 0.0)
+                for item_data in data.get('items', [])
             )
+            if _total_tax_ret < 0:
+                _total_tax_ret = abs(_total_tax_ret)
+            # Fallback: إذا الفرونت لم يُرسل tax في items، استخدم total_tax المخزّن في الفاتورة
+            # (يُحسب من karat_lines ومخزّن بشكل موثوق في new_invoice.total_tax)
+            if _total_tax_ret == 0.0:
+                _total_tax_ret = float(new_invoice.total_tax or 0.0)
+            # Second fallback: من الفاتورة الأصلية إن وُجدت
+            if _total_tax_ret == 0.0 and data.get('original_invoice_id'):
+                try:
+                    _orig_for_tax = Invoice.query.get(int(data['original_invoice_id']))
+                    if _orig_for_tax:
+                        _total_tax_ret = float(_orig_for_tax.total_tax or 0.0)
+                except Exception:
+                    pass
 
-            # قيود الوزن (je_engine_v2) — دخول مخزون وزني + رجوع وزن العميل
+            # ─── استخدام je_adapter كامل (يشمل VAT + وزن) ───
             import je_adapter as _je_adapter  # noqa: local import
             _je_party_sale_ret = (
                 party_account
                 or (Account.query.get(customers_acc_id) if customers_acc_id else None)
             )
-            if _je_party_sale_ret and inventory_accounts:
-                _sales_ret_weight_override = (
-                    _je_adapter._resolve_weight_account_id(sales_returns_acc_id)
-                    if sales_returns_acc_id else None
-                )
-                _je_adapter.weight_entries_for_party(
+            acc_id = customers_acc_id or cash_acc_id or (party_account.id if party_account else None)
+
+            if _je_party_sale_ret and inventory_accounts and sales_returns_acc_id:
+                _je_adapter.sale_return_je_for_invoice(
                     journal_entry_id=journal_entry.id,
-                    gold_by_karat=gold_by_karat,
+                    invoice_type=invoice_type,
+                    gold_type=gold_type,
+                    get_mapping_fn=get_account_id_for_mapping,
                     inventory_accounts=inventory_accounts,
-                    party_account_obj=_je_party_sale_ret,
-                    direction='purchase',   # مرتجع بيع = ذهب يعود للمخزون (مدين مخزون)
+                    gold_by_karat=gold_by_karat,
+                    sales_returns_account_id=sales_returns_acc_id,
+                    vat_payable_account_id=vat_payable_acc_id,
+                    ar_account_id=_je_party_sale_ret.id,
+                    customer_account_obj=_je_party_sale_ret,
+                    return_cash=total_cash,
+                    total_tax=_total_tax_ret,
+                    cash_refunded=total_cash,
                     customer_id=new_invoice.customer_id,
-                    party_weight_account_override=_sales_ret_weight_override,
                 )
-        
+            else:
+                # Fallback manual entries if adapter unavailable
+                _net_ret = round(total_cash - _total_tax_ret, 2)
+                if sales_returns_acc_id:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=sales_returns_acc_id,
+                        cash_debit=_net_ret,
+                        apply_golden_rule=False,
+                        description="مردودات المبيعات",
+                    )
+                if _total_tax_ret > 0 and vat_payable_acc_id:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=vat_payable_acc_id,
+                        cash_debit=_total_tax_ret,
+                        apply_golden_rule=False,
+                        description="عكس ضريبة القيمة المضافة - مرتجع",
+                    )
+                if acc_id:
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=acc_id,
+                        cash_credit=total_cash,
+                        apply_golden_rule=False,
+                        description="استرداد نقدي للعميل",
+                    )
+
+            # ─── عكس عمولات وسائل الدفع ───
+            _commission_acc_id     = get_account_id_for_mapping('بيع', 'commission')
+            _commission_vat_acc_id = get_account_id_for_mapping('بيع', 'commission_vat')
+            if payments_data:
+                for payment in payments_data:
+                    pm_obj = PaymentMethod.query.get(payment['payment_method_id'])
+                    try:
+                        pm_commission_timing = str(
+                            getattr(pm_obj, 'commission_timing', 'invoice') or 'invoice'
+                        ).strip().lower()
+                    except Exception:
+                        pm_commission_timing = 'invoice'
+                    if pm_commission_timing == 'settlement':
+                        continue
+                    pm_commission     = _to_float(payment.get('commission_amount', 0.0))
+                    pm_commission_vat = _to_float(payment.get('commission_vat', 0.0))
+                    if pm_commission > 0 and _commission_acc_id:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=_commission_acc_id,
+                            cash_credit=pm_commission,
+                            apply_golden_rule=False,
+                            description=f"عكس عمولة {pm_obj.name if pm_obj else ''} - مرتجع",
+                        )
+                    _vat_credit_pm = _commission_vat_acc_id or _commission_acc_id
+                    if pm_commission_vat > 0 and _vat_credit_pm:
+                        create_dual_journal_entry(
+                            journal_entry_id=journal_entry.id,
+                            account_id=_vat_credit_pm,
+                            cash_credit=pm_commission_vat,
+                            apply_golden_rule=False,
+                            description=f"عكس ضريبة عمولة {pm_obj.name if pm_obj else ''} - مرتجع",
+                        )
+
+            # ─── عكس أجور المصنعية ───
+            _wage_cash_ret = 0.0
+            for _wd in data.get('items', []):
+                _wage_cash_ret += (
+                    _to_float(_wd.get('wage', 0), 0.0)
+                    * _to_float(_wd.get('weight', 0), 0.0)
+                )
+            if karat_lines_data and isinstance(karat_lines_data, list):
+                for _kl in karat_lines_data:
+                    _wage_cash_ret += (
+                        _to_float(_kl.get('manufacturing_wage_cash', 0), 0.0)
+                        * _to_float(_kl.get('weight_grams', _kl.get('weight', 0)), 0.0)
+                    )
+            if _wage_cash_ret > 0:
+                _wage_inv_acc = (
+                    _get_manufacturing_wage_inventory_account_id()
+                    or get_account_id_by_number('1320')
+                    or get_account_id_by_number('1350')
+                )
+                _wage_exp_acc = (
+                    get_account_id_for_mapping('بيع', 'manufacturing_wage')
+                    or _ensure_manufacturing_wage_expense_account()
+                    or get_account_id_by_number('51')
+                )
+                if _wage_inv_acc and _wage_exp_acc:
+                    # عكس: مدين مخزون المصنعية، دائن مصروف المصنعية
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=_wage_inv_acc,
+                        cash_debit=round(_wage_cash_ret, 2),
+                        apply_golden_rule=False,
+                        description="إعادة أجور المصنعية للمخزون - مرتجع",
+                    )
+                    create_dual_journal_entry(
+                        journal_entry_id=journal_entry.id,
+                        account_id=_wage_exp_acc,
+                        cash_credit=round(_wage_cash_ret, 2),
+                        apply_golden_rule=False,
+                        description="عكس استهلاك أجور المصنعية - مرتجع",
+                    )
+
+            # ─── SBT صندوق الكسر (بيع كسر مرتجع → الكسر يعود للصندوق) ───
+            if gold_type == 'scrap' and not approval_required:
+                try:
+                    _ret_settings = Settings.query.first()
+                    _ret_scrap_sb_id = getattr(_ret_settings, 'main_scrap_gold_safe_box_id', None) if _ret_settings else None
+                    if not _ret_scrap_sb_id:
+                        _fb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+                        if _fb:
+                            _ret_scrap_sb_id = _fb.id
+                    if _ret_scrap_sb_id:
+                        _ret_sbt_weights = {
+                            'weight_18k': float(gold_by_karat.get('18', 0.0) or 0.0),
+                            'weight_21k': float(gold_by_karat.get('21', 0.0) or 0.0),
+                            'weight_22k': float(gold_by_karat.get('22', 0.0) or 0.0),
+                            'weight_24k': float(gold_by_karat.get('24', 0.0) or 0.0),
+                        }
+                        if any(v > 0 for v in _ret_sbt_weights.values()):
+                            db.session.add(SafeBoxTransaction(
+                                safe_box_id=int(_ret_scrap_sb_id),
+                                ref_type='invoice_scrap_return_receipt',
+                                ref_id=new_invoice.id,
+                                invoice_id=new_invoice.id,
+                                direction='in',
+                                amount_cash=0.0,
+                                notes='scrap sale return - gold back in safe',
+                                created_by=posted_by_username,
+                                **_ret_sbt_weights,
+                            ))
+                except Exception as _sbt_exc:
+                    print(f"⚠️ SBT for sale return scrap failed: {_sbt_exc}")
+
+            # ─── إلغاء/تعديل أمر تسكير الوزن للفاتورة الأصلية ───
+            _orig_inv_id = data.get('original_invoice_id')
+            if _orig_inv_id:
+                try:
+                    _orig_wco = WeightClosingOrder.query.filter_by(
+                        invoice_id=int(_orig_inv_id)
+                    ).first()
+                    if _orig_wco and _orig_wco.status in ('open', 'partial'):
+                        _ret_weight_mk = sum(
+                            float(w or 0) * int(k) / (get_main_karat() or 21)
+                            for k, w in gold_by_karat.items()
+                            if float(w or 0) > 0
+                        )
+                        _orig_wco.remaining_weight_main_karat = max(
+                            (_orig_wco.remaining_weight_main_karat or 0.0) - _ret_weight_mk,
+                            0.0,
+                        )
+                        if _orig_wco.remaining_weight_main_karat <= 0.001:
+                            _orig_wco.status = 'cancelled'
+                        db.session.flush()
+                except Exception as _wco_exc:
+                    print(f"⚠️ WeightClosingOrder update for sale return failed: {_wco_exc}")
+
         elif invoice_type == 'مرتجع شراء':
             # 4. مرتجع شراء كسر (عكس الشراء من عميل)
             # من حـ/ العميل (أو الصندوق) [مدين]
@@ -13968,6 +14131,28 @@ def add_invoice():
                         inventory_acc_id = inv_acc_id
                         break
             
+            # VAT receivable to reverse
+            vat_receivable_acc_id_ret = get_account_id_for_mapping('شراء من عميل', 'vat_receivable')
+            _total_tax_purchase_ret = sum(
+                _to_float(item_data.get('tax_amount', item_data.get('tax', 0.0)), 0.0)
+                for item_data in data.get('items', [])
+            )
+            if _total_tax_purchase_ret < 0:
+                _total_tax_purchase_ret = abs(_total_tax_purchase_ret)
+            # Fallback: total_tax المخزّن في الفاتورة (يُحسب من karat_lines)
+            if _total_tax_purchase_ret == 0.0:
+                _total_tax_purchase_ret = float(new_invoice.total_tax or 0.0)
+            # Second fallback: من الفاتورة الأصلية
+            if _total_tax_purchase_ret == 0.0 and data.get('original_invoice_id'):
+                try:
+                    _orig_for_ptax = Invoice.query.get(int(data['original_invoice_id']))
+                    if _orig_for_ptax:
+                        _total_tax_purchase_ret = float(_orig_for_ptax.total_tax or 0.0)
+                except Exception:
+                    pass
+
+            _net_purchase_ret = round(total_cash - _total_tax_purchase_ret, 2)
+
             # Line 1: مدين العميل/الصندوق (نقد فقط — الوزن عبر je_engine_v2 أدناه)
             acc_id = customers_acc_id or cash_acc_id or party_account.id
             create_dual_journal_entry(
@@ -13978,15 +14163,25 @@ def add_invoice():
                 description="استلام نقدي من مرتجع شراء"
             )
 
-            # Line 2: دائن مردودات المشتريات (أو المخزون عند غياب الحساب)
+            # Line 2: دائن مردودات المشتريات (بدون ضريبة)
             _pr_credit_acc = purchase_returns_acc_id or inventory_acc_id
             if _pr_credit_acc:
                 create_dual_journal_entry(
                     journal_entry_id=journal_entry.id,
                     account_id=_pr_credit_acc,
-                    cash_credit=total_cash,
+                    cash_credit=_net_purchase_ret,
                     apply_golden_rule=False,
                     description="مردودات مشتريات - مرتجع شراء"
+                )
+
+            # Line 2b: دائن ضريبة القيمة المضافة (عكس المدين في الشراء الأصلي)
+            if _total_tax_purchase_ret > 0 and vat_receivable_acc_id_ret:
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry.id,
+                    account_id=vat_receivable_acc_id_ret,
+                    cash_credit=_total_tax_purchase_ret,
+                    apply_golden_rule=False,
+                    description="عكس ضريبة القيمة المضافة - مرتجع شراء"
                 )
 
             # قيود الوزن (je_engine_v2): خروج وزن من المخزون + عودة وزن العميل
