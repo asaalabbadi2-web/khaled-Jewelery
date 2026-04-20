@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -260,7 +261,113 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   double get grandTotal =>
       _selectedItems.fold(0.0, (sum, item) => sum + item.total);
   double get _totalPayments => _payments.fold(0.0, (s, p) => s + p.amount);
-  double get amountDue => (grandTotal - _totalPayments).clamp(0, double.infinity);
+
+  double get _originalInvoiceTotal => _parseDouble(
+    selectedOriginalInvoice?['total'] ?? selectedOriginalInvoice?['total_amount'],
+  );
+
+  double get _originalInvoiceWeight =>
+      _parseDouble(selectedOriginalInvoice?['total_weight']);
+
+  double? get _enteredPaymentAmount {
+    final raw = _customAmountController.text.trim();
+    if (raw.isEmpty) return null;
+    final parsed = double.tryParse(raw.replaceAll(',', '.'));
+    if (parsed == null || parsed <= 0) return null;
+    return parsed;
+  }
+
+  bool get _isFullReturnSelection {
+    if (_returnItems.isEmpty || _selectedItems.length != _returnItems.length) {
+      return false;
+    }
+
+    for (final item in _returnItems) {
+      if (!item.isSelected) return false;
+      if ((item.weight - item.originalWeight).abs() > 0.005) return false;
+      if (item.quantity != item.originalQuantity) return false;
+    }
+
+    return true;
+  }
+
+  /// Suggested total: full-weight return → original invoice total, partial → proportional.
+  double get _suggestedTotal {
+    if (_isFullReturnSelection && _originalInvoiceTotal > 0) {
+      return _originalInvoiceTotal;
+    }
+
+    if (_originalInvoiceTotal > 0 && _originalInvoiceWeight > 0 && totalWeight > 0) {
+      final proportional =
+          (_originalInvoiceTotal * (totalWeight / _originalInvoiceWeight));
+      return proportional.clamp(0.0, _originalInvoiceTotal).toDouble();
+    }
+
+    return grandTotal;
+  }
+
+  double get _effectiveReturnTotal =>
+      _totalPayments > 0 ? _totalPayments : (_enteredPaymentAmount ?? _suggestedTotal);
+
+  _ReturnPaymentEntry _buildPaymentEntry({
+    required Map<String, dynamic> method,
+    required double amount,
+  }) {
+    final rate = method['commission_rate'] as double;
+    final commission = double.parse((amount * rate / 100).toStringAsFixed(2));
+    final net = double.parse((amount - commission).toStringAsFixed(2));
+    return _ReturnPaymentEntry(
+      paymentMethodId: method['id'] as int,
+      paymentMethodName: (method['name'] ?? '').toString(),
+      amount: amount,
+      commissionRate: rate,
+      commissionAmount: commission,
+      netAmount: net,
+    );
+  }
+
+  bool _capturePayment({bool showErrors = true}) {
+    if (_payments.isNotEmpty) return true;
+
+    if (_selectedPaymentMethodId == null) {
+      if (showErrors) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('الرجاء اختيار وسيلة الدفع')),
+        );
+      }
+      return false;
+    }
+
+    final amount = _enteredPaymentAmount;
+    if (amount == null || amount <= 0) {
+      if (showErrors) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('الرجاء إدخال مبلغ المرتجع')),
+        );
+      }
+      return false;
+    }
+
+    final method = _paymentMethods.firstWhere(
+      (m) => m['id'] == _selectedPaymentMethodId,
+      orElse: () => {},
+    );
+    if (method.isEmpty) {
+      if (showErrors) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('وسيلة الدفع المحددة غير متاحة')),
+        );
+      }
+      return false;
+    }
+
+    setState(() {
+      _payments
+        ..clear()
+        ..add(_buildPaymentEntry(method: method, amount: amount));
+    });
+    return true;
+  }
 
   double _parseDouble(dynamic value, [double fallback = 0]) {
     if (value == null) return fallback;
@@ -288,12 +395,66 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     return null;
   }
 
-  ReturnItemRow _mapInvoiceItemToReturnRow(Map<String, dynamic> item) {
-    final originalTotal = _parseDouble(item['price']);
-    final originalTax = _parseDouble(item['tax']);
-    double originalNet = _parseDouble(item['net']);
+  bool _shouldInterpretReturnItemAmountsAsPerGram(
+    Map<String, dynamic> invoiceDetails,
+  ) {
+    final invoiceTotal = _parseDouble(
+      invoiceDetails['total'] ?? invoiceDetails['total_amount'],
+    );
+    final rawItems = (invoiceDetails['items'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    if (invoiceTotal <= 0 || rawItems.isEmpty) return false;
+
+    double baseSum = 0.0;
+    double weightedSum = 0.0;
+
+    for (final item in rawItems) {
+      final weight = _parseDouble(item['weight']);
+      double lineTotal = _parseDouble(item['total']);
+      if (lineTotal <= 0) {
+        final net = _parseDouble(item['net']);
+        final tax = _parseDouble(item['tax']);
+        lineTotal = (net > 0 || tax > 0) ? (net + tax) : _parseDouble(item['price']);
+      }
+      if (lineTotal <= 0) continue;
+      baseSum += lineTotal;
+      weightedSum += lineTotal * (weight > 0 ? weight : 1.0);
+    }
+
+    if (baseSum <= 0 || weightedSum <= 0) return false;
+
+    final baseDelta = (invoiceTotal - baseSum).abs();
+    final weightedDelta = (invoiceTotal - weightedSum).abs();
+    final tolerance = math.max(5.0, invoiceTotal * 0.02);
+
+    return weightedDelta <= tolerance && (weightedDelta + tolerance) < baseDelta;
+  }
+
+  ReturnItemRow _mapInvoiceItemToReturnRow(
+    Map<String, dynamic> item, {
+    bool assumePerGramAmounts = false,
+  }) {
+    final originalWeight = _parseDouble(item['weight']);
+    final lineMultiplier =
+        assumePerGramAmounts && originalWeight > 0 ? originalWeight : 1.0;
+    final originalTax = _parseDouble(item['tax']) * lineMultiplier;
+    double originalNet = _parseDouble(item['net']) * lineMultiplier;
+    final originalPriceField = _parseDouble(item['price']) * lineMultiplier;
+    double originalTotal = _parseDouble(item['total']) * lineMultiplier;
     final parsedQuantity = _parseInt(item['quantity'], 1);
     final normalizedQuantity = parsedQuantity > 0 ? parsedQuantity : 1;
+
+    // Some historical invoices expose `price` as a price-per-gram-ish value,
+    // while `net + tax` carries the real line amount. Prefer explicit total,
+    // then net+tax, then fall back to price.
+    if (originalTotal <= 0 && (originalNet > 0 || originalTax > 0)) {
+      originalTotal = originalNet + originalTax;
+    }
+    if (originalTotal <= 0) {
+      originalTotal = originalPriceField;
+    }
+
     if (originalNet == 0 && originalTotal > 0) {
       originalNet = (originalTotal - originalTax).clamp(0, originalTotal);
     }
@@ -305,14 +466,12 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           ? item['name']
           : 'صنف بدون اسم',
       karat: _parseDouble(item['karat'], 21),
-      originalWeight: _parseDouble(item['weight']),
+        originalWeight: originalWeight,
       originalQuantity: normalizedQuantity,
       originalWage: _parseDouble(item['wage']),
       originalNet: originalNet,
       originalTax: originalTax,
-      originalTotal: originalTotal > 0
-          ? originalTotal
-          : originalNet + originalTax,
+      originalTotal: originalTotal > 0 ? originalTotal : originalNet + originalTax,
     );
   }
 
@@ -484,7 +643,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         break;
 
       case 3: // Payment
-        isStepValid = _paymentFormKey.currentState!.validate();
+        isStepValid = _capturePayment(showErrors: true);
         break;
 
       case 4: // Review
@@ -524,10 +683,18 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       if (!mounted) return;
 
       final mergedInvoice = {...?selectedOriginalInvoice, ...invoiceDetails};
+      final assumePerGramAmounts = _shouldInterpretReturnItemAmountsAsPerGram(
+        mergedInvoice,
+      );
 
       final items = (invoiceDetails['items'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()
-          .map((item) => _mapInvoiceItemToReturnRow(item))
+          .map(
+            (item) => _mapInvoiceItemToReturnRow(
+              item,
+              assumePerGramAmounts: assumePerGramAmounts,
+            ),
+          )
           .toList();
 
       setState(() {
@@ -626,31 +793,14 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     );
     if (method.isEmpty) return;
 
-    final remaining = amountDue;
-    if (remaining <= 0.005) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم تسوية المبلغ بالكامل')),
-      );
-      return;
-    }
-    final amount = (customAmount ?? remaining).clamp(0.0, remaining + 0.01);
+    final amount = (customAmount ?? _enteredPaymentAmount ?? _suggestedTotal)
+        .clamp(0.01, double.infinity);
     if (amount <= 0) return;
 
-    final rate = method['commission_rate'] as double;
-    final commission = double.parse((amount * rate / 100).toStringAsFixed(2));
-    final net = double.parse((amount - commission).toStringAsFixed(2));
-
     setState(() {
-      _payments.add(_ReturnPaymentEntry(
-        paymentMethodId: method['id'] as int,
-        paymentMethodName: (method['name'] ?? '').toString(),
-        amount: amount,
-        commissionRate: rate,
-        commissionAmount: commission,
-        netAmount: net,
-      ));
-      _selectedPaymentMethodId = null;
-      _customAmountController.clear();
+      _payments
+        ..clear()
+        ..add(_buildPaymentEntry(method: method, amount: amount));
     });
   }
 
@@ -682,6 +832,10 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       return;
     }
 
+    if (!_capturePayment(showErrors: true)) {
+      return;
+    }
+
     final returnItems = selectedItems.map((item) => item.toPayload()).toList();
 
     final payload = {
@@ -696,11 +850,11 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       'invoice_type': widget.returnType,
       'original_invoice_id': selectedOriginalInvoice!['id'],
       'return_reason': returnReason,
-      'total': grandTotal,
+      'total': _effectiveReturnTotal,
       'total_weight': totalWeight,
       'total_tax': totalTax,
       'total_cost': totalCost,
-      'amount_paid': _totalPayments,
+      'amount_paid': _effectiveReturnTotal,
       'payments': _payments.map((p) => p.toJson()).toList(),
       'items': returnItems,
     };
@@ -821,9 +975,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     String originalParty = '';
 
     if (original != null) {
-      originalTotal = _parseDouble(
-        original['total'] ?? original['total_amount'],
-      );
+      originalTotal = _parseDouble(original['total'] ?? original['total_amount']);
       originalTax = _parseDouble(original['total_tax']);
       originalWeight = _parseDouble(original['total_weight']);
       originalDate = (original['date'] ?? '').toString();
@@ -834,7 +986,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
               .toString();
     }
 
-    final returnTotal = grandTotal;
+    final returnTotal = _effectiveReturnTotal;
     final returnTax = totalTax;
     final returnWeight = totalWeight;
 
@@ -1065,7 +1217,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                     ),
                     _buildInfoRow(
                       'المبلغ',
-                      '${selectedOriginalInvoice!['total_amount'] ?? 0} $currencySymbol',
+                      '${_originalInvoiceTotal.toStringAsFixed(2)} $currencySymbol',
                     ),
                     if (selectedOriginalInvoice!['customer_name'] != null)
                       _buildInfoRow(
@@ -1234,49 +1386,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      // ── حقل المبلغ اليدوي ───────────────────────────
-                      TextFormField(
-                        key: ValueKey(
-                          'manual-amount-${item.originalItemId}-$index',
-                        ),
-                        initialValue: item.manualTotal != null
-                            ? item.manualTotal!.toStringAsFixed(2)
-                            : '',
-                        decoration: InputDecoration(
-                          labelText: 'مبلغ المرتجع (يدوي)',
-                          hintText:
-                              'اتركه فارغاً للحساب التلقائي (${item.total.toStringAsFixed(2)} $currencySymbol)',
-                          helperText: item.manualTotal != null
-                              ? '⚠️ مبلغ يدوي — الحساب التلقائي مُعطَّل'
-                              : 'تلقائي: ${item.total.toStringAsFixed(2)} $currencySymbol',
-                          helperStyle: TextStyle(
-                            color: item.manualTotal != null
-                                ? Colors.orange.shade700
-                                : Colors.grey,
-                          ),
-                          border: const OutlineInputBorder(),
-                          suffixIcon: item.manualTotal != null
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, size: 18),
-                                  tooltip: 'إلغاء المبلغ اليدوي',
-                                  onPressed: () => setState(
-                                    () => item.setManualTotal(null),
-                                  ),
-                                )
-                              : null,
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: [NormalizeNumberFormatter()],
-                        onChanged: (value) {
-                          final parsed = double.tryParse(
-                            value.replaceAll(',', '.'),
-                          );
-                          setState(() => item.setManualTotal(parsed));
-                        },
-                      ),
-                      const SizedBox(height: 12),
                       Wrap(
                         spacing: 12,
                         runSpacing: 8,
@@ -1301,9 +1410,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                           _buildItemSummaryChip(
                             icon: Icons.summarize,
                             label: 'الإجمالي',
-                            value: item.manualTotal != null
-                                ? '${item.total.toStringAsFixed(2)} $currencySymbol ✏️'
-                                : '${item.total.toStringAsFixed(2)} $currencySymbol',
+                            value:
+                                '${item.total.toStringAsFixed(2)} $currencySymbol',
                           ),
                         ],
                       ),
@@ -1365,6 +1473,16 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
+    // Auto-fill: full weight → original invoice total, partial → proportional
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final existing =
+          double.tryParse(_customAmountController.text.replaceAll(',', '.')) ??
+          0;
+      if (existing <= 0 && _payments.isEmpty && _suggestedTotal > 0.005) {
+        _customAmountController.text = _suggestedTotal.toStringAsFixed(2);
+      }
+    });
+
     return Form(
       key: _paymentFormKey,
       child: Column(
@@ -1385,7 +1503,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                   border: Border.all(color: cs.primary.withValues(alpha: 0.4)),
                 ),
                 child: Text(
-                  'الإجمالي: ${grandTotal.toStringAsFixed(2)} $currencySymbol',
+                  'القيمة المرجعية حسب الوزن: ${_suggestedTotal.toStringAsFixed(2)} $currencySymbol',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: cs.primary,
@@ -1487,16 +1605,16 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
             const SizedBox(height: 16),
           ],
 
-          // ── Remaining chip ───────────────────────────────────────────
+          // ── Status chip ───────────────────────────────────────────
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: amountDue > 0.005
+              color: _payments.isEmpty
                   ? Colors.orange.withValues(alpha: isDark ? 0.2 : 0.12)
                   : Colors.green.withValues(alpha: isDark ? 0.2 : 0.12),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: amountDue > 0.005
+                color: _payments.isEmpty
                     ? Colors.orange.withValues(alpha: 0.5)
                     : Colors.green.withValues(alpha: 0.5),
               ),
@@ -1505,17 +1623,21 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  amountDue > 0.005 ? 'المتبقي للتسوية' : '✓ تمت التسوية',
+                  _payments.isNotEmpty
+                      ? '✓ المبلغ المعتمد'
+                      : (_enteredPaymentAmount != null
+                            ? 'المبلغ المدخل'
+                            : 'المبلغ المقترح'),
                   style: theme.textTheme.bodyLarge?.copyWith(
                     fontWeight: FontWeight.bold,
-                    color: amountDue > 0.005 ? Colors.orange : Colors.green,
+                    color: _payments.isEmpty ? Colors.orange : Colors.green,
                   ),
                 ),
                 Text(
-                  '${amountDue.toStringAsFixed(2)} $currencySymbol',
+                  '${_effectiveReturnTotal.toStringAsFixed(2)} $currencySymbol',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
-                    color: amountDue > 0.005 ? Colors.orange : Colors.green,
+                    color: _payments.isEmpty ? Colors.orange : Colors.green,
                   ),
                 ),
               ],
@@ -1523,8 +1645,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           ),
           const SizedBox(height: 20),
 
-          // ── Add payment row ──────────────────────────────────────────
-          if (amountDue > 0.005) ...[
+          // ── Add payment row (only if no payment added yet — single payment) ──
+          if (_payments.isEmpty) ...[
             Text('إضافة وسيلة دفع', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             if (_paymentMethods.isEmpty)
@@ -1543,7 +1665,12 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                       : '${m['name']}';
                   return DropdownMenuItem<int>(value: m['id'] as int, child: Text(label));
                 }).toList(),
-                onChanged: (v) => setState(() => _selectedPaymentMethodId = v),
+                onChanged: (v) {
+                  setState(() => _selectedPaymentMethodId = v);
+                  if ((_enteredPaymentAmount ?? 0) <= 0 && _payments.isEmpty) {
+                    _customAmountController.text = _suggestedTotal.toStringAsFixed(2);
+                  }
+                },
               ),
               const SizedBox(height: 10),
               Row(
@@ -1552,7 +1679,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                     child: TextFormField(
                       controller: _customAmountController,
                       decoration: InputDecoration(
-                        labelText: 'المبلغ (اتركه فارغاً للمتبقي: ${amountDue.toStringAsFixed(2)})',
+                        labelText: 'المبلغ المسترجع (المعتمد للتسوية)',
                         border: const OutlineInputBorder(),
                         suffixText: currencySymbol,
                       ),
@@ -1573,18 +1700,6 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                 ],
               ),
             ],
-            const SizedBox(height: 8),
-            // Quick-fill buttons
-            if (amountDue > 0.005)
-              Wrap(
-                spacing: 8,
-                children: [
-                  ActionChip(
-                    label: Text('المتبقي كاملاً (${amountDue.toStringAsFixed(2)})'),
-                    onPressed: () => _addPayment(),
-                  ),
-                ],
-              ),
           ],
         ],
       ),
@@ -1604,7 +1719,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
     final invoiceDisplayNumber = _getInvoiceDisplayNumber(invoice);
     final invoiceDate = invoice['date'] ?? 'غير متوفر';
-    final invoiceTotalRaw = invoice['total_amount'] ?? invoice['total'] ?? 0;
+    final invoiceTotalRaw = invoice['total'] ?? invoice['total_amount'] ?? 0;
     final invoiceTotal = invoiceTotalRaw is num
         ? invoiceTotalRaw.toStringAsFixed(2)
         : invoiceTotalRaw.toString();
@@ -1721,17 +1836,17 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                     '${totalWeight.toStringAsFixed(2)} جم',
                   ),
                   _buildTotalRow(
-                    'المبلغ',
+                    'صافي الأصناف',
                     '${totalCost.toStringAsFixed(2)} $currencySymbol',
                   ),
                   _buildTotalRow(
-                    'الضريبة',
+                    'ضريبة الأصناف',
                     '${totalTax.toStringAsFixed(2)} $currencySymbol',
                   ),
                   const Divider(),
                   _buildTotalRow(
-                    'الإجمالي',
-                    '${grandTotal.toStringAsFixed(2)} $currencySymbol',
+                    'الإجمالي المعتمد',
+                    '${_effectiveReturnTotal.toStringAsFixed(2)} $currencySymbol',
                     isTotal: true,
                   ),
                 ],
