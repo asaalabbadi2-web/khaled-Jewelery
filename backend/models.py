@@ -2202,6 +2202,7 @@ class Settings(db.Model):
     # ==========================================
     # هدف وزن مبيعات الأسبوع (بالجرام) لاستخدامه في تحدي الفريق.
     weekly_sales_target_weight = db.Column(db.Float, default=2000.0)
+    monthly_sales_target_weight = db.Column(db.Float, default=8000.0)
     sales_race_settings = db.Column(db.Text, nullable=True)
     
     created_at = db.Column(db.DateTime, default=db.func.now())
@@ -2276,6 +2277,12 @@ class Settings(db.Model):
         except Exception:
             weekly_target = 0.0
 
+        monthly_target = None
+        try:
+            monthly_target = float(getattr(self, 'monthly_sales_target_weight', None) or 0.0)
+        except Exception:
+            monthly_target = 0.0
+
         # Decode JSON fields defensively (legacy DBs may contain invalid JSON strings).
         payment_methods = []
         try:
@@ -2302,6 +2309,7 @@ class Settings(db.Model):
             'main_karat': self.main_karat,
             'currency_symbol': self.currency_symbol,
             'weekly_sales_target_weight': weekly_target,
+            'monthly_sales_target_weight': monthly_target,
             'sales_race_settings': sales_race_settings,
             'tax_rate': self.tax_rate,
             'tax_enabled': self.tax_enabled,

@@ -20790,6 +20790,9 @@ def get_sales_race_config():
         'weekly_sales_target_weight': float(
             getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
         ),
+        'monthly_sales_target_weight': float(
+            getattr(settings_row, 'monthly_sales_target_weight', 8000.0) or 8000.0
+        ),
     }
     raw = getattr(settings_row, 'sales_race_settings', None)
     if raw:
@@ -20865,6 +20868,9 @@ def update_sales_race_config():
     result['weekly_sales_target_weight'] = float(
         getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
     )
+    result['monthly_sales_target_weight'] = float(
+        getattr(settings_row, 'monthly_sales_target_weight', 8000.0) or 8000.0
+    )
     return jsonify(result)
 
 
@@ -20911,9 +20917,9 @@ def get_home_leaderboard():
             pass
 
     default_period = str(sales_race_config.get('default_period') or 'today').strip().lower()
-    if default_period not in {'today', 'week'}:
+    if default_period not in {'today', 'week', 'month'}:
         default_period = 'today'
-    if period not in {'today', 'week'}:
+    if period not in {'today', 'week', 'month'}:
         period = default_period
 
     try:
@@ -20934,6 +20940,16 @@ def get_home_leaderboard():
             start_value = datetime.combine(start_date, datetime.min.time())
             end_value = start_value + timedelta(days=7)
             return normalized, start_value, end_value
+
+        if normalized == 'month':
+            start_date = ref.date().replace(day=1)
+            start_value = datetime.combine(start_date, datetime.min.time())
+            # أول يوم الشهر القادم
+            if start_date.month == 12:
+                end_value = datetime(start_date.year + 1, 1, 1)
+            else:
+                end_value = datetime(start_date.year, start_date.month + 1, 1)
+            return 'month', start_value, end_value
 
         start_value = datetime.combine(ref.date(), datetime.min.time())
         end_value = start_value + timedelta(days=1)
@@ -21207,7 +21223,7 @@ def get_home_leaderboard():
             'badge': '🥇',
         }
 
-    # Phase 2: weekly team goal
+    # Phase 2: weekly/monthly team goal
     target_progress = 0.0
     team_weight_g = None
     weekly_target_weight_g = None
@@ -21217,7 +21233,7 @@ def get_home_leaderboard():
     weekly_target_points = None
     remaining_points = None
 
-    if period == 'week':
+    if period in ('week', 'month'):
         if metric == 'points':
             invoices = points_invoices
             if invoices is None:
@@ -21236,17 +21252,22 @@ def get_home_leaderboard():
             )
             team_weight_g = round(_to_float(team_weight_value, 0.0), 3)
 
-        # Re-read the canonical settings row for weekly target (already fetched
-        # above as settings_row; re-use it here to avoid a redundant query).
         if settings_row is None:
             try:
                 settings_row = _get_settings_singleton(create_if_missing=True)
             except Exception:
                 settings_row = None
 
+        if period == 'month':
+            _target_attr = 'monthly_sales_target_weight'
+            _default_target = 8000.0
+        else:
+            _target_attr = 'weekly_sales_target_weight'
+            _default_target = 2000.0
+
         weekly_target_weight_g = _to_float(
-            getattr(settings_row, 'weekly_sales_target_weight', None) if settings_row else None,
-            2000.0,
+            getattr(settings_row, _target_attr, None) if settings_row else None,
+            _default_target,
         )
         if weekly_target_weight_g < 0:
             weekly_target_weight_g = 0.0

@@ -2056,6 +2056,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     final config = data?['config'] as Map?;
     final period = (data?['period'] ?? _leaderboardPeriod).toString();
     final isWeek = period == 'week';
+    final isMonth = period == 'month';
     final ranking = (data?['ranking'] as List?) ?? const [];
     final champion = data?['champion'] as Map?;
     final adminSummary = data?['admin_summary'] as Map?;
@@ -2119,7 +2120,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           ? '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
           : '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}');
 
-    final microcopy = isWeek
+    final microcopy = isMonth
+        ? (isAr ? 'سباق الشهر: من يتصدر نهاية الشهر؟' : 'Monthly race: who tops the board?')
+        : isWeek
         ? (isGoalAchieved
           ? (isAr ? 'إنجاز جماعي واضح هذا الأسبوع' : 'A strong team achievement this week')
               : (isAr
@@ -2134,6 +2137,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         'en',
       ).format(effectiveStartDate);
       final date = _ltrIsolate(formatted);
+      if (isMonth) {
+        return isAr
+            ? 'لا توجد مبيعات هذا الشهر — يتم عرض آخر شهر بدأ في $date'
+            : 'No sales this month — showing the latest month starting $date';
+      }
       if (isWeek) {
         return isAr
             ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $date'
@@ -2148,6 +2156,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     String? effectivePeriodText() {
       if (effectiveStartDate == null) return null;
+      if (isMonth) {
+        final monthName = DateFormat('MMMM yyyy', isAr ? 'ar' : 'en').format(effectiveStartDate);
+        return isAr ? 'بيانات الشهر: $monthName' : 'Month: $monthName';
+      }
       if (isWeek) {
         final weekEnd = effectiveStartDate.add(const Duration(days: 6));
         final startText = _ltrIsolate(
@@ -2543,12 +2555,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           children: [
                             Text(
                               isAr
-                                  ? (isWeek
+                                  ? (_leaderboardPeriod == 'week'
                                         ? 'سباق الأداء — الأسبوع'
-                                        : 'سباق الأداء — اليوم')
-                                  : (isWeek
+                                        : _leaderboardPeriod == 'month'
+                                            ? 'سباق الأداء — الشهر'
+                                            : 'سباق الأداء — اليوم')
+                                  : (_leaderboardPeriod == 'week'
                                         ? 'Sales Race — Week'
-                                        : 'Sales Race — Today'),
+                                        : _leaderboardPeriod == 'month'
+                                            ? 'Sales Race — Month'
+                                            : 'Sales Race — Today'),  
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.w800,
                                 color: AppColors.deepGold,
@@ -2605,6 +2621,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           ButtonSegment<String>(
                             value: 'week',
                             label: Text(isAr ? 'الأسبوع' : 'Week'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'month',
+                            label: Text(isAr ? 'الشهر' : 'Month'),
                           ),
                         ],
                         selected: <String>{_leaderboardPeriod},
@@ -2783,7 +2803,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ),
               )
             else ...[
-              if (isWeek &&
+              if ((isWeek || isMonth) &&
                   ((metric == 'points' &&
                           weeklyTargetPoints != null &&
                           teamPoints != null) ||
@@ -3032,12 +3052,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               if (allRanking.isEmpty)
                 Text(
                   isAr
-                      ? (isWeek
-                            ? 'لم يبدأ التحدي هذا الأسبوع بعد.'
-                            : 'لا توجد مبيعات مسجلة اليوم بعد.')
-                      : (isWeek
-                            ? 'The weekly challenge hasn\'t started yet.'
-                            : 'No sales recorded today yet.'),
+                      ? (isMonth
+                            ? 'لم يبدأ التحدي هذا الشهر بعد.'
+                            : isWeek
+                                ? 'لم يبدأ التحدي هذا الأسبوع بعد.'
+                                : 'لا توجد مبيعات مسجلة اليوم بعد.')
+                      : (isMonth
+                            ? 'The monthly challenge hasn\'t started yet.'
+                            : isWeek
+                                ? 'The weekly challenge hasn\'t started yet.'
+                                : 'No sales recorded today yet.'),
                   style: theme.textTheme.bodySmall,
                 )
               else ...[

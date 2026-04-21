@@ -47,9 +47,11 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   bool _showInvoiceCount = true;
   bool _showChampion = true;
   double _weeklyTarget = 2000.0;
+  double _monthlyTarget = 8000.0;
 
   final TextEditingController _pointsCtrl = TextEditingController();
   final TextEditingController _weeklyTargetCtrl = TextEditingController();
+  final TextEditingController _monthlyTargetCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -62,6 +64,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   void dispose() {
     _pointsCtrl.dispose();
     _weeklyTargetCtrl.dispose();
+    _monthlyTargetCtrl.dispose();
     super.dispose();
   }
 
@@ -121,11 +124,16 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     _showChampion = cfg['show_champion'] as bool? ?? true;
     _weeklyTarget =
         (cfg['weekly_sales_target_weight'] as num?)?.toDouble() ?? 2000.0;
+    _monthlyTarget =
+        (cfg['monthly_sales_target_weight'] as num?)?.toDouble() ?? 8000.0;
     _pointsCtrl.text = _pointsPerGram.toStringAsFixed(
       _pointsPerGram == _pointsPerGram.truncateToDouble() ? 0 : 1,
     );
     _weeklyTargetCtrl.text = _weeklyTarget.toStringAsFixed(
       _weeklyTarget == _weeklyTarget.truncateToDouble() ? 0 : 1,
+    );
+    _monthlyTargetCtrl.text = _monthlyTarget.toStringAsFixed(
+      _monthlyTarget == _monthlyTarget.truncateToDouble() ? 0 : 1,
     );
   }
 
@@ -134,6 +142,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     // Validate numeric fields
     final parsedPoints = double.tryParse(_pointsCtrl.text.trim());
     final parsedTarget = double.tryParse(_weeklyTargetCtrl.text.trim());
+    final parsedMonthlyTarget = double.tryParse(_monthlyTargetCtrl.text.trim());
     if (parsedPoints == null || parsedPoints < 0) {
       _showSnack(
         widget.isArabic ? 'قيمة النقاط غير صالحة' : 'Invalid points value',
@@ -150,6 +159,15 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
       );
       return;
     }
+    if (parsedMonthlyTarget == null || parsedMonthlyTarget < 0) {
+      _showSnack(
+        widget.isArabic
+            ? 'قيمة الهدف الشهري غير صالحة'
+            : 'Invalid monthly target value',
+        isError: true,
+      );
+      return;
+    }
     setState(() => _configSaving = true);
     try {
       final saved = await widget.api.updateSalesRaceConfig({
@@ -160,6 +178,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
         'show_invoice_count': _showInvoiceCount,
         'show_champion': _showChampion,
         'weekly_sales_target_weight': parsedTarget,
+        'monthly_sales_target_weight': parsedMonthlyTarget,
       });
       if (!mounted) return;
       _applyConfig(saved);
@@ -1414,6 +1433,25 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
               ),
               decoration: InputDecoration(
                 labelText: isAr ? 'الهدف الأسبوعي (جرام)' : 'Weekly target (g)',
+                suffixText: isAr ? 'جم' : 'g',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          _buildSectionHeader(
+            isAr ? 'هدف الشهر بالجرام' : 'Monthly Target (grams)',
+            Icons.flag_rounded,
+          ),
+          const SizedBox(height: 8),
+          _card(
+            child: TextField(
+              controller: _monthlyTargetCtrl,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: InputDecoration(
+                labelText: isAr ? 'الهدف الشهري (جرام)' : 'Monthly target (g)',
                 suffixText: isAr ? 'جم' : 'g',
                 border: const OutlineInputBorder(),
               ),
