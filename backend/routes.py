@@ -31863,10 +31863,17 @@ def get_gram_profit_report():
 
             # حساب الوزن المباشر:
             # - حسابات مالية (4/5/6): تستخدم debit_21k / credit_21k
-            # - حسابات وزنية (74/75): تستخدم debit_weight / credit_weight
+            # - حسابات وزنية (74/75): تستخدم debit_weight إذا متوفر،
+            #   وإلا debit_21k (القيود اليدوية تحفظ في 21k فقط)
             if acc_num.startswith('74') or acc_num.startswith('75'):
-                w_debit = float(getattr(line, 'debit_weight', 0) or 0)
-                w_credit = float(getattr(line, 'credit_weight', 0) or 0)
+                raw_dw = float(getattr(line, 'debit_weight', 0) or 0)
+                raw_cw = float(getattr(line, 'credit_weight', 0) or 0)
+                # fallback إلى 21k إذا كانت حقول الوزن المباشر فارغة
+                if raw_dw == 0 and raw_cw == 0:
+                    raw_dw = float(getattr(line, 'debit_21k', 0) or 0)
+                    raw_cw = float(getattr(line, 'credit_21k', 0) or 0)
+                w_debit = raw_dw
+                w_credit = raw_cw
             else:
                 w_debit = float(getattr(line, 'debit_21k', 0) or 0)
                 w_credit = float(getattr(line, 'credit_21k', 0) or 0)
@@ -31918,6 +31925,28 @@ def get_gram_profit_report():
                         'type': 'cash',
                         'cash_amount': round(cash_net, 2),
                     })
+
+        # تجميع التفاصيل حسب رقم الحساب (account_number) بدل سطر لكل قيد
+        def _aggregate_details(raw_list, value_key):
+            merged = {}
+            for entry in raw_list:
+                key = entry['account_number']
+                if key not in merged:
+                    merged[key] = {k: v for k, v in entry.items()}
+                else:
+                    merged[key][value_key] = round(
+                        merged[key][value_key] + entry[value_key], 6
+                    )
+            # أزل الإدخالات التي صارت صفراً بعد التجميع
+            return [e for e in merged.values() if abs(e[value_key]) > 0.0001]
+
+        expense_weight_details  = _aggregate_details(expense_weight_details,  'weight_grams')
+        expense_cash_details    = _aggregate_details(expense_cash_details,     'cash_amount')
+        extra_revenue_details_w = _aggregate_details(
+            [x for x in extra_revenue_details if x['type'] == 'weight'], 'weight_grams')
+        extra_revenue_details_c = _aggregate_details(
+            [x for x in extra_revenue_details if x['type'] == 'cash'],   'cash_amount')
+        extra_revenue_details = extra_revenue_details_w + extra_revenue_details_c
 
         # تحويل الإيراد النقدي إلى وزن
         extra_revenue_cash_as_weight = (
