@@ -31861,19 +31861,27 @@ def get_gram_profit_report():
             acc_num = str(acc.account_number or '')
             acc_name = acc.name or ''
 
+            # دالة مساعدة: تُجمّع جميع العيارات مُطبَّعةً إلى العيار الرئيسي
+            def _normalized_21k(prefix):
+                total = 0.0
+                for karat in (18, 21, 22, 24):
+                    field = f'{prefix}_{karat}k'
+                    val = float(getattr(line, field, 0) or 0)
+                    if val:
+                        total += val * karat / main_karat
+                return total
+
             # حساب الوزن المباشر:
             # - حسابات مالية (4/5/6): تستخدم debit_21k / credit_21k
-            # - حسابات وزنية (74/75): تستخدم debit_weight إذا متوفر،
-            #   وإلا debit_21k (القيود اليدوية تحفظ في 21k فقط)
+            # - حسابات وزنية (74/75): تجمع جميع العيارات مُطبَّعةً إلى 21k
+            #   وإلا fallback إلى debit_weight / credit_weight
             if acc_num.startswith('74') or acc_num.startswith('75'):
-                raw_dw = float(getattr(line, 'debit_weight', 0) or 0)
-                raw_cw = float(getattr(line, 'credit_weight', 0) or 0)
-                # fallback إلى 21k إذا كانت حقول الوزن المباشر فارغة
-                if raw_dw == 0 and raw_cw == 0:
-                    raw_dw = float(getattr(line, 'debit_21k', 0) or 0)
-                    raw_cw = float(getattr(line, 'credit_21k', 0) or 0)
-                w_debit = raw_dw
-                w_credit = raw_cw
+                w_debit = _normalized_21k('debit')
+                w_credit = _normalized_21k('credit')
+                # fallback إلى debit_weight إذا لم تتوفر أي حقول karat
+                if w_debit == 0 and w_credit == 0:
+                    w_debit = float(getattr(line, 'debit_weight', 0) or 0)
+                    w_credit = float(getattr(line, 'credit_weight', 0) or 0)
             else:
                 w_debit = float(getattr(line, 'debit_21k', 0) or 0)
                 w_credit = float(getattr(line, 'credit_21k', 0) or 0)
