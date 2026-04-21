@@ -31818,9 +31818,15 @@ def get_gram_profit_report():
             acc_num = str(acc.account_number or '')
             acc_name = acc.name or ''
 
-            # حساب الوزن المباشر (21k) — طريقة الذهب
-            w_debit = float(getattr(line, 'debit_21k', 0) or 0)
-            w_credit = float(getattr(line, 'credit_21k', 0) or 0)
+            # حساب الوزن المباشر:
+            # - حسابات مالية (4/5/6): تستخدم debit_21k / credit_21k
+            # - حسابات وزنية (74/75): تستخدم debit_weight / credit_weight
+            if acc_num.startswith('74') or acc_num.startswith('75'):
+                w_debit = float(getattr(line, 'debit_weight', 0) or 0)
+                w_credit = float(getattr(line, 'credit_weight', 0) or 0)
+            else:
+                w_debit = float(getattr(line, 'debit_21k', 0) or 0)
+                w_credit = float(getattr(line, 'credit_21k', 0) or 0)
 
             # حساب النقد
             c_debit = float(line.cash_debit or 0)

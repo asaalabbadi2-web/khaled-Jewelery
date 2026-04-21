@@ -358,7 +358,7 @@ def generate_token(user, expires_in_minutes: Optional[int] = None):
     - User (legacy)
     - AppUser (مرتبط بالموظفين)
     """
-    now = datetime.now()
+    now = datetime.utcnow()  # JWT standard requires UTC timestamps
     exp_minutes = expires_in_minutes if expires_in_minutes is not None else int(JWT_ACCESS_TOKEN_EXP_MINUTES)
 
     base_payload = {
