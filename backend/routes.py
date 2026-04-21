@@ -16785,6 +16785,7 @@ def add_account():
         account_type=data.get('account_type'),
         tracks_weight=bool(desired_tracks_weight),
         include_in_gram_profit=bool(data.get('include_in_gram_profit', False)),
+        exclude_from_gram_profit=bool(data.get('exclude_from_gram_profit', False)),
     )
     db.session.add(new_account)
     db.session.flush()
@@ -16837,6 +16838,8 @@ def update_account(id):
         account.account_type = data['account_type']
     if 'include_in_gram_profit' in data:
         account.include_in_gram_profit = bool(data['include_in_gram_profit'])
+    if 'exclude_from_gram_profit' in data:
+        account.exclude_from_gram_profit = bool(data['exclude_from_gram_profit'])
     
     # Enforce dual-chart convention by numbering.
     is_memo_account = str(account.account_number or '').startswith('7')
@@ -31747,18 +31750,26 @@ def get_gram_profit_report():
         directly_flagged = (
             Account.query
             .filter(Account.include_in_gram_profit == True)
+            .filter(func.coalesce(Account.exclude_from_gram_profit, False) == False)
             .all()
         )
 
         # جمع الأبناء لكل حساب مُفعّل (بحث تكراري)
         flagged_ids = {acc.id for acc in directly_flagged}
+
+        # الحسابات المستثناة صراحةً (exclude_from_gram_profit=True)
+        excluded_ids = {
+            acc.id for acc in
+            Account.query.filter(func.coalesce(Account.exclude_from_gram_profit, False) == True).all()
+        }
+
         def _collect_descendants(parent_ids):
             if not parent_ids:
                 return
             children = Account.query.filter(Account.parent_id.in_(parent_ids)).all()
             new_ids = set()
             for ch in children:
-                if ch.id not in flagged_ids:
+                if ch.id not in flagged_ids and ch.id not in excluded_ids:
                     flagged_ids.add(ch.id)
                     new_ids.add(ch.id)
             _collect_descendants(new_ids)
@@ -31769,6 +31780,7 @@ def get_gram_profit_report():
         # نستثني مجموعتي المقابلات التجارية لأنهما محسوبتان في الطبقة ①:
         #   741xx = مقابلات المبيعات الوزنية  (Layer ① → trading_profit)
         #   751xx = مقابلات تكلفة المبيعات الوزنية (Layer ① → avg_buy)
+        # ونستثني أيضاً أي حساب عليه exclude_from_gram_profit=True
         _counterpart_parent_accs = Account.query.filter(
             Account.account_number.in_(['741', '751'])
         ).all()
@@ -31780,18 +31792,21 @@ def get_gram_profit_report():
                 Account.account_number.like('74%'),
                 Account.account_number.like('75%'),
             ))
-            # استثناء 741 و 751 أنفسهم
             .filter(Account.id.notin_(_counterpart_group_ids))
-            # استثناء أبناءهم المباشرين (7400,7401,7420,7511,7512,7513,7521 ...)
             .filter(or_(
                 Account.parent_id.is_(None),
                 Account.parent_id.notin_(_counterpart_group_ids),
             ))
+            .filter(func.coalesce(Account.exclude_from_gram_profit, False) == False)
             .all()
         )
         for _wma in weight_memo_accs:
-            flagged_ids.add(_wma.id)
+            if _wma.id not in excluded_ids:
+                flagged_ids.add(_wma.id)
         # ────────────────────────────────────────────────────────────────────────
+
+        # إزالة المستثنيين صراحةً من النهائية
+        flagged_ids -= excluded_ids
 
         flagged_accounts = Account.query.filter(Account.id.in_(flagged_ids)).all() if flagged_ids else []
 

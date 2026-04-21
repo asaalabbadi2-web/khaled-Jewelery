@@ -91,6 +91,8 @@ class Account(db.Model):
     # 🆕 علم تضمين الحساب في تقرير ربح الجرام الوزني
     # True → يدخل في حساب الربح الوزني (إيراد أو مصروف حسب رقم الحساب)
     include_in_gram_profit = db.Column(db.Boolean, default=False, nullable=False)
+    # True → يُستثنى صراحةً من ربح الجرام حتى لو كانت فئته (74/75) تُضمَّن تلقائياً
+    exclude_from_gram_profit = db.Column(db.Boolean, default=False, nullable=False)
     # يشير إلى الحساب الوزني الموازي في قسم (7) حسابات المذكرة
     # مثال: حساب "1000 صندوق النقدية" له حساب موازي "7100 صندوق النقدية (وزن معادل)"
     
@@ -113,6 +115,7 @@ class Account(db.Model):
             'tracks_weight': self.tracks_weight,
             'memo_account_id': self.memo_account_id,
             'include_in_gram_profit': bool(getattr(self, 'include_in_gram_profit', False)),
+            'exclude_from_gram_profit': bool(getattr(self, 'exclude_from_gram_profit', False)),
         }
         
         # إضافة الأرصدة (النظام المزدوج)
