@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now()
 
 
 def _idle_timeout_seconds() -> int:
@@ -338,7 +338,7 @@ def _is_blacklisted(jti: str) -> bool:
                 try:
                     ttl = None
                     if getattr(entry, 'expires_at', None):
-                        ttl = int((entry.expires_at - datetime.utcnow()).total_seconds())
+                        ttl = int((entry.expires_at - datetime.now()).total_seconds())
                     if ttl and ttl > 0:
                         r.setex(f'bl:jti:{jti}', ttl, '1')
                     else:
@@ -358,7 +358,7 @@ def generate_token(user, expires_in_minutes: Optional[int] = None):
     - User (legacy)
     - AppUser (مرتبط بالموظفين)
     """
-    now = datetime.utcnow()
+    now = datetime.now()
     exp_minutes = expires_in_minutes if expires_in_minutes is not None else int(JWT_ACCESS_TOKEN_EXP_MINUTES)
 
     base_payload = {
@@ -487,7 +487,7 @@ def require_auth(f):
         g.current_user = user
         
         # تحديث آخر تسجيل دخول (User.last_login / AppUser.last_login_at)
-        now = datetime.utcnow()
+        now = datetime.now()
         try:
             if hasattr(user, 'last_login_at'):
                 last_login = user.last_login_at

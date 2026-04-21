@@ -307,7 +307,7 @@ class BonusCalculator:
             period_end=period_end,
             calculation_data=calculation_data,
             status="pending",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(),
         )
         return bonus
 
@@ -394,7 +394,7 @@ class BonusCalculator:
                     existing.status = target_status
                     if auto_approve:
                         existing.approved_by = "system"
-                        existing.approved_at = datetime.utcnow()
+                        existing.approved_at = datetime.now()
 
                     invoice_ids = bonus.calculation_data.get("invoice_ids") if bonus.calculation_data else None
                     if invoice_ids is not None:

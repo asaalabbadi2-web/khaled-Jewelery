@@ -856,7 +856,7 @@ class Category(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     description = db.Column(db.String(200))
     karat = db.Column(db.String(10), nullable=True)  # 🆕 عيار افتراضي للتصنيف
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
     
     # العلاقة مع الأصناف
     items = db.relationship('Item', backref='category', lazy=True)
@@ -1459,7 +1459,7 @@ class CategoryWeightMovement(db.Model):
     __tablename__ = 'category_weight_movement'
 
     id = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
     category_id = db.Column(db.Integer, db.ForeignKey('category.id', ondelete='RESTRICT'), nullable=False, index=True)
     safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id', ondelete='RESTRICT'), nullable=False, index=True)
@@ -1913,12 +1913,12 @@ def _generate_journal_entry_number_for_date(connection, entry_date: datetime, pr
 def _ensure_entry_number(mapper, connection, target):
     # Only set if not provided
     if not getattr(target, 'entry_number', None):
-        entry_dt = getattr(target, 'date', None) or datetime.utcnow()
+        entry_dt = getattr(target, 'date', None) or datetime.now()
         try:
             target.entry_number = _generate_journal_entry_number_for_date(connection, entry_dt)
         except Exception:
             # As a last resort, set a placeholder to avoid NOT NULL failure
-            target.entry_number = f'JE-{datetime.utcnow().year}-00000'
+            target.entry_number = f'JE-{datetime.now().year}-00000'
 
 # نموذج لأسطر قيد اليومية
 class JournalEntryLine(db.Model):
@@ -3056,7 +3056,7 @@ class AppUser(db.Model):
         # استخدام خوارزمية مدعومة عبر OpenSSL لضمان التوافق عبر البيئات
         self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
         try:
-            self.password_changed_at = datetime.utcnow()
+            self.password_changed_at = datetime.now()
         except Exception:
             pass
 
@@ -3108,7 +3108,7 @@ class TokenBlacklist(db.Model):
     jti = db.Column(db.String(36), unique=True, nullable=False, index=True)
     token_type = db.Column(db.String(10), nullable=True)  # access | refresh
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
-    blacklisted_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    blacklisted_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     reason = db.Column(db.String(100), nullable=True)
 
 
@@ -3132,7 +3132,7 @@ class RefreshToken(db.Model):
     user_agent = db.Column(db.String(255), nullable=True)
     device_fingerprint = db.Column(db.String(255), nullable=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     last_used_at = db.Column(db.DateTime, nullable=True)
 
 
@@ -3145,9 +3145,9 @@ class SessionActivity(db.Model):
     user_id = db.Column(db.Integer, nullable=False, index=True)
     user_type = db.Column(db.String(20), nullable=False, index=True)  # user | app_user
 
-    last_activity_at = db.Column(db.DateTime, nullable=False, index=True, default=datetime.utcnow)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_activity_at = db.Column(db.DateTime, nullable=False, index=True, default=datetime.now)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
     __table_args__ = (
         db.UniqueConstraint('user_id', 'user_type', name='uq_session_activity_user'),
@@ -3165,7 +3165,7 @@ class LoginAttempt(db.Model):
     user_agent = db.Column(db.String(255), nullable=True)
     success = db.Column(db.Boolean, default=False, nullable=False, index=True)
     failure_reason = db.Column(db.String(200), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
 class AuthActionAttempt(db.Model):
@@ -3184,7 +3184,7 @@ class AuthActionAttempt(db.Model):
     user_agent = db.Column(db.String(255), nullable=True)
     success = db.Column(db.Boolean, default=True, nullable=False, index=True)
     blocked_reason = db.Column(db.String(50), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
 class PasswordResetToken(db.Model):
@@ -3200,7 +3200,7 @@ class PasswordResetToken(db.Model):
     is_used = db.Column(db.Boolean, default=False, nullable=False, index=True)
     used_at = db.Column(db.DateTime, nullable=True)
     used_ip = db.Column(db.String(45), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
 
 
@@ -3440,8 +3440,8 @@ class SafeBox(db.Model):
     notes = db.Column(db.Text, nullable=True)
     
     # معلومات التتبع
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     created_by = db.Column(db.String(100), nullable=True)
     
     # العلاقات
@@ -3556,7 +3556,7 @@ class AuditLog(db.Model):
     entity_number = db.Column(db.String(50), nullable=True)  # رقم الفاتورة/القيد للبحث السريع
     
     # معلومات زمنية
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.now)
     
     # معلومات الأمان
     ip_address = db.Column(db.String(45), nullable=True)  # IPv4 or IPv6
@@ -3703,7 +3703,7 @@ class AuditLog(db.Model):
                 user_agent=user_agent,
                 success=success,
                 error_message=error_message,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now()
             )
             db.session.add(log)
             # لا نقوم بـ commit هنا - سيتم commit في المكان الذي يستدعي log_action
@@ -3747,7 +3747,7 @@ class AuditLog(db.Model):
 user_roles = db.Table('user_roles',
     db.Column('user_id', db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
     db.Column('role_id', db.Integer, db.ForeignKey('roles.id', ondelete='CASCADE'), primary_key=True),
-    db.Column('assigned_at', db.DateTime, default=datetime.utcnow),
+    db.Column('assigned_at', db.DateTime, default=datetime.now),
     db.Column('assigned_by', db.String(100))
 )
 
@@ -3755,7 +3755,7 @@ user_roles = db.Table('user_roles',
 role_permissions = db.Table('role_permissions',
     db.Column('role_id', db.Integer, db.ForeignKey('roles.id', ondelete='CASCADE'), primary_key=True),
     db.Column('permission_id', db.Integer, db.ForeignKey('permissions.id', ondelete='CASCADE'), primary_key=True),
-    db.Column('granted_at', db.DateTime, default=datetime.utcnow),
+    db.Column('granted_at', db.DateTime, default=datetime.now),
     db.Column('granted_by', db.String(100))
 )
 
@@ -3784,8 +3784,8 @@ class User(db.Model):
     position = db.Column(db.String(100))  # المسمى الوظيفي
     
     # تواريخ
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
     last_login = db.Column(db.DateTime)
     password_changed_at = db.Column(db.DateTime)
     
@@ -3806,7 +3806,7 @@ class User(db.Model):
         """تشفير وحفظ كلمة المرور"""
         from werkzeug.security import generate_password_hash
         self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
-        self.password_changed_at = datetime.utcnow()
+        self.password_changed_at = datetime.now()
     
     def check_password(self, password):
         """التحقق من كلمة المرور"""
@@ -3900,8 +3900,8 @@ class Role(db.Model):
     is_system = db.Column(db.Boolean, default=False)  # أدوار النظام لا يمكن حذفها
     
     # تواريخ
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
     
     # إدارة الدور
     created_by = db.Column(db.String(100))
@@ -3975,7 +3975,7 @@ class Permission(db.Model):
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
     
     # تواريخ
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     
     # الفهارس
     __table_args__ = (
@@ -4202,7 +4202,7 @@ class EmployeeBonus(db.Model):
     def approve(self, approved_by='system'):
         self.status = 'approved'
         self.approved_by = approved_by
-        self.approved_at = datetime.utcnow()
+        self.approved_at = datetime.now()
 
     def reject(self, reason=None):
         self.status = 'rejected'
@@ -4211,7 +4211,7 @@ class EmployeeBonus(db.Model):
 
     def mark_as_paid(self, reference=None):
         self.status = 'paid'
-        self.paid_at = datetime.utcnow()
+        self.paid_at = datetime.now()
         if reference:
             self.payment_reference = reference
 

@@ -175,7 +175,7 @@ def main() -> None:
             return
 
     with app.app_context():
-        started = datetime.utcnow()
+        started = datetime.now()
         stats = reset_operations(
             purge_master=args.purge_master,
             purge_prices=args.purge_prices,
@@ -184,7 +184,7 @@ def main() -> None:
             purge_audit=args.purge_audit,
             purge_vouchers=args.purge_vouchers,
         )
-        elapsed = (datetime.utcnow() - started).total_seconds()
+        elapsed = (datetime.now() - started).total_seconds()
 
     print('\n✅ Operations reset complete:')
     for label, count in stats.items():

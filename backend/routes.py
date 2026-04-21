@@ -505,7 +505,7 @@ def _append_restore_audit(event: str, success: bool, details: dict | None = None
         os.makedirs(_server_backup_dir(), exist_ok=True)
         path = os.path.join(_server_backup_dir(), 'restore_audit.log')
         payload = {
-            'ts_utc': datetime.utcnow().isoformat() + 'Z',
+            'ts_utc': datetime.now().isoformat() + 'Z',
             'event': event,
             'success': bool(success),
             'user': _actor_username(),
@@ -521,7 +521,7 @@ def _append_restore_audit(event: str, success: bool, details: dict | None = None
 
 
 def _create_pre_restore_snapshot_zip() -> str:
-    created_at = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    created_at = datetime.now().strftime('%Y%m%d-%H%M%S')
     backup_dir = _server_backup_dir()
     os.makedirs(backup_dir, exist_ok=True)
 
@@ -534,7 +534,7 @@ def _create_pre_restore_snapshot_zip() -> str:
             _create_postgres_backup_to_file(dump_path)
 
             meta = {
-                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'created_at_utc': datetime.now().isoformat() + 'Z',
                 'purpose': 'pre_restore_snapshot',
                 'db_backend': 'postgres',
                 'format': 'pg_dump_custom',
@@ -554,7 +554,7 @@ def _create_pre_restore_snapshot_zip() -> str:
         _create_sqlite_backup_to_file(db_path)
 
         meta = {
-            'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+            'created_at_utc': datetime.now().isoformat() + 'Z',
             'purpose': 'pre_restore_snapshot',
             'db_backend': 'sqlite',
         }
@@ -965,7 +965,7 @@ def review_system_alert(alert_id: int):
     user_name = user_name or 'system'
 
     row.is_reviewed = True
-    row.reviewed_at = datetime.utcnow()
+    row.reviewed_at = datetime.now()
     row.reviewed_by = user_name
     db.session.commit()
     return jsonify({'success': True, 'alert': row.to_dict()}), 200
@@ -1406,12 +1406,12 @@ def _load_weight_closing_settings():
 
 
 def _generate_weight_closing_order_number(prefix='WCO'):
-    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
     return f"{prefix}-{timestamp}"
 
 
 def _generate_reservation_code(prefix='RES'):
-    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     total = OfficeReservation.query.count() + 1
     return f"{prefix}-{timestamp}-{total:04d}"
 
@@ -1438,8 +1438,8 @@ def _generate_journal_entry_number(prefix='JE', entry_date=None):
         entry_date = prefix
         prefix = 'JE'
 
-    dt = entry_date or datetime.utcnow()
-    year = int(getattr(dt, 'year', datetime.utcnow().year))
+    dt = entry_date or datetime.now()
+    year = int(getattr(dt, 'year', datetime.now().year))
     prefix_str = str(prefix)
     number_prefix = f"{prefix_str}-{year}-"
 
@@ -3269,7 +3269,7 @@ def system_backup_download():
             'db': (db.engine.url.get_backend_name() if db.engine else None),
         }), 501
 
-    created_at = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    created_at = datetime.now().strftime('%Y%m%d-%H%M%S')
     filename = f'yasargold-backup-{created_at}.zip'
 
     with tempfile.TemporaryDirectory(prefix='yasargold-backup-') as tmpdir:
@@ -3285,7 +3285,7 @@ def system_backup_download():
                 }), 500
 
             meta = {
-                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'created_at_utc': datetime.now().isoformat() + 'Z',
                 'db_backend': 'postgres',
                 'format': 'pg_dump_custom',
             }
@@ -3295,7 +3295,7 @@ def system_backup_download():
             _create_sqlite_backup_to_file(db_path)
 
             meta = {
-                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'created_at_utc': datetime.now().isoformat() + 'Z',
                 'db_backend': 'sqlite',
             }
             archive_name = 'database.sqlite'
@@ -3422,7 +3422,7 @@ def system_backup_drive_upload():
             'message': f'تعذر تحميل مكتبات Google Drive على السيرفر: {exc}',
         }), 500
 
-    created_at = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    created_at = datetime.now().strftime('%Y%m%d-%H%M%S')
     filename = f'yasargold-backup-{created_at}.zip'
 
     with tempfile.TemporaryDirectory(prefix='yasargold-backup-') as tmpdir:
@@ -3438,7 +3438,7 @@ def system_backup_drive_upload():
                 }), 500
 
             meta = {
-                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'created_at_utc': datetime.now().isoformat() + 'Z',
                 'db_backend': 'postgres',
                 'format': 'pg_dump_custom',
             }
@@ -3448,7 +3448,7 @@ def system_backup_drive_upload():
             _create_sqlite_backup_to_file(db_path)
 
             meta = {
-                'created_at_utc': datetime.utcnow().isoformat() + 'Z',
+                'created_at_utc': datetime.now().isoformat() + 'Z',
                 'db_backend': 'sqlite',
             }
             archive_name = 'database.sqlite'
@@ -4145,7 +4145,7 @@ def get_account_statement(account_id):
     estimated_gold_value = closing_gold_value * price_main
     estimated_total_value = estimated_gold_value + closing_cash_value
 
-    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_issued_at = datetime.now().replace(microsecond=0).isoformat() + 'Z'
     qr_signed_payload = _build_statement_qr_signed_payload(
         account=account,
         main_karat=main_karat,
@@ -4448,7 +4448,7 @@ def get_account_statement_merged(account_id):
     estimated_gold_value = closing_gold_value * price_main
     estimated_total_value = estimated_gold_value + closing_cash_value
 
-    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_issued_at = datetime.now().replace(microsecond=0).isoformat() + 'Z'
     qr_signed_payload = _build_statement_qr_signed_payload(
         account=account,
         main_karat=main_karat,
@@ -4754,7 +4754,7 @@ def get_customer_statement(id):
     except Exception:
         qr_account = None
 
-    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_issued_at = datetime.now().replace(microsecond=0).isoformat() + 'Z'
     qr_signed_payload = None
     qr_signature = None
     qr_verify_token = None
@@ -6127,7 +6127,7 @@ def get_supplier_weight_statement(supplier_id):
     except Exception:
         qr_account = None
 
-    qr_issued_at = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+    qr_issued_at = datetime.now().replace(microsecond=0).isoformat() + 'Z'
     qr_signed_payload = None
     qr_signature = None
     qr_verify_token = None
@@ -6365,9 +6365,9 @@ def supplier_send_gold(supplier_id):
 
     raw_date = data.get('date')
     try:
-        entry_date = datetime.strptime(raw_date, '%Y-%m-%d') if raw_date else datetime.utcnow()
+        entry_date = datetime.strptime(raw_date, '%Y-%m-%d') if raw_date else datetime.now()
     except ValueError:
-        entry_date = datetime.utcnow()
+        entry_date = datetime.now()
 
     notes = str(data.get('notes') or 'إرسال ذهب للمصنع')
     entry_number = _generate_journal_entry_number(entry_date=entry_date)
@@ -8499,7 +8499,7 @@ def approve_invoice(invoice_id: int):
     )
 
     try:
-        now = datetime.utcnow()
+        now = datetime.now()
 
         # 1. Cascade: post all linked invoice JEs
         linked_jes = JournalEntry.query.filter_by(
@@ -9632,7 +9632,7 @@ def safe_boxes_reconciliation():
 
     if not safe_ids:
         return jsonify({
-            'generated_at': datetime.utcnow().isoformat() + 'Z',
+            'generated_at': datetime.now().isoformat() + 'Z',
             'safe_type': safe_type or None,
             'ignore_ref_types': ignore_ref_types,
             'threshold': threshold,
@@ -9792,7 +9792,7 @@ def safe_boxes_reconciliation():
         keyed = keyed[:200]
 
     return jsonify({
-        'generated_at': datetime.utcnow().isoformat() + 'Z',
+        'generated_at': datetime.now().isoformat() + 'Z',
         'safe_type': safe_type or None,
         'ignore_ref_types': ignore_ref_types,
         'threshold': threshold,
@@ -9822,7 +9822,7 @@ def repair_safe_box_transactions():
     )
 
     try:
-        now = datetime.utcnow()
+        now = datetime.now()
 
         # ── Phase A: Post unposted voucher JEs for posted invoices ──
         posted_invoices = Invoice.query.filter(
@@ -11240,7 +11240,7 @@ def add_invoice():
             employee_id=employee_id_for_invoice,
             branch_id=branch_id,
             office_id=office_id,
-            date=datetime.fromisoformat(data['date']) if data.get('date') else datetime.utcnow(),
+            date=datetime.fromisoformat(data['date']) if data.get('date') else datetime.now(),
             total=_extract_float('total', 0.0),
             invoice_type=invoice_type,
             total_weight=_extract_float('total_weight', 0.0),
@@ -16057,7 +16057,7 @@ def devtools_import_sales_invoices_from_excel():
             except Exception:
                 pass
 
-        summary['completed_at'] = datetime.utcnow().isoformat() + 'Z'
+        summary['completed_at'] = datetime.now().isoformat() + 'Z'
         return jsonify(summary), (200 if summary.get('success') else 400)
 
     except Exception as exc:
@@ -16251,7 +16251,7 @@ def export_accounts():
 
     return jsonify({
         'version': 1,
-        'exported_at': datetime.utcnow().isoformat(),
+        'exported_at': datetime.now().isoformat(),
         'count': len(exported),
         'accounts': exported,
     })
@@ -18514,7 +18514,7 @@ def get_sales_overview_report():
             summary['returns_count'] += 1
             summary['returns_value'] += total_value
 
-        period_source = invoice.date or datetime.utcnow()
+        period_source = invoice.date or datetime.now()
         if group_by == 'year':
             period_key = period_source.strftime('%Y')
         elif group_by == 'month':
@@ -19749,7 +19749,7 @@ def get_inventory_status_report():
     def round_weight(value):
         return round(float(value or 0.0), 3)
 
-    now = datetime.utcnow()
+    now = datetime.now()
 
     summary_totals = {
         'items_total': len(filtered_items),
@@ -20089,7 +20089,7 @@ def get_low_stock_report():
                 'critical_items': 0,
                 'total_shortage_quantity': 0.0,
                 'total_shortage_weight': 0.0,
-                'generated_at': datetime.utcnow().isoformat(),
+                'generated_at': datetime.now().isoformat(),
             },
             'items': [],
             'filters': {
@@ -20196,7 +20196,7 @@ def get_low_stock_report():
             if last_date is None or invoice.date > last_date:
                 bucket['last_movement'] = invoice.date
 
-    now = datetime.utcnow()
+    now = datetime.now()
 
     def round_qty(value):
         return round(float(value or 0.0), 3)
@@ -20330,7 +20330,7 @@ def get_low_stock_report():
         'total_shortage_quantity': round_qty(total_shortage_qty),
         'total_shortage_weight': round_weight(total_shortage_weight),
         'average_days_since_movement': avg_days_since_movement,
-        'generated_at': datetime.utcnow().isoformat(),
+        'generated_at': datetime.now().isoformat(),
     }
 
     return jsonify({
@@ -20382,7 +20382,7 @@ def get_inventory_movement_report():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    now = datetime.utcnow()
+    now = datetime.now()
     if end_dt is None:
         end_dt = datetime.combine(now.date(), datetime.min.time()) + timedelta(days=1)
     if start_dt is None:
@@ -21928,7 +21928,7 @@ def get_sales_vs_purchases_trend():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    now = datetime.utcnow()
+    now = datetime.now()
     if end_dt is None:
         end_dt = datetime.combine(now.date(), datetime.min.time()) + timedelta(days=1)
     if start_dt is None:
@@ -22136,7 +22136,7 @@ def get_customer_balances_aging():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    cutoff_date = cutoff_value or datetime.utcnow().date()
+    cutoff_date = cutoff_value or datetime.now().date()
     cutoff_end = datetime.combine(cutoff_date, datetime.min.time()) + timedelta(days=1)
 
     try:
@@ -23696,8 +23696,8 @@ def create_payroll():
 
     payroll_entry = Payroll(
         employee_id=employee.id,
-        month=int(data.get('month', datetime.utcnow().month)),
-        year=int(data.get('year', datetime.utcnow().year)),
+        month=int(data.get('month', datetime.now().month)),
+        year=int(data.get('year', datetime.now().year)),
         basic_salary=basic_salary,
         allowances=allowances,
         deductions=deductions,
@@ -24050,7 +24050,7 @@ def _post_payroll_accrual_internal(payroll_entry, created_by='system'):
         return False, 'لا يوجد حساب ذمم رواتب (2400xxxx) لهذا الموظف. يرجى تشغيل Ensure setup للموظف.', None
 
     # ── إنشاء القيد ───────────────────────────────────────────────────
-    now = datetime.utcnow()
+    now = datetime.now()
     description = f"إثبات استحقاق راتب {employee.name} - {payroll_entry.month}/{payroll_entry.year}"
 
     journal_entry = JournalEntry(
@@ -24151,7 +24151,7 @@ def mark_payroll_paid(payroll_id):
     data = request.get_json() or {}
 
     try:
-        paid_date = _parse_iso_date(data.get('paid_date') or datetime.utcnow().date(), 'paid_date')
+        paid_date = _parse_iso_date(data.get('paid_date') or datetime.now().date(), 'paid_date')
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -26529,7 +26529,7 @@ def get_gold_price_history_report():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    now = datetime.utcnow()
+    now = datetime.now()
     default_start = (now - timedelta(days=90)).date()
     applied_start = start_value or default_start
     applied_end = end_value or now.date()
@@ -30324,7 +30324,7 @@ def execute_weight_closing_profile():
     if profile['meta'].get('requires_weight') and weight_main <= 0:
         return jsonify({'error': 'هذا البروفايل يتطلب إدخال وزن'}), 400
 
-    now = datetime.utcnow()
+    now = datetime.now()
     description = data.get('notes') or profile['meta'].get('display_name') or profile_key
     journal_entry = JournalEntry(
         entry_number=_generate_journal_entry_number('WXP'),
@@ -30523,7 +30523,7 @@ def create_office_reservation():
     settings = _load_weight_closing_settings()
 
     try:
-        reservation_date = datetime.fromisoformat(data.get('reservation_date')) if data.get('reservation_date') else datetime.utcnow()
+        reservation_date = datetime.fromisoformat(data.get('reservation_date')) if data.get('reservation_date') else datetime.now()
     except ValueError:
         return jsonify({'error': 'reservation_date يجب أن يكون بصيغة ISO'}), 400
 
@@ -30601,7 +30601,7 @@ def create_office_reservation():
                 created_by=str(data.get('created_by') or 'system'),
                 status='approved',
                 approved_by=str(data.get('created_by') or 'system'),
-                approved_at=datetime.utcnow(),
+                approved_at=datetime.now(),
                 amount_cash=round(float(paid_amount), 2),
                 amount_gold=0.0,
             )
@@ -30697,7 +30697,7 @@ def settle_office_reservation(reservation_id: int):
         settlement_date = (
             datetime.fromisoformat(data.get('settlement_date'))
             if data.get('settlement_date')
-            else datetime.utcnow()
+            else datetime.now()
         )
     except ValueError:
         return jsonify({'error': 'settlement_date يجب أن يكون بصيغة ISO'}), 400

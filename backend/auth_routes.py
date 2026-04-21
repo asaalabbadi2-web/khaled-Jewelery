@@ -91,7 +91,7 @@ def _is_idle_expired(user_type: str, user_id: int) -> bool:
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now()
 
 
 def _client_ip() -> Optional[str]:
@@ -488,7 +488,7 @@ def login():
                     _record_login_attempt(username, success=False, failure_reason='otp_invalid')
                     return jsonify({'success': False, 'message': 'رمز التحقق غير صحيح', 'error': 'otp_invalid'}), 401
 
-            app_user.last_login_at = datetime.utcnow()
+            app_user.last_login_at = datetime.now()
             db.session.commit()
 
             token = generate_token(app_user)
@@ -546,7 +546,7 @@ def login():
             _record_login_attempt(username, success=False, failure_reason='inactive_account')
             return jsonify({'success': False, 'message': 'هذا الحساب غير نشط', 'error': 'inactive_account'}), 403
 
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now()
         db.session.commit()
 
         token = generate_token(user)
@@ -2082,7 +2082,7 @@ def update_user(user_id):
         if 'password' in data and data['password']:
             user.set_password(data['password'])
         
-        user.updated_at = datetime.utcnow()
+        user.updated_at = datetime.now()
         db.session.commit()
         
         return jsonify({
@@ -2123,7 +2123,7 @@ def delete_user(user_id):
         has_ops = AuditLog.query.filter_by(user_name=username).first() is not None
         if has_ops:
             user.is_active = False
-            user.updated_at = datetime.utcnow()
+            user.updated_at = datetime.now()
             db.session.commit()
             return jsonify({
                 'success': True,
@@ -2170,7 +2170,7 @@ def toggle_user_active(user_id):
             }), 400
         
         user.is_active = not user.is_active
-        user.updated_at = datetime.utcnow()
+        user.updated_at = datetime.now()
         db.session.commit()
         
         status = 'تفعيل' if user.is_active else 'تعطيل'
@@ -2208,7 +2208,7 @@ def reset_user_password(user_id):
             }), 400
 
         user.set_password(str(new_password))
-        user.updated_at = datetime.utcnow()
+        user.updated_at = datetime.now()
         db.session.commit()
 
         return jsonify({'success': True, 'message': 'تم تحديث كلمة المرور'}), 200

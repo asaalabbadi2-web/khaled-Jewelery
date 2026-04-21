@@ -181,7 +181,7 @@ def _create_opening_entry_for_supplier(
             pass
         equity_memo_id = getattr(equity_fin, 'memo_account_id', None)
 
-    now = datetime.utcnow()
+    now = datetime.now()
     entry = JournalEntry(
         date=now,
         description=f'رصيد افتتاحي للمورد: {supplier.name}',

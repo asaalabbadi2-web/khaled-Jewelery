@@ -38,7 +38,7 @@ class SafeboxReconciliationScheduler:
         from models import Invoice, Voucher, JournalEntry, SafeBox, SafeBoxTransaction, db
         from sqlalchemy import func, or_
 
-        now = datetime.utcnow()
+        now = datetime.now()
         approved_by = "scheduler"
         voucher_je_fixed = 0
         sbt_fixed = 0

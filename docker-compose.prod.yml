@@ -28,6 +28,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       BYPASS_AUTH_FOR_DEVELOPMENT: "0"
       YASAR_ENV: ${YASAR_ENV:-production}
+      TZ: ${TZ:-Asia/Riyadh}
       # Persist server-side snapshots/audit logs and allow UI download/restore.
       BACKUP_DIR: ${BACKUP_DIR:-/data/backups}
       # Keep this OFF by default; enable only during a controlled maintenance window.
@@ -58,6 +59,7 @@ services:
       YASAR_ENV: ${YASAR_ENV:-production}
       BACKUP_DIR: ${BACKUP_DIR:-/data/backups}
       ALLOW_DANGEROUS_RESETS: ${ALLOW_DANGEROUS_RESETS:-false}
+      TZ: ${TZ:-Asia/Riyadh}
       GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE: ${GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE:-/run/secrets/google_drive_sa.json}
       GOOGLE_DRIVE_BACKUP_FOLDER_ID: ${GOOGLE_DRIVE_BACKUP_FOLDER_ID:-}
     command: ["python", "backend/run_schedulers.py"]

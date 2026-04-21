@@ -32,7 +32,7 @@ class SupplierGoldService:
         supplier.gold_balance_cash_equivalent = (
             supplier.gold_balance_cash_equivalent or 0.0
         ) + (cash_delta or 0.0)
-        supplier.last_gold_transaction_date = datetime.utcnow()
+        supplier.last_gold_transaction_date = datetime.now()
 
     @staticmethod
     def record_purchase(

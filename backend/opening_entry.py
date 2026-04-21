@@ -220,7 +220,7 @@ def main():
             reference_type='opening',
             reference_id=None,
             is_posted=True,
-            posted_at=datetime.utcnow(),
+            posted_at=datetime.now(),
             posted_by='system_migration',
         )
         db.session.add(je)

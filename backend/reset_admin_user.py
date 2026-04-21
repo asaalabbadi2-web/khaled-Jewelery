@@ -135,10 +135,10 @@ def main() -> None:
             print('Aborted.')
             return
 
-    started = datetime.utcnow()
+    started = datetime.now()
     with app.app_context():
         reset_admin(username=args.username, password=args.password, full_name=args.full_name)
-    elapsed = (datetime.utcnow() - started).total_seconds()
+    elapsed = (datetime.now() - started).total_seconds()
 
     print('✅ Done.')
     print(f"Admin username: {args.username}")

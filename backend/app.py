@@ -234,7 +234,7 @@ def _compute_backend_build() -> str:
 
 
 _BACKEND_BUILD = _compute_backend_build()
-_BACKEND_STARTED_AT = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+_BACKEND_STARTED_AT = datetime.now().isoformat(timespec='seconds') + 'Z'
 
 
 @app.after_request
