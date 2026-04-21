@@ -31765,6 +31765,34 @@ def get_gram_profit_report():
 
         _collect_descendants(flagged_ids.copy())
 
+        # ── تضمين تلقائي للحسابات الوزنية التشغيلية (74xx / 75xx) ─────────────
+        # نستثني مجموعتي المقابلات التجارية لأنهما محسوبتان في الطبقة ①:
+        #   741xx = مقابلات المبيعات الوزنية  (Layer ① → trading_profit)
+        #   751xx = مقابلات تكلفة المبيعات الوزنية (Layer ① → avg_buy)
+        _counterpart_parent_accs = Account.query.filter(
+            Account.account_number.in_(['741', '751'])
+        ).all()
+        _counterpart_group_ids = {a.id for a in _counterpart_parent_accs}
+
+        weight_memo_accs = (
+            Account.query
+            .filter(or_(
+                Account.account_number.like('74%'),
+                Account.account_number.like('75%'),
+            ))
+            # استثناء 741 و 751 أنفسهم
+            .filter(Account.id.notin_(_counterpart_group_ids))
+            # استثناء أبناءهم المباشرين (7400,7401,7420,7511,7512,7513,7521 ...)
+            .filter(or_(
+                Account.parent_id.is_(None),
+                Account.parent_id.notin_(_counterpart_group_ids),
+            ))
+            .all()
+        )
+        for _wma in weight_memo_accs:
+            flagged_ids.add(_wma.id)
+        # ────────────────────────────────────────────────────────────────────────
+
         flagged_accounts = Account.query.filter(Account.id.in_(flagged_ids)).all() if flagged_ids else []
 
         revenue_account_ids = set()
