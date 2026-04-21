@@ -2710,7 +2710,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               Padding(
                 padding: EdgeInsets.only(bottom: _s(4)),
                 child: Text(
-                  isArabic ? 'جم ($mainKarat)' : 'g ($mainKarat)',
+                  isArabic ? 'عيار ($mainKarat)' : 'k($mainKarat)',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: profitColor.withValues(alpha: 0.7),
                     fontWeight: FontWeight.w600,

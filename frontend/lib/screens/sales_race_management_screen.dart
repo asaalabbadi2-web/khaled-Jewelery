@@ -117,7 +117,9 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     _defaultPeriod =
         (cfg['default_period'] as String?)?.trim().toLowerCase() == 'week'
         ? 'week'
-        : 'today';
+        : (cfg['default_period'] as String?)?.trim().toLowerCase() == 'month'
+            ? 'month'
+            : 'today';
     _pointsPerGram = (cfg['points_per_gram'] as num?)?.toDouble() ?? 10.0;
     _allowFallback = cfg['allow_fallback_to_latest_period'] as bool? ?? true;
     _showInvoiceCount = cfg['show_invoice_count'] as bool? ?? true;
@@ -290,7 +292,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
             else ...[
               _buildChampionAndSummaryRow(isAr),
               const SizedBox(height: 16),
-              if (_period == 'week') ...[
+              if (_period == 'week' || _period == 'month') ...[
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 2),
                   child: _buildWeeklyGoalCard(isAr),
@@ -321,6 +323,10 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
             ButtonSegment(
               value: 'week',
               label: Text(isAr ? 'الأسبوع' : 'Week'),
+            ),
+            ButtonSegment(
+              value: 'month',
+              label: Text(isAr ? 'الشهر' : 'Month'),
             ),
           ],
           selected: {_period},
@@ -382,7 +388,11 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
         if (isFallback && effectiveDate != null)
           _buildNoticeCard(
             icon: Icons.history_toggle_off_rounded,
-            message: _period == 'week'
+            message: _period == 'month'
+                ? (isAr
+                      ? 'لا توجد مبيعات هذا الشهر — يتم عرض آخر شهر بدأ في ${_fmt(effectiveDate)}'
+                      : 'No sales this month — showing latest month starting ${_fmt(effectiveDate)}')
+                : _period == 'week'
                 ? (isAr
                       ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في ${_fmt(effectiveDate)}'
                       : 'No sales this week — showing latest week starting ${_fmt(effectiveDate)}')
@@ -557,6 +567,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
 
   Widget _buildWeeklyGoalCard(bool isAr) {
     final data = _data!;
+    final isMonth = _period == 'month';
     final metric = (data['metric'] ?? 'weight_g').toString();
     final teamWeight = (data['team_weight_g'] as num?)?.toDouble();
     final weeklyTarget = (data['weekly_target_weight_g'] as num?)?.toDouble();
@@ -611,7 +622,9 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            isAr ? 'هدف الفريق الأسبوعي' : 'Team Weekly Goal',
+                            isMonth
+                                ? (isAr ? 'هدف الفريق الشهري' : 'Team Monthly Goal')
+                                : (isAr ? 'هدف الفريق الأسبوعي' : 'Team Weekly Goal'),
                             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.w800,
                               color: goalColor,
@@ -626,9 +639,13 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                           ? (isAr
                                 ? 'الهدف أُغلق بنجاح، وما زال المجال مفتوحاً لتوسيع الصدارة'
                                 : 'The goal is closed successfully, with room to extend the lead')
-                          : (isAr
-                                ? 'لوحة مركزة توضح أين وصل الفريق هذا الأسبوع'
-                                : 'A focused panel showing where the team stands this week'),
+                          : isMonth
+                              ? (isAr
+                                    ? 'لوحة مركزة توضح أين وصل الفريق هذا الشهر'
+                                    : 'A focused panel showing where the team stands this month')
+                              : (isAr
+                                    ? 'لوحة مركزة توضح أين وصل الفريق هذا الأسبوع'
+                                    : 'A focused panel showing where the team stands this week'),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.68),
                         fontWeight: FontWeight.w600,
@@ -1407,6 +1424,10 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                     ButtonSegment(
                       value: 'week',
                       label: Text(isAr ? 'الأسبوع' : 'Week'),
+                    ),
+                    ButtonSegment(
+                      value: 'month',
+                      label: Text(isAr ? 'الشهر' : 'Month'),
                     ),
                   ],
                   selected: {_defaultPeriod},
