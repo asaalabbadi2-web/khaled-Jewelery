@@ -31771,9 +31771,11 @@ def get_gram_profit_report():
         expense_account_ids = set()
         for acc in flagged_accounts:
             num = str(acc.account_number or '')
-            if num.startswith('4'):
+            # 4xxx = إيرادات مالية، 74xx = إيرادات وزنية (مذكرة)
+            if num.startswith('4') or num.startswith('74'):
                 revenue_account_ids.add(acc.id)
-            elif num.startswith('5') or num.startswith('6'):
+            # 5xxx/6xxx = مصاريف مالية، 75xx = مصاريف وزنية (مذكرة)
+            elif num.startswith('5') or num.startswith('6') or num.startswith('75'):
                 expense_account_ids.add(acc.id)
 
         all_flagged_ids = revenue_account_ids | expense_account_ids
