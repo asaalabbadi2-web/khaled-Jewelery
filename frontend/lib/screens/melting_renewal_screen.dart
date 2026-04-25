@@ -4,9 +4,9 @@ import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../utils.dart';
 
-/// شاشة التجديد والتكسير
-/// تكسير: نقل ذهب من خزينة المعروض → صندوق الكسر، مع تسجيل فصوص خارجة
-/// تجديد: نقل ذهب من خزينة المصدر → خزينة المعروض، مع تسجيل فصوص داخلة
+// ═══════════════════════════════════════════════════════════════════
+//  الشاشة الرئيسية
+// ═══════════════════════════════════════════════════════════════════
 class MeltingRenewalScreen extends StatefulWidget {
   final ApiService api;
   final bool isArabic;
@@ -39,813 +39,564 @@ class _MeltingRenewalScreenState extends State<MeltingRenewalScreen>
 
   @override
   Widget build(BuildContext context) {
-    final isAr = widget.isArabic;
-
-    const Color tabBg      = Color(0xFFB8860B); // ذهبي داكن
-    const Color tabSelected = Colors.white;
-    const Color tabUnselected = Color(0xFFFFE082); // ذهبي فاتح
-
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(isAr ? 'التجديد والتكسير' : 'Renewal & Melting'),
+        title: const Text('التجديد والتكسير'),
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: cs.primary,
+          labelColor: cs.primary,
+          tabs: const [
+            Tab(icon: Icon(Icons.recycling),     text: 'تكسير المخزون'),
+            Tab(icon: Icon(Icons.auto_fix_high), text: 'تجديد القطع'),
+          ],
+        ),
       ),
-      body: Column(
+      body: TabBarView(
+        controller: _tabController,
         children: [
-          // ── شريط التبويبات مستقل عن AppBar ────────────────────────
-          Material(
-            color: tabBg,
-            elevation: 2,
-            child: TabBar(
-              controller: _tabController,
-              labelColor: tabSelected,
-              unselectedLabelColor: tabUnselected,
-              labelStyle: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontWeight: FontWeight.normal,
-                fontSize: 14,
-              ),
-              indicatorColor: Colors.white,
-              indicatorWeight: 4,
-              indicatorSize: TabBarIndicatorSize.tab,
-              dividerColor: Colors.transparent,
-              tabs: [
-                Tab(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.recycling, size: 22),
-                      const SizedBox(width: 8),
-                      Text(isAr ? 'تكسير المخزون' : 'Melting'),
-                    ],
-                  ),
-                ),
-                Tab(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.auto_fix_high, size: 22),
-                      const SizedBox(width: 8),
-                      Text(isAr ? 'تجديد القطع' : 'Renewal'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ── محتوى التبويبات ─────────────────────────────────────
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                _MeltingTab(api: widget.api, isArabic: isAr, opType: 'melting'),
-                _MeltingTab(api: widget.api, isArabic: isAr, opType: 'renewal'),
-              ],
-            ),
-          ),
+          _OperationForm(api: widget.api, opType: 'melting'),
+          _OperationForm(api: widget.api, opType: 'renewal'),
         ],
       ),
     );
   }
 }
 
-// ==================== تبويب موحد (تكسير أو تجديد) ====================
-class _MeltingTab extends StatefulWidget {
-  final ApiService api;
-  final bool isArabic;
-  final String opType; // 'melting' | 'renewal'
+// ═══════════════════════════════════════════════════════════════════
+//  سطر وزن واحد (عيار + ذهب + فصوص)
+// ═══════════════════════════════════════════════════════════════════
+class _WeightLine {
+  int karat;
+  final TextEditingController goldCtrl   = TextEditingController();
+  final TextEditingController stonesCtrl = TextEditingController();
 
-  const _MeltingTab({
-    required this.api,
-    required this.isArabic,
-    required this.opType,
-  });
+  _WeightLine({this.karat = 21});
 
-  @override
-  State<_MeltingTab> createState() => _MeltingTabState();
+  double get goldWeight   => double.tryParse(goldCtrl.text.trim())   ?? 0.0;
+  double get stonesWeight => double.tryParse(stonesCtrl.text.trim()) ?? 0.0;
+
+  void dispose() {
+    goldCtrl.dispose();
+    stonesCtrl.dispose();
+  }
 }
 
-class _MeltingTabState extends State<_MeltingTab> {
+// ═══════════════════════════════════════════════════════════════════
+//  نموذج العملية
+// ═══════════════════════════════════════════════════════════════════
+class _OperationForm extends StatefulWidget {
+  final ApiService api;
+  final String opType;
+
+  const _OperationForm({required this.api, required this.opType});
+
+  @override
+  State<_OperationForm> createState() => _OperationFormState();
+}
+
+class _OperationFormState extends State<_OperationForm> {
   final _formKey = GlobalKey<FormState>();
 
-  // خزائن
-  List<SafeBoxModel> _goldSafes = [];
+  // ── بيانات محملة ─────────────────────────────────────────────
+  List<SafeBoxModel> _safes      = [];
+  Map<int, double>   _stonesMap  = {};   // safe_box_id → stones grams
+  List<Map<String, dynamic>> _wageAccounts = [];
+  bool _loading = true;
+
+  // ── اختيارات ─────────────────────────────────────────────────
   int? _fromSafeId;
   int? _toSafeId;
 
-  // عيارات
-  static const List<int> _karats = [24, 22, 21, 18];
-  int _fromKarat = 21;
-  int _toKarat = 21;
+  // ── أسطر الأوزان ─────────────────────────────────────────────
+  final List<_WeightLine> _lines = [_WeightLine()];
 
-  // أوزان
-  final _goldWeightCtrl    = TextEditingController();
-  final _stonesWeightCtrl  = TextEditingController();
-
-  // حسابات الفصوص
-  List<Map<String, dynamic>> _accounts = [];
-  int? _stonesAccountId;
-
-  // مصنعية تالفة (تكسير فقط) - مبلغ نقدي
-  final _wageAmountCtrl = TextEditingController();
-  List<Map<String, dynamic>> _wageAccounts = [];
+  // ── مصنعية تالفة (تكسير فقط) ─────────────────────────────────
+  final _wageCtrl = TextEditingController();
   int? _wageAccountId;
 
-  // ملاحظات
+  // ── ملاحظات ──────────────────────────────────────────────────
   final _notesCtrl = TextEditingController();
 
-  bool _loading = false;
   bool _submitting = false;
 
   bool get _isMelting => widget.opType == 'melting';
+  String get _prefFrom => 'mr2_from_${widget.opType}';
+  String get _prefTo   => 'mr2_to_${widget.opType}';
 
+  static const _availableKarats = [24, 22, 21, 18];
+
+  // ── دورة الحياة ──────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _load();
   }
 
   @override
   void dispose() {
-    _goldWeightCtrl.dispose();
-    _stonesWeightCtrl.dispose();
-    _wageAmountCtrl.dispose();
+    for (final l in _lines) { l.dispose(); }
+    _wageCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
 
-  /// مفاتيح SharedPreferences (مختلفة لكل نوع عملية)
-  String get _prefKeyFrom => 'mr_from_safe_${widget.opType}';
-  String get _prefKeyTo   => 'mr_to_safe_${widget.opType}';
-
-  /// يحفظ الخزائن المختارة بعد الإرسال الناجح
-  Future<void> _saveLastUsed() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (_fromSafeId != null) await prefs.setInt(_prefKeyFrom, _fromSafeId!);
-    if (_toSafeId   != null) await prefs.setInt(_prefKeyTo,   _toSafeId!);
-  }
-
-  Future<void> _loadData() async {
+  // ── تحميل البيانات ───────────────────────────────────────────
+  Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final safes    = await widget.api.getSafeBoxBalances();
-      final accounts = await widget.api.getAccounts();
-      final prefs    = await SharedPreferences.getInstance();
+      final results = await Future.wait([
+        widget.api.getSafeBoxBalances(type: 'gold'),
+        widget.api.getStonesBalance(),
+        widget.api.getAccounts(),
+        SharedPreferences.getInstance(),
+      ]);
+
+      final safes    = results[0] as List<SafeBoxModel>;
+      final stones   = results[1] as Map<int, double>;
+      final accounts = results[2] as List;
+      final prefs    = results[3] as SharedPreferences;
+
+      final wageAccs = accounts
+          .whereType<Map<String, dynamic>>()
+          .where((a) => (a['type'] ?? '').toString().toLowerCase() == 'expense')
+          .toList();
 
       setState(() {
-        _goldSafes = safes.where((s) => s.safeType == 'gold').toList();
-        _accounts  = accounts
-            .whereType<Map<String, dynamic>>()
-            .where((a) {
-              final t = (a['type'] ?? '').toString().toLowerCase();
-              if (_isMelting) return t == 'expense' || t == 'asset';
-              return t == 'revenue' || t == 'income';
-            })
-            .toList();
+        _safes       = safes;
+        _stonesMap   = stones;
+        _wageAccounts = wageAccs;
 
-        // حسابات المصنعية التالفة: مصروف فقط
-        _wageAccounts = accounts
-            .whereType<Map<String, dynamic>>()
-            .where((a) {
-              final t = (a['type'] ?? '').toString().toLowerCase();
-              return t == 'expense';
-            })
-            .toList();
+        // استعادة آخر اختيار
+        final ids       = safes.map((s) => s.id).toSet();
+        final savedFrom = prefs.getInt(_prefFrom);
+        final savedTo   = prefs.getInt(_prefTo);
+        if (savedFrom != null && ids.contains(savedFrom)) _fromSafeId = savedFrom;
+        if (savedTo   != null && ids.contains(savedTo))   _toSafeId   = savedTo;
 
-        // ── الاختيار التلقائي ────────────────────────────────────
-        // أولاً: جرّب الخزائن المستخدمة سابقاً (الأكثر اختياراً)
-        final savedFrom = prefs.getInt(_prefKeyFrom);
-        final savedTo   = prefs.getInt(_prefKeyTo);
-        final validIds  = _goldSafes.map((s) => s.id).toSet();
-        if (savedFrom != null && validIds.contains(savedFrom)) {
-          _fromSafeId = savedFrom;
-        }
-        if (savedTo != null && validIds.contains(savedTo)) {
-          _toSafeId = savedTo;
-        }
-
-        // ثانياً: كمل الناقص بالقواعد الافتراضية
-        _autoSelectDefaults();
+        _applyDefaults();
+        _loading = false;
       });
     } catch (e) {
-      _snack('خطأ في تحميل البيانات: $e', isError: true);
-    } finally {
-      setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        _snack('خطأ في تحميل البيانات: $e', error: true);
+      }
     }
   }
 
-  /// يكمل الاختيار التلقائي لأي خزينة لم تُختر بعد:
-  /// • من:  آخر خزينة مُستخدمة (من prefs)، وإلا الأولى في القائمة
-  /// • إلى: الخزينة الافتراضية (isDefault) أو التي تحوي "كسر" لعمليات التكسير
-  /// • العيار: العيار ذو أعلى رصيد في الخزينة المصدر
-  void _autoSelectDefaults() {
-    if (_goldSafes.isEmpty) return;
+  void _applyDefaults() {
+    if (_safes.isEmpty) return;
+    _fromSafeId ??= _safes.first.id;
 
-    // خزينة المصدر: إن لم تُختر بعد، خذ الأولى في القائمة
-    _fromSafeId ??= _goldSafes.first.id;
-
-    // خزينة الوجهة للتكسير: isDefault أو اسمها يحوي "كسر"
-    if (_isMelting) {
-      final meltingBox = _goldSafes.firstWhere(
-        (s) => s.isDefault,
-        orElse: () => _goldSafes.firstWhere(
-          (s) => s.name.contains('كسر') || s.name.toLowerCase().contains('scrap'),
-          orElse: () => _goldSafes.last,
-        ),
-      );
-      if (_toSafeId == null && meltingBox.id != _fromSafeId) {
-        _toSafeId = meltingBox.id;
-      }
-    } else {
-      // خزينة الوجهة للتجديد: isDefault
-      final displayBox = _goldSafes.firstWhere(
-        (s) => s.isDefault,
-        orElse: () => _goldSafes.first,
-      );
-      if (_toSafeId == null && displayBox.id != _fromSafeId) {
-        _toSafeId = displayBox.id;
-      }
-    }
-
-    // إذا لم تُختر وجهة (كل الخزائن متشابهة في الشروط) نأخذ الأولى المختلفة عن المصدر
     if (_toSafeId == null || _toSafeId == _fromSafeId) {
-      final other = _goldSafes.firstWhere(
-        (s) => s.id != _fromSafeId,
-        orElse: () => _goldSafes.first,
-      );
-      _toSafeId = other.id;
+      final target = _isMelting
+          ? _safes.firstWhere(
+              (s) => s.isDefault || s.name.contains('كسر'),
+              orElse: () => _safes.firstWhere(
+                  (s) => s.id != _fromSafeId, orElse: () => _safes.first))
+          : _safes.firstWhere(
+              (s) => s.isDefault,
+              orElse: () => _safes.firstWhere(
+                  (s) => s.id != _fromSafeId, orElse: () => _safes.first));
+      if (target.id != _fromSafeId) _toSafeId = target.id;
     }
 
-    // العيار: أعلى عيار رصيداً في خزينة المصدر
-    _autoSelectKarat();
-  }
-
-  /// يختار العيار ذا أعلى رصيد في الخزينة المصدر الحالية
-  void _autoSelectKarat() {
-    if (_fromSafeId == null) return;
-    final safe = _goldSafes.firstWhere(
-      (s) => s.id == _fromSafeId,
-      orElse: () => _goldSafes.first,
-    );
-    final balances = {
-      24: safe.goldBalance24k,
-      22: safe.goldBalance22k,
-      21: safe.goldBalance21k,
-      18: safe.goldBalance18k,
-    };
-    final best = balances.entries
-        .where((e) => e.value > 0)
-        .fold<MapEntry<int, double>?>(
-          null,
-          (prev, e) => prev == null || e.value > prev.value ? e : prev,
-        );
-    if (best != null) {
-      _fromKarat = best.key;
-      _toKarat   = best.key;
+    // اختيار العيار الأعلى رصيداً في الخزنة المصدر للسطر الأول
+    if (_lines.isNotEmpty) {
+      final s = _safeById(_fromSafeId);
+      if (s != null) {
+        final best = {
+          24: s.goldBalance24k,
+          22: s.goldBalance22k,
+          21: s.goldBalance21k,
+          18: s.goldBalance18k,
+        }.entries.where((e) => e.value > 0).fold<MapEntry<int, double>?>(
+              null, (p, e) => p == null || e.value > p.value ? e : p);
+        if (best != null) _lines[0].karat = best.key;
+      }
     }
   }
 
-  void _snack(String msg, {bool isError = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: isError ? Colors.red : Colors.green,
-    ));
-  }
+  // ── مساعدات الرصيد ───────────────────────────────────────────
+  SafeBoxModel? _safeById(int? id) =>
+      id == null ? null : _safes.firstWhere((s) => s.id == id, orElse: () => _safes.first);
 
-  /// رصيد العيار المحدد في الخزينة المصدر
-  double _fromAvailable() {
-    if (_fromSafeId == null) return 0.0;
-    final safe = _goldSafes.firstWhere(
-      (s) => s.id == _fromSafeId,
-      orElse: () => _goldSafes.first,
-    );
-    switch (_fromKarat) {
-      case 18: return safe.goldBalance18k;
-      case 21: return safe.goldBalance21k;
-      case 22: return safe.goldBalance22k;
-      case 24: return safe.goldBalance24k;
+  double _goldAvailable(int? safeId, int karat) {
+    final s = _safeById(safeId);
+    if (s == null) return 0.0;
+    switch (karat) {
+      case 18: return s.goldBalance18k;
+      case 21: return s.goldBalance21k;
+      case 22: return s.goldBalance22k;
+      case 24: return s.goldBalance24k;
       default: return 0.0;
     }
   }
 
+  double _stonesFor(int? safeId) =>
+      safeId == null ? 0.0 : (_stonesMap[safeId] ?? 0.0);
+
+  // ── إدارة الأسطر ─────────────────────────────────────────────
+  void _addLine() {
+    setState(() => _lines.add(_WeightLine(karat: _lines.last.karat)));
+  }
+
+  void _removeLine(int index) {
+    if (_lines.length <= 1) return;
+    setState(() {
+      _lines[index].dispose();
+      _lines.removeAt(index);
+    });
+  }
+
+  // ── إرسال ────────────────────────────────────────────────────
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_fromSafeId == null) {
-      _snack(widget.isArabic ? 'اختر خزينة المصدر' : 'Select source safe', isError: true);
-      return;
-    }
-    if (_toSafeId == null) {
-      _snack(widget.isArabic ? 'اختر خزينة الوجهة' : 'Select destination safe', isError: true);
-      return;
+    if (_fromSafeId == null || _toSafeId == null) {
+      _snack('اختر خزينة المصدر والوجهة', error: true); return;
     }
     if (_fromSafeId == _toSafeId) {
-      _snack(widget.isArabic ? 'المصدر والوجهة لا يمكن أن تكونا نفس الخزينة' : 'Source and destination must differ', isError: true);
-      return;
+      _snack('المصدر والوجهة يجب أن يختلفا', error: true); return;
     }
 
-    final goldW   = double.tryParse(_goldWeightCtrl.text.trim()) ?? 0.0;
-    final stonesW = double.tryParse(_stonesWeightCtrl.text.trim()) ?? 0.0;
-    final wageAmt = double.tryParse(_wageAmountCtrl.text.trim()) ?? 0.0;
-
-    if (goldW <= 0) {
-      _snack(widget.isArabic ? 'أدخل وزن الذهب' : 'Enter gold weight', isError: true);
-      return;
+    // التحقق من الأسطر
+    for (int i = 0; i < _lines.length; i++) {
+      final line  = _lines[i];
+      final avail = _goldAvailable(_fromSafeId, line.karat);
+      if (line.goldWeight <= 0) {
+        _snack('السطر ${i + 1}: أدخل وزن الذهب', error: true); return;
+      }
+      if (line.goldWeight > avail + 1e-6) {
+        _snack(
+          'السطر ${i + 1} (${line.karat}k): '
+          'الوزن ${line.goldWeight.toStringAsFixed(3)} جم '
+          'يتجاوز الرصيد ${avail.toStringAsFixed(3)} جم',
+          error: true,
+        );
+        return;
+      }
     }
 
-    final available = _fromAvailable();
-    if (goldW > available + 1e-6) {
-      _snack(
-        widget.isArabic
-            ? 'الوزن المطلوب ($goldW جم) أكبر من الرصيد المتاح (${available.toStringAsFixed(3)} جم)'
-            : 'Weight ($goldW g) exceeds available (${available.toStringAsFixed(3)} g)',
-        isError: true,
-      );
-      return;
-    }
+    final confirmed = await _showConfirm();
+    if (confirmed != true || !mounted) return;
 
-    final opAr = _isMelting ? 'التكسير' : 'التجديد';
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(widget.isArabic ? 'تأكيد $opAr' : 'Confirm ${widget.opType}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _confirmRow(widget.isArabic ? 'وزن الذهب' : 'Gold weight', '${goldW.toStringAsFixed(3)} جم'),
-            if (stonesW > 0) _confirmRow(widget.isArabic ? 'وزن الفصوص' : 'Stones weight', '${stonesW.toStringAsFixed(3)} جم'),
-            if (wageAmt > 0) _confirmRow(widget.isArabic ? 'مصنعية تالفة' : 'Damaged wage', wageAmt.toStringAsFixed(2)),
-            _confirmRow(widget.isArabic ? 'العيار الخارج' : 'From karat', '${_fromKarat}k'),
-            _confirmRow(widget.isArabic ? 'العيار الداخل' : 'To karat', '${_toKarat}k'),
-            const SizedBox(height: 10),
-            if (_isMelting)
-              Text(
-                widget.isArabic
-                    ? 'سيُقتطع الوزن من خزينة المعروض ويُنقل لصندوق الكسر'
-                    : 'Weight will be moved from display safe to melting box',
-                style: const TextStyle(fontSize: 12, color: Colors.orange),
-              )
-            else
-              Text(
-                widget.isArabic
-                    ? 'سيُقتطع الوزن من المصدر ويُضاف لخزينة المعروض'
-                    : 'Weight will be moved from source to display safe',
-                style: const TextStyle(fontSize: 12, color: Colors.blue),
-              ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(widget.isArabic ? 'إلغاء' : 'Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: _isMelting ? FilledButton.styleFrom(backgroundColor: Colors.orange[800]) : null,
-            child: Text(widget.isArabic ? 'تأكيد' : 'Confirm'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true || !mounted) return;
     setState(() => _submitting = true);
+    final wageAmt = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
+    final notes   = _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim();
+    final vouchers = <String>[];
+
     try {
-      final result = await widget.api.createMeltingRenewal(
-        operationType: widget.opType,
-        fromSafeBoxId: _fromSafeId!,
-        toSafeBoxId: _toSafeId!,
-        fromKarat: _fromKarat,
-        toKarat: _toKarat,
-        goldWeight: goldW,
-        stonesWeight: stonesW > 0 ? stonesW : null,
-        stonesRevenueAccountId: (!_isMelting && stonesW > 0) ? _stonesAccountId : null,
-        stonesExpenseAccountId: (_isMelting && stonesW > 0) ? _stonesAccountId : null,
-        damageWageAmount: (_isMelting && wageAmt > 0) ? wageAmt : null,
-        damageWageAccountId: (_isMelting && wageAmt > 0) ? _wageAccountId : null,
-        notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-      );
+      for (final line in _lines) {
+        final res = await widget.api.createMeltingRenewal(
+          operationType: widget.opType,
+          fromSafeBoxId: _fromSafeId!,
+          toSafeBoxId:   _toSafeId!,
+          fromKarat:     line.karat,
+          toKarat:       line.karat,
+          goldWeight:    line.goldWeight,
+          stonesWeight:  line.stonesWeight > 0 ? line.stonesWeight : null,
+          damageWageAmount:    (_isMelting && wageAmt > 0) ? wageAmt : null,
+          damageWageAccountId: (_isMelting && wageAmt > 0) ? _wageAccountId : null,
+          notes: notes,
+        );
+        final num = (res['voucher'] as Map?)?['voucher_number']?.toString() ?? '';
+        if (num.isNotEmpty) vouchers.add(num);
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefFrom, _fromSafeId!);
+      await prefs.setInt(_prefTo,   _toSafeId!);
+
       if (!mounted) return;
-      final voucher = result['voucher'] as Map<String, dynamic>?;
-      await _saveLastUsed(); // حفظ الاختيار للمرة القادمة
-      _snack('${widget.isArabic ? "تم" : "Done"}: ${voucher?['voucher_number'] ?? ""}');
+      _snack('تم بنجاح${vouchers.isNotEmpty ? ": ${vouchers.join(', ')}" : ""}');
       _reset();
-      _loadData(); // تحديث الأرصدة
+      _load();
     } catch (e) {
-      if (!mounted) return;
-      _snack('${widget.isArabic ? "فشل" : "Failed"}: $e', isError: true);
+      if (mounted) _snack('فشل: $e', error: true);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
   }
 
-  Widget _confirmRow(String label, String value) => Padding(
+  Future<bool?> _showConfirm() {
+    final fromSafe = _safeById(_fromSafeId);
+    final toSafe   = _safeById(_toSafeId);
+    final opLabel  = _isMelting ? 'التكسير' : 'التجديد';
+    final wageAmt  = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
+
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('تأكيد $opLabel'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _cRow('من', fromSafe?.name ?? '—'),
+              _cRow('إلى', toSafe?.name  ?? '—'),
+              const Divider(),
+              ..._lines.map((l) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _cRow('عيار ${l.karat}k — ذهب', '${l.goldWeight.toStringAsFixed(3)} جم'),
+                  if (l.stonesWeight > 0)
+                    _cRow('فصوص ${l.karat}k', '${l.stonesWeight.toStringAsFixed(3)} جم'),
+                ],
+              )),
+              if (wageAmt > 0 && _isMelting) ...[
+                const Divider(),
+                _cRow('مصنعية تالفة', '${wageAmt.toStringAsFixed(2)} ر.س'),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: _isMelting
+                ? FilledButton.styleFrom(backgroundColor: Colors.orange[800])
+                : null,
+            child: Text('تأكيد $opLabel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cRow(String label, String value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 2),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(color: Colors.grey)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+        Text(value,  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
       ],
     ),
   );
 
   void _reset() {
     setState(() {
-      _fromSafeId = null;
-      _toSafeId = null;
-      _fromKarat = 21;
-      _toKarat = 21;
-      _stonesAccountId = null;
-      _wageAmountCtrl.clear();
-      _wageAccountId   = null;
-      _goldWeightCtrl.clear();
-      _stonesWeightCtrl.clear();
+      for (final l in _lines) { l.dispose(); }
+      _lines.clear();
+      _lines.add(_WeightLine());
+      _fromSafeId    = null;
+      _toSafeId      = null;
+      _wageAccountId = null;
+      _wageCtrl.clear();
       _notesCtrl.clear();
-      // إعادة الاختيار التلقائي
-      _autoSelectDefaults();
+      _applyDefaults();
     });
   }
 
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? Colors.red[700] : Colors.green[700],
+    ));
+  }
+
+  // ── بناء الواجهة ──────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final isAr = widget.isArabic;
-    final theme = Theme.of(context);
-
     if (_loading) return const Center(child: CircularProgressIndicator());
 
-    final available = _fromAvailable();
-    final goldW = double.tryParse(_goldWeightCtrl.text.trim()) ?? 0.0;
-    final overGold = goldW > 0 && goldW > available + 1e-6;
+    final cs       = Theme.of(context).colorScheme;
+    final opColor  = _isMelting ? Colors.orange[800]! : cs.primary;
+    final wageAmt  = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
 
     return Form(
       key: _formKey,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
+          // ── بانر توضيحي ──────────────────────────────────────
+          _InfoBanner(isMelting: _isMelting, color: opColor),
+          const SizedBox(height: 14),
 
-          // ── معلومة توضيحية ──────────────────────────────────────────
-          Card(
-            color: _isMelting ? Colors.orange[50] : Colors.blue[50],
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(children: [
-                Icon(
-                  _isMelting ? Icons.delete_sweep : Icons.auto_fix_high,
-                  color: _isMelting ? Colors.orange[700] : Colors.blue[700],
-                ),
-                const SizedBox(width: 10),
-                Expanded(child: Text(
-                  isAr
-                      ? (_isMelting
-                          ? 'نقل ذهب من خزينة المعروض إلى صندوق الكسر. الفصوص الخارجة تُسجَّل كمصروف وزني.'
-                          : 'نقل ذهب من مصدر إلى خزينة المعروض. الفصوص الداخلة تُسجَّل كإيراد وزني.')
-                      : (_isMelting
-                          ? 'Move gold from display safe to melting box. Outgoing stones recorded as weight expense.'
-                          : 'Move gold from source to display safe. Incoming stones recorded as weight revenue.'),
-                  style: TextStyle(
-                    color: _isMelting ? Colors.orange[900] : Colors.blue[900],
-                    fontSize: 12,
-                  ),
-                )),
-              ]),
-            ),
+          // ── الخزائن (صف جنباً إلى جنب على الشاشات الواسعة) ──
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: _VaultCard(
+                title: 'خزينة المصدر',
+                icon: Icons.output,
+                color: opColor,
+                safes: _safes,
+                value: _fromSafeId,
+                excludeId: _toSafeId,
+                stonesBalance: _stonesFor(_fromSafeId),
+                onChanged: (v) => setState(() { _fromSafeId = v; _applyDefaults(); }),
+                highlightKarats: _lines.map((l) => l.karat).toSet(),
+                goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: _VaultCard(
+                title: 'خزينة الوجهة',
+                icon: Icons.input,
+                color: opColor,
+                safes: _safes,
+                value: _toSafeId,
+                excludeId: _fromSafeId,
+                stonesBalance: _stonesFor(_toSafeId),
+                onChanged: (v) => setState(() => _toSafeId = v),
+                highlightKarats: const {},
+                goldAvailable: (k) => _goldAvailable(_toSafeId, k),
+                isDestination: true,
+              )),
+            ],
           ),
+          const SizedBox(height: 14),
 
-          const SizedBox(height: 16),
-
-          // ── خزينة المصدر ────────────────────────────────────────────
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isAr ? 'خزينة المصدر (الخروج)' : 'Source Safe (Out)',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<int>(
-                    value: _fromSafeId,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'من خزينة' : 'From Safe',
-                      prefixIcon: const Icon(Icons.lock_open),
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: _goldSafes.map((s) => DropdownMenuItem(
-                      value: s.id,
-                      child: Text(s.name),
-                    )).toList(),
-                    onChanged: (v) => setState(() { _fromSafeId = v; _autoSelectKarat(); }),
-                    validator: (v) => v == null ? (isAr ? 'مطلوب' : 'Required') : null,
-                  ),
-                  const SizedBox(height: 8),
-
-                  // عيار الخروج
-                  DropdownButtonFormField<int>(
-                    value: _fromKarat,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'العيار الخارج' : 'From Karat',
-                      prefixIcon: const Icon(Icons.star_outline),
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: _karats.map((k) => DropdownMenuItem(
-                      value: k,
-                      child: Text('عيار $k'),
-                    )).toList(),
-                    onChanged: (v) => setState(() { _fromKarat = v ?? 21; }),
-                  ),
-
-                  // رصيد متاح
-                  if (_fromSafeId != null) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: available > 0 ? Colors.green[50] : Colors.red[50],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(children: [
-                        Icon(Icons.info_outline,
-                            size: 16, color: available > 0 ? Colors.green[700] : Colors.red),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${isAr ? 'الرصيد المتاح' : 'Available'}: ${available.toStringAsFixed(3)} جم (${_fromKarat}k)',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: available > 0 ? Colors.green[900] : Colors.red,
-                          ),
-                        ),
-                      ]),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // ── خزينة الوجهة ────────────────────────────────────────────
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isAr ? 'خزينة الوجهة (الدخول)' : 'Destination Safe (In)',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<int>(
-                    value: _toSafeId,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'إلى خزينة' : 'To Safe',
-                      prefixIcon: const Icon(Icons.lock),
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: _goldSafes
-                        .map((s) => DropdownMenuItem(
-                          value: s.id,
-                          child: Text(s.name),
-                        ))
-                        .toList(),
-                    onChanged: (v) => setState(() { _toSafeId = v; }),
-                    validator: (v) {
-                      if (v == null) return isAr ? 'مطلوب' : 'Required';
-                      if (v == _fromSafeId) return isAr ? 'يجب أن تختلف عن المصدر' : 'Must differ from source';
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 8),
-
-                  // عيار الدخول
-                  DropdownButtonFormField<int>(
-                    value: _toKarat,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'العيار الداخل' : 'To Karat',
-                      prefixIcon: const Icon(Icons.star),
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: _karats.map((k) => DropdownMenuItem(
-                      value: k,
-                      child: Text('عيار $k'),
-                    )).toList(),
-                    onChanged: (v) => setState(() { _toKarat = v ?? 21; }),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // ── الأوزان ────────────────────────────────────────────────
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(isAr ? 'الأوزان' : 'Weights', style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 10),
-
-                  // وزن الذهب
-                  TextFormField(
-                    controller: _goldWeightCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [NormalizeNumberFormatter()],
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'وزن الذهب (جم)' : 'Gold Weight (g)',
-                      prefixIcon: const Icon(Icons.scale),
-                      suffixText: 'جم',
-                      border: const OutlineInputBorder(),
-                      errorText: overGold
-                          ? (isAr
-                              ? 'يتجاوز الرصيد المتاح (${available.toStringAsFixed(3)} جم)'
-                              : 'Exceeds available (${available.toStringAsFixed(3)} g)')
-                          : null,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) return isAr ? 'مطلوب' : 'Required';
-                      final d = double.tryParse(v.trim());
-                      if (d == null || d <= 0) return isAr ? 'وزن غير صحيح' : 'Invalid weight';
-                      return null;
-                    },
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // وزن الفصوص (اختياري)
-                  TextFormField(
-                    controller: _stonesWeightCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [NormalizeNumberFormatter()],
-                    decoration: InputDecoration(
-                      labelText: isAr
-                          ? (_isMelting ? 'وزن الفصوص الخارجة (اختياري)' : 'وزن الفصوص الداخلة (اختياري)')
-                          : (_isMelting ? 'Outgoing stones weight (optional)' : 'Incoming stones weight (optional)'),
-                      prefixIcon: const Icon(Icons.diamond_outlined),
-                      suffixText: 'جم',
-                      border: const OutlineInputBorder(),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // ── حساب الفصوص (يظهر فقط إذا أُدخل وزن فصوص) ──────────
-          if ((double.tryParse(_stonesWeightCtrl.text.trim()) ?? 0) > 0) ...[
-            const SizedBox(height: 12),
-            Card(
-              color: Colors.amber[50],
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isAr
-                          ? (_isMelting ? 'حساب مصروف الفصوص الخارجة' : 'حساب إيراد الفصوص الداخلة')
-                          : (_isMelting ? 'Stones Expense Account' : 'Stones Revenue Account'),
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<int>(
-                      value: _stonesAccountId,
-                      decoration: InputDecoration(
-                        labelText: isAr
-                            ? (_isMelting ? 'حساب المصروف الوزني' : 'حساب الإيراد الوزني')
-                            : (_isMelting ? 'Weight Expense Account' : 'Weight Revenue Account'),
-                        prefixIcon: const Icon(Icons.account_balance_wallet_outlined),
-                        border: const OutlineInputBorder(),
-                      ),
-                      items: _accounts.map((a) => DropdownMenuItem<int>(
-                        value: a['id'] as int?,
-                        child: Text(
-                          '${a['account_number'] ?? ''} - ${a['name'] ?? ''}',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      )).toList(),
-                      onChanged: (v) => setState(() { _stonesAccountId = v; }),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-
-          // ── مصنعية تالفة (تكسير فقط) ──────────────────────────────
-          if (_isMelting) ...[
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _wageAmountCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [NormalizeNumberFormatter()],
-              decoration: InputDecoration(
-                labelText: isAr ? 'مبلغ المصنعية التالفة (اختياري)' : 'Damaged wage amount (optional)',
-                prefixIcon: const Icon(Icons.construction_outlined),
-                suffixText: 'ر.س',
-                border: const OutlineInputBorder(),
-                helperText: isAr
-                    ? 'قيمة أجرة الصنعة المهدرة بسبب التكسير'
-                    : 'Cash value of manufacturing wage lost due to melting',
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-
-            // حساب مصروف المصنعية التالفة (يظهر فقط إذا أُدخل مبلغ)
-            if ((double.tryParse(_wageAmountCtrl.text.trim()) ?? 0) > 0) ...[
-              const SizedBox(height: 12),
-              Card(
-                color: Colors.red[50],
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          // ── أسطر الأوزان ────────────────────────────────────
+          _SectionCard(
+            title: 'أسطر الأوزان',
+            icon: Icons.scale,
+            color: opColor,
+            child: Column(
+              children: [
+                // رأس الجدول
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  child: Row(
                     children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.warning_amber_rounded, color: Colors.deepOrange, size: 18),
-                          const SizedBox(width: 6),
-                          Text(
-                            isAr ? 'حساب مصروف المصنعية التالفة' : 'Damaged Wage Expense Account',
-                            style: theme.textTheme.titleSmall?.copyWith(color: Colors.deepOrange[800]),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      DropdownButtonFormField<int>(
-                        value: _wageAccountId,
-                        decoration: InputDecoration(
-                          labelText: isAr ? 'حساب مصروف أجور المصنعية' : 'Manufacturing Wage Expense',
-                          prefixIcon: const Icon(Icons.account_balance_outlined),
-                          border: const OutlineInputBorder(),
-                        ),
-                        items: _wageAccounts.map((a) => DropdownMenuItem<int>(
-                          value: a['id'] as int?,
-                          child: Text(
-                            '${a['account_number'] ?? ''} - ${a['name'] ?? ''}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        )).toList(),
-                        onChanged: (v) => setState(() { _wageAccountId = v; }),
-                      ),
+                      const SizedBox(width: 110, child: Text('العيار', style: TextStyle(fontSize: 11, color: Colors.grey))),
+                      const Expanded(child: Text('وزن الذهب (جم)', style: TextStyle(fontSize: 11, color: Colors.grey))),
+                      const SizedBox(width: 8),
+                      const Expanded(child: Text('فصوص (جم)', style: TextStyle(fontSize: 11, color: Colors.grey))),
+                      const SizedBox(width: 32),
                     ],
                   ),
                 ),
+                const Divider(height: 4),
+
+                // أسطر البيانات
+                ...List.generate(_lines.length, (i) => _WeightLineRow(
+                  key: ValueKey(i),
+                  line: _lines[i],
+                  availableKarats: _availableKarats,
+                  goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
+                  stonesAvailable: _stonesFor(_fromSafeId),
+                  canRemove: _lines.length > 1,
+                  onRemove: () => _removeLine(i),
+                  onChanged: () => setState(() {}),
+                )),
+
+                const Divider(height: 12),
+
+                // شريط الإجمالي + زر إضافة
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _addLine,
+                      icon: const Icon(Icons.add_circle_outline, size: 18),
+                      label: const Text('إضافة سطر عيار'),
+                      style: TextButton.styleFrom(foregroundColor: opColor),
+                    ),
+                    const Spacer(),
+                    _TotalBadge(
+                      goldTotal:   _lines.fold(0.0, (s, l) => s + l.goldWeight),
+                      stonesTotal: _lines.fold(0.0, (s, l) => s + l.stonesWeight),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // ── مصنعية تالفة (تكسير فقط) ────────────────────────
+          if (_isMelting) ...[
+            const SizedBox(height: 12),
+            _SectionCard(
+              title: 'مصنعية تالفة (اختياري)',
+              icon: Icons.construction_outlined,
+              color: Colors.deepOrange,
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _wageCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [NormalizeNumberFormatter()],
+                    decoration: const InputDecoration(
+                      labelText: 'المبلغ (ر.س)',
+                      prefixIcon: Icon(Icons.payments_outlined),
+                      suffixText: 'ر.س',
+                      border: OutlineInputBorder(),
+                      helperText: 'قيمة أجرة الصنعة المهدرة بالتكسير',
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  if (wageAmt > 0) ...[
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<int>(
+                      value: _wageAccountId,
+                      decoration: const InputDecoration(
+                        labelText: 'حساب مصروف المصنعية',
+                        prefixIcon: Icon(Icons.account_balance_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _wageAccounts
+                          .map((a) => DropdownMenuItem<int>(
+                                value: a['id'] as int?,
+                                child: Text(
+                                  '${a['account_number'] ?? ''} · ${a['name'] ?? ''}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ))
+                          .toList(),
+                      onChanged: (v) => setState(() => _wageAccountId = v),
+                    ),
+                  ],
+                ],
               ),
-            ],
+            ),
           ],
 
           const SizedBox(height: 12),
 
-          // ── ملاحظات ────────────────────────────────────────────────
+          // ── ملاحظات ──────────────────────────────────────────
           TextFormField(
             controller: _notesCtrl,
             maxLines: 2,
-            decoration: InputDecoration(
-              labelText: isAr ? 'ملاحظات (اختياري)' : 'Notes (optional)',
-              prefixIcon: const Icon(Icons.note_outlined),
-              border: const OutlineInputBorder(),
+            decoration: const InputDecoration(
+              labelText: 'ملاحظات (اختياري)',
+              prefixIcon: Icon(Icons.note_outlined),
+              border: OutlineInputBorder(),
             ),
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
-          // ── أزرار ─────────────────────────────────────────────────
+          // ── أزرار ────────────────────────────────────────────
           Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _reset,
-                icon: const Icon(Icons.clear),
-                label: Text(isAr ? 'إعادة تعيين' : 'Reset'),
-              ),
+            OutlinedButton.icon(
+              onPressed: _reset,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('إعادة'),
             ),
             const SizedBox(width: 12),
             Expanded(
-              flex: 2,
               child: FilledButton.icon(
                 onPressed: _submitting ? null : _submit,
-                icon: _submitting
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : Icon(_isMelting ? Icons.delete_sweep : Icons.auto_fix_high),
                 style: _isMelting
                     ? FilledButton.styleFrom(backgroundColor: Colors.orange[800])
                     : null,
-                label: Text(isAr
-                    ? (_isMelting ? 'تنفيذ التكسير' : 'تنفيذ التجديد')
-                    : (_isMelting ? 'Execute Melting' : 'Execute Renewal')),
+                icon: _submitting
+                    ? const SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : Icon(_isMelting ? Icons.recycling : Icons.auto_fix_high),
+                label: Text(_isMelting ? 'تنفيذ التكسير' : 'تنفيذ التجديد'),
               ),
             ),
           ]),
-
           const SizedBox(height: 32),
         ],
       ),
@@ -853,53 +604,560 @@ class _MeltingTabState extends State<_MeltingTab> {
   }
 }
 
-// ==================== Models (legacy - kept for compatibility) ====================
+// ═══════════════════════════════════════════════════════════════════
+//  سطر وزن واحد (عيار + ذهب + فصوص + رصيد مدمج)
+// ═══════════════════════════════════════════════════════════════════
+class _WeightLineRow extends StatefulWidget {
+  final _WeightLine line;
+  final List<int> availableKarats;
+  final double Function(int karat) goldAvailable;
+  final double stonesAvailable;
+  final bool canRemove;
+  final VoidCallback onRemove;
+  final VoidCallback onChanged;
 
-class RenewalItem {
-  final String description;
-  final double weight;
-  final int karat;
-  final double purchaseValue;
-
-  RenewalItem({
-    required this.description,
-    required this.weight,
-    required this.karat,
-    required this.purchaseValue,
+  const _WeightLineRow({
+    super.key,
+    required this.line,
+    required this.availableKarats,
+    required this.goldAvailable,
+    required this.stonesAvailable,
+    required this.canRemove,
+    required this.onRemove,
+    required this.onChanged,
   });
 
-  Map<String, dynamic> toJson() => {
-    'description': description,
-    'weight': weight,
-    'karat': karat,
-    'purchase_value': purchaseValue,
-  };
+  @override
+  State<_WeightLineRow> createState() => _WeightLineRowState();
 }
 
-class InventoryItem {
-  final int itemId;
-  final String itemCode;
-  final String name;
-  final double weight;
-  final int karat;
-  int quantity;
+class _WeightLineRowState extends State<_WeightLineRow> {
+  @override
+  Widget build(BuildContext context) {
+    final cs      = Theme.of(context).colorScheme;
+    final avail   = widget.goldAvailable(widget.line.karat);
+    final entered = widget.line.goldWeight;
+    final over    = entered > 0 && entered > avail + 1e-6;
 
-  InventoryItem({
-    required this.itemId,
-    required this.itemCode,
-    required this.name,
-    required this.weight,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── اختيار العيار ───────────────────────────────
+              SizedBox(
+                width: 110,
+                child: DropdownButtonFormField<int>(
+                  value: widget.line.karat,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                    isDense: true,
+                  ),
+                  items: widget.availableKarats
+                      .map((k) => DropdownMenuItem(value: k, child: Text('${k}k')))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => widget.line.karat = v);
+                    widget.onChanged();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+
+              // ── وزن الذهب ──────────────────────────────────
+              Expanded(
+                child: TextFormField(
+                  controller: widget.line.goldCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [NormalizeNumberFormatter()],
+                  onChanged: (_) { setState(() {}); widget.onChanged(); },
+                  decoration: InputDecoration(
+                    hintText: '0.000',
+                    suffixText: 'جم',
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                    isDense: true,
+                    errorText: over ? '>${avail.toStringAsFixed(2)}' : null,
+                    errorStyle: const TextStyle(fontSize: 10),
+                  ),
+                  validator: (v) {
+                    final d = double.tryParse(v?.trim() ?? '');
+                    if (d == null || d <= 0) return 'مطلوب';
+                    return null;
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+
+              // ── وزن الفصوص ─────────────────────────────────
+              Expanded(
+                child: TextFormField(
+                  controller: widget.line.stonesCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [NormalizeNumberFormatter()],
+                  onChanged: (_) { setState(() {}); widget.onChanged(); },
+                  decoration: const InputDecoration(
+                    hintText: '—',
+                    suffixText: 'جم',
+                    prefixIcon: Icon(Icons.diamond_outlined, size: 14),
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+
+              // ── حذف السطر ──────────────────────────────────
+              SizedBox(
+                width: 28,
+                child: widget.canRemove
+                    ? IconButton(
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.remove_circle_outline,
+                            size: 20, color: Colors.red),
+                        onPressed: widget.onRemove,
+                      )
+                    : const SizedBox(),
+              ),
+            ],
+          ),
+
+          // ── رصيد العيار مدمج أسفل السطر ──────────────────
+          Padding(
+            padding: const EdgeInsets.only(top: 4, right: 4),
+            child: _InlineBalance(
+              karat: widget.line.karat,
+              goldAvail: avail,
+              stonesAvail: widget.stonesAvailable,
+              over: over,
+              cs: cs,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  رصيد مدمج أسفل كل سطر
+// ═══════════════════════════════════════════════════════════════════
+class _InlineBalance extends StatelessWidget {
+  final int    karat;
+  final double goldAvail;
+  final double stonesAvail;
+  final bool   over;
+  final ColorScheme cs;
+
+  const _InlineBalance({
     required this.karat,
-    this.quantity = 1,
+    required this.goldAvail,
+    required this.stonesAvail,
+    required this.over,
+    required this.cs,
   });
 
-  Map<String, dynamic> toJson() => {
-    'item_id': itemId,
-    'item_code': itemCode,
-    'name': name,
-    'weight': weight,
-    'karat': karat,
-    'quantity': quantity,
-  };
+  @override
+  Widget build(BuildContext context) {
+    final goldColor = over
+        ? Colors.red[700]!
+        : (goldAvail > 0 ? Colors.green[700]! : cs.outline);
+
+    return Wrap(
+      spacing: 10,
+      children: [
+        // ذهب متاح
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              over ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+              size: 13,
+              color: goldColor,
+            ),
+            const SizedBox(width: 3),
+            Text(
+              'ذهب ${karat}k: ${goldAvail.toStringAsFixed(3)} جم',
+              style: TextStyle(fontSize: 11, color: goldColor),
+            ),
+          ],
+        ),
+        // فصوص
+        if (stonesAvail > 0)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.diamond_outlined, size: 12, color: Colors.purple),
+              const SizedBox(width: 3),
+              Text(
+                'فصوص: ${stonesAvail.toStringAsFixed(3)} جم',
+                style: const TextStyle(fontSize: 11, color: Colors.purple),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  بطاقة الخزينة مع لوحة الرصيد
+// ═══════════════════════════════════════════════════════════════════
+class _VaultCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final List<SafeBoxModel> safes;
+  final int? value;
+  final int? excludeId;
+  final double stonesBalance;
+  final ValueChanged<int?> onChanged;
+  final Set<int> highlightKarats;
+  final double Function(int) goldAvailable;
+  final bool isDestination;
+
+  const _VaultCard({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.safes,
+    required this.value,
+    required this.onChanged,
+    required this.stonesBalance,
+    required this.highlightKarats,
+    required this.goldAvailable,
+    this.excludeId,
+    this.isDestination = false,
+  });
+
+  SafeBoxModel? _safe() =>
+      value == null ? null : safes.firstWhere((s) => s.id == value, orElse: () => safes.first);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs    = theme.colorScheme;
+    final safe  = _safe();
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: value != null ? color.withOpacity(0.4) : cs.outlineVariant,
+          width: value != null ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── رأس البطاقة ──────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 15, color: color),
+                const SizedBox(width: 6),
+                Text(title,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: color)),
+              ],
+            ),
+          ),
+
+          // ── Dropdown الخزينة ──────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+            child: DropdownButtonFormField<int>(
+              value: value,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                isDense: true,
+              ),
+              items: safes.map((s) {
+                final disabled = s.id == excludeId;
+                return DropdownMenuItem<int>(
+                  value: s.id,
+                  enabled: !disabled,
+                  child: Text(s.name,
+                      style: disabled
+                          ? const TextStyle(color: Colors.grey)
+                          : null),
+                );
+              }).toList(),
+              onChanged: onChanged,
+              validator: (v) => v == null ? 'مطلوب' : null,
+            ),
+          ),
+
+          // ── لوحة الرصيد ──────────────────────────────────
+          if (safe != null)
+            _BalancePanel(
+              safe: safe,
+              stonesBalance: stonesBalance,
+              highlightKarats: highlightKarats,
+              goldAvailable: goldAvailable,
+            ),
+
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  لوحة الرصيد داخل بطاقة الخزينة
+// ═══════════════════════════════════════════════════════════════════
+class _BalancePanel extends StatelessWidget {
+  final SafeBoxModel safe;
+  final double stonesBalance;
+  final Set<int> highlightKarats;
+  final double Function(int) goldAvailable;
+
+  const _BalancePanel({
+    required this.safe,
+    required this.stonesBalance,
+    required this.highlightKarats,
+    required this.goldAvailable,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs     = Theme.of(context).colorScheme;
+    final karats = {
+      24: safe.goldBalance24k,
+      22: safe.goldBalance22k,
+      21: safe.goldBalance21k,
+      18: safe.goldBalance18k,
+    };
+    final hasAnyGold = karats.values.any((v) => v > 0);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // أرصدة العيارات
+            if (hasAnyGold)
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: karats.entries
+                    .where((e) => e.value > 0)
+                    .map((e) => _KaratPill(
+                          karat: e.key,
+                          weight: e.value,
+                          highlighted: highlightKarats.contains(e.key),
+                          cs: cs,
+                        ))
+                    .toList(),
+              )
+            else
+              Text('لا يوجد رصيد',
+                  style: TextStyle(fontSize: 11, color: cs.outline)),
+
+            // فصوص
+            if (stonesBalance > 0) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Icon(Icons.diamond_outlined, size: 13, color: Colors.purple),
+                  const SizedBox(width: 4),
+                  Text(
+                    'فصوص: ${stonesBalance.toStringAsFixed(3)} جم',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.purple,
+                        fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  شريحة عيار
+// ═══════════════════════════════════════════════════════════════════
+class _KaratPill extends StatelessWidget {
+  final int karat;
+  final double weight;
+  final bool highlighted;
+  final ColorScheme cs;
+
+  const _KaratPill({
+    required this.karat,
+    required this.weight,
+    required this.highlighted,
+    required this.cs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = highlighted ? cs.primaryContainer : cs.surfaceContainerHigh;
+    final fg = highlighted ? cs.onPrimaryContainer : cs.onSurface;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(16),
+        border: highlighted
+            ? Border.all(color: cs.primary, width: 1.5)
+            : null,
+      ),
+      child: Text(
+        '${karat}k  ${weight.toStringAsFixed(3)}',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  شارة الإجمالي
+// ═══════════════════════════════════════════════════════════════════
+class _TotalBadge extends StatelessWidget {
+  final double goldTotal;
+  final double stonesTotal;
+
+  const _TotalBadge({required this.goldTotal, required this.stonesTotal});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          'إجمالي الذهب: ${goldTotal.toStringAsFixed(3)} جم',
+          style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: cs.onSurface),
+        ),
+        if (stonesTotal > 0)
+          Text(
+            'إجمالي الفصوص: ${stonesTotal.toStringAsFixed(3)} جم',
+            style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: Colors.purple),
+          ),
+      ],
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  مكونات مساعدة
+// ═══════════════════════════════════════════════════════════════════
+class _InfoBanner extends StatelessWidget {
+  final bool isMelting;
+  final Color color;
+
+  const _InfoBanner({required this.isMelting, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(
+        children: [
+          Icon(isMelting ? Icons.recycling : Icons.auto_fix_high,
+              color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              isMelting
+                  ? 'نقل الذهب الصافي من خزينة المعروض إلى صندوق الكسر. يمكن إضافة أكثر من سطر عيار.'
+                  : 'نقل الذهب الصافي من المصدر إلى خزينة المعروض. الفصوص تُسجَّل كأصل وإيراد تلقائياً.',
+              style: TextStyle(fontSize: 11, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final Widget child;
+
+  const _SectionCard({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.07),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 16, color: color),
+                const SizedBox(width: 8),
+                Text(title,
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: color)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: child,
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -2156,6 +2156,18 @@ class Settings(db.Model):
     main_scrap_gold_safe_box = db.relationship('SafeBox', foreign_keys=[main_scrap_gold_safe_box_id])
 
     # ==========================================
+    # حسابات الفصوص (Stones Accounts)
+    # ==========================================
+    # حساب الفصوص المعلقة: يُقيَّد دائناً عند شراء قطعة تحتوي فصوصاً
+    # ويُقيَّد مديناً عند تحويل القطعة للعرض (تجديد)
+    stones_pending_account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=True)
+    stones_pending_account = db.relationship('Account', foreign_keys=[stones_pending_account_id])
+
+    # حساب إيراد الفصوص المعروضة: يُقيَّد دائناً عند تحويل القطعة للعرض (تجديد)
+    stones_display_revenue_account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=True)
+    stones_display_revenue_account = db.relationship('Account', foreign_keys=[stones_display_revenue_account_id])
+
+    # ==========================================
     # 🆕 إعدادات الترحيل (Posting Preferences)
     # ==========================================
     # ترحيل الفواتير تلقائياً فور الحفظ
@@ -2342,6 +2354,8 @@ class Settings(db.Model):
             'main_cash_safe_box_id': getattr(self, 'main_cash_safe_box_id', None),
             'sale_gold_safe_box_id': getattr(self, 'sale_gold_safe_box_id', None),
             'main_scrap_gold_safe_box_id': getattr(self, 'main_scrap_gold_safe_box_id', None),
+            'stones_pending_account_id': getattr(self, 'stones_pending_account_id', None),
+            'stones_display_revenue_account_id': getattr(self, 'stones_display_revenue_account_id', None),
             'manufacturing_wage_mode': (self.manufacturing_wage_mode or 'expense'),
             'voucher_auto_post': self.voucher_auto_post,
 
@@ -2814,11 +2828,15 @@ class SafeBoxTransaction(db.Model):
     # Cash amount (SAR)
     amount_cash = db.Column(db.Float, nullable=False, default=0.0)
 
-    # Optional weight tracking by karat (grams)
+    # Optional weight tracking by karat (grams) — الوزن القائم الكلي (يشمل الفصوص)
     weight_18k = db.Column(db.Float, nullable=False, default=0.0)
     weight_21k = db.Column(db.Float, nullable=False, default=0.0)
     weight_22k = db.Column(db.Float, nullable=False, default=0.0)
     weight_24k = db.Column(db.Float, nullable=False, default=0.0)
+
+    # وزن الفصوص المُضمَّنة في القطعة — مستقل عن العيار
+    # يُملأ عند الشراء والتجديد لمعرفة الفصوص في أي خزينة
+    stones_weight = db.Column(db.Float, nullable=False, default=0.0)
 
     notes = db.Column(db.Text, nullable=True)
 
@@ -2849,6 +2867,7 @@ class SafeBoxTransaction(db.Model):
             'weight_21k': float(self.weight_21k or 0.0),
             'weight_22k': float(self.weight_22k or 0.0),
             'weight_24k': float(self.weight_24k or 0.0),
+            'stones_weight': float(self.stones_weight or 0.0),
             'notes': self.notes,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'created_by': self.created_by,

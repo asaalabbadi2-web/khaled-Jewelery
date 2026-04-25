@@ -4719,6 +4719,24 @@ class ApiService {
     return <SafeBoxModel>[];
   }
 
+  /// رصيد الفصوص لكل خزينة ذهب (معلوماتي فقط — لا يؤثر على الأرصدة الذهبية).
+  /// Endpoint: GET /safe-boxes/stones-balance
+  Future<Map<int, double>> getStonesBalance({int? safeBoxId}) async {
+    final params = safeBoxId != null ? {'safe_box_id': safeBoxId.toString()} : null;
+    final uri = Uri.parse('$_baseUrl/safe-boxes/stones-balance')
+        .replace(queryParameters: params);
+    final response = await _authedGet(uri);
+    if (response.statusCode != 200) return {};
+    final decoded = json.decode(utf8.decode(response.bodyBytes));
+    final safes = decoded['safes'] as List? ?? [];
+    return {
+      for (final s in safes.whereType<Map<String, dynamic>>())
+        if (s['safe_box_id'] != null)
+          (s['safe_box_id'] as num).toInt():
+              (s['stones_balance'] as num? ?? 0).toDouble(),
+    };
+  }
+
   /// مطابقة أرصدة الخزن (Ledger) مع دفتر الأستاذ (GL) لحسابات الخزن.
   /// Endpoint: GET /safe-boxes/reconciliation
   Future<Map<String, dynamic>> getSafeBoxesReconciliation({

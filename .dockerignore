@@ -17,9 +17,15 @@ frontend/build/
 
 # Backups & DB files
 backups/
+data/
 *.db
 *.db.backup*
 *.db.damaged*
+*.sql
+*.dump
+*.tar.gz
+*.zip
+*.bak
 
 # Docs / reports
 *.md

@@ -2017,6 +2017,8 @@ def update_settings():
         'main_cash_safe_box_id',
         'sale_gold_safe_box_id',
         'main_scrap_gold_safe_box_id',
+        'stones_pending_account_id',
+        'stones_display_revenue_account_id',
         'manufacturing_wage_mode',
         'voucher_auto_post',
         'auto_post_invoices',
@@ -2156,8 +2158,11 @@ def update_settings():
     if 'employee_gold_safes_enabled' in data:
         settings.employee_gold_safes_enabled = bool(data.get('employee_gold_safes_enabled'))
 
-    # Default SafeBoxes
-    for key in ('main_cash_safe_box_id', 'sale_gold_safe_box_id', 'main_scrap_gold_safe_box_id'):
+    # Default SafeBoxes + Stones Accounts
+    for key in (
+        'main_cash_safe_box_id', 'sale_gold_safe_box_id', 'main_scrap_gold_safe_box_id',
+        'stones_pending_account_id', 'stones_display_revenue_account_id',
+    ):
         if key in data:
             raw = data.get(key)
             if raw in (None, '', 0, '0', False):
@@ -2166,7 +2171,6 @@ def update_settings():
                 try:
                     setattr(settings, key, int(raw))
                 except Exception:
-                    # Ignore invalid values (keep existing)
                     pass
     if 'manufacturing_wage_mode' in data:
         settings.manufacturing_wage_mode = data['manufacturing_wage_mode']
@@ -9802,6 +9806,53 @@ def safe_boxes_reconciliation():
     })
 
 
+@api.route('/safe-boxes/stones-balance', methods=['GET'])
+@require_permission('safe_boxes.view')
+def get_safe_boxes_stones_balance():
+    """رصيد الفصوص لكل خزينة ذهب — مستقل عن العيار.
+
+    stones_balance = SUM(stones_weight, direction='in')
+                   - SUM(stones_weight, direction='out')
+
+    Query params:
+      - safe_box_id: int (اختياري — لخزينة محددة)
+    """
+    safe_box_id_param = request.args.get('safe_box_id')
+
+    q_safes = SafeBox.query.filter_by(safe_type='gold', is_active=True)
+    if safe_box_id_param:
+        try:
+            q_safes = q_safes.filter_by(id=int(safe_box_id_param))
+        except (TypeError, ValueError):
+            pass
+    safes = q_safes.order_by(SafeBox.id).all()
+
+    results = []
+    for sb in safes:
+        col = SafeBoxTransaction.stones_weight
+        stones_in = float(
+            db.session.query(func.coalesce(func.sum(col), 0.0))
+            .filter(SafeBoxTransaction.safe_box_id == sb.id,
+                    SafeBoxTransaction.direction == 'in')
+            .scalar() or 0.0
+        )
+        stones_out = float(
+            db.session.query(func.coalesce(func.sum(col), 0.0))
+            .filter(SafeBoxTransaction.safe_box_id == sb.id,
+                    SafeBoxTransaction.direction == 'out')
+            .scalar() or 0.0
+        )
+        results.append({
+            'safe_box_id':        sb.id,
+            'safe_box_name':      sb.name,
+            'stones_in':          round(stones_in, 3),
+            'stones_out':         round(stones_out, 3),
+            'stones_balance':     round(stones_in - stones_out, 3),
+        })
+
+    return jsonify({'safes': results})
+
+
 @api.route('/safe-boxes/repair-transactions', methods=['POST'])
 @require_permission('admin')
 def repair_safe_box_transactions():
@@ -12976,16 +13027,14 @@ def add_invoice():
                 item_id = item_data.get('item_id')
                 item = Item.query.get(item_id) if item_id else None
 
-                # ✅ أولوية لبيانات الوزن/العيار المرسلة مع الفاتورة
                 karat_value = item_data.get('karat') if item_data.get('karat') not in (None, '') else (item.karat if item else None)
                 weight_value = item_data.get('weight') if item_data.get('weight') is not None else (item.weight if item else None)
 
                 if weight_value is None:
                     weight_value = item_data.get('total_weight')
 
-                # weight_value = الوزن الكلي للسطر بالفعل — لا نضربه في الكمية
+                # gold_by_karat = الوزن الصافي (بدون فصوص) → للقيود المحاسبية وحساب الربح
                 total_weight_value = _to_float(weight_value, 0.0)
-
                 _register_gold_weight(karat_value, total_weight_value)
 
         if karat_lines_data and isinstance(karat_lines_data, list):
@@ -12993,6 +13042,13 @@ def add_invoice():
                 karat_val = line_data.get('karat')
                 weight_val = line_data.get('weight_grams', line_data.get('weight', line_data.get('total_weight')))
                 _register_gold_weight(karat_val, weight_val)
+
+        # حساب وزن الفصوص الإجمالي من الأصناف — للتتبع المعلوماتي في SafeBoxTransaction فقط
+        # لا يدخل في القيود المحاسبية
+        _invoice_stones_weight = 0.0
+        if str(invoice_type).strip() == 'شراء من عميل' and not has_valid_karat_lines:
+            for _item_d in (data.get('items') or []):
+                _invoice_stones_weight += _to_float(_item_d.get('stones_weight'), 0.0)
 
         # --- Customer scrap purchase/return: move physical gold through a gold safe (employee or main) ---
         # Also expose the resolved gold safe account for weight journal entries.
@@ -13116,11 +13172,13 @@ def add_invoice():
 
                         # NOTE: avoid double-counting; safebox gold movements are applied only when posting is allowed.
                         if not approval_required:
+                            # الخزنة تسجل الوزن الصافي (ذهب فقط) + الفصوص معلوماتياً
                             weight_kwargs = {
                                 'weight_18k': float(gold_by_karat.get('18', 0.0) or 0.0),
                                 'weight_21k': float(gold_by_karat.get('21', 0.0) or 0.0),
                                 'weight_22k': float(gold_by_karat.get('22', 0.0) or 0.0),
                                 'weight_24k': float(gold_by_karat.get('24', 0.0) or 0.0),
+                                'stones_weight': round(_invoice_stones_weight, 6),
                             }
                             has_any_weight = any(v > 0 for v in weight_kwargs.values())
                             if has_any_weight:
@@ -13852,6 +13910,8 @@ def add_invoice():
                     description="ضريبة القيمة المضافة",
                     apply_golden_rule=False,
                 )
+
+            # الفصوص لا تدخل القيود — تُتابَع معلوماتياً عبر SafeBoxTransaction.stones_weight فقط
 
             # ─── نقاط السباق: profit_gold = وزن مشترى - مقابله بسعر السوق ───
             # المنطق: الموظف دفع X ريال واستلم Y جرام
@@ -28485,6 +28545,22 @@ def create_melting_renewal():
                 'available': round(available, 3),
             }), 400
 
+        # تحقق من رصيد الفصوص إذا أُدخل وزن فصوص
+        if stones_weight > 0:
+            s_in  = float(q_src.with_entities(
+                func.coalesce(func.sum(SafeBoxTransaction.stones_weight), 0.0))
+                .filter(SafeBoxTransaction.direction == 'in').scalar() or 0.0)
+            s_out = float(q_src.with_entities(
+                func.coalesce(func.sum(SafeBoxTransaction.stones_weight), 0.0))
+                .filter(SafeBoxTransaction.direction == 'out').scalar() or 0.0)
+            stones_available = round(s_in - s_out, 6)
+            if stones_weight > stones_available + 1e-6:
+                return jsonify({
+                    'error': 'insufficient_stones_balance',
+                    'message': f'وزن الفصوص المطلوب ({stones_weight:.3f} جم) يتجاوز الرصيد المتاح ({stones_available:.3f} جم)',
+                    'stones_available': round(stones_available, 3),
+                }), 400
+
         created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'system'
 
         # Optional: validate stones accounts exist
@@ -28546,48 +28622,34 @@ def create_melting_renewal():
                 karat=karat_val,
             ))
 
-        # قيد الفصوص إن وُجدت
-        if stones_weight > 0:
-            # تكسير: مصروف وزني للفصوص الخارجة من الوجهة (صندوق الكسر)
-            if operation_type == 'melting' and stones_exp_account_id:
+        # ─── قيد الفصوص عند التجديد فقط ───
+        # مدين:  حساب أصول الفصوص  (الفصوص تُسجَّل كأصل)
+        # دائن:  حساب إيراد الفصوص  (إيراد يُعترف به عند التجديد)
+        _stones_je_warning = None
+        if operation_type == 'renewal' and stones_weight > 0:
+            _s = Settings.query.first()
+            _stones_asset_acc   = getattr(_s, 'stones_pending_account_id', None) if _s else None
+            _stones_revenue_acc = getattr(_s, 'stones_display_revenue_account_id', None) if _s else None
+            if not _stones_asset_acc or not _stones_revenue_acc:
+                _stones_je_warning = 'لم تُسجَّل قيود الفصوص المحاسبية — يرجى تعريف حسابَي أصول وإيراد الفصوص في الإعدادات'
+            if _stones_asset_acc and _stones_revenue_acc:
                 db.session.add(VoucherAccountLine(
                     voucher_id=voucher.id,
-                    account_id=to_safe.account_id,
+                    account_id=_stones_asset_acc,
                     line_type='debit',
                     amount_type='gold',
                     amount=stones_weight,
                     karat=float(to_karat),
-                    description='فصوص خارجة',
+                    description=f'أصول فصوص — تجديد ({stones_weight:.3f} جم)',
                 ))
                 db.session.add(VoucherAccountLine(
                     voucher_id=voucher.id,
-                    account_id=stones_exp_account_id,
+                    account_id=_stones_revenue_acc,
                     line_type='credit',
                     amount_type='gold',
                     amount=stones_weight,
                     karat=float(to_karat),
-                    description='مصروف فصوص التكسير',
-                ))
-
-            # تجديد: إيراد وزني للفصوص الداخلة
-            if operation_type == 'renewal' and stones_rev_account_id:
-                db.session.add(VoucherAccountLine(
-                    voucher_id=voucher.id,
-                    account_id=to_safe.account_id,
-                    line_type='credit',
-                    amount_type='gold',
-                    amount=stones_weight,
-                    karat=float(to_karat),
-                    description='فصوص داخلة',
-                ))
-                db.session.add(VoucherAccountLine(
-                    voucher_id=voucher.id,
-                    account_id=stones_rev_account_id,
-                    line_type='debit',
-                    amount_type='gold',
-                    amount=stones_weight,
-                    karat=float(to_karat),
-                    description='إيراد فصوص التجديد',
+                    description=f'إيراد فصوص — تجديد ({stones_weight:.3f} جم)',
                 ))
 
         # قيد المصنعية التالفة (تكسير فقط):
@@ -28625,8 +28687,10 @@ def create_melting_renewal():
         voucher.approved_by = created_by
         voucher.journal_entry_id = journal_entry.id
 
-        # SafeBoxTransaction: خروج من المصدر
-        from_col_kw = {'amount_cash': 0.0, f'weight_{from_karat}k': round(gold_weight, 6)}
+        # stones_weight: معلوماتي فقط — لا يؤثر على رصيد الوزن الذهبي
+        _stones_kw = {'stones_weight': round(stones_weight, 6)} if stones_weight > 0 else {}
+
+        # SafeBoxTransaction: خروج من المصدر (وزن صافي + فصوص معلوماتي)
         db.session.add(SafeBoxTransaction(
             safe_box_id=from_safe_id,
             direction='out',
@@ -28634,11 +28698,12 @@ def create_melting_renewal():
             ref_id=voucher.id,
             created_by=created_by,
             notes=f'{op_label} — خروج {from_karat}k',
-            **from_col_kw,
+            amount_cash=0.0,
+            **{f'weight_{from_karat}k': round(gold_weight, 6)},
+            **_stones_kw,
         ))
 
-        # SafeBoxTransaction: دخول إلى الوجهة (الذهب)
-        to_col_kw = {'amount_cash': 0.0, f'weight_{to_karat}k': round(gold_weight, 6)}
+        # SafeBoxTransaction: دخول إلى الوجهة (وزن صافي + فصوص معلوماتي)
         db.session.add(SafeBoxTransaction(
             safe_box_id=to_safe_id,
             direction='in',
@@ -28646,25 +28711,14 @@ def create_melting_renewal():
             ref_id=voucher.id,
             created_by=created_by,
             notes=f'{op_label} — دخول {to_karat}k',
-            **to_col_kw,
+            amount_cash=0.0,
+            **{f'weight_{to_karat}k': round(gold_weight, 6)},
+            **_stones_kw,
         ))
-
-        # SafeBoxTransaction إضافية للفصوص (تُسجَّل في وجهة التكسير)
-        if stones_weight > 0 and operation_type == 'melting':
-            stones_kw = {'amount_cash': 0.0, f'weight_{to_karat}k': round(stones_weight, 6)}
-            db.session.add(SafeBoxTransaction(
-                safe_box_id=to_safe_id,
-                direction='in',
-                ref_type='voucher',
-                ref_id=voucher.id,
-                created_by=created_by,
-                notes=f'فصوص داخل صندوق الكسر {to_karat}k',
-                **stones_kw,
-            ))
 
         db.session.commit()
 
-        return jsonify({
+        resp = {
             'message': f'تم تسجيل عملية {op_label} بنجاح',
             'voucher': voucher.to_dict(),
             'operation': {
@@ -28677,7 +28731,10 @@ def create_melting_renewal():
                 'stones_weight': round(stones_weight, 3),
                 'damage_wage_amount': round(damage_wage_amount, 2),
             },
-        }), 201
+        }
+        if _stones_je_warning:
+            resp['warning'] = _stones_je_warning
+        return jsonify(resp), 201
 
     except Exception as e:
         db.session.rollback()

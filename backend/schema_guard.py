@@ -221,6 +221,10 @@ def ensure_settings_columns(engine: Engine) -> None:
                     ("sale_gold_safe_box_id", "INTEGER", "NULL"),
                     ("main_scrap_gold_safe_box_id", "INTEGER", "NULL"),
 
+                    # Stones accounts
+                    ("stones_pending_account_id", "INTEGER", "NULL"),
+                    ("stones_display_revenue_account_id", "INTEGER", "NULL"),
+
                     # Startup bootstrap guard
                     ("disable_startup_bootstrap", "BOOLEAN", "0"),
 
@@ -610,6 +614,26 @@ def ensure_account_columns(engine: Engine) -> None:
         )
     except SQLAlchemyError as exc:
         LOGGER.error("Auto schema guard failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
+def ensure_safe_box_transaction_stones_columns(engine: Engine) -> None:
+    """Add stones_weight column to safe_box_transaction for per-vault stones tracking."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "safe_box_transaction",
+                [
+                    ("stones_weight", "FLOAT", "0.0"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard (safe_box_transaction stones) failed: %s", exc)
         return
 
     _log_added(columns_added)

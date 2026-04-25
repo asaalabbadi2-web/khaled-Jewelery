@@ -118,6 +118,7 @@ from schema_guard import (
 	ensure_supplier_columns,
 	ensure_payment_method_columns,
 	ensure_account_columns,
+	ensure_safe_box_transaction_stones_columns,
 )
 
 import os
@@ -315,6 +316,7 @@ with app.app_context():
 	ensure_supplier_columns(db.engine)
 	ensure_payment_method_columns(db.engine)
 	ensure_account_columns(db.engine)
+	ensure_safe_box_transaction_stones_columns(db.engine)
 	# ensure_weight_closing_support_accounts()  # Moved to after create_tables()
 # ⚠️ ترتيب التسجيل مهم: auth_bp يجب أن يُسجل قبل api لأن auth_bp.login له أولوية
 app.register_blueprint(auth_bp, url_prefix='/api')  # 🆕 تسجيل auth & permissions routes (أولاً!)
@@ -381,6 +383,7 @@ def create_tables():
 		ensure_supplier_columns(db.engine)
 		ensure_payment_method_columns(db.engine)
 		ensure_account_columns(db.engine)
+		ensure_safe_box_transaction_stones_columns(db.engine)
 
 
 # In production Docker we run under Gunicorn (`backend.wsgi:app`).
