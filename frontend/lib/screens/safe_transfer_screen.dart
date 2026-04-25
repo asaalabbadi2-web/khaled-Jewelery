@@ -954,8 +954,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                                   )
                                   .toList(),
                               onChanged: (v) {
-                                if (v != null)
+                                if (v != null) {
                                   setState(() => _corrFromKarat = v);
+                                }
                               },
                             ),
                           ),

@@ -4786,7 +4786,7 @@ class ApiService {
   ///
   /// ملاحظة: هذه الدالة لا تؤثر على أي شاشة/تدفق ما لم يتم استدعاؤها.
   /// تصحيح عيار داخل نفس الخزينة الذهبية (تصحيح خطأ تسجيل).
-  /// Endpoint: POST /safe-boxes/<id>/correct-karat
+  /// Endpoint: POST /safe-boxes/{id}/correct-karat
 
   /// تسجيل عملية تكسير أو تجديد.
   /// Endpoint: POST /melting-renewal

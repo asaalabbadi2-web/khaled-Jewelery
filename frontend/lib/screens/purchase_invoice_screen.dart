@@ -11,6 +11,8 @@ import '../models/category_model.dart';
 import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
+import '../theme/app_theme.dart';
+import '../widgets/adaptive_invoice_summary_dialog.dart';
 import '../widgets/invoice_settings_sheet.dart';
 import '../widgets/original_invoice_selector.dart';
 import '../widgets/party_picker_dialog.dart';
@@ -2146,6 +2148,46 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   String _formatWeight(double value) => '${value.toStringAsFixed(3)} جم';
 
+  List<InvoiceSummaryMetricDetail> _buildWeightBreakdownLines(
+    Iterable<dynamic> rawItems,
+  ) {
+    double asDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '') ?? 0.0;
+    }
+
+    String formatKarat(dynamic value) {
+      final karat = asDouble(value);
+      if ((karat - karat.roundToDouble()).abs() < 0.001) {
+        return karat.round().toString();
+      }
+      return karat.toStringAsFixed(1);
+    }
+
+    final byKarat = <String, double>{};
+    for (final raw in rawItems) {
+      if (raw is! Map) continue;
+      final item = Map<String, dynamic>.from(raw);
+      final weight = asDouble(item['weight']);
+      if (weight <= 0) continue;
+      final karatLabel = formatKarat(item['karat']);
+      byKarat[karatLabel] = (byKarat[karatLabel] ?? 0) + weight;
+    }
+
+    final entries = byKarat.entries.toList()
+      ..sort((a, b) => (double.tryParse(b.key) ?? 0).compareTo(double.tryParse(a.key) ?? 0));
+
+    return entries
+        .map(
+          (entry) => InvoiceSummaryMetricDetail(
+            label: '${entry.key}k',
+            value: '${entry.value.toStringAsFixed(3)} جم',
+            accentColor: AppColors.karatColorFor(entry.key),
+          ),
+        )
+        .toList();
+  }
+
   bool _validateBeforeSave({bool forDraft = false}) {
     if (_selectedBranchId == null) {
       setState(() {
@@ -2457,7 +2499,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     if (_isSavingInvoice) return;
     if (!_validateBeforeSave()) return;
 
-    final shouldProceed = await _confirmPreSaveSummary();
+    final shouldProceed = await _showPreSaveInvoiceSummary();
     if (!shouldProceed) return;
 
     if (!mounted) return;
@@ -2488,45 +2530,86 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         // ignore
       }
 
+      double totalWeight = 0.0;
+      if (invoiceForPrint['items'] is List) {
+        for (final item in (invoiceForPrint['items'] as List<dynamic>)) {
+          totalWeight += (item['weight'] ?? 0.0) as num;
+        }
+      }
+
+      final settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+      final currency = settingsProvider.currencySymbol;
+      final weightBreakdown = _buildWeightBreakdownLines(
+        invoiceForPrint['items'] is List ? List<dynamic>.from(invoiceForPrint['items']) : const [],
+      );
+
       final shouldPrint = _uiAutoOpenPrintAfterSave
           ? 'print'
-          : await showDialog<String>(
+          : await showAdaptiveInvoiceSummaryDialog<String>(
               context: context,
-              barrierDismissible: false,
-              builder: (dialogContext) {
-                return AlertDialog(
-                  title: const Text('تم حفظ الفاتورة'),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        _isSupplierReturnMode
-                            ? '✅ تم حفظ مرتجع الشراء #${invoiceForPrint['id'] ?? ''}\nاختر الإجراء:'
-                            : '✅ تم حفظ فاتورة الشراء #${invoiceForPrint['id'] ?? ''}\nاختر الإجراء:',
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton.icon(
-                        onPressed: () => Navigator.pop(dialogContext, 'print'),
-                        icon: const Icon(Icons.print),
-                        label: const Text('طباعة'),
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        onPressed: () => Navigator.pop(dialogContext, 'share'),
-                        icon: const Icon(Icons.share, size: 18),
-                        label: const Text('مشاركة'),
-                      ),
-                      const SizedBox(height: 4),
-                      TextButton(
-                        onPressed: () => Navigator.pop(dialogContext, null),
-                        child: const Text('تم'),
-                      ),
-                    ],
+              title: 'تم حفظ الفاتورة',
+              subtitle: _isSupplierReturnMode
+                  ? 'تم حفظ مرتجع الشراء بنجاح'
+                  : 'تم حفظ فاتورة الشراء بنجاح',
+              icon: Icons.check_circle,
+              accentColor: AppColors.success,
+              highlightMessage: _isSupplierReturnMode
+                  ? 'مرتجع الشراء #${invoiceForPrint['id'] ?? ''}'
+                  : 'فاتورة الشراء #${invoiceForPrint['id'] ?? ''}',
+              statusTitle: 'حالة الفاتورة',
+              statusMessage: 'الفاتورة جاهزة للطباعة أو المشاركة',
+              statusTone: InvoiceSummaryStatusTone.success,
+              metrics: [
+                if ((invoiceForPrint['id'] ?? '').toString().isNotEmpty)
+                  InvoiceSummaryMetric(
+                    label: 'رقم الفاتورة',
+                    value: '#${invoiceForPrint['id'] ?? ''}',
+                    icon: Icons.tag_rounded,
+                    accentColor: AppColors.primaryGold,
                   ),
-                );
-              },
-            );
+                if ((invoiceForPrint['supplier_name'] ?? '').toString().isNotEmpty)
+                  InvoiceSummaryMetric(
+                    label: 'المورد',
+                    value: invoiceForPrint['supplier_name'] ?? '',
+                    icon: Icons.person_outline_rounded,
+                    accentColor: AppColors.info,
+                  ),
+                InvoiceSummaryMetric(
+                  label: 'الإجمالي',
+                  value: '${(invoiceForPrint['total'] ?? 0.0).toStringAsFixed(2)} $currency',
+                  icon: Icons.payments_outlined,
+                  accentColor: AppColors.primaryGold,
+                  emphasize: true,
+                ),
+                if (totalWeight > 0)
+                  InvoiceSummaryMetric(
+                    label: 'إجمالي الوزن',
+                    value: '${totalWeight.toStringAsFixed(3)} جم',
+                    icon: Icons.scale_outlined,
+                    accentColor: AppColors.info,
+                    fullWidth: true,
+                    details: weightBreakdown,
+                  ),
+              ],
+              actions: [
+                InvoiceSummaryAction.secondary(
+                  label: 'طباعة',
+                  icon: Icons.print_rounded,
+                  value: 'print',
+                ),
+                InvoiceSummaryAction.secondary(
+                  label: 'مشاركة',
+                  icon: Icons.share_rounded,
+                  value: 'share',
+                ),
+                InvoiceSummaryAction.primary(
+                  label: 'تم',
+                  icon: Icons.check_rounded,
+                  value: 'done',
+                ),
+              ],
+            ) ??
+          'close';
 
       if (!mounted) return;
       if (shouldPrint == 'print') {
@@ -2600,16 +2683,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   String _fmtMoney(double value) => value.toStringAsFixed(2);
   String _fmtWeight(double value) => value.toStringAsFixed(3);
 
-  Future<bool> _confirmPreSaveSummary() async {
+  Future<bool> _showPreSaveInvoiceSummary() async {
     if (!mounted) return false;
     final supplierId = _selectedSupplierId;
     if (supplierId == null) return true;
 
     // Invoice summary (based on current UI state)
     final totalWeight = _round(_totalWeight, 3);
-    final goldSubtotal = _round(_goldSubtotal, 2);
-    final wageSubtotal = _round(_wageSubtotal, 2);
-    final taxTotal = _round(_taxTotal, 2);
     final grandTotal = _round(_grandTotal, 2);
 
     final dueCash = _cashDueForSupplier();
@@ -2646,11 +2726,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           ),
         );
 
-        // Supplier statement running balance uses (debit - credit).
-        // A purchase invoice increases supplier payable (credit), which decreases the balance.
-        // Payments reduce payable (debit), which increases the balance.
-        // For a regular purchase we OWE the supplier (credit) → balance decreases.
-        // For a return the payable is reversed (debit) → balance increases.
         if (_isSupplierReturnMode) {
           projectedCashBalance = _round(currentCashBalance + netCashDue, 2);
           projectedGoldBalanceMain = _round(
@@ -2678,162 +2753,116 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       supplierName = '';
     }
 
-    final proceed = await showDialog<bool>(
+    final currency = 'ر.س';
+    final notices = <String>[];
+    if (netCashDue > 0.01) {
+      notices.add('سيزداد رصيد المورد النقدي بمقدار ${_fmtMoney(netCashDue)} $currency');
+    }
+    if (netGoldDueMain > 0.001) {
+      notices.add('سيزداد رصيد المورد الذهبي بمقدار ${_fmtWeight(netGoldDueMain)} جم');
+    }
+    if (statementError != null) {
+      notices.add('تعذر جلب الرصيد الحالي من السيرفر. سيتم المتابعة بدون عرض رصيد تفصيلي.');
+    }
+
+    return await showAdaptiveInvoiceSummaryDialog<bool>(
       context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        final theme = Theme.of(dialogContext);
-
-        Widget balanceRow(
-          String label,
-          double? value, {
-          required bool isWeight,
-        }) {
-          final text = value == null
-              ? 'غير متاح'
-              : (isWeight
-                    ? '${_fmtWeight(value)} جم'
-                    : '${_fmtMoney(value)} ر.س');
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(label, style: theme.textTheme.bodyMedium),
-                Text(
-                  text,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return AlertDialog(
-          title: const Text('ملخص قبل الحفظ'),
-          content: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (supplierName.isNotEmpty)
-                    Text(
-                      supplierName,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                      textAlign: TextAlign.start,
-                    ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'نوع التسوية: ${_settlementModeLabel(_settlementMode)}',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 10),
-
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest
-                          .withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'ملخص الفاتورة',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        balanceRow('إجمالي الوزن', totalWeight, isWeight: true),
-                        balanceRow(
-                          'إجمالي الذهب',
-                          goldSubtotal,
-                          isWeight: false,
-                        ),
-                        balanceRow('الأجور', wageSubtotal, isWeight: false),
-                        balanceRow('الضريبة', taxTotal, isWeight: false),
-                        const Divider(height: 16),
-                        balanceRow('الإجمالي', grandTotal, isWeight: false),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest
-                          .withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'سيصبح رصيد المورد بعد الحفظ',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        balanceRow(
-                          'نقدًا',
-                          projectedCashBalance,
-                          isWeight: false,
-                        ),
-                        balanceRow(
-                          'ذهب (عيار $mainKarat)',
-                          projectedGoldBalanceMain,
-                          isWeight: true,
-                        ),
-                        if (statementError != null) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            'تعذر جلب الرصيد الحالي من السيرفر. سيتم الحفظ بدون عرض الرصيد التفصيلي.',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.error,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ] else ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            'الرصيد الحالي (قبل الحفظ): نقد ${_fmtMoney(currentCashBalance ?? 0)} ر.س | ذهب ${_fmtWeight(currentGoldBalanceMain ?? 0)} جم',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
+      title: 'مراجعة الفاتورة',
+      subtitle: 'راجع البيانات الأساسية سريعاً قبل تنفيذ الحفظ.',
+      icon: Icons.receipt_long_rounded,
+      accentColor: AppColors.primaryGold,
+      statusTitle: 'حالة التسوية',
+      statusMessage: _settlementModeLabel(_settlementMode),
+      statusTone: InvoiceSummaryStatusTone.neutral,
+      metrics: [
+        if (supplierName.isNotEmpty)
+          InvoiceSummaryMetric(
+            label: 'المورد',
+            value: supplierName,
+            icon: Icons.person_outline_rounded,
+            accentColor: AppColors.info,
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('رجوع'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('حفظ'),
-            ),
-          ],
-        );
-      },
-    );
-
-    return proceed == true;
+        InvoiceSummaryMetric(
+          label: 'الإجمالي',
+          value: '${_fmtMoney(grandTotal)} $currency',
+          icon: Icons.payments_outlined,
+          accentColor: AppColors.primaryGold,
+          emphasize: true,
+        ),
+        if (totalWeight > 0)
+          InvoiceSummaryMetric(
+            label: 'إجمالي الوزن',
+            value: '${_fmtWeight(totalWeight)} جم',
+            icon: Icons.scale_outlined,
+            accentColor: AppColors.info,
+            fullWidth: true,
+          ),
+        InvoiceSummaryMetric(
+          label: 'نقدي مستحق',
+          value: '${_fmtMoney(netCashDue)} $currency',
+          icon: Icons.money,
+          accentColor: AppColors.success,
+        ),
+        InvoiceSummaryMetric(
+          label: 'ذهب مستحق (عيار $mainKarat)',
+          value: '${_fmtWeight(netGoldDueMain)} جم',
+          icon: Icons.monitor_weight_outlined,
+          accentColor: AppColors.karat24,
+        ),
+        if (currentGoldBalanceMain != null)
+          InvoiceSummaryMetric(
+            label: 'وزن الرصيد الحالي (عيار $mainKarat)',
+            value: '${_fmtWeight(currentGoldBalanceMain)} جم',
+            icon: Icons.monitor_weight_outlined,
+            accentColor: AppColors.info,
+            badgeLabel: 'الحالي',
+            badgeColor: AppColors.info,
+          ),
+        if (projectedGoldBalanceMain != null)
+          InvoiceSummaryMetric(
+            label: 'وزن الرصيد بعد الحفظ (عيار $mainKarat)',
+            value: '${_fmtWeight(projectedGoldBalanceMain)} جم',
+            icon: Icons.monitor_weight_outlined,
+            accentColor: AppColors.primaryGold,
+            badgeLabel: 'بعد الحفظ',
+            badgeColor: AppColors.primaryGold,
+          ),
+        if (currentCashBalance != null)
+          InvoiceSummaryMetric(
+            label: 'الرصيد الحالي (نقد)',
+            value: '${_fmtMoney(currentCashBalance)} $currency',
+            icon: Icons.account_balance_outlined,
+            accentColor: AppColors.info,
+            badgeLabel: 'الحالي',
+            badgeColor: AppColors.info,
+          ),
+        if (projectedCashBalance != null)
+          InvoiceSummaryMetric(
+            label: 'الرصيد بعد الحفظ (نقد)',
+            value: '${_fmtMoney(projectedCashBalance)} $currency',
+            icon: Icons.trending_up_rounded,
+            accentColor: AppColors.primaryGold,
+            badgeLabel: 'بعد الحفظ',
+            badgeColor: AppColors.primaryGold,
+          ),
+      ],
+      notices: notices,
+      closeValue: false,
+      actions: const [
+        InvoiceSummaryAction.secondary(
+          label: 'رجوع',
+          icon: Icons.arrow_back_rounded,
+          value: false,
+        ),
+        InvoiceSummaryAction.primary(
+          label: 'حفظ الفاتورة',
+          icon: Icons.save_rounded,
+          value: true,
+        ),
+      ],
+    ) ?? false;
   }
+
 
   @override
   Widget build(BuildContext context) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
@@ -38,7 +39,7 @@ import 'branches_management_screen.dart';
 import 'gold_price_manual_screen_enhanced.dart';
 import 'customize_quick_actions_screen.dart';
 import 'scrap_sales_invoice_screen.dart';
-import 'scrap_purchase_invoice_screen.dart';
+import 'scrap_purchase_invoice_screen.dart'; // 🆕 فاتورة شراء الكسر المحسّنة
 import 'employees_screen.dart';
 import 'users_screen.dart';
 import 'payroll_screen.dart';
@@ -58,6 +59,7 @@ import 'weight_closing_execute_screen.dart';
 import 'import_documents_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
+import 'reports/admin_dashboard_screen.dart';
 import 'printing_center_screen.dart';
 import 'security_sessions_screen.dart';
 import 'change_password_screen.dart';
@@ -104,7 +106,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   int mainKarat = 21;
 
   // Gold display toggle: true = persistent bar under AppBar, false = scrolling ticker
-  final bool _goldBarMode = true;
+  bool _goldBarMode = true;
 
   bool _isGoldPriceUpdatingNow = false;
 
@@ -1573,104 +1575,32 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       child: Scaffold(
         drawer: _buildDrawer(isAr, AppColors.primaryGold),
         appBar: AppBar(
-          automaticallyImplyLeading: false,
-          toolbarHeight: 56,
-          elevation: 0,
-          shadowColor: Colors.black.withValues(alpha: 0.14),
-          surfaceTintColor: Colors.transparent,
-          backgroundColor: Theme.of(context).brightness == Brightness.dark
-              ? const Color(0xFF2D2D2D)
-              : AppColors.darkGold,
-          foregroundColor: Theme.of(context).brightness == Brightness.dark
-              ? AppColors.primaryGold
-              : Colors.white,
-          leadingWidth: 52,
-          leading: Builder(
-            builder: (context) => IconButton(
-              tooltip: isAr ? 'القائمة' : 'Menu',
-              icon: const Icon(Icons.menu_rounded, size: 24),
-              onPressed: () => Scaffold.of(context).openDrawer(),
-            ),
-          ),
-          titleSpacing: 0,
           title: Row(
             children: [
               AppLogo.matchTextColor(
-                Theme.of(context).brightness == Brightness.dark
-                    ? AppColors.primaryGold
-                    : Colors.white,
-                width: 32,
-                height: 32,
+                (Theme.of(context).appBarTheme.foregroundColor ??
+                    Theme.of(context).colorScheme.onPrimary),
+                width: 28,
+                height: 28,
               ),
               const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  isAr ? 'مجوهرات خالد' : 'Khaled Jewelery',
-                  style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? AppColors.primaryGold
-                        : Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'Cairo',
-                    fontSize: 16,
-                  ),
-                ),
-              ),
+              Expanded(child: Text(isAr ? 'مجوهرات خالد' : 'Khaled Jewelery')),
             ],
           ),
           actions: [
-            if (_pendingApprovalsCount > 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(20),
-                  onTap: () => _handleQuickActionTap('vouchers'),
-                  child: Container(
-                    padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 12, 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.error.withValues(alpha: 0.16),
-                      border: Border.all(
-                        color: AppColors.error.withValues(alpha: 0.45),
-                      ),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 22,
-                          height: 22,
-                          decoration: const BoxDecoration(
-                            color: AppColors.error,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Text(
-                              '$_pendingApprovalsCount',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                fontFamily: 'Cairo',
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          isAr ? 'بانتظار الاعتماد' : 'Pending Approval',
-                          style: const TextStyle(
-                            color: Color(0xFFFFCDD2),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            fontFamily: 'Cairo',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+            // زر تبديل عرض سعر الذهب (شريط ثابت / شريط متحرك)
+            IconButton(
+              icon: Icon(
+                _goldBarMode
+                    ? Icons.view_stream_outlined
+                    : Icons.horizontal_rule_rounded,
               ),
+              tooltip: _goldBarMode
+                  ? 'تبديل إلى الشريط المتحرك'
+                  : 'تبديل إلى الشريط الثابت',
+              onPressed: () => setState(() => _goldBarMode = !_goldBarMode),
+            ),
+            // زر تبديل الوضع (فاتح/داكن)
             IconButton(
               icon: Icon(
                 Provider.of<ThemeProvider>(context).isDarkMode
@@ -1678,66 +1608,107 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     : Icons.dark_mode,
               ),
               tooltip: isAr ? 'تبديل الوضع' : 'Toggle Theme',
-              onPressed: () => Provider.of<ThemeProvider>(context, listen: false).toggleTheme(),
+              onPressed: () {
+                Provider.of<ThemeProvider>(
+                  context,
+                  listen: false,
+                ).toggleTheme();
+              },
             ),
+            // زر تبديل اللغة
             IconButton(
-              icon: const Icon(Icons.language),
+              icon: Icon(Icons.language),
               tooltip: isAr ? 'English' : 'العربية',
               onPressed: widget.onToggleLocale,
             ),
-            IconButton(
-              icon: const Icon(Icons.qr_code_scanner_outlined),
-              tooltip: isAr ? 'قارئ الباركود' : 'Barcode Scanner',
-              onPressed: () => _handleQuickActionTap('barcode_scan'),
+            // زر تبديل المستخدم - ظاهر مباشرة في الشريط
+            Consumer<AuthProvider>(
+              builder: (context, auth, _) => IconButton(
+                icon: const Icon(Icons.switch_account),
+                tooltip: isAr ? 'تبديل المستخدم' : 'Switch User',
+                onPressed: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: Text(isAr ? 'تبديل المستخدم' : 'Switch User'),
+                      content: Text(
+                        isAr
+                            ? 'سيتم تسجيل خروج المستخدم الحالي.\nهل تريد المتابعة؟'
+                            : 'The current user will be signed out.\nDo you want to continue?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: Text(isAr ? 'إلغاء' : 'Cancel'),
+                        ),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.switch_account, size: 18),
+                          label: Text(isAr ? 'تبديل' : 'Switch'),
+                          onPressed: () => Navigator.pop(ctx, true),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    await auth.logout();
+                  }
+                },
+              ),
             ),
             Consumer<AuthProvider>(
               builder: (context, auth, _) {
-                final displayName = auth.username.isNotEmpty
-                    ? auth.username
-                    : (auth.fullName.isEmpty
+                final displayName = auth.fullName.isEmpty
+                    ? (auth.username.isEmpty
                           ? (isAr ? 'حساب المستخدم' : 'Account')
-                          : auth.fullName);
+                          : auth.username)
+                    : auth.fullName;
                 return PopupMenuButton<String>(
                   tooltip: displayName,
                   offset: const Offset(0, 48),
+                  // show avatar + username inline so the name is visible on the app bar
+                  // constrain the widget height to the toolbar to avoid increasing AppBar height
                   child: SizedBox(
                     height: kToolbarHeight,
                     child: Center(
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const SizedBox(width: 6),
+                          CircleAvatar(
+                            radius: 17,
+                            backgroundColor: Colors.white.withValues(
+                              alpha: 0.25,
+                            ),
+                            child: Text(
+                              displayName.isNotEmpty
+                                  ? displayName[0].toUpperCase()
+                                  : '?',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // username label (falls back to localized account label)
                           ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 110),
+                            constraints: const BoxConstraints(maxWidth: 140),
                             child: Text(
                               displayName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               softWrap: false,
-                              style: TextStyle(
-                                color: Theme.of(context).brightness == Brightness.dark
-                                    ? AppColors.primaryGold
-                                    : Colors.white,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                                fontFamily: 'Cairo',
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          CircleAvatar(
-                            radius: 15,
-                            backgroundColor: Colors.white,
-                            child: Text(
-                              displayName.isNotEmpty
-                                  ? displayName[0].toUpperCase()
-                                  : '?',
-                              style: TextStyle(
-                                color: Theme.of(context).brightness == Brightness.dark
-                                    ? const Color(0xFF1A1A1A)
-                                    : AppColors.darkGold,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 12,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                shadows: [
+                                  Shadow(
+                                    color: Colors.black26,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 1),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -1909,77 +1880,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   Widget _buildBottomNavigationBar(bool isAr, Color gold) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
-    final items = _getBottomNavItems(isAr);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: bg,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
-            blurRadius: 12,
-            offset: const Offset(0, -2),
-          ),
-        ],
+    return BottomNavigationBar(
+      backgroundColor: theme.bottomNavigationBarTheme.backgroundColor,
+      selectedItemColor: AppColors.primaryGold,
+      unselectedItemColor: theme.unselectedWidgetColor,
+      currentIndex: _selectedNavIndex,
+      type: BottomNavigationBarType.fixed,
+      elevation: 8,
+      selectedLabelStyle: TextStyle(
+        fontFamily: 'Cairo',
+        fontWeight: FontWeight.bold,
       ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 60,
-          child: Row(
-            children: List.generate(items.length, (i) {
-              final selected = i == _selectedNavIndex;
-              final item = items[i];
-              return Expanded(
-                child: InkWell(
-                  onTap: () => _onBottomNavTap(i),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // مؤشر علوي للعنصر المختار
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 250),
-                        height: 3,
-                        width: selected ? 28 : 0,
-                        margin: const EdgeInsets.only(bottom: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryGold,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      IconTheme(
-                        data: IconThemeData(
-                          color: selected
-                              ? AppColors.primaryGold
-                              : theme.unselectedWidgetColor,
-                          size: 22,
-                        ),
-                        child: item.icon,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        item.label ?? '',
-                        style: TextStyle(
-                          fontFamily: 'Cairo',
-                          fontSize: 11,
-                          fontWeight: selected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                          color: selected
-                              ? AppColors.primaryGold
-                              : theme.unselectedWidgetColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
-          ),
-        ),
-      ),
+      unselectedLabelStyle: TextStyle(fontFamily: 'Cairo'),
+      onTap: _onBottomNavTap,
+      items: _getBottomNavItems(isAr),
     );
   }
 
@@ -2084,32 +1999,37 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   children: [
                     const SizedBox(height: 8),
 
+                    // Operations Center (with badge)
+                    _buildOperationsCenterCard(),
+
+                    const SizedBox(height: 24),
+
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final isWide = constraints.maxWidth >= 900;
+                        final isWide = constraints.maxWidth >= 1100;
 
                         if (isWide && showSalesRaceCard) {
-                          // Source HTML layout in RTL:
-                          // first child renders on the right => Sales Race on right, Quick Access on left.
+                          // Large screens: show Sales Race beside invoice buttons.
+                          // RTL: first child appears on the right, so put Quick Actions first.
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(flex: 13, child: _buildLeaderboardCard(isAr)),
-                              const SizedBox(width: 20),
-                              Expanded(flex: 10, child: _buildQuickActions()),
+                              Expanded(child: _buildQuickActions()),
+                              const SizedBox(width: 16),
+                              Expanded(child: _buildLeaderboardCard(isAr)),
                             ],
                           );
                         }
 
-                        // Source responsive layout: quick access above race panel.
+                        // Small/medium screens: stacked layout.
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildQuickActions(),
                             if (showSalesRaceCard) ...[
-                              const SizedBox(height: 16),
                               _buildLeaderboardCard(isAr),
+                              const SizedBox(height: 24),
                             ],
+                            _buildQuickActions(),
                           ],
                         );
                       },
@@ -2142,6 +2062,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     final adminSummary = data?['admin_summary'] as Map?;
     final raceEnabled = config?['enabled'] != false;
     final showInvoiceCount = config?['show_invoice_count'] != false;
+    // مبلغ المبيعات يظهر دائماً لجميع الموظفين
+    const showSalesAmountPerEmployee = true;
     final showChampion = config?['show_champion'] != false;
     final isFallback = data?['is_fallback'] == true;
     final effectiveStartDate = DateTime.tryParse(
@@ -2279,14 +2201,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       _ => isAr ? 'عرض حسب الوزن' : 'Weight View',
     };
 
-    // Current user position for "me card"
-    final meEmpId = context.read<AuthProvider>().currentUser?.employeeId;
-    final meIsInTop = meEmpId != null &&
-        topRanking.any((r) => (r['id'] as num?)?.toInt() == meEmpId);
-    final meRankIndex = meEmpId == null
-        ? -1
-        : allRanking.indexWhere((r) => (r['id'] as num?)?.toInt() == meEmpId);
-
     String rankRoleLabel(int index) {
       if (index == 0) return isAr ? 'المتصدر' : 'Leader';
       if (index == 1) return isAr ? 'الثاني' : 'Second';
@@ -2320,10 +2234,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           : colorScheme.onSurface.withValues(alpha: 0.62);
       final invoiceLabelEn = count == 1 ? 'invoice' : 'invoices';
       final invoiceLabelAr = count == 1 ? 'فاتورة بيع' : 'فواتير بيع';
-      final invoiceLabelPointsAr = count == 1 ? 'فاتورة' : 'فواتير';
       final invoiceSummary = showInvoiceCount
           ? (metric == 'points'
-            ? (isAr ? '$count $invoiceLabelPointsAr' : '$count transactions')
+            ? (isAr ? '$count فاتورة' : '$count transactions')
             : (isAr ? '$count $invoiceLabelAr' : '$count sales $invoiceLabelEn'))
           : (metric == 'points'
             ? (isAr ? 'فواتير مبيعات ومشتريات' : 'Sales and purchases activity')
@@ -2338,7 +2251,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         'points' => isAr ? 'نقطة' : 'Points',
         _ => isAr ? 'جم' : 'g',
       };
-      final numberFormat = NumberFormat('#,##0', 'en');
+      final amountSummary = isAr
+          ? 'مبيعات ${salesAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol • مشتريات ${purchaseAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol'
+          : 'Sales ${salesAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol • Purchases ${purchaseAmount.toStringAsFixed(currencyDecimalPlaces)} $currencySymbol';
       final avatarText = name.trim().isEmpty
           ? '?'
           : name
@@ -2349,354 +2264,233 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 .map((part) => part.characters.first)
                 .join();
 
-      bool hovered = false;
-      return StatefulBuilder(
-        builder: (context, setHover) {
-          return Padding(
-        padding: EdgeInsetsDirectional.only(bottom: 8, top: index == 0 ? 6 : 0),
-        child: MouseRegion(
-          onEnter: (_) => setHover(() => hovered = true),
-          onExit: (_) => setHover(() => hovered = false),
-          child: AnimatedScale(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOutCubic,
-            scale: hovered ? 1.015 : 1.0,
-            child: AnimatedContainer(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOutCubic,
-            transform: Matrix4.translationValues(0, hovered ? -2.0 : 0, 0),
-            decoration: BoxDecoration(
-              color: hovered
-                  ? (index == 0
-                      ? (isDark ? colorScheme.surfaceContainerHigh : const Color(0xFFFFFBF0))
-                      : (isDark ? colorScheme.surfaceContainerHigh : Colors.white))
-                  : (isDark
-                      ? colorScheme.surfaceContainerHigh
-                      : (index == 0 ? const Color(0xFFFFFDF5) : Colors.white)),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: hovered
-                    ? AppColors.primaryGold.withValues(alpha: 0.42)
-                    : (index == 0
-                        ? AppColors.primaryGold.withValues(alpha: 0.22)
-                        : index == 1
-                            ? const Color(0xFF98A2B3).withValues(alpha: 0.20)
-                            : index == 2
-                                ? const Color(0xFFB07A39).withValues(alpha: 0.18)
-                                : colorScheme.onSurface.withValues(alpha: 0.07)),
-                width: hovered ? 1.2 : (index == 0 ? 1.1 : 1.0),
-              ),
-              boxShadow: hovered
-                  ? [
-                      BoxShadow(
-                        color: AppColors.primaryGold.withValues(alpha: 0.11),
-                        blurRadius: 14,
-                        spreadRadius: 0,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.13 : 0.07),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : (index == 0
-                      ? [BoxShadow(color: AppColors.primaryGold.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3))]
-                      : null),
+      return Padding(
+        padding: const EdgeInsetsDirectional.only(bottom: 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(
+              sigmaX: index < 3 ? 10 : 4,
+              sigmaY: index < 3 ? 10 : 4,
             ),
-            child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Medal rank badge with crown for rank 1
-                SizedBox(
-                  width: 34,
-                  height: index == 0 ? 44 : 34,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    alignment: Alignment.center,
-                    children: [
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: switch (index) {
-                                0 => const [Color(0xFFFFD700), Color(0xFFDAA520)],
-                                1 => const [Color(0xFFE0E0E0), Color(0xFF9E9E9E)],
-                                2 => const [Color(0xFFCD7F32), Color(0xFF8B4513)],
-                                _ => [medalAccent.withValues(alpha: 0.22), medalAccent.withValues(alpha: 0.10)],
+            child: Container(
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? colorScheme.surfaceContainerHighest
+                        .withValues(alpha: index < 3 ? 0.65 : 0.50)
+                    : Colors.white.withValues(alpha: index < 3 ? 0.52 : 0.40),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: index < 3
+                      ? medalAccent.withValues(alpha: index == 0 ? 0.38 : 0.18)
+                      : colorScheme.onSurface.withValues(alpha: 0.07),
+                ),
+                boxShadow: index < 3
+                    ? [
+                        BoxShadow(
+                          color: medalAccent.withValues(
+                            alpha: index == 0 ? 0.12 : 0.06,
+                          ),
+                          blurRadius: index == 0 ? 18 : 10,
+                          offset: Offset(0, index == 0 ? 6 : 3),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 26,
+                    child: Text(
+                      '${index + 1}',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: index < 3
+                            ? medalAccent.withValues(alpha: 0.82)
+                            : colorScheme.onSurface.withValues(alpha: 0.3),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: medalAccent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(
+                        color: medalAccent.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        avatarText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: medalAccent,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: colorScheme.onSurface,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: roleBadgeColor.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                rankRoleLabel(index),
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: roleBadgeColor,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          invoiceSummary,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurface.withValues(alpha: 0.58),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (showSalesAmountPerEmployee) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            amountSummary,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: AppColors.darkGold,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            height: 5,
+                            color: colorScheme.onSurface.withValues(alpha: 0.07),
+                            child: TweenAnimationBuilder<double>(
+                              tween: Tween<double>(
+                                begin: 0,
+                                end: share.clamp(0.0, 1.0),
+                              ),
+                              duration: Duration(milliseconds: 650 + (index * 120)),
+                              curve: Curves.easeOutCubic,
+                              builder: (context, value, child) {
+                                return Stack(
+                                  children: [
+                                    FractionallySizedBox(
+                                      alignment: AlignmentDirectional.centerStart,
+                                      widthFactor: value,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            begin: AlignmentDirectional.centerStart,
+                                            end: AlignmentDirectional.centerEnd,
+                                            colors: [
+                                              progressColor.withValues(alpha: 0.72),
+                                              medalAccent,
+                                            ],
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: medalAccent.withValues(
+                                                alpha: 0.18,
+                                              ),
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
                               },
                             ),
-                            borderRadius: BorderRadius.circular(10),
-                            boxShadow: index == 0
-                                ? [BoxShadow(color: const Color(0xFFFFD700).withValues(alpha: 0.40), blurRadius: 14, offset: const Offset(0, 4))]
-                                : null,
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${index + 1}',
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w900,
-                                fontSize: 14,
-                                color: index < 3 ? Colors.white : medalAccent,
-                              ),
-                            ),
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 72),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 10,
                       ),
-                      if (index == 0)
-                        const Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          child: Center(
-                            child: Text('👑', style: TextStyle(fontSize: 13)),
-                          ),
+                      decoration: BoxDecoration(
+                        color: index == 0
+                            ? AppColors.primaryGold.withValues(alpha: 0.14)
+                            : medalAccent.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: index == 0
+                              ? AppColors.primaryGold.withValues(alpha: 0.28)
+                              : medalAccent.withValues(alpha: 0.14),
                         ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Avatar
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: medalAccent.withValues(alpha: 0.10),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: medalAccent.withValues(alpha: 0.18),
-                    ),
-                  ),
-                  child: Center(
-                    child: Text(
-                      avatarText,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        color: medalAccent,
                       ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // Employee info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Flexible(
-                            child: Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 14,
-                                color: colorScheme.onSurface,
-                              ),
+                          Text(
+                            scoreValueText,
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              color: medalAccent,
+                              fontWeight: FontWeight.w800,
+                              fontSize: index == 0 ? 23 : null,
                             ),
                           ),
-                          const SizedBox(width: 5),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: roleBadgeColor.withValues(alpha: 0.09),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              rankRoleLabel(index),
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 10,
-                                color: roleBadgeColor,
+                          const SizedBox(height: 1),
+                          Text(
+                            scoreUnitText,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.46,
                               ),
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 3),
-                      Text.rich(
-                        TextSpan(children: [
-                          WidgetSpan(
-                            alignment: PlaceholderAlignment.middle,
-                            child: Padding(
-                              padding: const EdgeInsetsDirectional.only(end: 4),
-                              child: Icon(
-                                Icons.receipt_long_rounded,
-                                size: 11,
-                                color: colorScheme.onSurface.withValues(alpha: 0.40),
-                              ),
-                            ),
-                          ),
-                          TextSpan(
-                            text: invoiceSummary,
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 10.5,
-                              color: colorScheme.onSurface.withValues(alpha: 0.52),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const TextSpan(
-                            text: '  ●  ',
-                            style: TextStyle(color: AppColors.success, fontSize: 7),
-                          ),
-                          TextSpan(
-                            text: '${isAr ? "مبيعات" : "Sales"} ',
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 10.5,
-                              color: colorScheme.onSurface.withValues(alpha: 0.44),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          TextSpan(
-                            text: '${numberFormat.format(salesAmount.round())} $currencySymbol',
-                            style: const TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 12,
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const TextSpan(
-                            text: '  ●  ',
-                            style: TextStyle(color: Color(0xFF5E35B1), fontSize: 7),
-                          ),
-                          TextSpan(
-                            text: '${isAr ? "مشتريات" : "Purchases"} ',
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 10.5,
-                              color: colorScheme.onSurface.withValues(alpha: 0.44),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          TextSpan(
-                            text: '${numberFormat.format(purchaseAmount.round())} $currencySymbol',
-                            style: const TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 12,
-                              color: Color(0xFF5E35B1),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ]),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      // Progress bar
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: Container(
-                          height: 4,
-                          color: colorScheme.onSurface.withValues(alpha: 0.07),
-                          child: TweenAnimationBuilder<double>(
-                            tween: Tween<double>(
-                                begin: 0, end: share.clamp(0.0, 1.0)),
-                            duration:
-                                Duration(milliseconds: 600 + (index * 100)),
-                            curve: Curves.easeOutCubic,
-                            builder: (context, value, _) =>
-                                FractionallySizedBox(
-                              alignment: AlignmentDirectional.centerStart,
-                              widthFactor: value,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: AlignmentDirectional.centerStart,
-                                    end: AlignmentDirectional.centerEnd,
-                                    colors: [
-                                      progressColor.withValues(alpha: 0.65),
-                                      medalAccent,
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // Score box
-                Container(
-                  constraints: const BoxConstraints(minWidth: 52),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    gradient: index == 0
-                        ? LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppColors.primaryGold.withValues(alpha: 0.18),
-                              AppColors.primaryGold.withValues(alpha: 0.07),
-                            ],
-                          )
-                        : null,
-                    color: index != 0 ? medalAccent.withValues(alpha: 0.07) : null,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: index == 0
-                          ? AppColors.primaryGold.withValues(alpha: 0.30)
-                          : medalAccent.withValues(alpha: 0.18),
                     ),
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        scoreValueText,
-                        style: TextStyle(
-                          fontFamily: 'Cairo',
-                          fontWeight: FontWeight.w900,
-                          fontSize: index == 0 ? 22 : 18,
-                          color: index == 0 ? AppColors.darkGold : medalAccent,
-                          height: 1.1,
-                        ),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        scoreUnitText,
-                        style: TextStyle(
-                          fontFamily: 'Cairo',
-                          fontSize: 9,
-                          color: colorScheme.onSurface.withValues(alpha: 0.44),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-        ),
-        ),
-        );
-        },
       );
     }
 
@@ -2958,41 +2752,25 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: AlignmentDirectional.centerEnd,
-                    end: AlignmentDirectional.centerStart,
-                    colors: [Color(0x17D4AF37), Colors.transparent],
-                  ),
+                  color: colorScheme.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(12),
-                  border: const BorderDirectional(
-                    end: BorderSide(color: AppColors.darkGold, width: 3),
-                    start: BorderSide(color: Color(0x1FD4AF37)),
-                    top: BorderSide(color: Color(0x1FD4AF37)),
-                    bottom: BorderSide(color: Color(0x1FD4AF37)),
+                  border: Border.all(
+                    color: colorScheme.primary.withValues(alpha: 0.18),
                   ),
                 ),
                 child: Row(
                   children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFFFFD700), Color(0xFFD4AF37)],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: const [BoxShadow(color: Color(0x59D4AF37), blurRadius: 6)],
-                      ),
-                      child: const Icon(Icons.calendar_today_rounded, size: 14, color: Colors.white),
+                    Icon(
+                      Icons.history_toggle_off_rounded,
+                      size: 18,
+                      color: colorScheme.primary,
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         fallbackMessage,
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppColors.deepGold,
+                          color: colorScheme.primary,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -3272,231 +3050,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 const SizedBox(height: 12),
               ],
               if (allRanking.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: AlignmentDirectional.centerEnd,
-                      end: AlignmentDirectional.centerStart,
-                      colors: [Color(0x1AD4AF37), Colors.transparent],
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                    border: BorderDirectional(
-                      end: BorderSide(color: AppColors.darkGold.withValues(alpha: 0.55), width: 3),
-                      start: BorderSide(color: AppColors.primaryGold.withValues(alpha: 0.12)),
-                      top: BorderSide(color: AppColors.primaryGold.withValues(alpha: 0.12)),
-                      bottom: BorderSide(color: AppColors.primaryGold.withValues(alpha: 0.12)),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFFFFD700), Color(0xFFD4AF37)],
-                          ),
-                          shape: BoxShape.circle,
-                          boxShadow: [BoxShadow(color: Color(0x66D4AF37), blurRadius: 8, offset: Offset(0, 2))],
-                        ),
-                        child: const Icon(Icons.wb_sunny_rounded, size: 20, color: Colors.white),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isAr ? 'يوم جديد بدأ' : 'New Day Begins',
-                              style: const TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                                color: AppColors.deepGold,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              isAr
-                                  ? (isMonth
-                                        ? 'يتم عرض النتائج بمجرد تسجيل أول فاتورة الشهر.'
-                                        : isWeek
-                                            ? 'يتم عرض النتائج بمجرد تسجيل أول فاتورة الأسبوع.'
-                                            : 'يتم عرض نتائج اليوم بمجرد تسجيل أول فاتورة اليوم.')
-                                  : (isMonth
-                                        ? 'Results appear after the first invoice this month.'
-                                        : isWeek
-                                            ? 'Results appear after the first invoice this week.'
-                                            : 'Today\'s results appear after recording the first invoice.'),
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontSize: 11.5,
-                                color: AppColors.darkGold.withValues(alpha: 0.72),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                Text(
+                  isAr
+                      ? (isMonth
+                            ? 'لم يبدأ التحدي هذا الشهر بعد.'
+                            : isWeek
+                                ? 'لم يبدأ التحدي هذا الأسبوع بعد.'
+                                : 'لا توجد مبيعات مسجلة اليوم بعد.')
+                      : (isMonth
+                            ? 'The monthly challenge hasn\'t started yet.'
+                            : isWeek
+                                ? 'The weekly challenge hasn\'t started yet.'
+                                : 'No sales recorded today yet.'),
+                  style: theme.textTheme.bodySmall,
                 )
-              else ...[              
-                // ───────── Me card (only when user not in top 3) ─────────
-                if (meEmpId != null && !meIsInTop) ...[
-                  () {
-                    final meRow = allRanking.firstWhere(
-                      (r) => (r['id'] as num?)?.toInt() == meEmpId,
-                      orElse: () => const {},
-                    );
-                    final meScore = (meRow['score'] as num?)?.toDouble() ?? 0.0;
-                    final meScoreText = switch (metric) {
-                      'count' => (meRow['count'] as num?)?.toInt().toString() ?? '0',
-                      'points' => meScore.toStringAsFixed(0),
-                      _ => meScore.toStringAsFixed(1),
-                    };
-                    final meScoreUnit = switch (metric) {
-                      'count' => isAr ? 'فاتورة' : 'Invoice',
-                      'points' => isAr ? 'نقطة' : 'pts',
-                      _ => isAr ? 'جم' : 'g',
-                    };
-                    final auth = context.read<AuthProvider>();
-                    final meFullName = auth.fullName.trim();
-                    final meAvatarText = meFullName.isEmpty
-                        ? '?'
-                        : meFullName
-                              .split(RegExp(r'\s+'))
-                              .where((p) => p.isNotEmpty)
-                              .take(2)
-                              .map((p) => p.characters.first)
-                              .join();
-                    return Padding(
-                      padding: const EdgeInsetsDirectional.only(bottom: 8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF0D2A47)
-                              : const Color(0xFF1976D2).withValues(alpha: 0.05),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: const Color(0xFF1976D2).withValues(alpha: 0.28),
-                            strokeAlign: BorderSide.strokeAlignInside,
-                          ),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            // Avatar (RTL: shows on RIGHT)
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1976D2).withValues(alpha: 0.13),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFF1976D2).withValues(alpha: 0.28)),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  meAvatarText,
-                                  style: const TextStyle(
-                                    fontFamily: 'Cairo',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 14,
-                                    color: Color(0xFF1976D2),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            // Info column (middle)
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    isAr ? 'أنت الآن' : 'Your Position',
-                                    style: const TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 11,
-                                      color: Color(0xFF1976D2),
-                                    ),
-                                  ),
-                                  Text(
-                                    meFullName.isEmpty ? (isAr ? 'مستخدم' : 'User') : meFullName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 14,
-                                      color: colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    meRankIndex >= 0
-                                        ? (isAr ? 'المركز: #${meRankIndex + 1}' : 'Rank: #${meRankIndex + 1}')
-                                        : (isAr ? 'خارج الترتيب • ابدأ بتسجيل أول فاتورة' : 'Outside ranking • Record first invoice'),
-                                    style: TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontSize: 10.5,
-                                      color: const Color(0xFF1976D2).withValues(alpha: 0.60),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            // Score box (RTL: shows on LEFT)
-                            Container(
-                              constraints: const BoxConstraints(minWidth: 48),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1976D2).withValues(alpha: 0.10),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: const Color(0xFF1976D2).withValues(alpha: 0.22)),
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    meScoreText,
-                                    style: const TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 20,
-                                      color: Color(0xFF1976D2),
-                                      height: 1.1,
-                                    ),
-                                  ),
-                                  Text(
-                                    meScoreUnit,
-                                    style: TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontSize: 9,
-                                      color: const Color(0xFF1976D2).withValues(alpha: 0.55),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }(),
-                  const SizedBox(height: 4),
-                ],
+              else ...[
                 for (int i = 0; i < topRanking.length; i++)
                   buildRow(topRanking[i], i),
                 if (extraRanking.isNotEmpty)
@@ -3523,34 +3091,35 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   ),
                 if (remainingEmployeesCount > 0 || _showAllLeaderboardEmployees)
                   Padding(
-                    padding: const EdgeInsetsDirectional.only(top: 6, bottom: 2),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () {
-                        setState(() {
-                          _showAllLeaderboardEmployees =
-                              !_showAllLeaderboardEmployees;
-                        });
-                      },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryGold.withValues(
-                            alpha: _showAllLeaderboardEmployees ? 0.10 : 0.05,
+                    padding: const EdgeInsetsDirectional.only(top: 6),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: () {
+                          setState(() {
+                            _showAllLeaderboardEmployees =
+                                !_showAllLeaderboardEmployees;
+                          });
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
                           ),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: AppColors.primaryGold.withValues(alpha: 0.18),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGold.withValues(
+                              alpha: _showAllLeaderboardEmployees ? 0.14 : 0.08,
+                            ),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: AppColors.primaryGold.withValues(alpha: 0.16),
+                            ),
                           ),
-                        ),
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               AnimatedRotation(
                                 duration: const Duration(milliseconds: 220),
@@ -3583,10 +3152,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                               ),
                             ],
                           ),
+                        ),
                       ),
                     ),
                   ),
-                ],
+              ],
             ],
             if (raceEnabled &&
                 adminSummary != null &&
@@ -3601,10 +3171,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       child: _buildLeaderboardSummaryTile(
                         theme: theme,
                         colorScheme: colorScheme,
-                        icon: Icons.north_rounded,
+                        icon: Icons.point_of_sale_rounded,
                         label: isAr ? 'مبلغ المبيعات' : 'Sales',
-                        value: '${adminSummary['currency'] ?? 'SAR'} ${NumberFormat('#,##0', 'en').format(((adminSummary['total_sales_amount'] as num?) ?? 0).round())}',
-                        accent: AppColors.success,
+                        value:
+                            '${(adminSummary['total_sales_amount'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                        accent: AppColors.primaryGold,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -3614,10 +3185,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       child: _buildLeaderboardSummaryTile(
                         theme: theme,
                         colorScheme: colorScheme,
-                        icon: Icons.south_rounded,
-                        label: isAr ? 'إجمالي المشتريات' : 'Purchases',
-                        value: '${adminSummary['currency'] ?? 'SAR'} ${NumberFormat('#,##0', 'en').format(((adminSummary['total_purchase_amount'] as num?) ?? 0).round())}',
-                        accent: const Color(0xFF5E35B1),
+                        icon: Icons.shopping_bag_rounded,
+                        label: isAr ? 'مبلغ المشتريات' : 'Purchases',
+                        value:
+                            '${(adminSummary['total_purchase_amount'] ?? 0).toString()} ${adminSummary['currency'] ?? 'SAR'}',
+                        accent: AppColors.darkGold,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -3627,7 +3199,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       child: _buildLeaderboardSummaryTile(
                         theme: theme,
                         colorScheme: colorScheme,
-                        icon: Icons.grade_rounded,
+                        icon: Icons.stars_rounded,
                         label: isAr ? 'إجمالي النقاط' : 'Points',
                         value: isAr
                             ? '${(adminSummary['total_points'] ?? 0).toString()} نقطة'
@@ -3654,111 +3226,52 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     required String value,
     required Color accent,
   }) {
-    final isDarkTile = theme.brightness == Brightness.dark;
-    var hovered = false;
-    return StatefulBuilder(
-      builder: (context, setTileState) => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setTileState(() => hovered = true),
-        onExit: (_) => setTileState(() => hovered = false),
-        child: AnimatedScale(
-          duration: const Duration(milliseconds: 170),
-          curve: Curves.easeOutCubic,
-          scale: hovered ? 1.025 : 1.0,
-          child: Stack(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: accent.withValues(alpha: 0.18)),
+          ),
+          child: Row(
             children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 170),
-                curve: Curves.easeOutCubic,
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+              Container(
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: isDarkTile
-                      ? colorScheme.surfaceContainerHigh
-                      : (hovered ? const Color(0xFFFAFAFA) : Colors.white),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: hovered
-                        ? accent.withValues(alpha: 0.35)
-                        : Colors.transparent,
-                    width: 1.2,
-                  ),
-                  boxShadow: hovered
-                      ? [
-                          BoxShadow(
-                            color: accent.withValues(alpha: 0.14),
-                            blurRadius: 14,
-                            spreadRadius: 0,
-                            offset: const Offset(0, 4),
-                          ),
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.07),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: isDarkTile ? 0.18 : 0.08),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
+                  color: accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: accent.withValues(alpha: 0.12)),
                 ),
+                child: Icon(icon, size: 18, color: accent),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 170),
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: hovered ? 0.16 : 0.10),
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Icon(icon, size: 16, color: accent),
-                    ),
-                    const SizedBox(height: 10),
                     Text(
                       label,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w500,
-                        color: colorScheme.onSurface.withValues(alpha: 0.52),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: accent.withValues(alpha: 0.72),
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontSize: 16,
+                      style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w900,
                         color: accent,
-                        height: 1.2,
+                        fontSize: 18,
+                        letterSpacing: -0.3,
                       ),
                     ),
                   ],
-                ),
-              ),
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 170),
-                  height: hovered ? 4 : 3,
-                  decoration: BoxDecoration(
-                    color: accent,
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(14),
-                      bottomRight: Radius.circular(14),
-                    ),
-                  ),
                 ),
               ),
             ],
@@ -3812,296 +3325,146 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
   }
 
-  Widget _buildGlassCard({required Widget child, VoidCallback? onTap}) {
+  Widget _buildOperationsCenterCard() {
     final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: isDark ? theme.colorScheme.surfaceContainer : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.08),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
 
-  /// عنوان قسم مع شريط ذهبي جانبي
-  Widget _buildSectionTitleBar(String title, ThemeData theme) {
-    return Row(
-      children: [
-        Container(
-          width: 4,
-          height: 16,
-          decoration: BoxDecoration(
-            color: AppColors.primaryGold,
-            borderRadius: BorderRadius.circular(2),
+    return _buildGlassCard(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                AdminDashboardScreen(api: api, isArabic: widget.isArabic),
           ),
-        ),
-        const SizedBox(width: 10),
-        Text(
-          title,
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
-            fontSize: 13,
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// بطاقة قسم بيضاء مع رأس (أيقونة + عنوان)
-  Widget _buildActionsCard({
-    required ThemeData theme,
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    Widget? trailing,
-    required Widget child,
-  }) {
-    final isDark = theme.brightness == Brightness.dark;
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark
-            ? theme.colorScheme.surfaceContainerHighest
-            : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // رأس البطاقة الفرعية
-            Row(
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          color: iconColor.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(icon, size: 16, color: iconColor),
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          title,
-                          style: TextStyle(
-                            fontFamily: 'Cairo',
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12.5,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.60),
-                          ),
-                        ),
-                      ),
-                    ],
+        );
+      },
+      child: Row(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGold.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.primaryGold.withValues(alpha: 0.35),
                   ),
                 ),
-                if (trailing != null) trailing,
-              ],
-            ),
-            const SizedBox(height: 10),
-            Container(
-              height: 1,
-              color: theme.dividerColor.withValues(alpha: 0.18),
-            ),
-            const SizedBox(height: 10),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// شبكة البلاطات السريعة مضغوطة لتطابق مرجع الشاشة.
-  Widget _buildTwoColumnGrid(List<QuickActionItem> items, ThemeData theme) {
-    if (items.isEmpty) return const SizedBox.shrink();
-    const double tileH = 64.0;
-    final rowCount = (items.length / 2).ceil();
-    return AnimationLimiter(
-      child: Column(
-        children: List.generate(rowCount, (row) {
-          final li = row * 2;
-          final ri = row * 2 + 1;
-          return Padding(
-            padding: EdgeInsets.only(bottom: row < rowCount - 1 ? 8 : 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: AnimationConfiguration.staggeredList(
-                    position: li,
-                    duration: const Duration(milliseconds: 260),
-                    child: FadeInAnimation(
-                      child: SizedBox(
-                        height: tileH,
-                        child: _buildQuickActionTile(
-                          action: items[li],
-                          theme: theme,
-                        ),
+                child: Icon(
+                  Icons.dashboard_customize,
+                  color: AppColors.primaryGold,
+                  size: 26,
+                ),
+              ),
+              if (_pendingApprovalsCount > 0)
+                Positioned(
+                  top: -6,
+                  right: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade700,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: (isDark ? Colors.black : Colors.white)
+                            .withValues(alpha: 0.9),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      '$_pendingApprovalsCount',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                ri < items.length
-                    ? Expanded(
-                        child: AnimationConfiguration.staggeredList(
-                          position: ri,
-                          duration: const Duration(milliseconds: 260),
-                          child: FadeInAnimation(
-                            child: SizedBox(
-                              height: tileH,
-                              child: _buildQuickActionTile(
-                                action: items[ri],
-                                theme: theme,
-                              ),
-                            ),
-                          ),
-                        ),
-                      )
-                    : const Expanded(child: SizedBox()),
+            ],
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'لوحة التحكم',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _pendingApprovalsCount > 0
+                      ? '$_pendingApprovalsCount فاتورة بانتظار الاعتماد'
+                      : 'متابعة التنبيهات والعمليات الحساسة',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                  ),
+                ),
               ],
             ),
-          );
-        }),
+          ),
+          Icon(
+            Icons.chevron_left,
+            color: colorScheme.onSurface.withValues(alpha: 0.6),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildQuickGroupFooter({
-    required ThemeData theme,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    final accent = theme.brightness == Brightness.dark
-        ? AppColors.primaryGold
-        : AppColors.darkGold;
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        margin: const EdgeInsets.only(top: 10),
-        padding: const EdgeInsets.only(top: 10),
-        decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.8)),
+  Widget _buildGlassCard({required Widget child, VoidCallback? onTap}) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = theme.colorScheme.surface;
+
+    final tint = isDark
+        ? surface.withValues(alpha: 0.20)
+        : Colors.white.withValues(alpha: 0.55);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: tint,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.25),
+                  width: 0.9,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+                    blurRadius: 14,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: child,
+            ),
           ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: accent,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                fontFamily: 'Cairo',
-              ),
-            ),
-            const SizedBox(width: 5),
-            Icon(Icons.arrow_back_ios_new_rounded, size: 12, color: accent),
-          ],
-        ),
       ),
     );
-  }
-
-  /// نص فرعي مرتبط بمسار الزر
-  String? _getActionSubtitle(String route) {
-    final isAr = widget.isArabic;
-    switch (route) {
-      case 'purchase_invoice':
-        return isAr ? 'من مورد' : 'From supplier';
-      case 'scrap_sales':
-        return isAr ? 'من العميل' : 'From customer';
-      case 'scrap_purchase':
-        return isAr ? 'من عميل' : 'From customer';
-      case 'return_sales':
-        return isAr ? 'مرتجع بيع' : 'Sales return';
-      case 'return_purchase':
-        return isAr ? 'مرتجع شراء' : 'Purchase return';
-      case 'return_purchase_supplier':
-        return isAr ? 'من مورد' : 'From supplier';
-      case 'invoices_list':
-        return isAr ? 'جميع الفواتير' : 'All invoices';
-      case 'add_customer':
-        return isAr ? 'عميل جديد' : 'New customer';
-      case 'customers_list':
-        return isAr ? 'إدارة العملاء' : 'Manage customers';
-      case 'suppliers_list':
-        return isAr ? 'إدارة المورّدين' : 'Manage suppliers';
-      case 'journal_entry':
-        return isAr ? 'قيد جديد' : 'New entry';
-      case 'journal_entries_list':
-        return isAr ? 'قيود محاسبية' : 'Accounting entries';
-      case 'vouchers':
-      case 'vouchers_list':
-        return isAr ? 'قبض / صرف' : 'Receipt / Payment';
-      case 'receipt_voucher':
-        return isAr ? 'قبض نقدي' : 'Cash receipt';
-      case 'payment_voucher':
-        return isAr ? 'صرف نقدي' : 'Cash payment';
-      case 'accounts':
-        return isAr ? 'شجرة الحسابات' : 'Chart of accounts';
-      case 'general_ledger':
-        return isAr ? 'دفتر الأستاذ' : 'Ledger book';
-      case 'trial_balance':
-        return isAr ? 'ميزان المراجعة' : 'Trial balance';
-      case 'reports_center':
-        return isAr ? '22 تقرير' : '22 reports';
-      case 'chart_of_accounts':
-        return isAr ? 'هيكل الحسابات' : 'Account structure';
-      case 'melting_renewal':
-        return isAr ? 'تكسير وتجديد' : 'Melt & renew';
-      case 'add_item':
-        return isAr ? 'صنف جديد' : 'New item';
-      case 'items_list':
-        return isAr ? 'إدارة المخزون' : 'Manage stock';
-      case 'printing_center':
-        return isAr ? 'طباعة المستندات' : 'Print documents';
-      case 'posting_management':
-        return isAr ? 'اعتماد الفواتير' : 'Invoice approvals';
-      case 'shift_closing':
-        return isAr ? 'نهاية اليوم' : 'End of day';
-      case 'safe_boxes':
-        return isAr ? 'إدارة الخزائن' : 'Manage safes';
-      default:
-        return null;
-    }
   }
 
   Widget _buildQuickActions() {
     final theme = Theme.of(context);
-    final isAr = widget.isArabic;
 
     return Consumer<QuickActionsProvider>(
       builder: (context, provider, child) {
@@ -4126,12 +3489,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 Icon(Icons.info_outline, color: AppColors.info, size: 40),
                 const SizedBox(height: 12),
                 Text(
-                  isAr ? 'لا توجد أزرار وصول سريع مفعّلة' : 'No quick actions enabled',
+                  'لا توجد أزرار وصول سريع مفعّلة',
                   style: theme.textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  isAr ? 'اذهب إلى الإعدادات لتخصيص الأزرار' : 'Go to settings to customize buttons',
+                  'اذهب إلى الإعدادات لتخصيص الأزرار',
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -4139,417 +3502,115 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           );
         }
 
-        final primaryAction = activeActions.firstWhere(
-          (a) => a.route == 'sales_invoice',
-          orElse: () => activeActions.first,
-        );
-        final salesActions = activeActions
-              .where((a) => const {
-                    'scrap_sales',
-                    'purchase_invoice',
-                    'scrap_purchase',
-                    'return_sales',
-                    'return_purchase',
-                    'return_purchase_supplier',
-                    'invoices_list',
-                  }.contains(a.route))
-              .toList();
-        final accountingActions = activeActions
-              .where((a) => const {
-                    'journal_entries_list',
-                    'vouchers_list',
-                    'reports_center',
-                    'journal_entry',
-                    'vouchers',
-                    'receipt_voucher',
-                    'payment_voucher',
-                    'general_ledger',
-                    'trial_balance',
-                    'chart_of_accounts',
-                    'recurring_entries',
-                  }.contains(a.route))
-              .toList();
-        final adminActions = activeActions
-              .where((a) => const {
-                    'accounts',
-                    'posting_management',
-                    'suppliers_list',
-                    'customers_list',
-                    'printing_center',
-                    'safe_boxes',
-                    'shift_closing',
-                    'employees',
-                    'users',
-                    'offices',
-                    'items_list',
-                  }.contains(a.route))
-              .toList();
-        final compact = MediaQuery.sizeOf(context).width < 640;
-        final visibleSales = salesActions.take(compact ? 2 : 3).toList();
-        final visibleAccounting = accountingActions.take(compact ? 2 : 3).toList();
-        final visibleAdmin = adminActions.take(compact ? 2 : 3).toList();
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildSectionTitleBar(
-              isAr ? 'الوصول السريع' : 'Quick Access',
-              theme,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'الوصول السريع',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.settings, color: AppColors.primaryGold),
+                  tooltip: 'تخصيص الأزرار',
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const CustomizeQuickActionsScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ],
             ),
             const SizedBox(height: 12),
-            _buildActionsCard(
-              theme: theme,
-              icon: Icons.receipt_long_rounded,
-              iconColor: AppColors.success,
-              title: isAr ? 'المبيعات والمشتريات' : 'Sales & Purchases',
-              trailing: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const CustomizeQuickActionsScreen(),
-                    ),
-                  );
-                },
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.edit_outlined,
-                      size: 13,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.48),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isAr ? 'تخصيص' : 'Customize',
-                      style: TextStyle(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.48),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        fontFamily: 'Cairo',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            AnimationLimiter(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildPrimaryActionButton(
-                    action: primaryAction,
-                    theme: theme,
-                  ),
-                  if (visibleSales.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    _buildTwoColumnGrid(visibleSales, theme),
-                  ],
-                  if (salesActions.length > visibleSales.length)
-                    _buildQuickGroupFooter(
-                      theme: theme,
-                      label: isAr
-                          ? 'عرض الكل (${salesActions.length + 1} عملية)'
-                          : 'View all (${salesActions.length + 1} actions)',
-                      onTap: () => _handleQuickActionTap('invoices_list'),
-                    ),
+                  // عرض الأزرار في صفوف (2 أزرار في كل صف)
+                  ...List.generate((activeActions.length / 2).ceil(), (
+                    rowIndex,
+                  ) {
+                    final startIndex = rowIndex * 2;
+                    final endIndex = (startIndex + 2 > activeActions.length)
+                        ? activeActions.length
+                        : startIndex + 2;
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          for (int i = startIndex; i < endIndex; i++) ...[
+                            Expanded(
+                              child: AnimationConfiguration.staggeredList(
+                                position: i,
+                                duration: const Duration(milliseconds: 420),
+                                child: SlideAnimation(
+                                  verticalOffset: 18.0,
+                                  child: FadeInAnimation(
+                                    child: _buildQuickActionButton(
+                                      action: activeActions[i],
+                                      theme: theme,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (i < endIndex - 1) const SizedBox(width: 12),
+                          ],
+                          // إذا كان هناك زر واحد فقط في الصف، أضف مساحة فارغة
+                          if (endIndex - startIndex == 1)
+                            const Expanded(child: SizedBox()),
+                        ],
+                      ),
+                    );
+                  }),
                 ],
               ),
             ),
-            if (visibleAccounting.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              _buildActionsCard(
-                theme: theme,
-                icon: Icons.menu_book_rounded,
-                iconColor: AppColors.info,
-                title: isAr ? 'المحاسبة والتقارير' : 'Accounting & Reports',
-                child: Column(
-                  children: [
-                    _buildTwoColumnGrid(visibleAccounting, theme),
-                    if (accountingActions.length > visibleAccounting.length)
-                      _buildQuickGroupFooter(
-                        theme: theme,
-                        label: isAr ? 'عرض كل التقارير' : 'View all reports',
-                        onTap: () => _handleQuickActionTap('reports_center'),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-            if (visibleAdmin.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              _buildActionsCard(
-                theme: theme,
-                icon: Icons.settings_rounded,
-                iconColor: AppColors.darkGold,
-                title: isAr ? 'الإدارة' : 'Administration',
-                child: _buildTwoColumnGrid(visibleAdmin, theme),
-              ),
-            ],
           ],
         );
       },
     );
   }
 
-  /// زر رئيسي ممتد بعرض البطاقة كما في المصدر
-  Widget _buildPrimaryActionButton({
+  Widget _buildQuickActionButton({
     required QuickActionItem action,
     required ThemeData theme,
   }) {
-    final isDark = theme.brightness == Brightness.dark;
-    final isAr = widget.isArabic;
-    var hovered = false;
-    return StatefulBuilder(
-      builder: (context, setState) => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => hovered = true),
-        onExit:  (_) => setState(() => hovered = false),
-        child: GestureDetector(
-          onTap: () => _handleQuickActionTap(action.route),
-          child: AnimatedScale(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOutCubic,
-            scale: hovered ? 1.018 : 1.0,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 170),
-              curve: Curves.easeOutCubic,
-              transform: Matrix4.translationValues(
-                hovered ? -1.0 : 0.0,
-                hovered ? -1.0 : 0.0,
-                0,
+    return _buildGlassCard(
+      onTap: () => _handleQuickActionTap(action.route),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: action.getColor().withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppColors.primaryGold.withValues(alpha: 0.18),
               ),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: isDark
-                      ? [AppColors.darkGold, AppColors.deepGold]
-                      : [AppColors.primaryGold, AppColors.darkGold],
-                  begin: Alignment.topRight,
-                  end: Alignment.bottomLeft,
-                ),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: hovered
-                    ? [
-                        // ظل محيطي ذهبي فاتح متلاشٍ
-                        BoxShadow(
-                          color: AppColors.primaryGold.withValues(alpha: 0.35),
-                          blurRadius: 22,
-                          spreadRadius: 2,
-                          offset: const Offset(0, 4),
-                        ),
-                        BoxShadow(
-                          color: AppColors.darkGold.withValues(alpha: 0.22),
-                          blurRadius: 10,
-                          offset: const Offset(0, 6),
-                        ),
-                      ]
-                    : [
-                        BoxShadow(
-                          color: AppColors.darkGold.withValues(alpha: 0.28),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-                child: Row(
-                  children: [
-                    // زر + في اليسار (RTL: يمين)
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 170),
-                      curve: Curves.easeOutCubic,
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: hovered ? 0.30 : 0.20),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.add_rounded, color: Colors.white, size: 22),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            isAr ? 'فاتورة بيع جديدة' : 'New Sales Invoice',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              fontFamily: 'Cairo',
-                              height: 1.3,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            isAr ? 'السريع · الأكثر استخداماً' : 'Quick · Most used',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.80),
-                              fontSize: 11,
-                              fontFamily: 'Cairo',
-                              fontWeight: FontWeight.w500,
-                              height: 1.2,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    AnimatedSlide(
-                      duration: const Duration(milliseconds: 170),
-                      curve: Curves.easeOutCubic,
-                      offset: Offset(hovered ? -0.22 : 0, 0),
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 170),
-                        opacity: hovered ? 1.0 : 0.70,
-                        child: const Icon(
-                          Icons.arrow_back_rounded,
-                          color: Colors.white,
-                          size: 22,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+            ),
+            child: Icon(action.icon, color: action.getColor(), size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              action.label,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
-
-  /// بلاطة سريعة: رمادي فاتح افتراضياً، عند hover → أبيض + حد ذهبي متلاشٍ + ظل ناعم.
-  Widget _buildQuickActionTile({
-    required QuickActionItem action,
-    required ThemeData theme,
-  }) {
-    final color = action.getColor();
-    final isDark = theme.brightness == Brightness.dark;
-    final subtitle = _getActionSubtitle(action.route);
-    var hovered = false;
-
-    // ألوان الحالتين
-    final bgNormal  = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : const Color(0xFFF4F4F5);   // رمادي فاتح جداً
-    final bgHovered = isDark
-        ? theme.colorScheme.surface
-        : Colors.white;
-
-    return StatefulBuilder(
-      builder: (context, setState) => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => hovered = true),
-        onExit:  (_) => setState(() => hovered = false),
-        child: GestureDetector(
-          onTap: () => _handleQuickActionTap(action.route),
-          child: AnimatedScale(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOutCubic,
-            scale: hovered ? 1.025 : 1.0,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 170),
-              curve: Curves.easeOutCubic,
-              transform: Matrix4.translationValues(
-                hovered ? -1.0 : 0.0,
-                hovered ? -1.0 : 0.0,
-                0,
-              ),
-              decoration: BoxDecoration(
-                color: hovered ? bgHovered : bgNormal,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: hovered
-                      ? AppColors.primaryGold.withValues(alpha: 0.42)
-                      : Colors.transparent,
-                  width: 1.2,
-                ),
-                boxShadow: hovered
-                    ? [
-                        BoxShadow(
-                          color: AppColors.primaryGold.withValues(alpha: 0.11),
-                          blurRadius: 14,
-                          spreadRadius: 0,
-                          offset: const Offset(0, 4),
-                        ),
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: isDark ? 0.13 : 0.07),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ]
-                    : [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: isDark ? 0.04 : 0.02),
-                          blurRadius: 2,
-                          offset: const Offset(0, 1),
-                        ),
-                      ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 170),
-                      curve: Curves.easeOutCubic,
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: hovered ? 0.20 : 0.12),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(action.icon, color: color, size: 19),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            action.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              height: 1.3,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                          if (subtitle != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              subtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontFamily: 'Cairo',
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.45),
-                                height: 1.2,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),         // AnimatedContainer
-        ),           // AnimatedScale
-      ),             // GestureDetector
-    ),               // MouseRegion
-  );
-  }
-
 
   // معالجة النقر على أزرار الوصول السريع
   Future<void> _handleQuickActionTap(String route) async {
