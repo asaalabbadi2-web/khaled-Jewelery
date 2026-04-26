@@ -63,6 +63,7 @@ import 'security_sessions_screen.dart';
 import 'change_password_screen.dart';
 import 'user_profile_screen.dart';
 import 'sales_race_management_screen.dart';
+import '../features/invoice/widgets/barcode_scanner_screen.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -79,8 +80,12 @@ class HomeScreenEnhanced extends StatefulWidget {
 }
 
 class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
-    with RouteAware, WidgetsBindingObserver {
+    with RouteAware, WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final ApiService api = ApiService();
+
+  // Sun pulse animation for empty leaderboard banner
+  late final AnimationController _sunController;
+  late final Animation<double> _sunScale;
 
   // Isolate LTR runs (dates/numbers) inside Arabic sentences to avoid
   // bidi reordering artifacts like swapped punctuation or digit shaping.
@@ -142,6 +147,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   void dispose() {
     routeObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
+    _sunController.dispose();
     _goldPriceAutoRefreshTimer?.cancel();
     _goldPriceAutoRefreshTimer = null;
 
@@ -222,6 +228,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _sunController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat(reverse: true);
+    _sunScale = Tween<double>(begin: 0.85, end: 1.0).animate(
+      CurvedAnimation(parent: _sunController, curve: Curves.easeInOut),
+    );
     _loadAllData();
   }
 
@@ -2094,9 +2107,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(flex: 13, child: _buildLeaderboardCard(isAr)),
+                              Expanded(flex: 9, child: _buildLeaderboardCard(isAr)),
                               const SizedBox(width: 20),
-                              Expanded(flex: 10, child: _buildQuickActions()),
+                              Expanded(flex: 11, child: _buildQuickActions()),
                             ],
                           );
                         }
@@ -2410,61 +2423,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // Medal rank badge with crown for rank 1
-                SizedBox(
-                  width: 34,
-                  height: index == 0 ? 44 : 34,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    alignment: Alignment.center,
-                    children: [
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: switch (index) {
-                                0 => const [Color(0xFFFFD700), Color(0xFFDAA520)],
-                                1 => const [Color(0xFFE0E0E0), Color(0xFF9E9E9E)],
-                                2 => const [Color(0xFFCD7F32), Color(0xFF8B4513)],
-                                _ => [medalAccent.withValues(alpha: 0.22), medalAccent.withValues(alpha: 0.10)],
-                              },
-                            ),
-                            borderRadius: BorderRadius.circular(10),
-                            boxShadow: index == 0
-                                ? [BoxShadow(color: const Color(0xFFFFD700).withValues(alpha: 0.40), blurRadius: 14, offset: const Offset(0, 4))]
-                                : null,
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${index + 1}',
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w900,
-                                fontSize: 14,
-                                color: index < 3 ? Colors.white : medalAccent,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (index == 0)
-                        const Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          child: Center(
-                            child: Text('👑', style: TextStyle(fontSize: 13)),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
+                _buildRankBadge(index, medalAccent),
                 const SizedBox(width: 8),
                 // Avatar
                 Container(
@@ -2530,76 +2489,30 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           ),
                         ],
                       ),
-                      const SizedBox(height: 3),
-                      Text.rich(
-                        TextSpan(children: [
-                          WidgetSpan(
-                            alignment: PlaceholderAlignment.middle,
-                            child: Padding(
-                              padding: const EdgeInsetsDirectional.only(end: 4),
-                              child: Icon(
-                                Icons.receipt_long_rounded,
-                                size: 11,
-                                color: colorScheme.onSurface.withValues(alpha: 0.40),
-                              ),
-                            ),
+                      const SizedBox(height: 5),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          _buildStatChip(
+                            icon: Icons.receipt_long_rounded,
+                            value: invoiceSummary,
+                            label: '',
+                            valueColor: colorScheme.onSurface.withValues(alpha: 0.55),
                           ),
-                          TextSpan(
-                            text: invoiceSummary,
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 10.5,
-                              color: colorScheme.onSurface.withValues(alpha: 0.52),
-                              fontWeight: FontWeight.w500,
-                            ),
+                          _buildStatChip(
+                            dotColor: AppColors.success,
+                            value: numberFormat.format(salesAmount.round()),
+                            label: isAr ? 'مبيعات' : 'Sales',
+                            valueColor: AppColors.success,
                           ),
-                          const TextSpan(
-                            text: '  ●  ',
-                            style: TextStyle(color: AppColors.success, fontSize: 7),
+                          _buildStatChip(
+                            dotColor: const Color(0xFF5E35B1),
+                            value: numberFormat.format(purchaseAmount.round()),
+                            label: isAr ? 'مشتريات' : 'Purch',
+                            valueColor: const Color(0xFF5E35B1),
                           ),
-                          TextSpan(
-                            text: '${isAr ? "مبيعات" : "Sales"} ',
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 10.5,
-                              color: colorScheme.onSurface.withValues(alpha: 0.44),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          TextSpan(
-                            text: '${numberFormat.format(salesAmount.round())} $currencySymbol',
-                            style: const TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 12,
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const TextSpan(
-                            text: '  ●  ',
-                            style: TextStyle(color: Color(0xFF5E35B1), fontSize: 7),
-                          ),
-                          TextSpan(
-                            text: '${isAr ? "مشتريات" : "Purchases"} ',
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 10.5,
-                              color: colorScheme.onSurface.withValues(alpha: 0.44),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          TextSpan(
-                            text: '${numberFormat.format(purchaseAmount.round())} $currencySymbol',
-                            style: const TextStyle(
-                              fontFamily: 'Cairo',
-                              fontSize: 12,
-                              color: Color(0xFF5E35B1),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ]),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        ],
                       ),
                       const SizedBox(height: 6),
                       // Progress bar
@@ -2949,7 +2862,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ],
               ),
             ],
-            if (fallbackMessage != null) ...[
+            if (fallbackMessage != null && (isWeek || isMonth)) ...[
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -3271,81 +3184,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ),
                 const SizedBox(height: 12),
               ],
-              if (allRanking.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: AlignmentDirectional.centerEnd,
-                      end: AlignmentDirectional.centerStart,
-                      colors: [Color(0x1AD4AF37), Colors.transparent],
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                    border: BorderDirectional(
-                      end: BorderSide(color: AppColors.darkGold.withValues(alpha: 0.55), width: 3),
-                      start: BorderSide(color: AppColors.primaryGold.withValues(alpha: 0.12)),
-                      top: BorderSide(color: AppColors.primaryGold.withValues(alpha: 0.12)),
-                      bottom: BorderSide(color: AppColors.primaryGold.withValues(alpha: 0.12)),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFFFFD700), Color(0xFFD4AF37)],
-                          ),
-                          shape: BoxShape.circle,
-                          boxShadow: [BoxShadow(color: Color(0x66D4AF37), blurRadius: 8, offset: Offset(0, 2))],
-                        ),
-                        child: const Icon(Icons.wb_sunny_rounded, size: 20, color: Colors.white),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isAr ? 'يوم جديد بدأ' : 'New Day Begins',
-                              style: const TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                                color: AppColors.deepGold,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              isAr
-                                  ? (isMonth
-                                        ? 'يتم عرض النتائج بمجرد تسجيل أول فاتورة الشهر.'
-                                        : isWeek
-                                            ? 'يتم عرض النتائج بمجرد تسجيل أول فاتورة الأسبوع.'
-                                            : 'يتم عرض نتائج اليوم بمجرد تسجيل أول فاتورة اليوم.')
-                                  : (isMonth
-                                        ? 'Results appear after the first invoice this month.'
-                                        : isWeek
-                                            ? 'Results appear after the first invoice this week.'
-                                            : 'Today\'s results appear after recording the first invoice.'),
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontSize: 11.5,
-                                color: AppColors.darkGold.withValues(alpha: 0.72),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                )
+              if (allRanking.isEmpty || (isFallback && !isWeek && !isMonth))
+                _buildNewDayBanner(isAr, isMonth, isWeek)
               else ...[              
                 // ───────── Me card (only when user not in top 3) ─────────
                 if (meEmpId != null && !meIsInTop) ...[
@@ -3590,6 +3430,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             ],
             if (raceEnabled &&
                 adminSummary != null &&
+                !(isFallback && !isWeek && !isMonth) &&
                 ((adminSummary['total_sales_amount'] != null) ||
                     (adminSummary['total_purchase_amount'] != null) ||
                     (adminSummary['total_points'] != null))) ...[
@@ -3598,41 +3439,52 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 children: [
                   if (adminSummary['total_sales_amount'] != null) ...[
                     Expanded(
-                      child: _buildLeaderboardSummaryTile(
+                      child: _buildSummaryTileWithBorder(
                         theme: theme,
                         colorScheme: colorScheme,
                         icon: Icons.north_rounded,
                         label: isAr ? 'مبلغ المبيعات' : 'Sales',
-                        value: '${adminSummary['currency'] ?? 'SAR'} ${NumberFormat('#,##0', 'en').format(((adminSummary['total_sales_amount'] as num?) ?? 0).round())}',
+                        value:
+                            '${adminSummary['currency'] ?? 'SAR'} '
+                            '${NumberFormat('#,##0', 'en').format(
+                              ((adminSummary['total_sales_amount'] as num?) ?? 0).round(),
+                            )}',
                         accent: AppColors.success,
+                        borderBottomColor: AppColors.success,
                       ),
                     ),
                     const SizedBox(width: 8),
                   ],
                   if (adminSummary['total_purchase_amount'] != null) ...[
                     Expanded(
-                      child: _buildLeaderboardSummaryTile(
+                      child: _buildSummaryTileWithBorder(
                         theme: theme,
                         colorScheme: colorScheme,
                         icon: Icons.south_rounded,
                         label: isAr ? 'إجمالي المشتريات' : 'Purchases',
-                        value: '${adminSummary['currency'] ?? 'SAR'} ${NumberFormat('#,##0', 'en').format(((adminSummary['total_purchase_amount'] as num?) ?? 0).round())}',
+                        value:
+                            '${adminSummary['currency'] ?? 'SAR'} '
+                            '${NumberFormat('#,##0', 'en').format(
+                              ((adminSummary['total_purchase_amount'] as num?) ?? 0).round(),
+                            )}',
                         accent: const Color(0xFF5E35B1),
+                        borderBottomColor: const Color(0xFF5E35B1),
                       ),
                     ),
                     const SizedBox(width: 8),
                   ],
                   if (adminSummary['total_points'] != null)
                     Expanded(
-                      child: _buildLeaderboardSummaryTile(
+                      child: _buildSummaryTileWithBorder(
                         theme: theme,
                         colorScheme: colorScheme,
                         icon: Icons.grade_rounded,
                         label: isAr ? 'إجمالي النقاط' : 'Points',
                         value: isAr
-                            ? '${(adminSummary['total_points'] ?? 0).toString()} نقطة'
-                            : '${(adminSummary['total_points'] ?? 0).toString()} pts',
+                            ? '${adminSummary['total_points']} نقطة'
+                            : '${adminSummary['total_points']} pts',
                         accent: AppColors.deepGold,
+                        borderBottomColor: AppColors.primaryGold,
                       ),
                     ),
                 ],
@@ -3643,128 +3495,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             ),
           ],
         ),
-    );
-  }
-
-  Widget _buildLeaderboardSummaryTile({
-    required ThemeData theme,
-    required ColorScheme colorScheme,
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color accent,
-  }) {
-    final isDarkTile = theme.brightness == Brightness.dark;
-    var hovered = false;
-    return StatefulBuilder(
-      builder: (context, setTileState) => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setTileState(() => hovered = true),
-        onExit: (_) => setTileState(() => hovered = false),
-        child: AnimatedScale(
-          duration: const Duration(milliseconds: 170),
-          curve: Curves.easeOutCubic,
-          scale: hovered ? 1.025 : 1.0,
-          child: Stack(
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 170),
-                curve: Curves.easeOutCubic,
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
-                decoration: BoxDecoration(
-                  color: isDarkTile
-                      ? colorScheme.surfaceContainerHigh
-                      : (hovered ? const Color(0xFFFAFAFA) : Colors.white),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: hovered
-                        ? accent.withValues(alpha: 0.35)
-                        : Colors.transparent,
-                    width: 1.2,
-                  ),
-                  boxShadow: hovered
-                      ? [
-                          BoxShadow(
-                            color: accent.withValues(alpha: 0.14),
-                            blurRadius: 14,
-                            spreadRadius: 0,
-                            offset: const Offset(0, 4),
-                          ),
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.07),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: isDarkTile ? 0.18 : 0.08),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 170),
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: hovered ? 0.16 : 0.10),
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Icon(icon, size: 16, color: accent),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w500,
-                        color: colorScheme.onSurface.withValues(alpha: 0.52),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        color: accent,
-                        height: 1.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 170),
-                  height: hovered ? 4 : 3,
-                  decoration: BoxDecoration(
-                    color: accent,
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(14),
-                      bottomRight: Radius.circular(14),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 
@@ -3783,15 +3513,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       ),
       foregroundColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return AppColors.deepGold;
+          return Colors.white;
         }
-        return colorScheme.onSurface.withValues(alpha: 0.72);
+        return colorScheme.onSurface.withValues(alpha: 0.68);
       }),
       backgroundColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return AppColors.primaryGold.withValues(alpha: 0.9);
+          return AppColors.primaryGold;
         }
-        return Colors.white.withValues(alpha: 0.82);
+        return const Color(0xFFE8E8E8);
       }),
       overlayColor: WidgetStateProperty.all(
         AppColors.primaryGold.withValues(alpha: 0.08),
@@ -3835,6 +3565,400 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             ],
           ),
           child: child,
+        ),
+      ),
+    );
+  }
+
+  /// PATCH 2: بانر "يوم جديد" بتصميم نظيف — حد أيمن فقط + dark mode
+  Widget _buildNewDayBanner(bool isAr, bool isMonth, bool isWeek) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final description = isAr
+        ? (isMonth
+            ? ' — يتم عرض النتائج بمجرد تسجيل أول فاتورة الشهر.'
+            : isWeek
+                ? ' — يتم عرض النتائج بمجرد تسجيل أول فاتورة الأسبوع.'
+                : ' — يتم عرض نتائج اليوم بمجرد تسجيل أول فاتورة اليوم.')
+        : (isMonth
+            ? ' — Results appear after the first invoice this month.'
+            : isWeek
+                ? ' — Results appear after the first invoice this week.'
+                : ' — Today\'s results appear after recording the first invoice.');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primaryGold.withValues(alpha: 0.10),
+            AppColors.primaryGold.withValues(alpha: 0.03),
+          ],
+          begin: AlignmentDirectional.centerEnd,
+          end: AlignmentDirectional.centerStart,
+        ),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(8),
+          bottomLeft: Radius.circular(8),
+        ),
+        border: BorderDirectional(
+          end: BorderSide(color: AppColors.primaryGold, width: 3),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AnimatedBuilder(
+            animation: _sunScale,
+            builder: (context, child) => Transform.scale(
+              scale: _sunScale.value,
+              child: child,
+            ),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFFD700), AppColors.primaryGold],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primaryGold.withValues(alpha: 0.40),
+                    blurRadius: 10,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.wb_sunny_rounded, color: Colors.white, size: 20),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 12,
+                  fontFamily: 'Cairo',
+                  height: 1.5,
+                  color: isDark ? const Color(0xFFE0E0E0) : const Color(0xFF212121),
+                ),
+                children: [
+                  TextSpan(
+                    text: isAr ? 'يوم جديد بدأ' : 'New Day Begins',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? AppColors.primaryGold : AppColors.darkGold,
+                    ),
+                  ),
+                  TextSpan(text: description),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// PATCH 4: شارة الترتيب — 50×50 مع تاج للمتصدر
+  Widget _buildRankBadge(int index, Color medalAccent) {
+    return SizedBox(
+      width: 50,
+      height: index == 0 ? 60 : 50,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: switch (index) {
+                    0 => const [Color(0xFFFFD700), Color(0xFFDAA520)],
+                    1 => const [Color(0xFFE0E0E0), Color(0xFF9E9E9E)],
+                    2 => const [Color(0xFFCD7F32), Color(0xFF8B4513)],
+                    _ => [medalAccent.withValues(alpha: 0.22), medalAccent.withValues(alpha: 0.10)],
+                  },
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: index == 0
+                    ? [BoxShadow(color: const Color(0xFFFFD700).withValues(alpha: 0.40), blurRadius: 14, offset: const Offset(0, 4))]
+                    : null,
+              ),
+              child: Center(
+                child: Text(
+                  '${index + 1}',
+                  style: TextStyle(
+                    fontFamily: 'Cairo',
+                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    color: index < 3 ? Colors.white : medalAccent,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (index == 0)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text('👑', style: TextStyle(fontSize: 13)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// PATCH 5: stat chip — dot/icon + value + label
+  Widget _buildStatChip({
+    IconData? icon,
+    Color? dotColor,
+    required String value,
+    required String label,
+    required Color valueColor,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (icon != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: 3),
+            child: Icon(icon, size: 12, color: valueColor),
+          )
+        else if (dotColor != null)
+          Container(
+            width: 6,
+            height: 6,
+            margin: const EdgeInsetsDirectional.only(end: 3),
+            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+          ),
+        RichText(
+          text: TextSpan(
+            style: const TextStyle(fontSize: 11.5, fontFamily: 'Cairo'),
+            children: [
+              TextSpan(
+                text: value,
+                style: TextStyle(fontWeight: FontWeight.w800, color: valueColor),
+              ),
+              if (label.isNotEmpty)
+                TextSpan(
+                  text: ' $label',
+                  style: const TextStyle(color: Color(0xFF9E9E9E)),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// PATCH 6: بطاقة إجمالي مع حد سفلي ملوّن
+  // ignore: unused_element
+  Widget _buildTotalCard({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required Color borderBottomColor,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 12, 10, 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF252525) : const Color(0xFFF5F5F5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isDark ? const Color(0xFF3D3D3D) : const Color(0xFFE0E0E0),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: borderBottomColor.withValues(alpha: 0.50),
+              blurRadius: 0,
+              spreadRadius: 0,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.18),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 14, color: iconColor),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontFamily: 'Cairo',
+                fontWeight: FontWeight.w600,
+                color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF616161),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                fontFamily: 'Cairo',
+                fontWeight: FontWeight.w800,
+                color: isDark ? Colors.white : const Color(0xFF212121),
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// بطاقة إجمالي مع حد سفلي ملوّن + hover animation كامل
+  Widget _buildSummaryTileWithBorder({
+    required ThemeData theme,
+    required ColorScheme colorScheme,
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color accent,
+    required Color borderBottomColor,
+  }) {
+    final isDark = theme.brightness == Brightness.dark;
+    var hovered = false;
+
+    return StatefulBuilder(
+      builder: (context, setTileState) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setTileState(() => hovered = true),
+        onExit: (_) => setTileState(() => hovered = false),
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 170),
+          curve: Curves.easeOutCubic,
+          scale: hovered ? 1.025 : 1.0,
+          child: Stack(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 170),
+                curve: Curves.easeOutCubic,
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 20),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? colorScheme.surfaceContainerHigh
+                      : (hovered ? const Color(0xFFFAFAFA) : Colors.white),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: hovered
+                        ? accent.withValues(alpha: 0.35)
+                        : Colors.transparent,
+                    width: 1.2,
+                  ),
+                  boxShadow: hovered
+                      ? [
+                          BoxShadow(
+                            color: accent.withValues(alpha: 0.14),
+                            blurRadius: 14,
+                            offset: const Offset(0, 4),
+                          ),
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.07),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha: isDark ? 0.18 : 0.08,
+                            ),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 170),
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: hovered ? 0.16 : 0.10),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: AnimatedScale(
+                        duration: const Duration(milliseconds: 170),
+                        scale: hovered ? 1.08 : 1.0,
+                        child: Icon(icon, size: 16, color: accent),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontFamily: 'Cairo',
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w500,
+                        color: colorScheme.onSurface.withValues(alpha: 0.52),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'Cairo',
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: accent,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // الحد السفلي الملوّن — يتسع عند hover
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 170),
+                  height: hovered ? 4 : 3,
+                  decoration: BoxDecoration(
+                    color: borderBottomColor,
+                    borderRadius: const BorderRadius.only(
+                      bottomLeft: Radius.circular(14),
+                      bottomRight: Radius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3940,57 +4064,33 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
   }
 
-  /// شبكة البلاطات السريعة مضغوطة لتطابق مرجع الشاشة.
+  /// شبكة البلاطات السريعة — 3 أعمدة مطابقة للمصدر.
   Widget _buildTwoColumnGrid(List<QuickActionItem> items, ThemeData theme) {
     if (items.isEmpty) return const SizedBox.shrink();
-    const double tileH = 64.0;
-    final rowCount = (items.length / 2).ceil();
     return AnimationLimiter(
-      child: Column(
-        children: List.generate(rowCount, (row) {
-          final li = row * 2;
-          final ri = row * 2 + 1;
-          return Padding(
-            padding: EdgeInsets.only(bottom: row < rowCount - 1 ? 8 : 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: AnimationConfiguration.staggeredList(
-                    position: li,
-                    duration: const Duration(milliseconds: 260),
-                    child: FadeInAnimation(
-                      child: SizedBox(
-                        height: tileH,
-                        child: _buildQuickActionTile(
-                          action: items[li],
-                          theme: theme,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ri < items.length
-                    ? Expanded(
-                        child: AnimationConfiguration.staggeredList(
-                          position: ri,
-                          duration: const Duration(milliseconds: 260),
-                          child: FadeInAnimation(
-                            child: SizedBox(
-                              height: tileH,
-                              child: _buildQuickActionTile(
-                                action: items[ri],
-                                theme: theme,
-                              ),
-                            ),
-                          ),
-                        ),
-                      )
-                    : const Expanded(child: SizedBox()),
-              ],
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          childAspectRatio: 2.5,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          return AnimationConfiguration.staggeredGrid(
+            position: index,
+            columnCount: 3,
+            duration: const Duration(milliseconds: 260),
+            child: FadeInAnimation(
+              child: _buildQuickActionTile(
+                action: items[index],
+                theme: theme,
+              ),
             ),
           );
-        }),
+        },
       ),
     );
   }
@@ -4420,7 +4520,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
   }
 
-  /// بلاطة سريعة: رمادي فاتح افتراضياً، عند hover → أبيض + حد ذهبي متلاشٍ + ظل ناعم.
+  /// بلاطة سريعة: تصميم عامودي (أيقونة فوق + نص تحت) مطابق للمصدر.
   Widget _buildQuickActionTile({
     required QuickActionItem action,
     required ThemeData theme,
@@ -4430,14 +4530,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     final subtitle = _getActionSubtitle(action.route);
     var hovered = false;
 
-    // ألوان الحالتين
-    final bgNormal  = isDark
-        ? theme.colorScheme.surfaceContainerHigh
-        : const Color(0xFFF4F4F5);   // رمادي فاتح جداً
-    final bgHovered = isDark
-        ? theme.colorScheme.surface
-        : Colors.white;
-
     return StatefulBuilder(
       builder: (context, setState) => MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -4446,37 +4538,35 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         child: GestureDetector(
           onTap: () => _handleQuickActionTap(action.route),
           child: AnimatedScale(
-            duration: const Duration(milliseconds: 170),
+            duration: const Duration(milliseconds: 160),
             curve: Curves.easeOutCubic,
-            scale: hovered ? 1.025 : 1.0,
+            scale: hovered ? 1.04 : 1.0,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 170),
+              duration: const Duration(milliseconds: 160),
               curve: Curves.easeOutCubic,
-              transform: Matrix4.translationValues(
-                hovered ? -1.0 : 0.0,
-                hovered ? -1.0 : 0.0,
-                0,
-              ),
               decoration: BoxDecoration(
-                color: hovered ? bgHovered : bgNormal,
-                borderRadius: BorderRadius.circular(12),
+                color: hovered
+                    ? (isDark ? theme.colorScheme.surface : Colors.white)
+                    : (isDark
+                        ? theme.colorScheme.surfaceContainerHigh
+                        : const Color(0xFFF4F4F5)),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(
                   color: hovered
-                      ? AppColors.primaryGold.withValues(alpha: 0.42)
+                      ? color.withValues(alpha: 0.40)
                       : Colors.transparent,
                   width: 1.2,
                 ),
                 boxShadow: hovered
                     ? [
                         BoxShadow(
-                          color: AppColors.primaryGold.withValues(alpha: 0.11),
+                          color: color.withValues(alpha: 0.13),
                           blurRadius: 14,
-                          spreadRadius: 0,
                           offset: const Offset(0, 4),
                         ),
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: isDark ? 0.13 : 0.07),
-                          blurRadius: 8,
+                          color: Colors.black.withValues(alpha: isDark ? 0.13 : 0.06),
+                          blurRadius: 6,
                           offset: const Offset(0, 2),
                         ),
                       ]
@@ -4488,66 +4578,71 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         ),
                       ],
               ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    AnimatedContainer(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // ── أيقونة ملوّنة مع خلفية مستطيل مدوّر ──
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 170),
+                    curve: Curves.easeOutCubic,
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: hovered ? 0.20 : 0.18),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: AnimatedScale(
                       duration: const Duration(milliseconds: 170),
                       curve: Curves.easeOutCubic,
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: hovered ? 0.20 : 0.12),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(action.icon, color: color, size: 19),
+                      scale: hovered ? 1.08 : 1.0,
+                      child: Icon(action.icon, color: color, size: 22),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            action.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontFamily: 'Cairo',
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              height: 1.3,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                          if (subtitle != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              subtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontFamily: 'Cairo',
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.45),
-                                height: 1.2,
-                              ),
-                            ),
-                          ],
-                        ],
+                  ),
+                  const SizedBox(height: 8),
+                  // ── اسم الإجراء ──
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(
+                      action.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontFamily: 'Cairo',
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                        height: 1.3,
+                        color: theme.colorScheme.onSurface,
                       ),
                     ),
+                  ),
+                  // ── النص الفرعي (اختياري) ──
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontFamily: 'Cairo',
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                          height: 1.2,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-          ),         // AnimatedContainer
-        ),           // AnimatedScale
-      ),             // GestureDetector
-    ),               // MouseRegion
-  );
+          ),
+        ),
+      ),
+    );
   }
 
 
@@ -4826,6 +4921,34 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             ),
           );
           result = true;
+        }
+        break;
+      case 'vouchers':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => VouchersListScreen()),
+        );
+        break;
+      case 'barcode_scan':
+        {
+          final scanned = await Navigator.push<String>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const BarcodeScannerScreen(),
+            ),
+          );
+          if (scanned != null && scanned.isNotEmpty && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  widget.isArabic
+                      ? 'تم المسح: $scanned'
+                      : 'Scanned: $scanned',
+                ),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
         break;
       default:
