@@ -212,21 +212,31 @@ class _CustomizeQuickActionsScreenState
     QuickActionGroup group,
     ThemeData theme,
   ) {
-    final allInGroup = provider.actions
+    final inProviderIds = provider.actions.map((a) => a.id).toSet();
+
+    // Items already tracked in provider for this group
+    final inProvider = provider.actions
         .where((a) => a.group == group)
         .toList()
       ..sort((a, b) => a.order.compareTo(b.order));
 
-    final active = allInGroup.where((a) => a.isActive).toList();
-    final inactive = allInGroup.where((a) => !a.isActive).toList();
+    // Full catalog items for this group that haven't been added yet
+    final notInProvider = DefaultQuickActions.catalogForGroup(group)
+        .where((a) => !inProviderIds.contains(a.id))
+        .toList();
 
-    if (allInGroup.isEmpty) {
+    final active = inProvider.where((a) => a.isActive).toList();
+    final inactiveInProvider = inProvider.where((a) => !a.isActive).toList();
+
+    // Inactive section = disabled-in-provider items + never-added catalog items
+    final allInactive = [...inactiveInProvider, ...notInProvider];
+    final totalCount = active.length + allInactive.length;
+
+    if (totalCount == 0) {
       return _buildEmptyState(theme);
     }
 
     final groupIndex = _groups.indexOf(group);
-    final activeCount = active.length;
-    final totalCount = allInGroup.length;
 
     return CustomScrollView(
       slivers: [
@@ -235,7 +245,7 @@ class _CustomizeQuickActionsScreenState
             theme,
             _groupTitles[groupIndex],
             _groupIcons[groupIndex],
-            activeCount,
+            active.length,
             totalCount,
           ),
         ),
@@ -251,12 +261,29 @@ class _CustomizeQuickActionsScreenState
               ),
             ),
           ],
-          if (inactive.isNotEmpty) ...[
+          if (allInactive.isNotEmpty) ...[
             SliverToBoxAdapter(child: _buildSubHeader(theme, 'متاحة للتفعيل', theme.hintColor)),
             SliverList(
               delegate: SliverChildBuilderDelegate(
-                (_, i) => _buildToggleItem(inactive[i], provider, theme, active: false),
-                childCount: inactive.length,
+                (_, i) {
+                  final item = allInactive[i];
+                  final isInProvider = inProviderIds.contains(item.id);
+                  return _buildToggleItem(
+                    item,
+                    provider,
+                    theme,
+                    active: false,
+                    onToggleOverride: isInProvider
+                        ? null
+                        : () async {
+                            final status =
+                                await provider.addActionFromCatalog(item.id);
+                            return status == QuickActionAddStatus.added ||
+                                status == QuickActionAddStatus.reactivated;
+                          },
+                  );
+                },
+                childCount: allInactive.length,
               ),
             ),
           ],
@@ -385,6 +412,7 @@ class _CustomizeQuickActionsScreenState
     QuickActionsProvider provider,
     ThemeData theme, {
     required bool active,
+    Future<bool> Function()? onToggleOverride,
   }) {
     final color = action.getColor();
     return Card(
@@ -414,7 +442,12 @@ class _CustomizeQuickActionsScreenState
           value: active,
           activeThumbColor: AppColors.success,
           onChanged: (_) async {
-            final success = await provider.toggleAction(action.id);
+            final bool success;
+            if (onToggleOverride != null) {
+              success = await onToggleOverride();
+            } else {
+              success = await provider.toggleAction(action.id);
+            }
             if (success && mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -430,7 +463,13 @@ class _CustomizeQuickActionsScreenState
             }
           },
         ),
-        onTap: () => provider.toggleAction(action.id),
+        onTap: () async {
+          if (onToggleOverride != null) {
+            await onToggleOverride();
+          } else {
+            await provider.toggleAction(action.id);
+          }
+        },
       ),
     );
   }

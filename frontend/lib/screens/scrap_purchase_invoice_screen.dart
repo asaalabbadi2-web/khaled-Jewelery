@@ -190,7 +190,7 @@ class _ScrapPurchaseInvoiceScreenState
         barcode: '',
         karat: result.karat,
         standingWeight: result.weight,
-        stonesWeight: 0.0,
+        stonesWeight: result.stonesWeight,
         quantity: result.count,
         weight: result.weight,
         wage: result.wage,
@@ -4220,6 +4220,7 @@ class _ScrapCategoryLineResult {
   final double amountCash;
   final double karat;
   final double weight;
+  final double stonesWeight;
   final double wage;
   final int count;
 
@@ -4228,6 +4229,7 @@ class _ScrapCategoryLineResult {
     required this.amountCash,
     required this.karat,
     required this.weight,
+    this.stonesWeight = 0.0,
     required this.wage,
     required this.count,
   });
@@ -4253,11 +4255,13 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
   final _formKey = GlobalKey<FormState>();
   final _searchController = TextEditingController();
   final _weightController = TextEditingController(text: '1.0');
+  final _stonesWeightController = TextEditingController(text: '0');
   final _wageController = TextEditingController(text: '0');
   final _countController = TextEditingController(text: '1');
   final _amountController = TextEditingController();
   final _searchFocusNode = FocusNode();
   final _weightFocusNode = FocusNode();
+  final _stonesWeightFocusNode = FocusNode();
   final _wageFocusNode = FocusNode();
   final _countFocusNode = FocusNode();
   final _amountFocusNode = FocusNode();
@@ -4271,7 +4275,7 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
   void initState() {
     super.initState();
     _selectedKarat = widget.mainKarat;
-    for (final c in [_weightController, _wageController, _countController]) {
+    for (final c in [_weightController, _stonesWeightController, _wageController, _countController]) {
       c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
     }
   }
@@ -4280,11 +4284,13 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
   void dispose() {
     _searchController.dispose();
     _weightController.dispose();
+    _stonesWeightController.dispose();
     _wageController.dispose();
     _countController.dispose();
     _amountController.dispose();
     _searchFocusNode.dispose();
     _weightFocusNode.dispose();
+    _stonesWeightFocusNode.dispose();
     _wageFocusNode.dispose();
     _countFocusNode.dispose();
     _amountFocusNode.dispose();
@@ -4331,6 +4337,7 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
 
     final name = (selected['name'] ?? '').toString().trim();
     final weight = _tryParseDouble(_weightController.text);
+    final stonesWeight = _tryParseDouble(_stonesWeightController.text);
     final wage = _tryParseDouble(_wageController.text);
     final count =
         int.tryParse(normalizeNumber(_countController.text).trim()) ?? 0;
@@ -4346,6 +4353,7 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
         amountCash: amount,
         karat: _selectedKarat.toDouble(),
         weight: weight,
+        stonesWeight: stonesWeight,
         wage: wage,
         count: count,
       ),
@@ -4603,6 +4611,34 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                           if (w <= 0 && amount <= 0) {
                             return 'أدخل الوزن أو المبلغ';
                           }
+                          return null;
+                        },
+                        onFieldSubmitted: (_) => _focusAndSelect(
+                            _stonesWeightFocusNode, _stonesWeightController),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _stonesWeightController,
+                        focusNode: _stonesWeightFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [NormalizeNumberFormatter()],
+                        onTap: () => _focusAndSelect(
+                          _stonesWeightFocusNode,
+                          _stonesWeightController,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'وزن الأحجار',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.diamond_outlined),
+                        ),
+                        validator: (v) {
+                          final sw = _tryParseDouble(v ?? '');
+                          if (sw < 0) return 'وزن الأحجار لا يمكن أن يكون سالباً';
+                          final w = _tryParseDouble(_weightController.text);
+                          if (sw > w && w > 0) return 'وزن الأحجار أكبر من الوزن';
                           return null;
                         },
                         onFieldSubmitted: (_) =>

@@ -13,6 +13,7 @@ import '../providers/sales_race_refresh_provider.dart';
 import '../models/quick_action_item.dart';
 import '../widgets/gold_price_bar.dart';
 import '../widgets/gold_price_ticker_bar.dart';
+import '../widgets/gold_sparkline_enhanced.dart';
 import '../widgets/app_logo.dart';
 import '../app_route_observer.dart';
 import 'items_screen_enhanced.dart';
@@ -97,6 +98,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   DateTime? goldPriceDate;
   double? goldPriceOpening;
   DateTime? goldPriceOpeningDate;
+  List<SparklinePoint> _sparklinePoints = [];
+  int _sparklineTickCounter = 0;
   List customers = [];
   List items = [];
   List invoices = [];
@@ -176,6 +179,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final auth = context.read<AuthProvider>();
       if (!auth.isAuthenticated) return;
       await _loadGoldPrice();
+
+      // sparkline يتحدّث كل 15 دقيقة فقط
+      _sparklineTickCounter++;
+      if (_sparklineTickCounter >= 15) {
+        _sparklineTickCounter = 0;
+        await _loadSparklineData();
+      }
     });
   }
 
@@ -324,6 +334,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       debugPrint('🔄 بدء تحميل البيانات...');
       final futures = <Future<void>>[];
       if (auth.isAuthenticated) futures.add(_loadGoldPrice());
+      if (auth.isAuthenticated) futures.add(_loadSparklineData());
       if (auth.isAuthenticated) futures.add(_loadPendingApprovalsCount());
       final quickActions = context.read<QuickActionsProvider>();
       if (auth.isAuthenticated && quickActions.showSalesRaceCard) {
@@ -490,6 +501,33 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       }
     } catch (e) {
       debugPrint('⚠️ خطأ في تحميل سعر الذهب: $e');
+    }
+  }
+
+  Future<void> _loadSparklineData() async {
+    try {
+      final auth = context.read<AuthProvider>();
+      if (!auth.isAuthenticated) return;
+
+      final raw = await api.getGoldPrice24h();
+      if (!mounted) return;
+
+      final points = <SparklinePoint>[];
+      for (final row in raw) {
+        final ts = row['timestamp']?.toString();
+        final price = row['price_usd_per_oz'];
+        if (ts == null || price == null) continue;
+        final time = DateTime.tryParse(ts);
+        final p = price is num
+            ? price.toDouble()
+            : double.tryParse(price.toString());
+        if (time == null || p == null) continue;
+        points.add(SparklinePoint(time: time, price: p));
+      }
+
+      setState(() => _sparklinePoints = points);
+    } catch (e) {
+      debugPrint('⚠️ خطأ في تحميل بيانات الـ Sparkline: $e');
     }
   }
 
@@ -2075,6 +2113,19 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             mainKarat: mainKarat,
             isUpdating: _isGoldPriceUpdatingNow,
             onRefresh: _updateGoldPriceNow,
+            sparklinePoints: _sparklinePoints,
+            isArabic: widget.isArabic,
+            onSparklineTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GoldPriceHistoryReportScreen(
+                    api: api,
+                    isArabic: widget.isArabic,
+                  ),
+                ),
+              );
+            },
           ),
           Expanded(child: tab),
         ],
@@ -4065,28 +4116,47 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     bool animated = true,
   }) {
     if (items.isEmpty) return const SizedBox.shrink();
-    final grid = GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 2.5,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: items.length,
-      itemBuilder: (context, index) {
-        final tile = _buildQuickActionTile(action: items[index], theme: theme);
-        if (!animated) return tile;
-        return AnimationConfiguration.staggeredGrid(
-          position: index,
-          columnCount: 3,
-          duration: const Duration(milliseconds: 260),
-          child: FadeInAnimation(child: tile),
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const cols = 3;
+        const spacing = 8.0;
+        final tileWidth =
+            (constraints.maxWidth - spacing * (cols - 1)) / cols;
+
+        // ارتفاع ثابت يكفي المحتوى: أيقونة 36 + مسافة 6 + نص سطرين 11*1.3*2 = ~71
+        // نضيف هامشاً للـ padding الداخلي
+        const tileHeight = 82.0;
+        final ratio = tileWidth / tileHeight;
+
+        final grid = GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            childAspectRatio: ratio,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+          ),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final tile = _buildQuickActionTile(
+              action: items[index],
+              theme: theme,
+              compact: tileWidth < 100,
+            );
+            if (!animated) return tile;
+            return AnimationConfiguration.staggeredGrid(
+              position: index,
+              columnCount: cols,
+              duration: const Duration(milliseconds: 260),
+              child: FadeInAnimation(child: tile),
+            );
+          },
         );
+        return animated ? AnimationLimiter(child: grid) : grid;
       },
     );
-    return animated ? AnimationLimiter(child: grid) : grid;
   }
 
   Widget _buildCustomizeTrailing(ThemeData theme, QuickActionGroup group) {
@@ -4529,10 +4599,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   Widget _buildQuickActionTile({
     required QuickActionItem action,
     required ThemeData theme,
+    bool compact = false,
   }) {
     final color = action.getColor();
     final isDark = theme.brightness == Brightness.dark;
-    final subtitle = _getActionSubtitle(action.route);
+    final subtitle = compact ? null : _getActionSubtitle(action.route);
+    final iconBoxSize = compact ? 32.0 : 38.0;
+    final iconSize = compact ? 18.0 : 20.0;
+    final labelSize = compact ? 10.0 : 11.0;
     var hovered = false;
 
     return StatefulBuilder(
@@ -4591,23 +4665,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 170),
                     curve: Curves.easeOutCubic,
-                    width: 44,
-                    height: 44,
+                    width: iconBoxSize,
+                    height: iconBoxSize,
                     decoration: BoxDecoration(
                       color: color.withValues(alpha: hovered ? 0.20 : 0.18),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: AnimatedScale(
                       duration: const Duration(milliseconds: 170),
                       curve: Curves.easeOutCubic,
                       scale: hovered ? 1.08 : 1.0,
-                      child: Icon(action.icon, color: color, size: 22),
+                      child: Icon(action.icon, color: color, size: iconSize),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 5),
                   // ── اسم الإجراء ──
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Text(
                       action.label,
                       maxLines: 2,
@@ -4616,8 +4690,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       style: TextStyle(
                         fontFamily: 'Cairo',
                         fontWeight: FontWeight.w800,
-                        fontSize: 12,
-                        height: 1.3,
+                        fontSize: labelSize,
+                        height: 1.25,
                         color: theme.colorScheme.onSurface,
                       ),
                     ),
@@ -4626,14 +4700,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: Text(
                         subtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 9,
                           fontFamily: 'Cairo',
                           color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
                           height: 1.2,

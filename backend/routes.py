@@ -7136,7 +7136,34 @@ def get_gold_price():
 def get_gold_price_public():
     return get_gold_price()
 
-    # Endpoint لتحديث سعر الذهب يدوياً
+
+@api.route('/gold_price/24h', methods=['GET'])
+def get_gold_price_24h():
+    """آخر 24 ساعة من أسعار الذهب — نقطة لكل تحديث (حد أقصى 48 نقطة)."""
+    from datetime import datetime, timedelta
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        rows = (
+            GoldPrice.query
+            .filter(GoldPrice.date >= cutoff)
+            .order_by(GoldPrice.date.asc())
+            .limit(48)
+            .all()
+        )
+        points = [
+            {
+                'timestamp': r.date.isoformat(),
+                'price_usd_per_oz': float(r.price or 0),
+            }
+            for r in rows
+        ]
+        return jsonify({'points': points, 'count': len(points)}), 200
+    except Exception as e:
+        current_app.logger.error(f'Error fetching 24h gold price: {e}')
+        return jsonify({'points': [], 'count': 0, 'error': str(e)}), 500
+
+
+
 @api.route('/gold_price/update', methods=['POST'])
 def update_gold_price():
     import traceback

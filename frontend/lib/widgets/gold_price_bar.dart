@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../theme/app_theme.dart';
+import 'gold_sparkline_enhanced.dart';
 
 class GoldPriceBar extends StatelessWidget {
   final double? goldPrice;
@@ -12,6 +13,15 @@ class GoldPriceBar extends StatelessWidget {
   final bool isUpdating;
   final VoidCallback? onRefresh;
 
+  /// بيانات آخر 24 ساعة للـ sparkline المتحرك
+  final List<SparklinePoint> sparklinePoints;
+
+  /// عند الضغط على الـ sparkline (مثلاً يفتح تقرير أسعار الذهب)
+  final VoidCallback? onSparklineTap;
+
+  /// لغة العرض
+  final bool isArabic;
+
   const GoldPriceBar({
     super.key,
     this.goldPrice,
@@ -21,6 +31,9 @@ class GoldPriceBar extends StatelessWidget {
     this.mainKarat = 21,
     this.isUpdating = false,
     this.onRefresh,
+    this.sparklinePoints = const [],
+    this.onSparklineTap,
+    this.isArabic = true,
   });
 
   List<int> _otherKarats(int main) {
@@ -227,118 +240,110 @@ class GoldPriceBar extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsetsDirectional.only(start: 12),
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(
-                  color: palette.primaryGold.withValues(alpha: 0.4),
-                ),
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: palette.primaryGold,
-                    borderRadius: BorderRadius.circular(8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final showSparkline = w > 320;
+          return Row(
+            children: [
+              Container(
+                padding: const EdgeInsetsDirectional.only(start: 12),
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(
+                      color: palette.primaryGold.withValues(alpha: 0.4),
+                    ),
                   ),
-                  child: Center(
-                    child: Text(
-                      '${mainKarat}K',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                        fontFamily: 'Cairo',
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: palette.primaryGold,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${mainKarat}K',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                            fontFamily: 'Cairo',
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    'الأساسي',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      color: palette.darkGold,
-                      fontFamily: 'Cairo',
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'الأساسي',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          color: palette.darkGold,
+                          fontFamily: 'Cairo',
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: _buildPrimaryValue(
-                    palette: palette,
-                    label: 'بيع / جم',
-                    value: sell,
-                    unit: 'ريال',
-                    color: AppColors.success,
-                    changePercent: _formatPercent(changePercent),
-                    isUp: isUp,
-                  ),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: _buildPrimaryValue(
-                    palette: palette,
-                    label: 'شراء / جم',
-                    value: buy,
-                    unit: 'ريال',
-                    color: const Color(0xFF5E35B1),
-                    changePercent: _formatPercent(changePercent),
-                    isUp: isUp,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 14),
-          SizedBox(
-            width: 150,
-            height: 44,
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: Text(
-                    'آخر 24س',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                      color: palette.textSoft,
-                      fontFamily: 'Cairo',
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                flex: 5,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _buildPrimaryValue(
+                        palette: palette,
+                        label: 'بيع / جم',
+                        value: sell,
+                        unit: 'ريال',
+                        color: AppColors.success,
+                        changePercent: _formatPercent(changePercent),
+                        isUp: isUp,
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildPrimaryValue(
+                        palette: palette,
+                        label: 'شراء / جم',
+                        value: buy,
+                        unit: 'ريال',
+                        color: const Color(0xFF5E35B1),
+                        changePercent: _formatPercent(changePercent),
+                        isUp: isUp,
+                      ),
+                    ),
+                  ],
                 ),
-                Positioned.fill(
-                  top: 12,
-                  child: CustomPaint(
-                    painter: _SparklinePainter(color: palette.darkGold),
+              ),
+              if (showSparkline) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 3,
+                  child: GoldSparklineEnhanced(
+                    points: sparklinePoints,
+                    openingPrice: goldPriceOpening,
+                    isArabic: isArabic,
+                    height: 40,
+                    onTap: onSparklineTap,
                   ),
                 ),
               ],
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -368,17 +373,22 @@ class GoldPriceBar extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              value != null ? _formatPrice(value) : '—',
-              style: TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.w900,
-                color: color,
-                fontFamily: 'Cairo',
-                height: 1,
+            Flexible(
+              fit: FlexFit.loose,
+              child: Text(
+                value != null ? _formatPrice(value) : '—',
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                  fontFamily: 'Cairo',
+                  height: 1,
+                ),
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: BoxDecoration(
@@ -617,65 +627,4 @@ class _GoldBarPalette {
   Color get textSoft => isDark ? const Color(0xFF757575) : const Color(0xFF9E9E9E);
   Color get divider => isDark ? const Color(0xFF3D3D3D) : const Color(0xFFE0E0E0);
   Color get border => isDark ? const Color(0xFF3D3D3D) : const Color(0xFFE0E0E0);
-}
-
-class _SparklinePainter extends CustomPainter {
-  final Color color;
-
-  const _SparklinePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final points = <Offset>[
-      Offset(0, size.height * 0.75),
-      Offset(size.width * 0.10, size.height * 0.65),
-      Offset(size.width * 0.20, size.height * 0.70),
-      Offset(size.width * 0.30, size.height * 0.50),
-      Offset(size.width * 0.40, size.height * 0.60),
-      Offset(size.width * 0.50, size.height * 0.40),
-      Offset(size.width * 0.60, size.height * 0.45),
-      Offset(size.width * 0.70, size.height * 0.28),
-      Offset(size.width * 0.80, size.height * 0.33),
-      Offset(size.width * 0.90, size.height * 0.18),
-      Offset(size.width, size.height * 0.22),
-    ];
-
-    final fillPath = Path()..moveTo(points.first.dx, size.height);
-    for (final point in points) {
-      fillPath.lineTo(point.dx, point.dy);
-    }
-    fillPath
-      ..lineTo(size.width, size.height)
-      ..close();
-
-    final fillPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          color.withValues(alpha: 0.40),
-          color.withValues(alpha: 0.0),
-        ],
-      ).createShader(Offset.zero & size);
-
-    final strokePaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    final linePath = Path()..moveTo(points.first.dx, points.first.dy);
-    for (final point in points.skip(1)) {
-      linePath.lineTo(point.dx, point.dy);
-    }
-
-    canvas.drawPath(fillPath, fillPaint);
-    canvas.drawPath(linePath, strokePaint);
-    canvas.drawCircle(points.last, 3, Paint()..color = color);
-  }
-
-  @override
-  bool shouldRepaint(covariant _SparklinePainter oldDelegate) =>
-      oldDelegate.color != color;
 }

@@ -1371,6 +1371,24 @@ class ApiService {
     }
   }
 
+  /// آخر 24 ساعة من أسعار الذهب — للـ sparkline
+  Future<List<Map<String, dynamic>>> getGoldPrice24h() async {
+    try {
+      final response =
+          await _authedGet(Uri.parse('$_baseUrl/gold_price/24h'));
+      if (response.statusCode == 200) {
+        final raw =
+            (json.decode(utf8.decode(response.bodyBytes))['points'] as List?) ??
+                [];
+        return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('⚠️ Error getting gold price 24h: $e');
+      return [];
+    }
+  }
+
   // ============================================
   // 💾 Backup / Restore
   // ============================================
