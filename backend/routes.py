@@ -204,6 +204,64 @@ def debug_db_info():
     )
 
 
+@api.route('/admin/repair/invoice-payment-method', methods=['POST'])
+@jwt_required()
+def repair_invoice_payment_method():
+    """TEMPORARY: Reassign an InvoicePayment to a different payment method + safe-box.
+
+    Body:
+      { "invoice_payment_id": 1217,
+        "new_payment_method_id": 13,
+        "new_safe_box_id": 35,
+        "reason": "..." }
+
+    This endpoint MUST be removed after the one-time correction is confirmed.
+    """
+    data = request.get_json() or {}
+    ip_id = data.get('invoice_payment_id')
+    new_pm = data.get('new_payment_method_id')
+    new_sb = data.get('new_safe_box_id')
+    reason = data.get('reason', 'manual repair')
+
+    if not ip_id or not new_pm:
+        return jsonify({'error': 'invoice_payment_id and new_payment_method_id are required'}), 400
+
+    ip = InvoicePayment.query.get(ip_id)
+    if ip is None:
+        return jsonify({'error': f'InvoicePayment {ip_id} not found'}), 404
+
+    old_pm = ip.payment_method_id
+    old_sb = None
+
+    try:
+        # Update payment method
+        ip.payment_method_id = new_pm
+
+        # Update SafeBoxTransaction if a safe-box id is provided
+        if new_sb is not None:
+            sbt = SafeBoxTransaction.query.filter_by(
+                invoice_payment_id=ip_id
+            ).first()
+            if sbt:
+                old_sb = sbt.safe_box_id
+                sbt.safe_box_id = new_sb
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'invoice_payment_id': ip_id,
+            'old_payment_method_id': old_pm,
+            'new_payment_method_id': new_pm,
+            'old_safe_box_id': old_sb,
+            'new_safe_box_id': new_sb,
+            'reason': reason,
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
 def _is_sqlite_database() -> bool:
     try:
         return (db.engine.url.get_backend_name() or '').lower().startswith('sqlite')
