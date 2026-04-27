@@ -7462,6 +7462,68 @@ def reset_scrap_costing():
 
 
 # Invoices CRUD
+
+@api.route('/invoices/pending-post', methods=['GET'])
+def pending_post_invoices():
+    """قائمة مختصرة بالفواتير غير المرحّلة — للـ Dialog في الرئيسية"""
+    try:
+        limit = request.args.get('limit', 10, type=int)
+        limit = max(1, min(limit, 50))  # clamp to safe range
+
+        base_q = Invoice.query.filter(Invoice.is_posted.is_(False))
+
+        total = base_q.count()
+
+        invoices = (
+            base_q
+            .order_by(Invoice.date.desc(), Invoice.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+        result = []
+        for inv in invoices:
+            # party name
+            party_name = ''
+            if inv.customer:
+                party_name = inv.customer.name or ''
+            elif inv.supplier:
+                party_name = inv.supplier.name or ''
+
+            # creator: use posted_by if available, else fallback to employee name
+            creator = ''
+            if getattr(inv, 'posted_by', None):
+                creator = inv.posted_by
+            elif getattr(inv, 'employee', None) and inv.employee.name:
+                creator = inv.employee.name
+
+            result.append({
+                'id': inv.id,
+                'invoice_number': inv.invoice_number,
+                'invoice_type': inv.invoice_type or '',
+                'total_amount': float(inv.total or 0),
+                'party_name': party_name,
+                'created_by_name': creator,
+                'created_at': inv.date.isoformat() if inv.date else None,
+            })
+
+        return jsonify({
+            'invoices': result,
+            'total': total,
+            'showing': len(result),
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'invoices': [],
+            'total': 0,
+            'showing': 0,
+            'error': str(e),
+        }), 500
+
+
 @api.route('/invoices', methods=['GET'])
 def get_invoices():
     # Pagination parameters
@@ -28755,12 +28817,17 @@ def create_melting_renewal():
 def _compute_clearing_due_amount(safe_box_id):
     """Compute how much is actually owed in a clearing safe box.
 
-    due = IP total (authoritative) - SBT voucher OUT
+    due = ip_in + net_transfer_in - net_voucher_out
 
-    Uses InvoicePayment as the inflow source (same as the FIFO pending-
-    transactions endpoint) to avoid orphan/duplicate SBT records that
-    inflate the total.  Settlement outflows come from SBT voucher/out
-    rows which correctly capture all settlements including legacy ones.
+    Where:
+      net_voucher_out  = voucher OUT − reversal IN
+                         (reversal IN undoes a previously counted OUT)
+      net_transfer_in  = voucher IN (no IP) − reversal OUT (no IP)
+                         (reversal OUT undoes a previously counted transfer IN)
+
+    This correctly handles the cancel-and-redo workflow where a transfer
+    voucher was issued then reversed (voucher_reversal), so the cancelled
+    amount is no longer double-counted in either direction.
     """
     # Inflow: authoritative IP total via PaymentMethod routing
     ip_in = (
@@ -28770,7 +28837,31 @@ def _compute_clearing_due_amount(safe_box_id):
         .scalar()
     ) or 0.0
 
-    # Outflow: settlement vouchers recorded in SBT
+    # Inflow: safe-box transfers arriving (routing corrections, no IP link)
+    transfer_in = (
+        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'voucher',
+            SafeBoxTransaction.direction == 'in',
+            SafeBoxTransaction.invoice_payment_id.is_(None),
+        )
+        .scalar()
+    ) or 0.0
+
+    # Offset: reversal-outs negate previously-counted transfer-ins
+    reversal_out = (
+        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'voucher_reversal',
+            SafeBoxTransaction.direction == 'out',
+            SafeBoxTransaction.invoice_payment_id.is_(None),
+        )
+        .scalar()
+    ) or 0.0
+
+    # Outflow: settlement / transfer vouchers
     voucher_out = (
         db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
         .filter(
@@ -28781,7 +28872,21 @@ def _compute_clearing_due_amount(safe_box_id):
         .scalar()
     ) or 0.0
 
-    return round(float(ip_in) - float(voucher_out), 2)
+    # Offset: reversal-ins negate previously-counted voucher-outs
+    reversal_in = (
+        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+        .filter(
+            SafeBoxTransaction.safe_box_id == safe_box_id,
+            SafeBoxTransaction.ref_type == 'voucher_reversal',
+            SafeBoxTransaction.direction == 'in',
+        )
+        .scalar()
+    ) or 0.0
+
+    net_transfer_in = max(0.0, float(transfer_in) - float(reversal_out))
+    net_voucher_out = max(0.0, float(voucher_out) - float(reversal_in))
+
+    return round(float(ip_in) + net_transfer_in - net_voucher_out, 2)
 
 
 def _create_clearing_settlement_voucher(
@@ -29612,12 +29717,76 @@ def get_pending_settlement_transactions():
 
     # Build pending list: IPs with remaining unsettled balance.
     due_amount = _compute_clearing_due_amount(clearing_safe_box_id)
+
+    # ── Transfer-out FIFO attribution ────────────────────────────────────────
+    # If some voucher_out rows are transfer outflows (no SettlementLine backing),
+    # we must "consume" the oldest IPs first so they don't falsely appear pending.
+    #
+    # net_voucher_out = voucher OUT − reversal IN  (reversals undo cancelled outs)
+    # transfer_out_unaccounted = net_voucher_out − (SettlementLine + legacy)
+    # This remainder is attributed FIFO-first to IPs so they are hidden from the list.
+    try:
+        total_voucher_out = (
+            db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(
+                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                SafeBoxTransaction.ref_type == 'voucher',
+                SafeBoxTransaction.direction == 'out',
+            )
+            .scalar()
+        ) or 0.0
+        total_voucher_out = round(float(total_voucher_out), 2)
+
+        # Subtract reversal-ins: they undo previously-counted voucher-outs
+        total_reversal_in = (
+            db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            .filter(
+                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                SafeBoxTransaction.ref_type == 'voucher_reversal',
+                SafeBoxTransaction.direction == 'in',
+            )
+            .scalar()
+        ) or 0.0
+        net_voucher_out = max(0.0, round(total_voucher_out - float(total_reversal_in), 2))
+
+        # Total already covered by SettlementLine records
+        sl_covered = round(sum(settled_by_ip.values()), 2)
+
+        # Legacy-settled IPs: treated as fully covered
+        legacy_covered = 0.0
+        for ip in all_ips:
+            if ip.id in legacy_settled_ip_ids:
+                legacy_covered += float(ip.amount or 0)
+        legacy_covered = round(legacy_covered, 2)
+
+        # Unaccounted outflow = net settlement-outs that consumed IPs without SettlementLine
+        transfer_out_unaccounted = max(0.0, round(net_voucher_out - sl_covered - legacy_covered, 2))
+    except Exception:
+        transfer_out_unaccounted = 0.0
+
+    # Extra credit per IP consumed by transfer-out (FIFO applied below)
+    transfer_credit_by_ip = {}  # ip_id → extra amount consumed by transfer-out
+    if transfer_out_unaccounted > 0.005:
+        remaining_credit = transfer_out_unaccounted
+        for ip in all_ips:
+            if ip.id in legacy_settled_ip_ids or remaining_credit <= 0.005:
+                break
+            ip_amount = round(float(ip.amount or 0.0), 2)
+            already_settled = round(settled_by_ip.get(ip.id, 0.0), 2)
+            available = round(ip_amount - already_settled, 2)
+            if available <= 0.005:
+                continue
+            consumed = min(available, remaining_credit)
+            transfer_credit_by_ip[ip.id] = round(consumed, 2)
+            remaining_credit = round(remaining_credit - consumed, 2)
+    # ────────────────────────────────────────────────────────────────────────
+
     pending = []
     for ip in all_ips:  # already ordered by created_at asc
         if ip.id in legacy_settled_ip_ids:
             continue
         ip_amount = round(float(ip.amount or 0.0), 2)
-        settled = round(settled_by_ip.get(ip.id, 0.0), 2)
+        settled = round(settled_by_ip.get(ip.id, 0.0) + transfer_credit_by_ip.get(ip.id, 0.0), 2)
         remaining = round(ip_amount - settled, 2)
         if remaining <= 0.005:
             continue
@@ -29637,13 +29806,79 @@ def get_pending_settlement_transactions():
             'invoice_number': invoice_number,
             'amount': remaining,
             'date': ip.created_at.isoformat() if ip.created_at else None,
+            'type': 'invoice_payment',
         })
 
-    # tx_count_for_fee: number of pending (unsettled) payments — used for
-    # fixed-per-transaction commission calculation in bulk settlement mode.
-    # We reuse the already-computed FIFO-accurate `pending` list instead of
-    # a time-based heuristic (which suffered from UTC vs local tz mismatch).
+    # tx_count_for_fee: number of pending invoice-payment transactions only.
+    # Transfer-in items below are NOT counted since they don't carry a
+    # per-transaction fee in the normal commission model.
     tx_count_for_fee = len(pending)
+
+    # Also include safe-box transfer-in items as pending.
+    # These arise when an operator corrects a routing error by transferring
+    # from one clearing safe to another (e.g. تابي → تمارا).  The destination
+    # safe receives an SBT in/voucher with no invoice_payment_id, which was
+    # previously invisible to the reconciliation formula.
+    try:
+        transfer_in_sbts = (
+            SafeBoxTransaction.query
+            .filter(
+                SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                SafeBoxTransaction.ref_type == 'voucher',
+                SafeBoxTransaction.direction == 'in',
+                SafeBoxTransaction.invoice_payment_id.is_(None),
+            )
+            .order_by(SafeBoxTransaction.created_at.asc())
+            .all()
+        )
+
+        if transfer_in_sbts:
+            # Compute how much of the total transfer-in has already been settled.
+            # IP-linked settlements are tracked by SettlementLine.  Any voucher_out
+            # beyond what SettlementLine accounts for is attributed to transfers.
+            ip_total_settled = sum(settled_by_ip.values())
+            legacy_ip_settled = sum(
+                float(ip.amount or 0) for ip in all_ips
+                if ip.id in legacy_settled_ip_ids
+            )
+            ip_settled_total = round(ip_total_settled + legacy_ip_settled, 2)
+
+            total_voucher_out = (
+                db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+                .filter(
+                    SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
+                    SafeBoxTransaction.ref_type == 'voucher',
+                    SafeBoxTransaction.direction == 'out',
+                )
+                .scalar()
+            ) or 0.0
+
+            transfer_settled = max(0.0, round(float(total_voucher_out) - ip_settled_total, 2))
+            transfer_in_total = round(sum(float(t.amount_cash or 0) for t in transfer_in_sbts), 2)
+            transfer_remaining = max(0.0, round(transfer_in_total - transfer_settled, 2))
+
+            if transfer_remaining > 0.005:
+                for tx in transfer_in_sbts:
+                    tx_amount = float(tx.amount_cash or 0)
+                    if transfer_in_total > 0:
+                        tx_remaining = round(tx_amount * (transfer_remaining / transfer_in_total), 2)
+                    else:
+                        tx_remaining = 0.0
+                    if tx_remaining <= 0.005:
+                        continue
+                    pending.append({
+                        'tx_id': f'transfer_{tx.id}',
+                        'invoice_payment_id': None,
+                        'invoice_id': None,
+                        'invoice_number': None,
+                        'amount': tx_remaining,
+                        'date': tx.created_at.isoformat() if tx.created_at else None,
+                        'type': 'safe_transfer',
+                        'ref_id': tx.ref_id,
+                        'note': 'تحويل من خزنة مقاصة أخرى',
+                    })
+    except Exception:
+        pass
 
     return jsonify({
         'clearing_safe_box_id': clearing_safe_box_id,
