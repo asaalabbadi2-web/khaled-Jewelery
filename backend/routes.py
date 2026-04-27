@@ -29819,6 +29819,10 @@ def get_pending_settlement_transactions():
     # from one clearing safe to another (e.g. تابي → تمارا).  The destination
     # safe receives an SBT in/voucher with no invoice_payment_id, which was
     # previously invisible to the reconciliation formula.
+    #
+    # A transfer-in that was fully reversed (voucher_reversal out) must NOT
+    # appear as pending.  We subtract net reversal-outs (no IP link) from the
+    # total transfer-in before deciding what's still due.
     try:
         transfer_in_sbts = (
             SafeBoxTransaction.query
@@ -29833,35 +29837,27 @@ def get_pending_settlement_transactions():
         )
 
         if transfer_in_sbts:
-            # Compute how much of the total transfer-in has already been settled.
-            # IP-linked settlements are tracked by SettlementLine.  Any voucher_out
-            # beyond what SettlementLine accounts for is attributed to transfers.
-            ip_total_settled = sum(settled_by_ip.values())
-            legacy_ip_settled = sum(
-                float(ip.amount or 0) for ip in all_ips
-                if ip.id in legacy_settled_ip_ids
-            )
-            ip_settled_total = round(ip_total_settled + legacy_ip_settled, 2)
+            transfer_in_total = round(sum(float(t.amount_cash or 0) for t in transfer_in_sbts), 2)
 
-            total_voucher_out = (
+            # Subtract reversal-outs (no IP): these cancel previously-arrived transfers.
+            reversal_out_no_ip = (
                 db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
                 .filter(
                     SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
-                    SafeBoxTransaction.ref_type == 'voucher',
+                    SafeBoxTransaction.ref_type == 'voucher_reversal',
                     SafeBoxTransaction.direction == 'out',
+                    SafeBoxTransaction.invoice_payment_id.is_(None),
                 )
                 .scalar()
             ) or 0.0
 
-            transfer_settled = max(0.0, round(float(total_voucher_out) - ip_settled_total, 2))
-            transfer_in_total = round(sum(float(t.amount_cash or 0) for t in transfer_in_sbts), 2)
-            transfer_remaining = max(0.0, round(transfer_in_total - transfer_settled, 2))
+            net_transfer_in = max(0.0, round(transfer_in_total - float(reversal_out_no_ip), 2))
 
-            if transfer_remaining > 0.005:
+            if net_transfer_in > 0.005:
                 for tx in transfer_in_sbts:
                     tx_amount = float(tx.amount_cash or 0)
                     if transfer_in_total > 0:
-                        tx_remaining = round(tx_amount * (transfer_remaining / transfer_in_total), 2)
+                        tx_remaining = round(tx_amount * (net_transfer_in / transfer_in_total), 2)
                     else:
                         tx_remaining = 0.0
                     if tx_remaining <= 0.005:
