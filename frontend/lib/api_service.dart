@@ -3335,12 +3335,12 @@ class ApiService {
     required int newPaymentMethodId,
     required String reason,
   }) async {
-    final token = await _getToken();
+    final token = await _requireAuthToken();
     final response = await http.post(
       Uri.parse('$_baseUrl/invoices/$invoiceId/payments/$paymentId/correct-method'),
       headers: {
         'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
+        'Authorization': 'Bearer $token',
       },
       body: json.encode({
         'new_payment_method_id': newPaymentMethodId,
