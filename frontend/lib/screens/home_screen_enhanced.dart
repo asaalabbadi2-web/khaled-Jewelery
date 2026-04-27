@@ -64,6 +64,7 @@ import 'change_password_screen.dart';
 import 'user_profile_screen.dart';
 import 'sales_race_management_screen.dart';
 import '../features/invoice/widgets/barcode_scanner_screen.dart';
+import '../widgets/pending_approvals_dialog.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -130,6 +131,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   int _lastHandledSalesRaceRefreshToken = 0;
   bool _pendingLeaderboardRefresh = false;
   String _salesRaceSettingsFingerprint = '';
+
+  // Groups expanded in-place on the home screen quick-access panel
+  final Set<QuickActionGroup> _expandedGroups = {};
 
   // Bottom Navigation
   int _selectedNavIndex = 0;
@@ -265,10 +269,17 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   @override
   void didPopNext() {
+    // Refresh pending approvals badge whenever we return from any sub-screen.
+    _loadPendingApprovalsCount();
     // Returned from a sub-screen — refresh leaderboard but only if data is stale (>30s).
     final last = _leaderboardFetchedAt;
     if (last == null || DateTime.now().difference(last) > const Duration(seconds: 30)) {
       _loadLeaderboard(period: _leaderboardPeriod);
+    }
+    // Collapse any expanded quick-action groups so the home screen
+    // always opens in its compact default state after navigation.
+    if (_expandedGroups.isNotEmpty) {
+      setState(() => _expandedGroups.clear());
     }
   }
 
@@ -419,20 +430,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final auth = context.read<AuthProvider>();
       if (!auth.isAuthenticated) return;
 
-      final result = await api.getSystemAlerts(reviewed: false);
-      final rows = (result['alerts'] as List?) ?? const [];
-
-      int count = 0;
-      for (final row in rows) {
-        if (row is Map) {
-          final alertType = (row['alert_type'] ?? row['type'] ?? '').toString();
-          final entityType = (row['entity_type'] ?? '').toString();
-          if (alertType == 'invoice_approval' ||
-              (entityType == 'Invoice' && alertType.contains('approval'))) {
-            count++;
-          }
-        }
-      }
+      // Use the dedicated endpoint that counts actual unposted invoices so the
+      // badge stays in sync regardless of system-alert state.
+      final result = await api.getPendingPostInvoices(limit: 1);
+      final count = (result['total'] as num?)?.toInt() ?? 0;
 
       if (!mounted) return;
       setState(() {
@@ -1637,7 +1638,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(20),
-                  onTap: () => _handleQuickActionTap('vouchers'),
+                  onTap: () => PendingApprovalsDialog.show(
+                    context: context,
+                    api: api,
+                    isArabic: isAr,
+                    onCountChanged: _loadPendingApprovalsCount,
+                  ),
                   child: Container(
                     padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 12, 6),
                     decoration: BoxDecoration(
@@ -2211,16 +2217,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           ? '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
           : '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}');
 
-    final microcopy = isMonth
-        ? (isAr ? 'سباق الشهر: من يتصدر نهاية الشهر؟' : 'Monthly race: who tops the board?')
-        : isWeek
-        ? (isGoalAchieved
-          ? (isAr ? 'إنجاز جماعي واضح هذا الأسبوع' : 'A strong team achievement this week')
-              : (isAr
-            ? 'تقدم متدرج نحو إغلاق هدف الأسبوع'
-            : 'Steady progress toward closing the weekly goal'))
-        : (isAr ? 'هدف اليوم: اجعل العميل بطلاً في قصتك، وليس مجرد رقم في مبيعاتك.' : 'Today\'s goal: speed + accuracy');
-
     String? fallbackText() {
       if (!isFallback || effectiveStartDate == null) return null;
       final formatted = DateFormat(
@@ -2692,7 +2688,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 4),
-                            if (showChampion && championName.isNotEmpty) ...[
+                            if (showChampion &&
+                                championName.isNotEmpty &&
+                                topRanking.isNotEmpty &&
+                                !(isFallback && !isWeek && !isMonth)) ...[
                               Row(
                                 children: [
                                   Icon(
@@ -2715,16 +2714,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                                     ),
                                   ),
                                 ],
-                              ),
-                            ] else ...[
-                              Text(
-                                microcopy,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface.withValues(
-                                    alpha: 0.58,
-                                  ),
-                                  fontWeight: FontWeight.w600,
-                                ),
                               ),
                             ],
                           ],
@@ -2773,6 +2762,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+            // ── إذا كان وضع اليوم + fallback: اعرض البانر فقط ──
+            if (isFallback && !isWeek && !isMonth) ...[
+              _buildNewDayBanner(isAr, isMonth, isWeek),
+            ] else ...[
             if (effectivePeriodLabel != null || updateLabel != null) ...[
               Wrap(
                 spacing: 8,
@@ -3490,6 +3483,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ],
               ),
             ],
+            ], // end else (not today-fallback)
                 ],
               ),
             ),
@@ -4065,71 +4059,101 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   }
 
   /// شبكة البلاطات السريعة — 3 أعمدة مطابقة للمصدر.
-  Widget _buildTwoColumnGrid(List<QuickActionItem> items, ThemeData theme) {
+  Widget _buildTwoColumnGrid(
+    List<QuickActionItem> items,
+    ThemeData theme, {
+    bool animated = true,
+  }) {
     if (items.isEmpty) return const SizedBox.shrink();
-    return AnimationLimiter(
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          childAspectRatio: 2.5,
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          return AnimationConfiguration.staggeredGrid(
-            position: index,
-            columnCount: 3,
-            duration: const Duration(milliseconds: 260),
-            child: FadeInAnimation(
-              child: _buildQuickActionTile(
-                action: items[index],
-                theme: theme,
-              ),
-            ),
-          );
-        },
+    final grid = GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 2.5,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
       ),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final tile = _buildQuickActionTile(action: items[index], theme: theme);
+        if (!animated) return tile;
+        return AnimationConfiguration.staggeredGrid(
+          position: index,
+          columnCount: 3,
+          duration: const Duration(milliseconds: 260),
+          child: FadeInAnimation(child: tile),
+        );
+      },
+    );
+    return animated ? AnimationLimiter(child: grid) : grid;
+  }
+
+  Widget _buildCustomizeTrailing(ThemeData theme, QuickActionGroup group) {
+    return IconButton(
+      icon: Icon(
+        Icons.edit_outlined,
+        size: 15,
+        color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+      ),
+      tooltip: widget.isArabic ? 'تخصيص' : 'Customize',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      onPressed: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CustomizeQuickActionsScreen(initialGroup: group),
+          ),
+        );
+      },
+    );
+  }
+
+  /// شبكة قابلة للتوسيع — بدون stagger animation على الـ tiles
+  Widget _buildExpandableGrid({
+    required List<QuickActionItem> items,
+    required bool expanded,
+    required ThemeData theme,
+  }) {
+    return _AnimatedExpandSection(
+      expanded: expanded,
+      child: _buildTwoColumnGrid(items, theme, animated: false),
     );
   }
 
   Widget _buildQuickGroupFooter({
     required ThemeData theme,
-    required String label,
+    required bool expanded,
     required VoidCallback onTap,
   }) {
-    final accent = theme.brightness == Brightness.dark
-        ? AppColors.primaryGold
-        : AppColors.darkGold;
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
+    final arrowColor = theme.colorScheme.onSurface.withValues(alpha: 0.28);
+    return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         width: double.infinity,
-        margin: const EdgeInsets.only(top: 10),
-        padding: const EdgeInsets.only(top: 10),
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.only(top: 8, bottom: 2),
         decoration: BoxDecoration(
           border: Border(
-            top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.8)),
+            top: BorderSide(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.07),
+              width: 1,
+            ),
           ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: accent,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                fontFamily: 'Cairo',
-              ),
+        child: Center(
+          child: AnimatedRotation(
+            turns: expanded ? 0.5 : 0.0,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeInOutCubic,
+            child: Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 20,
+              color: arrowColor,
             ),
-            const SizedBox(width: 5),
-            Icon(Icons.arrow_back_ios_new_rounded, size: 12, color: accent),
-          ],
+          ),
         ),
       ),
     );
@@ -4243,51 +4267,31 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           (a) => a.route == 'sales_invoice',
           orElse: () => activeActions.first,
         );
+
+        // Filter by group field (set in catalog — no hardcoded route lists needed).
         final salesActions = activeActions
-              .where((a) => const {
-                    'scrap_sales',
-                    'purchase_invoice',
-                    'scrap_purchase',
-                    'return_sales',
-                    'return_purchase',
-                    'return_purchase_supplier',
-                    'invoices_list',
-                  }.contains(a.route))
-              .toList();
+            .where((a) => a.id != 'sales_invoice' && a.group == QuickActionGroup.sales)
+            .toList();
         final accountingActions = activeActions
-              .where((a) => const {
-                    'journal_entries_list',
-                    'vouchers_list',
-                    'reports_center',
-                    'journal_entry',
-                    'vouchers',
-                    'receipt_voucher',
-                    'payment_voucher',
-                    'general_ledger',
-                    'trial_balance',
-                    'chart_of_accounts',
-                    'recurring_entries',
-                  }.contains(a.route))
-              .toList();
+            .where((a) => a.group == QuickActionGroup.accounting)
+            .toList();
         final adminActions = activeActions
-              .where((a) => const {
-                    'accounts',
-                    'posting_management',
-                    'suppliers_list',
-                    'customers_list',
-                    'printing_center',
-                    'safe_boxes',
-                    'shift_closing',
-                    'employees',
-                    'users',
-                    'offices',
-                    'items_list',
-                  }.contains(a.route))
-              .toList();
+            .where((a) => a.group == QuickActionGroup.admin)
+            .toList();
+
         final compact = MediaQuery.sizeOf(context).width < 640;
-        final visibleSales = salesActions.take(compact ? 2 : 3).toList();
-        final visibleAccounting = accountingActions.take(compact ? 2 : 3).toList();
-        final visibleAdmin = adminActions.take(compact ? 2 : 3).toList();
+        final defaultVisible = compact ? 2 : 3;
+
+        final salesExpanded    = _expandedGroups.contains(QuickActionGroup.sales);
+        final accountingExpanded = _expandedGroups.contains(QuickActionGroup.accounting);
+        final adminExpanded    = _expandedGroups.contains(QuickActionGroup.admin);
+
+        final shownSales       = salesActions.take(defaultVisible).toList();
+        final hiddenSales      = salesActions.skip(defaultVisible).toList();
+        final shownAccounting  = accountingActions.take(defaultVisible).toList();
+        final hiddenAccounting = accountingActions.skip(defaultVisible).toList();
+        final shownAdmin       = adminActions.take(defaultVisible).toList();
+        final hiddenAdmin      = adminActions.skip(defaultVisible).toList();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4302,87 +4306,88 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               icon: Icons.receipt_long_rounded,
               iconColor: AppColors.success,
               title: isAr ? 'المبيعات والمشتريات' : 'Sales & Purchases',
-              trailing: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const CustomizeQuickActionsScreen(),
-                    ),
-                  );
-                },
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.edit_outlined,
-                      size: 13,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.48),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isAr ? 'تخصيص' : 'Customize',
-                      style: TextStyle(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.48),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        fontFamily: 'Cairo',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              trailing: _buildCustomizeTrailing(theme, QuickActionGroup.sales),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildPrimaryActionButton(
-                    action: primaryAction,
-                    theme: theme,
-                  ),
-                  if (visibleSales.isNotEmpty) ...[
+                  _buildPrimaryActionButton(action: primaryAction, theme: theme),
+                  if (shownSales.isNotEmpty) ...[
                     const SizedBox(height: 10),
-                    _buildTwoColumnGrid(visibleSales, theme),
+                    _buildTwoColumnGrid(shownSales, theme),
                   ],
-                  if (salesActions.length > visibleSales.length)
+                  if (hiddenSales.isNotEmpty) ...[
+                    _buildExpandableGrid(
+                      items: hiddenSales,
+                      expanded: salesExpanded,
+                      theme: theme,
+                    ),
                     _buildQuickGroupFooter(
                       theme: theme,
-                      label: isAr
-                          ? 'عرض الكل (${salesActions.length + 1} عملية)'
-                          : 'View all (${salesActions.length + 1} actions)',
-                      onTap: () => _handleQuickActionTap('invoices_list'),
+                      expanded: salesExpanded,
+                      onTap: () => setState(() => salesExpanded
+                          ? _expandedGroups.remove(QuickActionGroup.sales)
+                          : _expandedGroups.add(QuickActionGroup.sales)),
                     ),
+                  ],
                 ],
               ),
             ),
-            if (visibleAccounting.isNotEmpty) ...[
+            if (shownAccounting.isNotEmpty) ...[
               const SizedBox(height: 16),
               _buildActionsCard(
                 theme: theme,
                 icon: Icons.menu_book_rounded,
                 iconColor: AppColors.info,
                 title: isAr ? 'المحاسبة والتقارير' : 'Accounting & Reports',
+                trailing: _buildCustomizeTrailing(theme, QuickActionGroup.accounting),
                 child: Column(
                   children: [
-                    _buildTwoColumnGrid(visibleAccounting, theme),
-                    if (accountingActions.length > visibleAccounting.length)
+                    _buildTwoColumnGrid(shownAccounting, theme),
+                    if (hiddenAccounting.isNotEmpty) ...[
+                      _buildExpandableGrid(
+                        items: hiddenAccounting,
+                        expanded: accountingExpanded,
+                        theme: theme,
+                      ),
                       _buildQuickGroupFooter(
                         theme: theme,
-                        label: isAr ? 'عرض كل التقارير' : 'View all reports',
-                        onTap: () => _handleQuickActionTap('reports_center'),
+                        expanded: accountingExpanded,
+                        onTap: () => setState(() => accountingExpanded
+                            ? _expandedGroups.remove(QuickActionGroup.accounting)
+                            : _expandedGroups.add(QuickActionGroup.accounting)),
                       ),
+                    ],
                   ],
                 ),
               ),
             ],
-            if (visibleAdmin.isNotEmpty) ...[
+            if (shownAdmin.isNotEmpty) ...[
               const SizedBox(height: 16),
               _buildActionsCard(
                 theme: theme,
                 icon: Icons.settings_rounded,
                 iconColor: AppColors.darkGold,
                 title: isAr ? 'الإدارة' : 'Administration',
-                child: _buildTwoColumnGrid(visibleAdmin, theme),
+                trailing: _buildCustomizeTrailing(theme, QuickActionGroup.admin),
+                child: Column(
+                  children: [
+                    _buildTwoColumnGrid(shownAdmin, theme),
+                    if (hiddenAdmin.isNotEmpty) ...[
+                      _buildExpandableGrid(
+                        items: hiddenAdmin,
+                        expanded: adminExpanded,
+                        theme: theme,
+                      ),
+                      _buildQuickGroupFooter(
+                        theme: theme,
+                        expanded: adminExpanded,
+                        onTap: () => setState(() => adminExpanded
+                            ? _expandedGroups.remove(QuickActionGroup.admin)
+                            : _expandedGroups.add(QuickActionGroup.admin)),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ],
           ],
@@ -4990,4 +4995,87 @@ class _DrawerSectionItem {
     required this.onSelected,
     this.color,
   });
+}
+
+
+class _AnimatedExpandSection extends StatefulWidget {
+  final bool expanded;
+  final Widget child;
+
+  const _AnimatedExpandSection({required this.expanded, required this.child});
+
+  @override
+  State<_AnimatedExpandSection> createState() => _AnimatedExpandSectionState();
+}
+
+class _AnimatedExpandSectionState extends State<_AnimatedExpandSection>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _sizeFactor;
+  late final Animation<double> _opacity;
+  bool _animating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      value: widget.expanded ? 1.0 : 0.0,
+    );
+    _sizeFactor = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOutCubic);
+    _opacity = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.08, 1.0, curve: Curves.easeIn),
+    );
+    _ctrl.addStatusListener(_onStatus);
+  }
+
+  void _onStatus(AnimationStatus status) {
+    final running = status == AnimationStatus.forward ||
+        status == AnimationStatus.reverse;
+    if (running != _animating) setState(() => _animating = running);
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedExpandSection old) {
+    super.didUpdateWidget(old);
+    if (widget.expanded != old.expanded) {
+      setState(() => _animating = true);
+      widget.expanded ? _ctrl.forward() : _ctrl.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.removeStatusListener(_onStatus);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_animating) {
+      if (widget.expanded) {
+        return Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: widget.child,
+        );
+      }
+      return const SizedBox.shrink();
+    }
+    return ClipRect(
+      child: SizeTransition(
+        sizeFactor: _sizeFactor,
+        axisAlignment: -1.0,
+        child: FadeTransition(
+          opacity: _opacity,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: widget.child,
+          ),
+        ),
+      ),
+    );
+  }
 }

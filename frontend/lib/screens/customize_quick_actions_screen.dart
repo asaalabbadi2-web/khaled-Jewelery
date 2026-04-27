@@ -11,9 +11,11 @@ class _AddActionResult {
   const _AddActionResult({required this.action, required this.status});
 }
 
-/// شاشة تخصيص أزرار الوصول السريع في الشاشة الرئيسية
+/// شاشة تخصيص أزرار الوصول السريع — تبويب لكل مجموعة
 class CustomizeQuickActionsScreen extends StatefulWidget {
-  const CustomizeQuickActionsScreen({super.key});
+  final QuickActionGroup? initialGroup;
+
+  const CustomizeQuickActionsScreen({super.key, this.initialGroup});
 
   @override
   State<CustomizeQuickActionsScreen> createState() =>
@@ -21,8 +23,48 @@ class CustomizeQuickActionsScreen extends StatefulWidget {
 }
 
 class _CustomizeQuickActionsScreenState
-    extends State<CustomizeQuickActionsScreen> {
+    extends State<CustomizeQuickActionsScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   bool _isReordering = false;
+
+  static const _groups = [
+    QuickActionGroup.sales,
+    QuickActionGroup.accounting,
+    QuickActionGroup.admin,
+  ];
+
+  static const _groupTitles = ['المبيعات', 'المحاسبة', 'الإدارة'];
+
+  static const _groupIcons = [
+    Icons.receipt_long_rounded,
+    Icons.menu_book_rounded,
+    Icons.settings_rounded,
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final initialIndex = widget.initialGroup != null
+        ? _groups.indexOf(widget.initialGroup!)
+        : 0;
+    _tabController = TabController(
+      length: _groups.length,
+      vsync: this,
+      initialIndex: initialIndex.clamp(0, _groups.length - 1),
+    );
+    _tabController.addListener(() {
+      if (_isReordering) setState(() => _isReordering = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  QuickActionGroup get _currentGroup => _groups[_tabController.index];
 
   @override
   Widget build(BuildContext context) {
@@ -41,28 +83,17 @@ class _CustomizeQuickActionsScreenState
                     ? theme.disabledColor
                     : AppColors.primaryGold,
               ),
-              tooltip: 'إضافة زر جديد',
-              onPressed: () {
-                if (_isReordering) return;
-                _openAddActionSheet();
-              },
+              tooltip: 'إضافة زر',
+              onPressed: _isReordering ? null : _openAddActionSheet,
             ),
-            // زر إعادة الترتيب
             IconButton(
               icon: Icon(_isReordering ? Icons.done : Icons.reorder),
               tooltip: _isReordering ? 'إنهاء الترتيب' : 'إعادة الترتيب',
-              onPressed: () {
-                setState(() {
-                  _isReordering = !_isReordering;
-                });
-              },
+              onPressed: () => setState(() => _isReordering = !_isReordering),
             ),
-            // زر إعادة التعيين
             PopupMenuButton<String>(
-              onSelected: (value) async {
-                if (value == 'reset') {
-                  _showResetConfirmDialog();
-                }
+              onSelected: (value) {
+                if (value == 'reset') _showResetConfirmDialog();
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(
@@ -78,9 +109,21 @@ class _CustomizeQuickActionsScreenState
               ],
             ),
           ],
+          bottom: TabBar(
+            controller: _tabController,
+            tabs: List.generate(
+              _groups.length,
+              (i) => Tab(
+                icon: Icon(_groupIcons[i], size: 18),
+                text: _groupTitles[i],
+              ),
+            ),
+            indicatorColor: AppColors.primaryGold,
+            labelColor: AppColors.primaryGold,
+          ),
         ),
         body: Consumer<QuickActionsProvider>(
-          builder: (context, provider, child) {
+          builder: (context, provider, _) {
             if (provider.isLoading) {
               return Center(
                 child: CircularProgressIndicator(color: AppColors.primaryGold),
@@ -89,98 +132,17 @@ class _CustomizeQuickActionsScreenState
 
             return Column(
               children: [
-                // بطاقة المعلومات
-                Container(
-                  margin: const EdgeInsets.all(16),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppColors.info.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: AppColors.info.withValues(alpha: 0.3),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, color: AppColors.info, size: 24),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _isReordering
-                              ? 'اسحب الأزرار لتغيير ترتيبها'
-                              : 'فعّل/عطّل الأزرار التي تريد عرضها في الشاشة الرئيسية',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: AppColors.info,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // خيارات العرض في الشاشة الرئيسية
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 16),
-                  decoration: BoxDecoration(
-                    color: theme.cardColor,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: theme.dividerColor, width: 1),
-                  ),
-                  child: SwitchListTile(
-                    value: provider.showSalesRaceCard,
-                    activeColor: AppColors.success,
-                    title: const Text('عرض كرت سباق المبيعات'),
-                    subtitle: const Text('إظهار/إخفاء كرت التحدي في الرئيسية'),
-                    onChanged: (value) async {
-                      final ok = await provider.setShowSalesRaceCard(value);
-                      if (!mounted) return;
-                      if (!ok) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: const Text('تعذر حفظ الإعداد، حاول مرة أخرى'),
-                            backgroundColor: AppColors.error,
-                            duration: const Duration(seconds: 2),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                ),
-
-                // الإحصائيات
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _buildStatCard(
-                          icon: Icons.apps,
-                          label: 'الإجمالي',
-                          value: provider.actions.length.toString(),
-                          color: theme.hintColor,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildStatCard(
-                          icon: Icons.check_circle,
-                          label: 'المفعّلة',
-                          value: provider.activeActions.length.toString(),
-                          color: AppColors.success,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // قائمة الأزرار
+                _buildInfoBanner(theme),
+                if (_tabController.index == 0) ...[
+                  _buildSalesRaceSwitch(provider),
+                ],
                 Expanded(
-                  child: _isReordering
-                      ? _buildReorderableList(provider)
-                      : _buildToggleList(provider),
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: _groups.map((group) {
+                      return _buildGroupTab(provider, group, theme);
+                    }).toList(),
+                  ),
                 ),
               ],
             );
@@ -190,192 +152,311 @@ class _CustomizeQuickActionsScreenState
     );
   }
 
-  /// بطاقة إحصائية
-  Widget _buildStatCard({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    final theme = Theme.of(context);
-
+  Widget _buildInfoBanner(ThemeData theme) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.dividerColor, width: 1),
+        color: AppColors.info.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.info.withValues(alpha: 0.3)),
       ),
-      child: Column(
+      child: Row(
         children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: theme.textTheme.headlineSmall?.copyWith(
-              color: color,
-              fontWeight: FontWeight.bold,
+          Icon(Icons.info_outline, color: AppColors.info, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _isReordering
+                  ? 'اسحب الأزرار لتغيير ترتيبها داخل القسم'
+                  : 'فعّل/عطّل الأزرار التي تريد عرضها في كل قسم',
+              style: theme.textTheme.bodySmall?.copyWith(color: AppColors.info),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(label, style: theme.textTheme.bodySmall),
         ],
       ),
     );
   }
 
-  /// قائمة مع إمكانية إعادة الترتيب
-  Widget _buildReorderableList(QuickActionsProvider provider) {
+  Widget _buildSalesRaceSwitch(QuickActionsProvider provider) {
     final theme = Theme.of(context);
-
-    return ReorderableListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: provider.actions.length,
-      onReorder: (oldIndex, newIndex) async {
-        await provider.reorderActions(oldIndex, newIndex);
-      },
-      itemBuilder: (context, index) {
-        final action = provider.actions[index];
-        return _buildReorderableItem(action, theme);
-      },
-    );
-  }
-
-  /// عنصر قابل لإعادة الترتيب
-  Widget _buildReorderableItem(QuickActionItem action, ThemeData theme) {
-    return Card(
-      key: ValueKey(action.id),
-      margin: const EdgeInsets.only(bottom: 8),
-      color: theme.cardColor,
-      elevation: 2,
-      child: ListTile(
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: action.getColor().withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(action.icon, color: action.getColor(), size: 24),
-        ),
-        title: Text(action.label, style: theme.textTheme.titleMedium),
-        subtitle: Text(
-          'الترتيب: ${action.order + 1}',
-          style: theme.textTheme.bodySmall,
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (!action.isActive)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: theme.disabledColor.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'معطّل',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.disabledColor,
-                  ),
-                ),
-              ),
-            const SizedBox(width: 8),
-            Icon(Icons.drag_handle, color: theme.hintColor),
-          ],
-        ),
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: SwitchListTile(
+        value: provider.showSalesRaceCard,
+        activeColor: AppColors.success,
+        title: const Text('عرض كرت سباق المبيعات'),
+        subtitle: const Text('إظهار/إخفاء كرت التحدي في الرئيسية'),
+        onChanged: (value) async {
+          final ok = await provider.setShowSalesRaceCard(value);
+          if (!mounted || ok) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('تعذر حفظ الإعداد، حاول مرة أخرى'),
+              backgroundColor: AppColors.error,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        },
       ),
     );
   }
 
-  /// قائمة مع إمكانية التفعيل/التعطيل
-  Widget _buildToggleList(QuickActionsProvider provider) {
-    final theme = Theme.of(context);
+  Widget _buildGroupTab(
+    QuickActionsProvider provider,
+    QuickActionGroup group,
+    ThemeData theme,
+  ) {
+    final allInGroup = provider.actions
+        .where((a) => a.group == group)
+        .toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: provider.actions.length,
+    final active = allInGroup.where((a) => a.isActive).toList();
+    final inactive = allInGroup.where((a) => !a.isActive).toList();
+
+    if (allInGroup.isEmpty) {
+      return _buildEmptyState(theme);
+    }
+
+    final groupIndex = _groups.indexOf(group);
+    final activeCount = active.length;
+    final totalCount = allInGroup.length;
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: _buildGroupHeader(
+            theme,
+            _groupTitles[groupIndex],
+            _groupIcons[groupIndex],
+            activeCount,
+            totalCount,
+          ),
+        ),
+        if (_isReordering)
+          _buildReorderableSliver(provider, active, theme)
+        else ...[
+          if (active.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _buildSubHeader(theme, 'مفعّلة', AppColors.success)),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (_, i) => _buildToggleItem(active[i], provider, theme, active: true),
+                childCount: active.length,
+              ),
+            ),
+          ],
+          if (inactive.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _buildSubHeader(theme, 'متاحة للتفعيل', theme.hintColor)),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (_, i) => _buildToggleItem(inactive[i], provider, theme, active: false),
+                childCount: inactive.length,
+              ),
+            ),
+          ],
+          SliverToBoxAdapter(child: const SizedBox(height: 24)),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildGroupHeader(
+    ThemeData theme,
+    String title,
+    IconData icon,
+    int active,
+    int total,
+  ) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: AppColors.primaryGold),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.success.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '$active / $total مفعّل',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: AppColors.success,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSubHeader(ThemeData theme, String label, Color color) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 12,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReorderableSliver(
+    QuickActionsProvider provider,
+    List<QuickActionItem> active,
+    ThemeData theme,
+  ) {
+    return SliverReorderableList(
+      itemCount: active.length,
+      onReorder: (oldIndex, newIndex) async {
+        await provider.reorderGroupActions(_currentGroup, oldIndex, newIndex);
+      },
       itemBuilder: (context, index) {
-        final action = provider.actions[index];
-        return _buildToggleItem(action, provider, theme);
+        if (index >= active.length) {
+          return const SizedBox.shrink(key: ValueKey('_empty'));
+        }
+        final action = active[index];
+        return ReorderableDragStartListener(
+          key: ValueKey(action.id),
+          index: index,
+          child: Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            color: theme.cardColor,
+            elevation: 2,
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: action.getColor().withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(action.icon, color: action.getColor(), size: 22),
+              ),
+              title: Text(action.label, style: theme.textTheme.titleSmall),
+              trailing: Icon(Icons.drag_handle, color: theme.hintColor),
+            ),
+          ),
+        );
       },
     );
   }
 
-  /// عنصر مع مفتاح تفعيل/تعطيل
+  QuickActionsProvider get provider =>
+      Provider.of<QuickActionsProvider>(context, listen: false);
+
   Widget _buildToggleItem(
     QuickActionItem action,
     QuickActionsProvider provider,
-    ThemeData theme,
-  ) {
+    ThemeData theme, {
+    required bool active,
+  }) {
+    final color = action.getColor();
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       color: theme.cardColor,
-      elevation: action.isActive ? 2 : 0.5,
+      elevation: active ? 1.5 : 0.5,
       child: ListTile(
-        enabled: true,
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: action.getColor().withValues(
-              alpha: action.isActive ? 0.15 : 0.05,
-            ),
+            color: color.withValues(alpha: active ? 0.14 : 0.05),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
             action.icon,
-            color: action.isActive ? action.getColor() : theme.disabledColor,
-            size: 24,
+            color: active ? color : theme.disabledColor,
+            size: 22,
           ),
         ),
         title: Text(
           action.label,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: action.isActive ? null : theme.disabledColor,
-          ),
-        ),
-        subtitle: Text(
-          action.isActive ? 'مفعّل • الترتيب: ${action.order + 1}' : 'معطّل',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: action.isActive ? AppColors.success : theme.disabledColor,
+          style: theme.textTheme.titleSmall?.copyWith(
+            color: active ? null : theme.disabledColor,
           ),
         ),
         trailing: Switch(
-          value: action.isActive,
+          value: active,
           activeThumbColor: AppColors.success,
-          onChanged: (value) async {
+          onChanged: (_) async {
             final success = await provider.toggleAction(action.id);
             if (success && mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
-                    value
+                    !active
                         ? 'تم تفعيل "${action.label}"'
                         : 'تم تعطيل "${action.label}"',
                   ),
-                  backgroundColor: value ? AppColors.success : theme.hintColor,
+                  backgroundColor: !active ? AppColors.success : theme.hintColor,
                   duration: const Duration(seconds: 2),
                 ),
               );
             }
           },
         ),
-        onTap: () async {
-          await provider.toggleAction(action.id);
-        },
+        onTap: () => provider.toggleAction(action.id),
       ),
     );
   }
 
-  /// حوار تأكيد إعادة التعيين
+  Widget _buildEmptyState(ThemeData theme) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.inbox_outlined, size: 48, color: theme.hintColor),
+          const SizedBox(height: 12),
+          Text('لا توجد عناصر في هذا القسم', style: theme.textTheme.bodyMedium),
+        ],
+      ),
+    );
+  }
+
   void _showResetConfirmDialog() {
     final theme = Theme.of(context);
-
     showDialog(
       context: context,
       builder: (context) => Directionality(
         textDirection: TextDirection.rtl,
         child: AlertDialog(
-          backgroundColor: theme.dialogTheme.backgroundColor ?? theme.colorScheme.surface,
+          backgroundColor:
+              theme.dialogTheme.backgroundColor ?? theme.colorScheme.surface,
           title: Row(
             children: [
               Icon(Icons.warning_amber_rounded, color: AppColors.warning),
@@ -399,11 +480,11 @@ class _CustomizeQuickActionsScreenState
               ),
               onPressed: () async {
                 Navigator.pop(context);
-                final provider = Provider.of<QuickActionsProvider>(
+                final p = Provider.of<QuickActionsProvider>(
                   context,
                   listen: false,
                 );
-                final success = await provider.resetToDefaults();
+                final success = await p.resetToDefaults();
                 if (success && mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -422,15 +503,19 @@ class _CustomizeQuickActionsScreenState
   }
 
   Future<void> _openAddActionSheet() async {
-    final provider = Provider.of<QuickActionsProvider>(context, listen: false);
-    final availableItems = provider.availableActions;
+    final p = Provider.of<QuickActionsProvider>(context, listen: false);
+
+    // Show only items from current group that aren't already added
+    final existingIds = p.actions.map((a) => a.id).toSet();
+    final groupCatalog = DefaultQuickActions.catalogForGroup(_currentGroup);
+    final availableItems =
+        groupCatalog.where((a) => !existingIds.contains(a.id)).toList();
 
     if (availableItems.isEmpty) {
-      final theme = Theme.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('لا توجد عناصر جديدة لإضافتها حالياً'),
-          backgroundColor: theme.hintColor,
+          content: const Text('جميع عناصر هذا القسم مضافة بالفعل'),
+          backgroundColor: Theme.of(context).hintColor,
           duration: const Duration(seconds: 2),
         ),
       );
@@ -442,25 +527,24 @@ class _CustomizeQuickActionsScreenState
     final result = await showModalBottomSheet<_AddActionResult>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Theme.of(context).dialogTheme.backgroundColor ?? Theme.of(context).colorScheme.surface,
+      backgroundColor: Theme.of(context).dialogTheme.backgroundColor ??
+          Theme.of(context).colorScheme.surface,
       builder: (sheetContext) {
         final sheetTheme = Theme.of(sheetContext);
-
         return Directionality(
           textDirection: TextDirection.rtl,
           child: SafeArea(
             child: StatefulBuilder(
               builder: (sheetContext, setSheetState) {
-                final filteredItems = availableItems.where((item) {
-                  final query = searchQuery.trim();
-                  if (query.isEmpty) return true;
-                  final lowerQuery = query.toLowerCase();
-                  return item.label.toLowerCase().contains(lowerQuery) ||
-                      item.id.toLowerCase().contains(lowerQuery);
+                final filtered = availableItems.where((item) {
+                  final q = searchQuery.trim().toLowerCase();
+                  return q.isEmpty ||
+                      item.label.toLowerCase().contains(q) ||
+                      item.id.toLowerCase().contains(q);
                 }).toList();
 
                 return SizedBox(
-                  height: MediaQuery.of(sheetContext).size.height * 0.75,
+                  height: MediaQuery.of(sheetContext).size.height * 0.65,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -470,58 +554,48 @@ class _CustomizeQuickActionsScreenState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'إضافة عناصر جديدة',
+                              'إضافة من قسم ${_groupTitles[_groups.indexOf(_currentGroup)]}',
                               style: sheetTheme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'اختر من القائمة التالية لإضافة عناصر جديدة إلى الوصول السريع.',
-                              style: sheetTheme.textTheme.bodySmall,
                             ),
                             const SizedBox(height: 12),
                             TextField(
                               textDirection: TextDirection.rtl,
                               decoration: InputDecoration(
                                 prefixIcon: const Icon(Icons.search),
-                                hintText: 'ابحث باسم العنصر أو المعرّف',
+                                hintText: 'ابحث باسم العنصر',
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                               ),
-                              onChanged: (value) =>
-                                  setSheetState(() => searchQuery = value),
+                              onChanged: (v) =>
+                                  setSheetState(() => searchQuery = v),
                             ),
                           ],
                         ),
                       ),
                       Expanded(
-                        child: filteredItems.isEmpty
+                        child: filtered.isEmpty
                             ? Center(
                                 child: Text(
-                                  'لا توجد نتائج مطابقة للبحث',
+                                  'لا توجد نتائج',
                                   style: sheetTheme.textTheme.bodyMedium
                                       ?.copyWith(color: sheetTheme.hintColor),
                                 ),
                               )
                             : ListView.separated(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  0,
-                                  16,
-                                  16,
-                                ),
-                                itemCount: filteredItems.length,
-                                separatorBuilder: (context, index) =>
-                                    const SizedBox(height: 12),
+                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                                itemCount: filtered.length,
+                                separatorBuilder: (context, i) =>
+                                    const SizedBox(height: 8),
                                 itemBuilder: (_, index) {
-                                  final action = filteredItems[index];
+                                  final action = filtered[index];
                                   final actionColor = action.getColor();
 
-                                  Future<void> handleSelection() async {
-                                    final status = await provider
-                                        .addActionFromCatalog(action.id);
+                                  Future<void> handleTap() async {
+                                    final status =
+                                        await p.addActionFromCatalog(action.id);
                                     if (!mounted) return;
                                     Navigator.of(sheetContext).pop(
                                       _AddActionResult(
@@ -533,48 +607,23 @@ class _CustomizeQuickActionsScreenState
 
                                   return Card(
                                     margin: EdgeInsets.zero,
-                                    elevation: 2,
+                                    elevation: 1.5,
                                     child: ListTile(
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                            horizontal: 16,
-                                            vertical: 12,
-                                          ),
                                       leading: Container(
                                         padding: const EdgeInsets.all(8),
                                         decoration: BoxDecoration(
-                                          color: actionColor.withValues(
-                                            alpha: 0.12,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
+                                          color: actionColor.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(8),
                                         ),
-                                        child: Icon(
-                                          action.icon,
-                                          color: actionColor,
-                                        ),
+                                        child: Icon(action.icon, color: actionColor),
                                       ),
-                                      title: Text(
-                                        action.label,
-                                        style: sheetTheme.textTheme.titleMedium,
-                                      ),
-                                      subtitle: Text(
-                                        'المعرّف: ${action.id}',
-                                        style: sheetTheme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: sheetTheme.hintColor,
-                                            ),
-                                      ),
+                                      title: Text(action.label),
                                       trailing: IconButton(
-                                        icon: const Icon(
-                                          Icons.add_circle_outline,
-                                        ),
+                                        icon: const Icon(Icons.add_circle_outline),
                                         color: AppColors.primaryGold,
-                                        tooltip: 'إضافة إلى الوصول السريع',
-                                        onPressed: handleSelection,
+                                        onPressed: handleTap,
                                       ),
-                                      onTap: handleSelection,
+                                      onTap: handleTap,
                                     ),
                                   );
                                 },
@@ -590,9 +639,7 @@ class _CustomizeQuickActionsScreenState
       },
     );
 
-    if (!mounted || result == null) {
-      return;
-    }
+    if (!mounted || result == null) return;
 
     final theme = Theme.of(context);
     final label = result.action?.label ?? '';
@@ -601,7 +648,7 @@ class _CustomizeQuickActionsScreenState
       case QuickActionAddStatus.added:
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('تمت إضافة "$label" إلى الوصول السريع'),
+            content: Text('تمت إضافة "$label"'),
             backgroundColor: AppColors.success,
             duration: const Duration(seconds: 2),
           ),
@@ -619,7 +666,7 @@ class _CustomizeQuickActionsScreenState
       case QuickActionAddStatus.alreadyExists:
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('"$label" موجود بالفعل ضمن الوصول السريع'),
+            content: Text('"$label" موجود بالفعل'),
             backgroundColor: theme.hintColor,
             duration: const Duration(seconds: 2),
           ),
@@ -628,7 +675,7 @@ class _CustomizeQuickActionsScreenState
       case QuickActionAddStatus.failed:
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('تعذر إضافة العنصر، حاول مرة أخرى'),
+            content: const Text('تعذر الإضافة، حاول مرة أخرى'),
             backgroundColor: AppColors.error,
             duration: const Duration(seconds: 2),
           ),

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+enum QuickActionGroup { sales, accounting, admin }
+
 /// نموذج بيانات لعناصر الوصول السريع في الشاشة الرئيسية
 class QuickActionItem {
   final String id;
@@ -9,6 +11,7 @@ class QuickActionItem {
   final String colorHex; // نخزن اللون كـ hex string (#RRGGBB)
   final bool isActive;
   final int order; // ترتيب العنصر
+  final QuickActionGroup group;
 
   QuickActionItem({
     required this.id,
@@ -18,6 +21,7 @@ class QuickActionItem {
     required this.colorHex,
     this.isActive = true,
     this.order = 0,
+    this.group = QuickActionGroup.sales,
   });
 
   factory QuickActionItem.fromMap(Map<String, dynamic> map) {
@@ -62,6 +66,9 @@ class QuickActionItem {
     final int resolvedOrder = map['order'] as int? ?? fallbackItem?.order ?? 0;
     final IconData resolvedIcon =
         canonicalFallback?.icon ?? _resolveIcon(map, fallbackItem);
+    final QuickActionGroup resolvedGroup =
+        canonicalFallback?.group ??
+        _resolveGroup(map['group'] as String?, fallbackItem?.group);
 
     return QuickActionItem(
       id: resolvedId,
@@ -71,6 +78,7 @@ class QuickActionItem {
       colorHex: resolvedColorHex,
       isActive: resolvedActive,
       order: resolvedOrder,
+      group: resolvedGroup,
     );
   }
 
@@ -83,6 +91,7 @@ class QuickActionItem {
       'colorHex': colorHex,
       'isActive': isActive,
       'order': order,
+      'group': group.name,
     };
   }
 
@@ -98,6 +107,7 @@ class QuickActionItem {
     String? colorHex,
     bool? isActive,
     int? order,
+    QuickActionGroup? group,
   }) {
     return QuickActionItem(
       id: id ?? this.id,
@@ -107,12 +117,24 @@ class QuickActionItem {
       colorHex: colorHex ?? this.colorHex,
       isActive: isActive ?? this.isActive,
       order: order ?? this.order,
+      group: group ?? this.group,
     );
   }
 
   @override
   String toString() {
-    return 'QuickActionItem(id: $id, label: $label, isActive: $isActive, order: $order)';
+    return 'QuickActionItem(id: $id, label: $label, isActive: $isActive, order: $order, group: ${group.name})';
+  }
+
+  static QuickActionGroup _resolveGroup(String? value, QuickActionGroup? fallback) {
+    if (value != null) {
+      switch (value) {
+        case 'sales': return QuickActionGroup.sales;
+        case 'accounting': return QuickActionGroup.accounting;
+        case 'admin': return QuickActionGroup.admin;
+      }
+    }
+    return fallback ?? QuickActionGroup.sales;
   }
 
   static IconData _resolveIcon(
@@ -247,7 +269,7 @@ class QuickActionItem {
 
 class DefaultQuickActions {
   static final List<QuickActionItem> _catalog = [
-    // الفواتير
+    // ─── المبيعات والمشتريات ────────────────────────────────────────
     QuickActionItem(
       id: 'sales_invoice',
       icon: Icons.point_of_sale,
@@ -256,6 +278,7 @@ class DefaultQuickActions {
       colorHex: '#2E7D32',
       isActive: true,
       order: 0,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'scrap_sales_invoice',
@@ -265,6 +288,7 @@ class DefaultQuickActions {
       colorHex: '#FB8C00',
       isActive: true,
       order: 1,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'purchase_invoice',
@@ -274,6 +298,7 @@ class DefaultQuickActions {
       colorHex: '#9A7D0A',
       isActive: true,
       order: 2,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'scrap_purchase_invoice',
@@ -283,6 +308,7 @@ class DefaultQuickActions {
       colorHex: '#0288D1',
       isActive: true,
       order: 3,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'invoices_list',
@@ -292,6 +318,7 @@ class DefaultQuickActions {
       colorHex: '#546E7A',
       isActive: false,
       order: 4,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'return_sales',
@@ -301,6 +328,7 @@ class DefaultQuickActions {
       colorHex: '#E53935',
       isActive: true,
       order: 5,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'return_purchase',
@@ -310,6 +338,7 @@ class DefaultQuickActions {
       colorHex: '#EF6C00',
       isActive: true,
       order: 6,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'return_purchase_supplier',
@@ -319,6 +348,7 @@ class DefaultQuickActions {
       colorHex: '#FF7043',
       isActive: false,
       order: 7,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'return_invoice',
@@ -328,6 +358,7 @@ class DefaultQuickActions {
       colorHex: '#C62828',
       isActive: false,
       order: 8,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'add_customer',
@@ -337,6 +368,7 @@ class DefaultQuickActions {
       colorHex: '#1976D2',
       isActive: true,
       order: 9,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'customers_list',
@@ -346,6 +378,7 @@ class DefaultQuickActions {
       colorHex: '#0288D1',
       isActive: false,
       order: 10,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'suppliers_list',
@@ -355,6 +388,7 @@ class DefaultQuickActions {
       colorHex: '#7B1FA2',
       isActive: false,
       order: 11,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'add_item',
@@ -364,6 +398,7 @@ class DefaultQuickActions {
       colorHex: '#D4AF37',
       isActive: true,
       order: 12,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'items_list',
@@ -373,132 +408,7 @@ class DefaultQuickActions {
       colorHex: '#F57C00',
       isActive: false,
       order: 13,
-    ),
-    QuickActionItem(
-      id: 'receipt_voucher',
-      icon: Icons.south,
-      label: 'سند قبض',
-      route: 'receipt_voucher',
-      colorHex: '#388E3C',
-      isActive: false,
-      order: 14,
-    ),
-    QuickActionItem(
-      id: 'payment_voucher',
-      icon: Icons.north,
-      label: 'سند صرف',
-      route: 'payment_voucher',
-      colorHex: '#D32F2F',
-      isActive: false,
-      order: 15,
-    ),
-    QuickActionItem(
-      id: 'vouchers_list',
-      icon: Icons.receipt_long,
-      label: 'قائمة السندات',
-      route: 'vouchers_list',
-      colorHex: '#5D4037',
-      isActive: false,
-      order: 16,
-    ),
-    QuickActionItem(
-      id: 'journal_entry',
-      icon: Icons.edit_note,
-      label: 'إضافة قيد',
-      route: 'journal_entry',
-      colorHex: '#455A64',
-      isActive: false,
-      order: 17,
-    ),
-    QuickActionItem(
-      id: 'journal_entries_list',
-      icon: Icons.book,
-      label: 'قيود اليومية',
-      route: 'journal_entries_list',
-      colorHex: '#5C6BC0',
-      isActive: false,
-      order: 18,
-    ),
-    QuickActionItem(
-      id: 'accounts',
-      icon: Icons.assessment,
-      label: 'كشوفات الحسابات',
-      route: 'accounts',
-      colorHex: '#546E7A',
-      isActive: false,
-      order: 19,
-    ),
-    QuickActionItem(
-      id: 'recurring_entries',
-      icon: Icons.repeat,
-      label: 'القيود الدورية',
-      route: 'recurring_entries',
-      colorHex: '#6A1B9A',
-      isActive: false,
-      order: 20,
-    ),
-    QuickActionItem(
-      id: 'general_ledger',
-      icon: Icons.menu_book,
-      label: 'دفتر الأستاذ العام',
-      route: 'general_ledger',
-      colorHex: '#FFB300',
-      isActive: false,
-      order: 21,
-    ),
-    QuickActionItem(
-      id: 'trial_balance',
-      icon: Icons.account_balance_wallet,
-      label: 'ميزان المراجعة',
-      route: 'trial_balance',
-      colorHex: '#8D6E63',
-      isActive: false,
-      order: 22,
-    ),
-    QuickActionItem(
-      id: 'chart_of_accounts',
-      icon: Icons.account_tree,
-      label: 'شجرة الحسابات',
-      route: 'chart_of_accounts',
-      colorHex: '#00897B',
-      isActive: false,
-      order: 23,
-    ),
-    QuickActionItem(
-      id: 'employees',
-      icon: Icons.badge,
-      label: 'الموظفون',
-      route: 'employees',
-      colorHex: '#B8860B',
-      isActive: false,
-      order: 24,
-    ),
-    QuickActionItem(
-      id: 'users',
-      icon: Icons.manage_accounts,
-      label: 'المستخدمون',
-      route: 'users',
-      colorHex: '#1565C0',
-      isActive: false,
-      order: 25,
-    ),
-    QuickActionItem(
-      id: 'payroll',
-      icon: Icons.payments_rounded,
-      label: 'الرواتب',
-      route: 'payroll',
-      colorHex: '#2E7D32',
-      isActive: false,
-      order: 26,
-    ),
-    QuickActionItem(
-      id: 'attendance',
-      icon: Icons.event_available,
-      label: 'الحضور والانصراف',
-      route: 'attendance',
-      colorHex: '#6A1B9A',
-      isActive: false,
-      order: 27,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'melting_renewal',
@@ -507,115 +417,8 @@ class DefaultQuickActions {
       route: 'melting_renewal',
       colorHex: '#FF6F00',
       isActive: true,
-      order: 28,
-    ),
-    QuickActionItem(
-      id: 'payroll_report',
-      icon: Icons.analytics,
-      label: 'تقارير الرواتب',
-      route: 'payroll_report',
-      colorHex: '#512DA8',
-      isActive: false,
-      order: 29,
-    ),
-    QuickActionItem(
-      id: 'reports_center',
-      icon: Icons.insights,
-      label: 'مركز التقارير',
-      route: 'reports_center',
-      colorHex: '#00BFA5',
-      isActive: true,
-      order: 30,
-    ),
-    QuickActionItem(
-      id: 'gold_price_history_report',
-      icon: Icons.auto_graph,
-      label: 'تقرير سعر الذهب',
-      route: 'gold_price_history',
-      colorHex: '#FFD700',
-      isActive: false,
-      order: 31,
-    ),
-    QuickActionItem(
-      id: 'gold_position_report',
-      icon: Icons.scale,
-      label: 'تقرير مركز الذهب',
-      route: 'gold_position',
-      colorHex: '#FDD835',
-      isActive: false,
-      order: 31,
-    ),
-    QuickActionItem(
-      id: 'printing_center',
-      icon: Icons.print,
-      label: 'مركز الطباعة',
-      route: 'printing_center',
-      colorHex: '#1976D2',
-      isActive: true,
-      order: 32,
-    ),
-    QuickActionItem(
-      id: 'gold_price',
-      icon: Icons.trending_up,
-      label: 'سعر الذهب',
-      route: 'gold_price',
-      colorHex: '#F9A825',
-      isActive: false,
-      order: 32,
-    ),
-    QuickActionItem(
-      id: 'safe_boxes',
-      icon: Icons.savings,
-      label: 'إدارة الخزائن',
-      route: 'safe_boxes',
-      colorHex: '#FFA000',
-      isActive: false,
-      order: 33,
-    ),
-    QuickActionItem(
-      id: 'system_reset',
-      icon: Icons.restore,
-      label: 'إعادة تهيئة النظام',
-      route: 'system_reset',
-      colorHex: '#D84315',
-      isActive: false,
-      order: 34,
-    ),
-    QuickActionItem(
-      id: 'printer_settings',
-      icon: Icons.print,
-      label: 'إعدادات الطابعة',
-      route: 'printer_settings',
-      colorHex: '#7E57C2',
-      isActive: false,
-      order: 35,
-    ),
-    QuickActionItem(
-      id: 'about',
-      icon: Icons.info_outline,
-      label: 'حول التطبيق',
-      route: 'about',
-      colorHex: '#00838F',
-      isActive: false,
-      order: 36,
-    ),
-    QuickActionItem(
-      id: 'admin_dashboard',
-      icon: Icons.dashboard_customize,
-      label: 'لوحة تحكم المدير',
-      route: 'admin_dashboard',
-      colorHex: '#D4AF37',
-      isActive: false,
-      order: 37,
-    ),
-    QuickActionItem(
-      id: 'offices',
-      icon: Icons.business,
-      label: 'مكاتب التسكير',
-      route: 'offices',
-      colorHex: '#B8860B',
-      isActive: false,
-      order: 38,
+      order: 14,
+      group: QuickActionGroup.sales,
     ),
     QuickActionItem(
       id: 'gold_reservation',
@@ -624,25 +427,109 @@ class DefaultQuickActions {
       route: 'gold_reservation',
       colorHex: '#F9A825',
       isActive: false,
-      order: 39,
+      order: 15,
+      group: QuickActionGroup.sales,
+    ),
+    // ─── المحاسبة والتقارير ────────────────────────────────────────
+    QuickActionItem(
+      id: 'receipt_voucher',
+      icon: Icons.south,
+      label: 'سند قبض',
+      route: 'receipt_voucher',
+      colorHex: '#388E3C',
+      isActive: false,
+      order: 0,
+      group: QuickActionGroup.accounting,
     ),
     QuickActionItem(
-      id: 'bonuses',
-      icon: Icons.card_giftcard,
-      label: 'المكافآت',
-      route: 'bonuses',
+      id: 'payment_voucher',
+      icon: Icons.north,
+      label: 'سند صرف',
+      route: 'payment_voucher',
+      colorHex: '#D32F2F',
+      isActive: false,
+      order: 1,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'vouchers_list',
+      icon: Icons.receipt_long,
+      label: 'قائمة السندات',
+      route: 'vouchers_list',
+      colorHex: '#5D4037',
+      isActive: false,
+      order: 2,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'journal_entry',
+      icon: Icons.edit_note,
+      label: 'إضافة قيد',
+      route: 'journal_entry',
+      colorHex: '#455A64',
+      isActive: false,
+      order: 3,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'journal_entries_list',
+      icon: Icons.book,
+      label: 'قيود اليومية',
+      route: 'journal_entries_list',
+      colorHex: '#5C6BC0',
+      isActive: false,
+      order: 4,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'accounts',
+      icon: Icons.assessment,
+      label: 'كشوفات الحسابات',
+      route: 'accounts',
       colorHex: '#546E7A',
       isActive: false,
-      order: 40,
+      order: 5,
+      group: QuickActionGroup.accounting,
     ),
     QuickActionItem(
-      id: 'shift_closing',
-      icon: Icons.fact_check,
-      label: 'إغلاق اليومية',
-      route: 'shift_closing',
-      colorHex: '#7CB342',
+      id: 'recurring_entries',
+      icon: Icons.repeat,
+      label: 'القيود الدورية',
+      route: 'recurring_entries',
+      colorHex: '#6A1B9A',
       isActive: false,
-      order: 41,
+      order: 6,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'general_ledger',
+      icon: Icons.menu_book,
+      label: 'دفتر الأستاذ العام',
+      route: 'general_ledger',
+      colorHex: '#FFB300',
+      isActive: false,
+      order: 7,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'trial_balance',
+      icon: Icons.account_balance_wallet,
+      label: 'ميزان المراجعة',
+      route: 'trial_balance',
+      colorHex: '#8D6E63',
+      isActive: false,
+      order: 8,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'chart_of_accounts',
+      icon: Icons.account_tree,
+      label: 'شجرة الحسابات',
+      route: 'chart_of_accounts',
+      colorHex: '#00897B',
+      isActive: false,
+      order: 9,
+      group: QuickActionGroup.accounting,
     ),
     QuickActionItem(
       id: 'weight_closing_execute',
@@ -651,16 +538,159 @@ class DefaultQuickActions {
       route: 'weight_closing_execute',
       colorHex: '#C9A227',
       isActive: true,
-      order: 42,
+      order: 10,
+      group: QuickActionGroup.accounting,
     ),
     QuickActionItem(
-      id: 'audit_log',
-      icon: Icons.history,
-      label: 'سجل التدقيق',
-      route: 'audit_log',
-      colorHex: '#455A64',
+      id: 'shift_closing',
+      icon: Icons.fact_check,
+      label: 'إغلاق اليومية',
+      route: 'shift_closing',
+      colorHex: '#7CB342',
       isActive: false,
-      order: 43,
+      order: 11,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'reports_center',
+      icon: Icons.insights,
+      label: 'مركز التقارير',
+      route: 'reports_center',
+      colorHex: '#00BFA5',
+      isActive: true,
+      order: 12,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'gold_price_history_report',
+      icon: Icons.auto_graph,
+      label: 'تقرير سعر الذهب',
+      route: 'gold_price_history',
+      colorHex: '#FFD700',
+      isActive: false,
+      order: 13,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'gold_position_report',
+      icon: Icons.scale,
+      label: 'تقرير مركز الذهب',
+      route: 'gold_position',
+      colorHex: '#FDD835',
+      isActive: false,
+      order: 14,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'payroll_report',
+      icon: Icons.analytics,
+      label: 'تقارير الرواتب',
+      route: 'payroll_report',
+      colorHex: '#512DA8',
+      isActive: false,
+      order: 15,
+      group: QuickActionGroup.accounting,
+    ),
+    QuickActionItem(
+      id: 'gold_price',
+      icon: Icons.trending_up,
+      label: 'سعر الذهب',
+      route: 'gold_price',
+      colorHex: '#F9A825',
+      isActive: false,
+      order: 16,
+      group: QuickActionGroup.accounting,
+    ),
+    // ─── الإدارة ────────────────────────────────────────────────────
+    QuickActionItem(
+      id: 'posting_management',
+      icon: Icons.check_circle_outline,
+      label: 'إدارة الترحيل',
+      route: 'posting_management',
+      colorHex: '#2E7D32',
+      isActive: true,
+      order: 0,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'printing_center',
+      icon: Icons.print,
+      label: 'مركز الطباعة',
+      route: 'printing_center',
+      colorHex: '#1976D2',
+      isActive: true,
+      order: 1,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'safe_boxes',
+      icon: Icons.savings,
+      label: 'إدارة الخزائن',
+      route: 'safe_boxes',
+      colorHex: '#FFA000',
+      isActive: false,
+      order: 2,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'employees',
+      icon: Icons.badge,
+      label: 'الموظفون',
+      route: 'employees',
+      colorHex: '#B8860B',
+      isActive: false,
+      order: 3,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'users',
+      icon: Icons.manage_accounts,
+      label: 'المستخدمون',
+      route: 'users',
+      colorHex: '#1565C0',
+      isActive: false,
+      order: 4,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'payroll',
+      icon: Icons.payments_rounded,
+      label: 'الرواتب',
+      route: 'payroll',
+      colorHex: '#2E7D32',
+      isActive: false,
+      order: 5,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'attendance',
+      icon: Icons.event_available,
+      label: 'الحضور والانصراف',
+      route: 'attendance',
+      colorHex: '#6A1B9A',
+      isActive: false,
+      order: 6,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'bonuses',
+      icon: Icons.card_giftcard,
+      label: 'المكافآت',
+      route: 'bonuses',
+      colorHex: '#546E7A',
+      isActive: false,
+      order: 7,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'offices',
+      icon: Icons.business,
+      label: 'مكاتب التسكير',
+      route: 'offices',
+      colorHex: '#B8860B',
+      isActive: false,
+      order: 8,
+      group: QuickActionGroup.admin,
     ),
     QuickActionItem(
       id: 'branches_management',
@@ -669,16 +699,58 @@ class DefaultQuickActions {
       route: 'branches_management',
       colorHex: '#00897B',
       isActive: false,
-      order: 44,
+      order: 9,
+      group: QuickActionGroup.admin,
     ),
     QuickActionItem(
-      id: 'posting_management',
-      icon: Icons.check_circle_outline,
-      label: 'إدارة الترحيل',
-      route: 'posting_management',
-      colorHex: '#2E7D32',
-      isActive: true,
-      order: 45,
+      id: 'audit_log',
+      icon: Icons.history,
+      label: 'سجل التدقيق',
+      route: 'audit_log',
+      colorHex: '#455A64',
+      isActive: false,
+      order: 10,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'admin_dashboard',
+      icon: Icons.dashboard_customize,
+      label: 'لوحة تحكم المدير',
+      route: 'admin_dashboard',
+      colorHex: '#D4AF37',
+      isActive: false,
+      order: 11,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'system_reset',
+      icon: Icons.restore,
+      label: 'إعادة تهيئة النظام',
+      route: 'system_reset',
+      colorHex: '#D84315',
+      isActive: false,
+      order: 12,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'printer_settings',
+      icon: Icons.print,
+      label: 'إعدادات الطابعة',
+      route: 'printer_settings',
+      colorHex: '#7E57C2',
+      isActive: false,
+      order: 13,
+      group: QuickActionGroup.admin,
+    ),
+    QuickActionItem(
+      id: 'about',
+      icon: Icons.info_outline,
+      label: 'حول التطبيق',
+      route: 'about',
+      colorHex: '#00838F',
+      isActive: false,
+      order: 14,
+      group: QuickActionGroup.admin,
     ),
   ];
 
@@ -720,6 +792,14 @@ class DefaultQuickActions {
   static List<QuickActionItem> catalogExcluding(Set<String> ids) {
     return _catalog
         .where((item) => !ids.contains(item.id))
+        .map((item) => item.copyWith())
+        .toList()
+      ..sort((a, b) => a.label.compareTo(b.label));
+  }
+
+  static List<QuickActionItem> catalogForGroup(QuickActionGroup group) {
+    return _catalog
+        .where((item) => item.group == group)
         .map((item) => item.copyWith())
         .toList()
       ..sort((a, b) => a.label.compareTo(b.label));

@@ -144,6 +144,34 @@ class QuickActionsProvider extends ChangeNotifier {
     return await _saveActions();
   }
 
+  /// إعادة ترتيب أزرار مجموعة واحدة فقط (group-scoped reorder)
+  Future<bool> reorderGroupActions(
+    QuickActionGroup group,
+    int oldIndex,
+    int newIndex,
+  ) async {
+    final groupItems = _actions
+        .where((a) => a.group == group && a.isActive)
+        .toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+
+    if (oldIndex >= groupItems.length) return false;
+    final adj = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    final moved = groupItems.removeAt(oldIndex);
+    groupItems.insert(adj.clamp(0, groupItems.length), moved);
+
+    // Apply group-scoped order values (0-based per group)
+    for (int i = 0; i < groupItems.length; i++) {
+      final idx = _actions.indexWhere((a) => a.id == groupItems[i].id);
+      if (idx != -1) {
+        _actions[idx] = _actions[idx].copyWith(order: i);
+      }
+    }
+
+    notifyListeners();
+    return await _saveActions();
+  }
+
   /// إعادة تعيين إلى الإعدادات الافتراضية
   Future<bool> resetToDefaults() async {
     _actions = DefaultQuickActions.getDefaultActive();

@@ -5396,6 +5396,18 @@ class ApiService {
     }
   }
 
+  /// Fetch unposted invoices for the pending-approval Dialog
+  Future<Map<String, dynamic>> getPendingPostInvoices({int limit = 10}) async {
+    final uri = Uri.parse('$_baseUrl/invoices/pending-post')
+        .replace(queryParameters: {'limit': '$limit'});
+    final response = await _authedGet(uri);
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    }
+    return {'invoices': [], 'total': 0, 'showing': 0};
+  }
+
   /// Post a single invoice
   Future<Map<String, dynamic>> postInvoice(
     int invoiceId,

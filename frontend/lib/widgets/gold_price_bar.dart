@@ -35,7 +35,15 @@ class GoldPriceBar extends StatelessWidget {
 
   String _formatPercent(double? value) {
     final normalized = value ?? 0;
-    return '${normalized.abs().toStringAsFixed(1)}%';
+    return '${normalized.abs().toStringAsFixed(2)}%';
+  }
+
+  /// SAR change per gram for a given karat (current vs opening).
+  double? _changeAbsGram(int karat) {
+    if (goldPrice == null || goldPriceOpening == null || goldPriceOpening == 0) {
+      return null;
+    }
+    return _gramPrice(goldPrice!, karat) - _gramPrice(goldPriceOpening!, karat);
   }
 
   double? _changePercent() {
@@ -123,6 +131,7 @@ class GoldPriceBar extends StatelessWidget {
                         color: colors[idx % colors.length],
                         ouncePrice: goldPrice,
                         trendText: _formatPercent(changePercent),
+                        changeAbsGram: _changeAbsGram(k),
                         isUp: isUp,
                       ),
                     ),
@@ -407,6 +416,7 @@ class GoldPriceBar extends StatelessWidget {
     required Color color,
     required double? ouncePrice,
     required String trendText,
+    double? changeAbsGram,
     required bool isUp,
   }) {
     final sell = ouncePrice != null ? _gramPrice(ouncePrice, karat) : null;
@@ -451,14 +461,31 @@ class GoldPriceBar extends StatelessWidget {
                   color: (isUp ? AppColors.success : AppColors.error).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(3),
                 ),
-                child: Text(
-                  '${isUp ? '▲' : '▼'} $trendText',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: isUp ? AppColors.success : AppColors.error,
-                    fontFamily: 'Cairo',
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${isUp ? '▲' : '▼'} $trendText',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        color: isUp ? AppColors.success : AppColors.error,
+                        fontFamily: 'Cairo',
+                      ),
+                    ),
+                    if (changeAbsGram != null)
+                      Text(
+                        '${changeAbsGram >= 0 ? '+' : ''}${changeAbsGram.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w600,
+                          color: (isUp ? AppColors.success : AppColors.error)
+                              .withValues(alpha: 0.8),
+                          fontFamily: 'Cairo',
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ],
