@@ -205,7 +205,7 @@ def debug_db_info():
 
 
 @api.route('/admin/repair/invoice-payment-method', methods=['POST'])
-@jwt_required()
+@require_admin
 def repair_invoice_payment_method():
     """TEMPORARY: Reassign an InvoicePayment to a different payment method + safe-box.
 
