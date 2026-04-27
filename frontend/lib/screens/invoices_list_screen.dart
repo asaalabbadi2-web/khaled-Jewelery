@@ -3942,6 +3942,24 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                         color: colorScheme.primary,
                                       ),
                                     ),
+                                    if (auth.isManager && paymentId != null)
+                                      IconButton(
+                                        onPressed: () =>
+                                            _showCorrectPaymentMethodDialog(
+                                          sheetContext: sheetContext,
+                                          invoice: invoice,
+                                          paymentId: paymentId,
+                                          currentMethodName: methodName,
+                                        ),
+                                        tooltip: isAr
+                                            ? 'تصحيح وسيلة الدفع'
+                                            : 'Correct payment method',
+                                        icon: Icon(
+                                          Icons.edit_outlined,
+                                          size: 20,
+                                          color: colorScheme.secondary,
+                                        ),
+                                      ),
                                   ],
                                 ),
                               );
@@ -4107,6 +4125,118 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
           ),
         );
       },
+    );
+  }
+
+  Future<void> _showCorrectPaymentMethodDialog({
+    required BuildContext sheetContext,
+    required Map<String, dynamic> invoice,
+    required int paymentId,
+    required String currentMethodName,
+  }) async {
+    final isAr = Localizations.localeOf(sheetContext).languageCode == 'ar';
+    final invoiceId = _tryParseInt(invoice['id']);
+    if (invoiceId == null) return;
+
+    List<dynamic> methods = [];
+    try {
+      methods = await _apiService.getActivePaymentMethods();
+    } catch (_) {}
+
+    int? selectedMethodId;
+    final reasonController = TextEditingController();
+
+    await showDialog<void>(
+      context: sheetContext,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: Text(isAr ? 'تصحيح وسيلة الدفع' : 'Correct Payment Method'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isAr
+                    ? 'الوسيلة الحالية: $currentMethodName'
+                    : 'Current method: $currentMethodName',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                decoration: InputDecoration(
+                  labelText: isAr ? 'وسيلة الدفع الصحيحة' : 'Correct method',
+                  border: const OutlineInputBorder(),
+                ),
+                value: selectedMethodId,
+                items: methods.map<DropdownMenuItem<int>>((m) {
+                  final id = _tryParseInt(m['id']);
+                  final name = m['name']?.toString() ?? '';
+                  return DropdownMenuItem(value: id, child: Text(name));
+                }).toList(),
+                onChanged: (v) => setState(() => selectedMethodId = v),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonController,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'سبب التصحيح' : 'Reason',
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(isAr ? 'إلغاء' : 'Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: selectedMethodId == null
+                  ? null
+                  : () async {
+                      Navigator.pop(ctx);
+                      try {
+                        await _apiService.correctInvoicePaymentMethod(
+                          invoiceId: invoiceId,
+                          paymentId: paymentId,
+                          newPaymentMethodId: selectedMethodId!,
+                          reason: reasonController.text.trim().isNotEmpty
+                              ? reasonController.text.trim()
+                              : (isAr
+                                    ? 'تصحيح وسيلة الدفع'
+                                    : 'Correct payment method'),
+                        );
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                isAr
+                                    ? 'تم تصحيح وسيلة الدفع بنجاح'
+                                    : 'Payment method corrected successfully',
+                              ),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                          _loadInvoices();
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                isAr ? 'خطأ: $e' : 'Error: $e',
+                              ),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              child: Text(isAr ? 'تصحيح' : 'Correct'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

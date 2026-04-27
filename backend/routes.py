@@ -8543,6 +8543,105 @@ def update_invoice_status(invoice_id: int):
     return jsonify(invoice.to_dict()), 200
 
 
+@api.route('/invoices/<int:invoice_id>/payments/<int:payment_id>/correct-method', methods=['POST'])
+@require_admin
+def correct_invoice_payment_method(invoice_id: int, payment_id: int):
+    """Correct the payment method of an invoice payment.
+
+    Only allowed when the payment has not yet been settled (no SettlementLine).
+    This atomically updates InvoicePayment.payment_method_id and the linked
+    SafeBoxTransaction.safe_box_id so the clearing ledger stays consistent.
+
+    Body: { "new_payment_method_id": <int>, "reason": "<string>" }
+    """
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
+
+    ip = InvoicePayment.query.filter_by(id=payment_id, invoice_id=invoice_id).first()
+    if ip is None:
+        return jsonify({'error': 'not_found', 'message': 'الدفعة غير موجودة'}), 404
+
+    # Block if already settled
+    settled = (
+        db.session.query(func.coalesce(func.sum(SettlementLine.amount_settled), 0.0))
+        .filter(SettlementLine.invoice_payment_id == payment_id)
+        .scalar()
+    ) or 0.0
+    if float(settled) > 0.005:
+        return jsonify({
+            'error': 'already_settled',
+            'message': 'لا يمكن تصحيح وسيلة الدفع بعد إتمام التسوية',
+        }), 409
+
+    data = request.get_json(silent=True) or {}
+    new_pm_id = data.get('new_payment_method_id')
+    reason = str(data.get('reason') or 'تصحيح وسيلة الدفع').strip()
+
+    if not new_pm_id:
+        return jsonify({'error': 'new_payment_method_id is required'}), 400
+
+    new_pm = PaymentMethod.query.get(new_pm_id)
+    if new_pm is None:
+        return jsonify({'error': 'not_found', 'message': 'وسيلة الدفع غير موجودة'}), 404
+
+    old_pm_id = ip.payment_method_id
+    old_pm = PaymentMethod.query.get(old_pm_id)
+    old_sb_id = getattr(old_pm, 'default_safe_box_id', None) if old_pm else None
+    new_sb_id = getattr(new_pm, 'default_safe_box_id', None)
+
+    if old_pm_id == new_pm_id:
+        return jsonify({'error': 'same_method', 'message': 'وسيلة الدفع هي نفسها الحالية'}), 400
+
+    try:
+        ip.payment_method_id = new_pm_id
+
+        # Update the linked SafeBoxTransaction safe_box_id
+        if new_sb_id is not None:
+            sbt = SafeBoxTransaction.query.filter_by(
+                invoice_payment_id=payment_id
+            ).first()
+            if sbt:
+                sbt.safe_box_id = new_sb_id
+
+        # Audit log
+        try:
+            AuditLog.log_action(
+                user_name=g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin',
+                action='correct_payment_method',
+                entity_type='InvoicePayment',
+                entity_id=payment_id,
+                entity_number=invoice.invoice_number,
+                details=json.dumps({
+                    'old_payment_method_id': old_pm_id,
+                    'new_payment_method_id': new_pm_id,
+                    'old_safe_box_id': old_sb_id,
+                    'new_safe_box_id': new_sb_id,
+                    'reason': reason,
+                }, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+        except Exception:
+            pass
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'payment_id': payment_id,
+            'old_payment_method_id': old_pm_id,
+            'new_payment_method_id': new_pm_id,
+            'old_safe_box_id': old_sb_id,
+            'new_safe_box_id': new_sb_id,
+        }), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 500
+
+
 @api.route('/invoices/<int:invoice_id>/approve', methods=['POST'])
 @require_permission('invoice.edit')
 def approve_invoice(invoice_id: int):

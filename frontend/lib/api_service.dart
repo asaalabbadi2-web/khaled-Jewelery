@@ -3328,6 +3328,33 @@ class ApiService {
     }
   }
 
+  /// تصحيح وسيلة الدفع لدفعة فاتورة (قبل التسوية فقط)
+  Future<Map<String, dynamic>> correctInvoicePaymentMethod({
+    required int invoiceId,
+    required int paymentId,
+    required int newPaymentMethodId,
+    required String reason,
+  }) async {
+    final token = await _getToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/invoices/$invoiceId/payments/$paymentId/correct-method'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      },
+      body: json.encode({
+        'new_payment_method_id': newPaymentMethodId,
+        'reason': reason,
+      }),
+    );
+    final data = json.decode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200) return data as Map<String, dynamic>;
+    throw Exception(
+      (data is Map ? data['message'] ?? data['error'] : null) ??
+          'Failed to correct payment method',
+    );
+  }
+
   /// جلب الحسابات البنكية المتاحة
   Future<List<dynamic>> getBankAccounts() async {
     final response = await http.get(
