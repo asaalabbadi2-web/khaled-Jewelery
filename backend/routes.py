@@ -29817,12 +29817,11 @@ def get_pending_settlement_transactions():
     # Also include safe-box transfer-in items as pending.
     # These arise when an operator corrects a routing error by transferring
     # from one clearing safe to another (e.g. تابي → تمارا).  The destination
-    # safe receives an SBT in/voucher with no invoice_payment_id, which was
-    # previously invisible to the reconciliation formula.
+    # safe receives an SBT in/voucher with no invoice_payment_id.
     #
-    # A transfer-in that was fully reversed (voucher_reversal out) must NOT
-    # appear as pending.  We subtract net reversal-outs (no IP link) from the
-    # total transfer-in before deciding what's still due.
+    # Reversals: a voucher_reversal SBT shares the same ref_id as the original
+    # transfer SBT it cancels.  We match by ref_id to exclude fully-reversed
+    # transfers rather than proportionally reducing all of them.
     try:
         transfer_in_sbts = (
             SafeBoxTransaction.query
@@ -29837,42 +29836,48 @@ def get_pending_settlement_transactions():
         )
 
         if transfer_in_sbts:
-            transfer_in_total = round(sum(float(t.amount_cash or 0) for t in transfer_in_sbts), 2)
-
-            # Subtract reversal-outs (no IP): these cancel previously-arrived transfers.
-            reversal_out_no_ip = (
-                db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
+            # Build a set of ref_ids that have been reversed (voucher_reversal out, no IP).
+            # A ref_id in this set means the transfer was cancelled and should be excluded.
+            reversal_out_sbts = (
+                SafeBoxTransaction.query
                 .filter(
                     SafeBoxTransaction.safe_box_id == clearing_safe_box_id,
                     SafeBoxTransaction.ref_type == 'voucher_reversal',
                     SafeBoxTransaction.direction == 'out',
                     SafeBoxTransaction.invoice_payment_id.is_(None),
                 )
-                .scalar()
-            ) or 0.0
+                .all()
+            )
+            reversed_ref_ids = set()
+            reversal_by_ref = {}  # ref_id → total reversed amount
+            for r in reversal_out_sbts:
+                rid = r.ref_id
+                if rid is not None:
+                    reversed_ref_ids.add(rid)
+                    reversal_by_ref[rid] = reversal_by_ref.get(rid, 0.0) + float(r.amount_cash or 0)
 
-            net_transfer_in = max(0.0, round(transfer_in_total - float(reversal_out_no_ip), 2))
+            for tx in transfer_in_sbts:
+                tx_amount = float(tx.amount_cash or 0)
+                if tx.ref_id is not None and tx.ref_id in reversed_ref_ids:
+                    # Partially or fully reversed: compute net remaining
+                    reversed_amt = reversal_by_ref.get(tx.ref_id, tx_amount)
+                    tx_remaining = max(0.0, round(tx_amount - reversed_amt, 2))
+                else:
+                    tx_remaining = round(tx_amount, 2)
 
-            if net_transfer_in > 0.005:
-                for tx in transfer_in_sbts:
-                    tx_amount = float(tx.amount_cash or 0)
-                    if transfer_in_total > 0:
-                        tx_remaining = round(tx_amount * (net_transfer_in / transfer_in_total), 2)
-                    else:
-                        tx_remaining = 0.0
-                    if tx_remaining <= 0.005:
-                        continue
-                    pending.append({
-                        'tx_id': f'transfer_{tx.id}',
-                        'invoice_payment_id': None,
-                        'invoice_id': None,
-                        'invoice_number': None,
-                        'amount': tx_remaining,
-                        'date': tx.created_at.isoformat() if tx.created_at else None,
-                        'type': 'safe_transfer',
-                        'ref_id': tx.ref_id,
-                        'note': 'تحويل من خزنة مقاصة أخرى',
-                    })
+                if tx_remaining <= 0.005:
+                    continue
+                pending.append({
+                    'tx_id': f'transfer_{tx.id}',
+                    'invoice_payment_id': None,
+                    'invoice_id': None,
+                    'invoice_number': None,
+                    'amount': tx_remaining,
+                    'date': tx.created_at.isoformat() if tx.created_at else None,
+                    'type': 'safe_transfer',
+                    'ref_id': tx.ref_id,
+                    'note': 'تحويل من خزنة مقاصة أخرى',
+                })
     except Exception:
         pass
 
