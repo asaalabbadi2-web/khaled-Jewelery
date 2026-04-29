@@ -390,10 +390,51 @@ class ClearingSettlementScheduler:
                         _skip(f'bank_safe_wrong_type:{bank_sb.safe_type}')
                         continue
 
-                    schedule_type = (pm.settlement_schedule_type or 'days').strip().lower()
+                    schedule_type = str(pm.settlement_schedule_type or 'days').strip().lower()
+                    if schedule_type not in ('days', 'weekday'):
+                        schedule_type = 'days'
+
+                    # New: allow a separate deposit schedule (days|weekday) independent
+                    # from settlement schedule. This supports:
+                    # - settlement in same day (settlement_days=0)
+                    # - deposit on a fixed weekday (e.g. every Wednesday)
+                    deposit_schedule_type = str(
+                        getattr(pm, 'deposit_schedule_type', 'days') or 'days'
+                    ).strip().lower()
+                    if deposit_schedule_type not in ('days', 'weekday'):
+                        deposit_schedule_type = 'days'
 
                     # Determine if this method is due to run today, and compute cutoff.
                     cutoff_days = int(pm.settlement_days or 0)
+                    if cutoff_days < 0:
+                        cutoff_days = 0
+
+                    deposit_delay = int(getattr(pm, 'deposit_delay_days', 0) or 0)
+                    if deposit_delay < 0:
+                        deposit_delay = 0
+
+                    if deposit_schedule_type == 'weekday':
+                        deposit_weekday = getattr(pm, 'deposit_weekday', None)
+                        if deposit_weekday is None:
+                            _skip('deposit_weekday_not_configured')
+                            continue
+                        try:
+                            deposit_weekday = int(deposit_weekday)
+                        except Exception:
+                            _skip('deposit_weekday_invalid')
+                            continue
+                        if deposit_weekday < 0 or deposit_weekday > 6:
+                            _skip(f'deposit_weekday_out_of_range:{deposit_weekday}')
+                            continue
+                        if deposit_weekday != weekday:
+                            _skip(f'not_deposit_weekday:execution={deposit_weekday},today={weekday}')
+                            continue
+                        # When execution is fixed to a weekday, delay-in-days does not
+                        # control execution timing.
+                        effective_deposit_delay = 0
+                    else:
+                        effective_deposit_delay = deposit_delay
+
                     if schedule_type == 'weekday':
                         if pm.settlement_weekday is None:
                             _skip('weekday_not_configured')
@@ -407,25 +448,20 @@ class ClearingSettlementScheduler:
                             _skip(f'weekday_out_of_range:{configured_weekday}')
                             continue
 
-                        # عدد أيام تأخير الإيداع بعد يوم التسوية
-                        deposit_delay = int(getattr(pm, 'deposit_delay_days', 0) or 0)
-                        if deposit_delay < 0:
-                            deposit_delay = 0
+                        # Backward-compatible behavior:
+                        # for deposit_schedule_type=days, execution weekday derives from
+                        # (settlement weekday + deposit delay). For fixed deposit weekday,
+                        # execution gating is already handled above.
+                        if deposit_schedule_type == 'days':
+                            execution_weekday = (configured_weekday + effective_deposit_delay) % 7
+                            if execution_weekday != weekday:
+                                _skip(f'not_scheduled_today:execution={execution_weekday},today={weekday}')
+                                continue
 
-                        # يوم التنفيذ الفعلي = (يوم التسوية + أيام التأخير) % 7
-                        execution_weekday = (configured_weekday + deposit_delay) % 7
-                        if execution_weekday != weekday:
-                            _skip(f'not_scheduled_today:execution={execution_weekday},today={weekday}')
-                            continue
-
-                        # cutoff = اليوم - أيام التأخير (= يوم التسوية الأصلي)
-                        cutoff_days = max(int(pm.settlement_days or 0), 1) + deposit_delay
+                        cutoff_days = max(cutoff_days, 1) + effective_deposit_delay
                     else:
                         schedule_type = 'days'
-                        # تأخير الإيداع لنمط الأيام: cutoff يرجع للخلف بأيام التأخير
-                        deposit_delay = int(getattr(pm, 'deposit_delay_days', 0) or 0)
-                        if deposit_delay > 0:
-                            cutoff_days = cutoff_days + deposit_delay
+                        cutoff_days = cutoff_days + effective_deposit_delay
 
                     cutoff_date = today - timedelta(days=max(cutoff_days, 0))
                     cutoff_dt = datetime.combine(cutoff_date, time.max)

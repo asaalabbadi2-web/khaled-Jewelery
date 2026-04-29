@@ -589,6 +589,8 @@ def ensure_payment_method_columns(engine: Engine) -> None:
                 "payment_method",
                 [
                     ("deposit_delay_days", "INTEGER", "0"),
+                    ("deposit_schedule_type", "VARCHAR(20)", "'days'"),
+                    ("deposit_weekday", "INTEGER", "NULL"),
                 ],
             )
         )

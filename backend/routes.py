@@ -7142,7 +7142,10 @@ def get_gold_price_24h():
     """آخر 24 ساعة من أسعار الذهب — نقطة لكل تحديث (حد أقصى 48 نقطة)."""
     from datetime import datetime, timedelta
     try:
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        # Use datetime.now() (server local time) to match how prices are stored via
+        # save_gold_price() which also uses datetime.now(). Using utcnow() here would
+        # create a 3-hour offset on servers configured with TZ=Asia/Riyadh (production).
+        cutoff = datetime.now() - timedelta(hours=24)
         rows = (
             GoldPrice.query
             .filter(GoldPrice.date >= cutoff)

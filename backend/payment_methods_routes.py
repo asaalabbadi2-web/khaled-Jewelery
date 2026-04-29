@@ -202,6 +202,17 @@ def _normalize_settlement_schedule_type(raw_value: Any) -> str:
     raise ValueError('قيمة settlement_schedule_type غير مدعومة (days أو weekday)')
 
 
+def _normalize_deposit_schedule_type(raw_value: Any) -> str:
+    if raw_value is None:
+        return 'days'
+    value = str(raw_value).strip().lower()
+    if not value:
+        return 'days'
+    if value in {'days', 'weekday'}:
+        return value
+    raise ValueError('قيمة deposit_schedule_type غير مدعومة (days أو weekday)')
+
+
 def _normalize_weekday(raw_value: Any):
     # allow 0 (الاثنين) — do not treat it as falsy/null
     if raw_value is None:
@@ -732,7 +743,17 @@ def create_payment_method():
         if deposit_delay_days > 30:
             return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 30'}), 400
 
-        # إنشاء وسيلة الدفع
+        # نوع جدولة الإيداع ويومه (مستقل عن جدولة التسوية)
+        try:
+            deposit_schedule_type = _normalize_deposit_schedule_type(data.get('deposit_schedule_type'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        try:
+            deposit_weekday = _normalize_weekday(data.get('deposit_weekday'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        if auto_settlement_enabled and deposit_schedule_type == 'weekday' and deposit_weekday is None:
+            return jsonify({'error': 'يجب تحديد deposit_weekday عند اختيار جدولة إيداع أسبوعية'}), 400
         try:
             payment_method = PaymentMethod(
                 payment_type=data['payment_type'],
@@ -749,6 +770,8 @@ def create_payment_method():
                 min_settlement_amount=min_settlement_amount,
                 settlement_mode=settlement_mode,
                 deposit_delay_days=deposit_delay_days,
+                deposit_schedule_type=deposit_schedule_type,
+                deposit_weekday=deposit_weekday,
                 is_active=data.get('is_active', True),
                 applicable_invoice_types=applicable_invoice_types,
                 default_safe_box_id=default_safe_box_id  # اختياري
@@ -816,6 +839,24 @@ def update_payment_method(id):
                 _normalize_weekday(data.get('settlement_weekday'))
                 if 'settlement_weekday' in data
                 else getattr(payment_method, 'settlement_weekday', None)
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        try:
+            proposed_deposit_schedule_type = (
+                _normalize_deposit_schedule_type(data.get('deposit_schedule_type'))
+                if 'deposit_schedule_type' in data
+                else (_normalize_deposit_schedule_type(getattr(payment_method, 'deposit_schedule_type', 'days')))
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        try:
+            proposed_deposit_weekday = (
+                _normalize_weekday(data.get('deposit_weekday'))
+                if 'deposit_weekday' in data
+                else getattr(payment_method, 'deposit_weekday', None)
             )
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
@@ -891,6 +932,8 @@ def update_payment_method(id):
                 return jsonify({'error': 'يجب تحديد خزينة بنكية لتمكين التسوية التلقائية'}), 400
             if proposed_schedule_type == 'weekday' and proposed_weekday is None:
                 return jsonify({'error': 'يجب تحديد يوم الأسبوع عند اختيار جدول (weekday)'}), 400
+            if proposed_deposit_schedule_type == 'weekday' and proposed_deposit_weekday is None:
+                return jsonify({'error': 'يجب تحديد يوم الإيداع عند اختيار جدولة إيداع أسبوعية'}), 400
 
         # Prevent duplicates: same payment_type under same parent account (when parent is known)
         if proposed_parent_account_id:
@@ -990,6 +1033,24 @@ def update_payment_method(id):
             if ddv > 30:
                 return jsonify({'error': 'أيام تأخير الإيداع يجب أن تكون بين 0 و 30'}), 400
             payment_method.deposit_delay_days = ddv
+        if 'deposit_schedule_type' in data:
+            try:
+                dst = _normalize_deposit_schedule_type(data.get('deposit_schedule_type'))
+                payment_method.deposit_schedule_type = dst
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+        if 'deposit_weekday' in data:
+            try:
+                dwv = _normalize_weekday(data.get('deposit_weekday'))
+                payment_method.deposit_weekday = dwv
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+        # Validate weekday consistency after both fields are applied
+        _dst_final = str(getattr(payment_method, 'deposit_schedule_type', 'days') or 'days')
+        _dwv_final = getattr(payment_method, 'deposit_weekday', None)
+        _auto_final = bool(getattr(payment_method, 'auto_settlement_enabled', False))
+        if _auto_final and _dst_final == 'weekday' and _dwv_final is None:
+            return jsonify({'error': 'يجب تحديد deposit_weekday عند اختيار جدولة إيداع أسبوعية'}), 400
 
         db.session.commit()
         

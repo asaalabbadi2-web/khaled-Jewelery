@@ -60,22 +60,25 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
       // Load pending tx and due_amount for each clearing safe in parallel
       final Map<int, List<Map<String, dynamic>>> pending = {};
       final Map<int, double> dueAmounts = {};
-      await Future.wait(clearingBoxes.map((sb) async {
-        if (sb.id == null) return;
-        try {
-          final res = await _api.getPendingSettlementTransactions(
-            clearingSafeBoxId: sb.id!,
-          );
-          pending[sb.id!] = (res['transactions'] as List?)
-                  ?.whereType<Map<String, dynamic>>()
-                  .toList() ??
-              [];
-          final da = (res['due_amount'] as num?)?.toDouble();
-          if (da != null) dueAmounts[sb.id!] = da;
-        } catch (_) {
-          pending[sb.id!] = [];
-        }
-      }));
+      await Future.wait(
+        clearingBoxes.map((sb) async {
+          if (sb.id == null) return;
+          try {
+            final res = await _api.getPendingSettlementTransactions(
+              clearingSafeBoxId: sb.id!,
+            );
+            pending[sb.id!] =
+                (res['transactions'] as List?)
+                    ?.whereType<Map<String, dynamic>>()
+                    .toList() ??
+                [];
+            final da = (res['due_amount'] as num?)?.toDouble();
+            if (da != null) dueAmounts[sb.id!] = da;
+          } catch (_) {
+            pending[sb.id!] = [];
+          }
+        }),
+      );
 
       if (!mounted) return;
       setState(() {
@@ -124,21 +127,27 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
             .take(3)
             .map((s) => '${s['name']}: ${s['reason']}')
             .join(' — ');
-        detail = '$msg\nتجاوز: $reasons${skipped.length > 3 ? ' (و${skipped.length - 3} أخرى)' : ''}';
+        detail =
+            '$msg\nتجاوز: $reasons${skipped.length > 3 ? ' (و${skipped.length - 3} أخرى)' : ''}';
       }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(detail),
-        backgroundColor:
-            hasSkipped ? theme.AppColors.warning : theme.AppColors.success,
-        duration: Duration(seconds: hasSkipped ? 6 : 4),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail),
+          backgroundColor: hasSkipped
+              ? theme.AppColors.warning
+              : theme.AppColors.success,
+          duration: Duration(seconds: hasSkipped ? 6 : 4),
+        ),
+      );
       await _loadData();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('خطأ: $e'),
-        backgroundColor: theme.AppColors.error,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطأ: $e'),
+          backgroundColor: theme.AppColors.error,
+        ),
+      );
     } finally {
       if (mounted) setState(() => _runningAutoSettle = false);
     }
@@ -154,7 +163,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
     }
 
     // Use the authoritative due_amount from the API
-    final dueAmount = (clearing.id != null) ? _dueAmountByBox[clearing.id!] : null;
+    final dueAmount = (clearing.id != null)
+        ? _dueAmountByBox[clearing.id!]
+        : null;
 
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -221,63 +232,61 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error != null
-                ? _buildError()
-                : _clearingSafes.isEmpty
-                    ? _buildEmpty()
-                    : RefreshIndicator(
-                        onRefresh: _loadData,
-                        child: ListView(
-                          padding: const EdgeInsets.all(16),
-                          children: [
-                            _buildSummaryRow(),
-                            const SizedBox(height: 16),
-                            ..._clearingSafes.map(_buildClearingCard),
-                          ],
-                        ),
-                      ),
+            ? _buildError()
+            : _clearingSafes.isEmpty
+            ? _buildEmpty()
+            : RefreshIndicator(
+                onRefresh: _loadData,
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    _buildSummaryRow(),
+                    const SizedBox(height: 16),
+                    ..._clearingSafes.map(_buildClearingCard),
+                  ],
+                ),
+              ),
       ),
     );
   }
 
   Widget _buildError() => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.error_outline, size: 48, color: theme.AppColors.error),
-              const SizedBox(height: 12),
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _loadData,
-                icon: const Icon(Icons.refresh),
-                label: const Text('إعادة المحاولة'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: theme.AppColors.primaryGold,
-                  foregroundColor: Colors.black,
-                ),
-              ),
-            ],
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 48, color: theme.AppColors.error),
+          const SizedBox(height: 12),
+          Text(_error!, textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _loadData,
+            icon: const Icon(Icons.refresh),
+            label: const Text('إعادة المحاولة'),
+            style: FilledButton.styleFrom(
+              backgroundColor: theme.AppColors.primaryGold,
+              foregroundColor: Colors.black,
+            ),
           ),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 
   Widget _buildEmpty() => Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.inbox_outlined,
-                size: 56, color: Colors.grey.shade400),
-            const SizedBox(height: 12),
-            Text(
-              'لا توجد خزائن مستحقات تحصيل (clearing)',
-              style:
-                  TextStyle(color: Colors.grey.shade600, fontSize: 15),
-            ),
-          ],
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.inbox_outlined, size: 56, color: Colors.grey.shade400),
+        const SizedBox(height: 12),
+        Text(
+          'لا توجد خزائن مستحقات تحصيل (clearing)',
+          style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _buildSummaryRow() {
     double totalDue = 0;
@@ -410,8 +419,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
         children: [
           // ─── Header ──────────────────────────────────────────────────────
           InkWell(
-            onTap: () => setState(() =>
-                _expandedBox[sb.id!] = !(isExpanded)),
+            onTap: () => setState(() => _expandedBox[sb.id!] = !(isExpanded)),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -421,7 +429,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: theme.AppColors.primaryGold.withValues(alpha: 0.15),
+                      color: theme.AppColors.primaryGold.withValues(
+                        alpha: 0.15,
+                      ),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
@@ -447,10 +457,13 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                             if (autoEnabled)
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 7, vertical: 2),
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: theme.AppColors.success
-                                      .withValues(alpha: 0.12),
+                                  color: theme.AppColors.success.withValues(
+                                    alpha: 0.12,
+                                  ),
                                   borderRadius: BorderRadius.circular(999),
                                 ),
                                 child: Text(
@@ -472,10 +485,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                               theme.AppColors.info,
                             ),
                             const SizedBox(width: 6),
-                            _infoTag(
-                              statusLabel,
-                              statusColor,
-                            ),
+                            _infoTag(statusLabel, statusColor),
                           ],
                         ),
                       ],
@@ -561,17 +571,20 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                         onPressed: () async {
                           setState(() => _loadingBox[sb.id!] = true);
                           try {
-                            final res = await _api.getPendingSettlementTransactions(
-                              clearingSafeBoxId: sb.id!,
-                            );
-                            final updated = (res['transactions'] as List?)
+                            final res = await _api
+                                .getPendingSettlementTransactions(
+                                  clearingSafeBoxId: sb.id!,
+                                );
+                            final updated =
+                                (res['transactions'] as List?)
                                     ?.whereType<Map<String, dynamic>>()
                                     .toList() ??
                                 [];
                             if (mounted) {
                               setState(() {
                                 _pendingByBox[sb.id!] = updated;
-                                final da = (res['due_amount'] as num?)?.toDouble();
+                                final da = (res['due_amount'] as num?)
+                                    ?.toDouble();
                                 if (da != null) _dueAmountByBox[sb.id!] = da;
                               });
                             }
@@ -586,10 +599,15 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                             ? const SizedBox(
                                 width: 14,
                                 height: 14,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.refresh, size: 16),
-                        label: const Text('تحديث', style: TextStyle(fontSize: 12)),
+                        label: const Text(
+                          'تحديث',
+                          style: TextStyle(fontSize: 12),
+                        ),
                         style: TextButton.styleFrom(
                           padding: EdgeInsets.zero,
                           visualDensity: VisualDensity.compact,
@@ -604,8 +622,11 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Row(
                         children: [
-                          Icon(Icons.check_circle_outline,
-                              color: theme.AppColors.success, size: 18),
+                          Icon(
+                            Icons.check_circle_outline,
+                            color: theme.AppColors.success,
+                            size: 18,
+                          ),
                           const SizedBox(width: 6),
                           Text(
                             'لا توجد دفعات معلّقة',
@@ -617,12 +638,13 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                   else
                     Container(
                       decoration: BoxDecoration(
-                        border: Border.all(
-                            color: Colors.grey.shade200),
+                        border: Border.all(color: Colors.grey.shade200),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Column(
-                        children: txs.take(20).toList().asMap().entries.map((e) {
+                        children: txs.take(20).toList().asMap().entries.map((
+                          e,
+                        ) {
                           final idx = e.key;
                           final tx = e.value;
                           final amt = (tx['amount'] as num?)?.toDouble() ?? 0.0;
@@ -635,15 +657,19 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                                   : Colors.white,
                               borderRadius: idx == 0
                                   ? const BorderRadius.vertical(
-                                      top: Radius.circular(9))
+                                      top: Radius.circular(9),
+                                    )
                                   : idx == txs.length - 1
-                                      ? const BorderRadius.vertical(
-                                          bottom: Radius.circular(9))
-                                      : null,
+                                  ? const BorderRadius.vertical(
+                                      bottom: Radius.circular(9),
+                                    )
+                                  : null,
                             ),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 9),
+                                horizontal: 12,
+                                vertical: 9,
+                              ),
                               child: Row(
                                 children: [
                                   Container(
@@ -708,7 +734,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                       child: Text(
                         'و${txs.length - 20} دفعة أخرى...',
                         style: TextStyle(
-                            fontSize: 12, color: Colors.grey.shade500),
+                          fontSize: 12,
+                          color: Colors.grey.shade500,
+                        ),
                       ),
                     ),
 
@@ -727,7 +755,8 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                           style: OutlinedButton.styleFrom(
                             foregroundColor: theme.AppColors.primaryGold,
                             side: BorderSide(
-                                color: theme.AppColors.primaryGold),
+                              color: theme.AppColors.primaryGold,
+                            ),
                           ),
                         ),
                       ),
@@ -746,31 +775,54 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
     final name = pm['name']?.toString() ?? '—';
     final timing =
         pm['commission_timing']?.toString().trim().toLowerCase() == 'settlement'
-            ? 'عند التسوية'
-            : 'ضمن الفاتورة';
-    final rate =
-        (pm['commission_rate'] as num?)?.toDouble() ?? 0.0;
+        ? 'عند التسوية'
+        : 'ضمن الفاتورة';
+    final rate = (pm['commission_rate'] as num?)?.toDouble() ?? 0.0;
     final autoEnabled = pm['auto_settlement_enabled'] == true;
-    final scheduleType =
-        pm['settlement_schedule_type']?.toString() ?? 'days';
+    final scheduleType = pm['settlement_schedule_type']?.toString() ?? 'days';
     final days = pm['settlement_days'];
+    final depositScheduleType =
+        pm['deposit_schedule_type']?.toString().trim().toLowerCase() ?? 'days';
+    final depositDelayDays =
+        int.tryParse(pm['deposit_delay_days']?.toString() ?? '0') ?? 0;
+    final depositWeekday =
+        int.tryParse(pm['deposit_weekday']?.toString() ?? '') ?? -1;
 
     String scheduleLabel = '—';
     if (autoEnabled) {
+      const weekdays = [
+        'الاثنين',
+        'الثلاثاء',
+        'الأربعاء',
+        'الخميس',
+        'الجمعة',
+        'السبت',
+        'الأحد',
+      ];
+
+      String settlementLabel;
       if (scheduleType == 'weekday') {
-        const weekdays = [
-          'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس',
-          'الجمعة', 'السبت', 'الأحد'
-        ];
         final idx =
-            int.tryParse(pm['settlement_weekday']?.toString() ?? '') ??
-                -1;
-        scheduleLabel = (idx >= 0 && idx < weekdays.length)
+            int.tryParse(pm['settlement_weekday']?.toString() ?? '') ?? -1;
+        settlementLabel = (idx >= 0 && idx < weekdays.length)
             ? 'أسبوعي / ${weekdays[idx]}'
             : 'أسبوعي';
       } else {
-        scheduleLabel = 'كل ${days ?? 0} يوم';
+        settlementLabel = 'كل ${days ?? 0} يوم';
       }
+
+      String depositLabel;
+      if (depositScheduleType == 'weekday' &&
+          depositWeekday >= 0 &&
+          depositWeekday < weekdays.length) {
+        depositLabel = 'إيداع أسبوعي / ${weekdays[depositWeekday]}';
+      } else if (depositDelayDays > 0) {
+        depositLabel = 'إيداع بعد $depositDelayDays يوم';
+      } else {
+        depositLabel = 'إيداع فوري';
+      }
+
+      scheduleLabel = '$settlementLabel • $depositLabel';
     }
 
     return Container(
@@ -785,13 +837,14 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
         children: [
           Row(
             children: [
-              Icon(Icons.credit_card,
-                  size: 16, color: Colors.grey.shade600),
+              Icon(Icons.credit_card, size: 16, color: Colors.grey.shade600),
               const SizedBox(width: 6),
               Text(
                 'وسيلة الدفع: $name',
                 style: const TextStyle(
-                    fontWeight: FontWeight.w700, fontSize: 12),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
               ),
             ],
           ),
@@ -803,8 +856,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
               _infoTag('عمولة: $rate%', Colors.deepPurple),
               _infoTag('توقيت: $timing', theme.AppColors.info),
               if (autoEnabled)
-                _infoTag('تلقائي: $scheduleLabel',
-                    theme.AppColors.success)
+                _infoTag('تلقائي: $scheduleLabel', theme.AppColors.success)
               else
                 _infoTag('تسوية يدوية', Colors.grey),
             ],

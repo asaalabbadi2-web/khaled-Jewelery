@@ -958,7 +958,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     if (safe == null) return;
 
     final String targetType =
-        safe.safeType == 'gold' ? 'gold' : 'cash';
+      safe.safeType == 'gold' ? 'gold' : 'cash';
 
     for (final line in _accountLines) {
       if (line.amountType == targetType) continue;

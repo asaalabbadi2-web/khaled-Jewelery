@@ -685,22 +685,49 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       final scheduleType = matched['settlement_schedule_type']?.toString();
       final settlementDays = matched['settlement_days'];
       final settlementWeekday = matched['settlement_weekday'];
+      final depositScheduleType =
+          matched['deposit_schedule_type']?.toString().trim().toLowerCase() ??
+          'days';
+      final depositDelayDays =
+          int.tryParse(matched['deposit_delay_days']?.toString() ?? '0') ?? 0;
+      final depositWeekday =
+          int.tryParse(matched['deposit_weekday']?.toString() ?? '') ?? -1;
+
+      const weekdays = [
+        'الاثنين',
+        'الثلاثاء',
+        'الأربعاء',
+        'الخميس',
+        'الجمعة',
+        'السبت',
+        'الأحد',
+      ];
+
+      String? settlementLabel;
       if (scheduleType == 'days' && settlementDays != null) {
-        scheduleInfo = 'تسوية كل $settlementDays يوم';
+        settlementLabel = 'تسوية كل $settlementDays يوم';
       } else if (scheduleType == 'weekday' && settlementWeekday != null) {
-        const weekdays = [
-          'الاثنين',
-          'الثلاثاء',
-          'الأربعاء',
-          'الخميس',
-          'الجمعة',
-          'السبت',
-          'الأحد',
-        ];
         final idx = int.tryParse(settlementWeekday.toString()) ?? -1;
         if (idx >= 0 && idx < weekdays.length) {
-          scheduleInfo = 'تسوية أسبوعية يوم ${weekdays[idx]}';
+          settlementLabel = 'تسوية أسبوعية يوم ${weekdays[idx]}';
+        } else {
+          settlementLabel = 'تسوية أسبوعية';
         }
+      }
+
+      String? depositLabel;
+      if (depositScheduleType == 'weekday' &&
+          depositWeekday >= 0 &&
+          depositWeekday < weekdays.length) {
+        depositLabel = 'إيداع أسبوعي يوم ${weekdays[depositWeekday]}';
+      } else if (depositDelayDays > 0) {
+        depositLabel = 'إيداع بعد $depositDelayDays يوم';
+      }
+
+      if (settlementLabel != null && depositLabel != null) {
+        scheduleInfo = '$settlementLabel • $depositLabel';
+      } else {
+        scheduleInfo = settlementLabel;
       }
     }
 
@@ -817,7 +844,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
           }
         }
         // Auto-fill tx count for per-transaction commission (bulk mode only)
-        if (txCountForFee != null && txCountForFee > 0 && !_feeAlreadyAppliedInInvoice) {
+        if (txCountForFee != null &&
+            txCountForFee > 0 &&
+            !_feeAlreadyAppliedInInvoice) {
           final currentTxCount = int.tryParse(_txCountController.text) ?? 0;
           if (currentTxCount <= 1) {
             _txCountController.text = txCountForFee.toString();
