@@ -7139,26 +7139,45 @@ def get_gold_price_public():
 
 @api.route('/gold_price/24h', methods=['GET'])
 def get_gold_price_24h():
-    """آخر 24 ساعة من أسعار الذهب — نقطة لكل تحديث (حد أقصى 48 نقطة)."""
+    """آخر 24 ساعة من أسعار الذهب — 48 نقطة موزعة بشكل منتظم عبر الـ 24 ساعة."""
     from datetime import datetime, timedelta
     try:
         # Use datetime.now() (server local time) to match how prices are stored via
         # save_gold_price() which also uses datetime.now(). Using utcnow() here would
         # create a 3-hour offset on servers configured with TZ=Asia/Riyadh (production).
         cutoff = datetime.now() - timedelta(hours=24)
-        rows = (
+
+        # Fetch ALL rows in the 24h window ordered oldest-first, then downsample
+        # to at most 48 evenly-distributed points so that:
+        #  1. The sparkline always covers the full 24h period.
+        #  2. The latest data point is always included (no staleness gap).
+        all_rows = (
             GoldPrice.query
             .filter(GoldPrice.date >= cutoff)
             .order_by(GoldPrice.date.asc())
-            .limit(48)
             .all()
         )
+
+        if not all_rows:
+            return jsonify({'points': [], 'count': 0}), 200
+
+        TARGET = 48
+        total = len(all_rows)
+        if total <= TARGET:
+            sampled = all_rows
+        else:
+            # Always include the first and last; distribute the rest evenly.
+            step = (total - 1) / (TARGET - 1)
+            sampled = [all_rows[round(i * step)] for i in range(TARGET)]
+            # Guarantee the very last row is included (avoid rounding drift).
+            sampled[-1] = all_rows[-1]
+
         points = [
             {
                 'timestamp': r.date.isoformat(),
                 'price_usd_per_oz': float(r.price or 0),
             }
-            for r in rows
+            for r in sampled
         ]
         return jsonify({'points': points, 'count': len(points)}), 200
     except Exception as e:
