@@ -392,7 +392,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     // Only show chips when there are 2+ different karats
     final showChips = nonZeroKarats.length >= 2;
     final weightFmt = showChips
-        ? NumberFormat('#,##0.000', Localizations.localeOf(context).toString())
+        ? NumberFormat('#,##0.00', Localizations.localeOf(context).toString())
         : null;
 
     return Container(
@@ -460,7 +460,10 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                 spacing: 6,
                 runSpacing: 4,
                 children: nonZeroKarats.map((e) {
-                  const chipColor = Color(0xFFC69214);
+                  final isNeg = e.value < 0;
+                  final chipColor = isNeg
+                      ? app_theme.AppColors.error
+                      : const Color(0xFFC69214);
                   return Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
@@ -474,7 +477,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                       ),
                     ),
                     child: Text(
-                      '${e.key}: ${weightFmt!.format(e.value.abs())} جم',
+                      '${e.key}: ${weightFmt!.format(e.value)}',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,

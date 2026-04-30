@@ -8470,7 +8470,14 @@ def update_unposted_invoice(invoice_id: int):
 @api.route('/invoices/<int:invoice_id>', methods=['DELETE'])
 @require_permission('invoice.edit')
 def delete_unposted_invoice(invoice_id: int):
-    """Delete an unposted invoice and all related records."""
+    """Delete an invoice and all related records.
+
+    Unposted invoices can be deleted by any user with invoice.edit permission.
+    Posted invoices require admin permission and passing force=true in the request body.
+    All side effects are cleaned up: journal entries, vouchers, safebox transactions,
+    category weight movements, weight closing orders, and dynamic points (profit_gold
+    is stored on the invoice — deleting it removes its leaderboard contribution).
+    """
 
     from models import (
         CategoryWeightMovement, SystemAlert, InvoiceWeightSettlement,
@@ -8481,10 +8488,16 @@ def delete_unposted_invoice(invoice_id: int):
         return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
 
     if invoice.is_posted:
-        return jsonify({
-            'error': 'invoice_already_posted',
-            'message': 'لا يمكن حذف فاتورة مرحّلة.',
-        }), 400
+        # Require admin + explicit force flag to delete posted invoices
+        current_user = getattr(g, 'current_user', None)
+        is_admin = current_user and getattr(current_user, 'role', '') == 'admin'
+        data = request.get_json(silent=True) or {}
+        force = bool(data.get('force', False))
+        if not (is_admin and force):
+            return jsonify({
+                'error': 'invoice_already_posted',
+                'message': 'لا يمكن حذف فاتورة مرحّلة. أرسل force=true مع صلاحية admin لحذفها إجباراً.',
+            }), 400
 
     try:
         # Journal entries
