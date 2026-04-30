@@ -59,6 +59,10 @@ import 'weight_closing_execute_screen.dart';
 import 'import_documents_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
+import 'reports/admin_dashboard_screen.dart';
+import 'reports/gold_position_report_screen.dart';
+import 'system_reset_screen.dart';
+import 'payroll_report_screen.dart' show PayrollReportScreen;
 import 'printing_center_screen.dart';
 import 'security_sessions_screen.dart';
 import 'change_password_screen.dart';
@@ -5029,6 +5033,112 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             );
           }
         }
+        break;
+      case 'invoices_list':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => InvoicesListScreen()),
+        );
+        break;
+      case 'return_purchase_supplier':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                AddReturnInvoiceScreen(api: api, returnType: 'مرتجع شراء'),
+          ),
+        );
+        break;
+      case 'recurring_entries':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => RecurringTemplatesScreen()),
+        );
+        break;
+      case 'general_ledger':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const GeneralLedgerScreenV2(),
+          ),
+        );
+        break;
+      case 'trial_balance':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const TrialBalanceScreenV2(),
+          ),
+        );
+        break;
+      case 'chart_of_accounts':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ChartOfAccountsScreen()),
+        );
+        break;
+      case 'gold_position':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => GoldPositionReportScreen(api: api, isArabic: widget.isArabic)),
+        );
+        break;
+      case 'payroll_report':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PayrollReportScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'safe_boxes':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => SafeBoxesScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'bonuses':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => BonusManagementScreen(api: api, isArabic: widget.isArabic)),
+        );
+        break;
+      case 'branches_management':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => BranchesManagementScreen(isArabic: widget.isArabic)),
+        );
+        break;
+      case 'admin_dashboard':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminDashboardScreen(api: api, isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'system_reset':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SystemResetScreen()),
+        );
+        break;
+      case 'printer_settings':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PrintingCenterScreen(isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'about':
+        showAboutDialog(
+          context: context,
+          applicationName: widget.isArabic ? 'مجوهرات خالد' : 'Khaled Jewelry',
+          applicationVersion: '1.0.0',
+        );
         break;
       default:
         ScaffoldMessenger.of(context).showSnackBar(
