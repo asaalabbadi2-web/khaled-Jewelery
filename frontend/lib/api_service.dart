@@ -1143,7 +1143,9 @@ class ApiService {
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
-      throw Exception('Failed to load invoices (HTTP ${response.statusCode})');
+      throw Exception(
+        'Failed to load invoices (HTTP ${response.statusCode})',
+      );
     }
   }
 
@@ -1372,11 +1374,12 @@ class ApiService {
   /// آخر 24 ساعة من أسعار الذهب — للـ sparkline
   Future<List<Map<String, dynamic>>> getGoldPrice24h() async {
     try {
-      final response = await _authedGet(Uri.parse('$_baseUrl/gold_price/24h'));
+      final response =
+          await _authedGet(Uri.parse('$_baseUrl/gold_price/24h'));
       if (response.statusCode == 200) {
         final raw =
             (json.decode(utf8.decode(response.bodyBytes))['points'] as List?) ??
-            [];
+                [];
         return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
       return [];
@@ -1925,8 +1928,7 @@ class ApiService {
       try {
         final decoded = json.decode(body);
         if (decoded is Map) {
-          detail = (decoded['message'] ?? decoded['error'] ?? detail)
-              .toString();
+          detail = (decoded['message'] ?? decoded['error'] ?? detail).toString();
         }
       } catch (_) {}
       throw Exception('$detail (${response.statusCode})');
@@ -1934,9 +1936,7 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getJournalEntryById(int id) async {
-    final response = await _authedGet(
-      Uri.parse('$_baseUrl/journal_entries/$id'),
-    );
+    final response = await _authedGet(Uri.parse('$_baseUrl/journal_entries/$id'));
     if (response.statusCode == 200) {
       final decoded = json.decode(utf8.decode(response.bodyBytes));
       if (decoded is Map<String, dynamic>) return decoded;
@@ -2299,6 +2299,7 @@ class ApiService {
       throw Exception('Failed to load gram profit report: ${response.body}');
     }
   }
+
 
   Future<Map<String, dynamic>> getSalesByCustomerReport({
     DateTime? startDate,
@@ -2913,9 +2914,7 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> updateSettings(
-    Map<String, dynamic> settingsData,
-  ) async {
+  Future<Map<String, dynamic>> updateSettings(Map<String, dynamic> settingsData) async {
     final response = await _authedPut(
       Uri.parse('$_baseUrl/settings'),
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
@@ -3356,9 +3355,7 @@ class ApiService {
   }) async {
     final token = await _requireAuthToken();
     final response = await http.post(
-      Uri.parse(
-        '$_baseUrl/invoices/$invoiceId/payments/$paymentId/correct-method',
-      ),
+      Uri.parse('$_baseUrl/invoices/$invoiceId/payments/$paymentId/correct-method'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -3484,7 +3481,7 @@ class ApiService {
     double minSettlementAmount = 0.0,
     String settlementMode = 'bulk',
     int depositDelayDays = 0,
-    String? depositScheduleType,
+    String depositScheduleType = 'days',
     int? depositWeekday,
     required bool isActive,
     int? defaultSafeBoxId,
@@ -3524,12 +3521,8 @@ class ApiService {
     payload['min_settlement_amount'] = minSettlementAmount;
     payload['settlement_mode'] = settlementMode;
     payload['deposit_delay_days'] = depositDelayDays;
-    if (depositScheduleType != null) {
-      payload['deposit_schedule_type'] = depositScheduleType;
-    }
-    if (depositWeekday != null || depositScheduleType == 'weekday') {
-      payload['deposit_weekday'] = depositWeekday;
-    }
+    payload['deposit_schedule_type'] = depositScheduleType;
+    payload['deposit_weekday'] = depositWeekday;
 
     if (applicableInvoiceTypes != null && applicableInvoiceTypes.isNotEmpty) {
       payload['applicable_invoice_types'] = applicableInvoiceTypes;
@@ -4362,9 +4355,7 @@ class ApiService {
     if (response.statusCode == 200 && decoded is Map<String, dynamic>) {
       return decoded;
     }
-    final msg = decoded is Map
-        ? (decoded['message'] ?? decoded['error'])
-        : null;
+    final msg = decoded is Map ? (decoded['message'] ?? decoded['error']) : null;
     throw Exception(msg?.toString() ?? 'فشل حفظ إعدادات سباق المبيعات');
   }
 
@@ -4504,11 +4495,8 @@ class ApiService {
       // استخراج رسالة عربية واضحة من الـ JSON إن وُجدت
       String msg = response.body;
       try {
-        final decoded =
-            json.decode(utf8.decode(response.bodyBytes))
-                as Map<String, dynamic>;
-        msg =
-            (decoded['message'] as String?) ??
+        final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        msg = (decoded['message'] as String?) ??
             (decoded['error'] as String?) ??
             response.body;
       } catch (_) {}
@@ -4571,13 +4559,8 @@ class ApiService {
     } else {
       String msg = response.body;
       try {
-        final decoded =
-            json.decode(utf8.decode(response.bodyBytes))
-                as Map<String, dynamic>;
-        msg =
-            (decoded['message'] as String?) ??
-            (decoded['error'] as String?) ??
-            response.body;
+        final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        msg = (decoded['message'] as String?) ?? (decoded['error'] as String?) ?? response.body;
       } catch (_) {}
       throw Exception(msg);
     }
@@ -4600,8 +4583,7 @@ class ApiService {
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(body),
     );
-    final decoded =
-        json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
     if (response.statusCode == 200) return decoded;
     throw Exception((decoded['message'] ?? decoded['error']) ?? response.body);
   }
@@ -4621,8 +4603,7 @@ class ApiService {
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: json.encode(body),
     );
-    final decoded =
-        json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    final decoded = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
     if (response.statusCode == 200) return decoded;
     throw Exception((decoded['message'] ?? decoded['error']) ?? response.body);
   }
@@ -4794,12 +4775,9 @@ class ApiService {
   /// رصيد الفصوص لكل خزينة ذهب (معلوماتي فقط — لا يؤثر على الأرصدة الذهبية).
   /// Endpoint: GET /safe-boxes/stones-balance
   Future<Map<int, double>> getStonesBalance({int? safeBoxId}) async {
-    final params = safeBoxId != null
-        ? {'safe_box_id': safeBoxId.toString()}
-        : null;
-    final uri = Uri.parse(
-      '$_baseUrl/safe-boxes/stones-balance',
-    ).replace(queryParameters: params);
+    final params = safeBoxId != null ? {'safe_box_id': safeBoxId.toString()} : null;
+    final uri = Uri.parse('$_baseUrl/safe-boxes/stones-balance')
+        .replace(queryParameters: params);
     final response = await _authedGet(uri);
     if (response.statusCode != 200) return {};
     final decoded = json.decode(utf8.decode(response.bodyBytes));
@@ -4807,8 +4785,8 @@ class ApiService {
     return {
       for (final s in safes.whereType<Map<String, dynamic>>())
         if (s['safe_box_id'] != null)
-          (s['safe_box_id'] as num).toInt(): (s['stones_balance'] as num? ?? 0)
-              .toDouble(),
+          (s['safe_box_id'] as num).toInt():
+              (s['stones_balance'] as num? ?? 0).toDouble(),
     };
   }
 
@@ -4822,7 +4800,9 @@ class ApiService {
     double threshold = 0.01,
     List<String> ignoreRefTypes = const ['shift_closing_settlement'],
   }) async {
-    final queryParams = <String, String>{'threshold': threshold.toString()};
+    final queryParams = <String, String>{
+      'threshold': threshold.toString(),
+    };
     if (safeType != null && safeType.trim().isNotEmpty) {
       queryParams['safe_type'] = safeType.trim().toLowerCase();
     }
@@ -4849,7 +4829,9 @@ class ApiService {
           as Map<String, dynamic>;
     }
 
-    throw Exception('Failed to load safe-box reconciliation: ${response.body}');
+    throw Exception(
+      'Failed to load safe-box reconciliation: ${response.body}',
+    );
   }
 
   /// إنشاء سند تحويل بين الخزائن (ذهب أو نقدي) وتحديث الـ Ledger فوراً.
@@ -4882,16 +4864,11 @@ class ApiService {
       'from_karat': fromKarat,
       if (toKarat != null) 'to_karat': toKarat,
       'gold_weight': goldWeight,
-      if (stonesWeight != null && stonesWeight > 0)
-        'stones_weight': stonesWeight,
-      if (stonesRevenueAccountId != null)
-        'stones_revenue_account_id': stonesRevenueAccountId,
-      if (stonesExpenseAccountId != null)
-        'stones_expense_account_id': stonesExpenseAccountId,
-      if (damageWageAmount != null && damageWageAmount > 0)
-        'damage_wage_amount': damageWageAmount,
-      if (damageWageAccountId != null)
-        'damage_wage_account_id': damageWageAccountId,
+      if (stonesWeight != null && stonesWeight > 0) 'stones_weight': stonesWeight,
+      if (stonesRevenueAccountId != null) 'stones_revenue_account_id': stonesRevenueAccountId,
+      if (stonesExpenseAccountId != null) 'stones_expense_account_id': stonesExpenseAccountId,
+      if (damageWageAmount != null && damageWageAmount > 0) 'damage_wage_amount': damageWageAmount,
+      if (damageWageAccountId != null) 'damage_wage_account_id': damageWageAccountId,
       if (notes != null && notes.isNotEmpty) 'notes': notes,
     };
     final response = await _authedPost(
@@ -5474,9 +5451,8 @@ class ApiService {
 
   /// Fetch unposted invoices for the pending-approval Dialog
   Future<Map<String, dynamic>> getPendingPostInvoices({int limit = 10}) async {
-    final uri = Uri.parse(
-      '$_baseUrl/invoices/pending-post',
-    ).replace(queryParameters: {'limit': '$limit'});
+    final uri = Uri.parse('$_baseUrl/invoices/pending-post')
+        .replace(queryParameters: {'limit': '$limit'});
     final response = await _authedGet(uri);
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes))

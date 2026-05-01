@@ -95,12 +95,7 @@ class _GoldSparklineEnhancedState extends State<GoldSparklineEnhanced>
   }
 
   double get _percentChange {
-    // نقطة واحدة: قارن بسعر الفتح إذا وُجد
-    if (widget.points.length < 2) {
-      if (widget.openingPrice == null || widget.openingPrice == 0) return 0;
-      final last = widget.points.isEmpty ? 0.0 : widget.points.last.price;
-      return ((last - widget.openingPrice!) / widget.openingPrice!) * 100;
-    }
+    if (widget.points.length < 2) return 0;
     final first = widget.openingPrice ?? widget.points.first.price;
     final last = widget.points.last.price;
     if (first == 0) return 0;
@@ -472,37 +467,10 @@ class _SparklineEnhancedPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (points.isEmpty) return;
+    if (points.length < 2) return;
 
     // يمنع تجاوز النقطة النابضة حدود الـ canvas
     canvas.clipRect(Offset.zero & size, doAntiAlias: false);
-
-    // حالة خاصة: نقطة واحدة فقط — ارسم خطاً أفقياً مع نقطة نابضة
-    if (points.length == 1) {
-      final y = size.height / 2;
-      final lastX = size.width - 6.0;
-      // خط أفقي متقطع
-      _drawDashedLine(
-        canvas,
-        Offset(6.0, y),
-        Offset(lastX, y),
-        Paint()
-          ..color = AppColors.primaryGold.withValues(alpha: 0.45)
-          ..strokeWidth = 1.5
-          ..style = PaintingStyle.stroke,
-      );
-      // نقطة نابضة في النهاية
-      canvas.drawCircle(
-        Offset(lastX, y),
-        7 * pulseScale,
-        Paint()
-          ..color = AppColors.primaryGold.withValues(alpha: 0.30)
-          ..style = PaintingStyle.fill,
-      );
-      _drawDot(canvas, Offset(lastX, y), const Color(0xFFFFD700),
-          radius: 3.5, strokeWidth: 1.5, strokeColor: Colors.white);
-      return;
-    }
 
     var minPrice = points.first.price;
     var maxPrice = points.first.price;

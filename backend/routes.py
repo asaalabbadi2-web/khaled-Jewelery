@@ -7139,45 +7139,23 @@ def get_gold_price_public():
 
 @api.route('/gold_price/24h', methods=['GET'])
 def get_gold_price_24h():
-    """آخر 24 ساعة من أسعار الذهب — 48 نقطة موزعة بشكل منتظم عبر الـ 24 ساعة."""
+    """آخر 24 ساعة من أسعار الذهب — نقطة لكل تحديث (حد أقصى 48 نقطة)."""
     from datetime import datetime, timedelta
     try:
-        # Use datetime.now() (server local time) to match how prices are stored via
-        # save_gold_price() which also uses datetime.now(). Using utcnow() here would
-        # create a 3-hour offset on servers configured with TZ=Asia/Riyadh (production).
-        cutoff = datetime.now() - timedelta(hours=24)
-
-        # Fetch ALL rows in the 24h window ordered oldest-first, then downsample
-        # to at most 48 evenly-distributed points so that:
-        #  1. The sparkline always covers the full 24h period.
-        #  2. The latest data point is always included (no staleness gap).
-        all_rows = (
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        rows = (
             GoldPrice.query
             .filter(GoldPrice.date >= cutoff)
             .order_by(GoldPrice.date.asc())
+            .limit(48)
             .all()
         )
-
-        if not all_rows:
-            return jsonify({'points': [], 'count': 0}), 200
-
-        TARGET = 48
-        total = len(all_rows)
-        if total <= TARGET:
-            sampled = all_rows
-        else:
-            # Always include the first and last; distribute the rest evenly.
-            step = (total - 1) / (TARGET - 1)
-            sampled = [all_rows[round(i * step)] for i in range(TARGET)]
-            # Guarantee the very last row is included (avoid rounding drift).
-            sampled[-1] = all_rows[-1]
-
         points = [
             {
                 'timestamp': r.date.isoformat(),
                 'price_usd_per_oz': float(r.price or 0),
             }
-            for r in sampled
+            for r in rows
         ]
         return jsonify({'points': points, 'count': len(points)}), 200
     except Exception as e:
@@ -8470,14 +8448,7 @@ def update_unposted_invoice(invoice_id: int):
 @api.route('/invoices/<int:invoice_id>', methods=['DELETE'])
 @require_permission('invoice.edit')
 def delete_unposted_invoice(invoice_id: int):
-    """Delete an invoice and all related records.
-
-    Unposted invoices can be deleted by any user with invoice.edit permission.
-    Posted invoices require admin permission and passing force=true in the request body.
-    All side effects are cleaned up: journal entries, vouchers, safebox transactions,
-    category weight movements, weight closing orders, and dynamic points (profit_gold
-    is stored on the invoice — deleting it removes its leaderboard contribution).
-    """
+    """Delete an unposted invoice and all related records."""
 
     from models import (
         CategoryWeightMovement, SystemAlert, InvoiceWeightSettlement,
@@ -8488,16 +8459,10 @@ def delete_unposted_invoice(invoice_id: int):
         return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
 
     if invoice.is_posted:
-        # Require admin + explicit force flag to delete posted invoices
-        current_user = getattr(g, 'current_user', None)
-        is_admin = current_user and getattr(current_user, 'role', '') == 'admin'
-        data = request.get_json(silent=True) or {}
-        force = bool(data.get('force', False))
-        if not (is_admin and force):
-            return jsonify({
-                'error': 'invoice_already_posted',
-                'message': 'لا يمكن حذف فاتورة مرحّلة. أرسل force=true مع صلاحية admin لحذفها إجباراً.',
-            }), 400
+        return jsonify({
+            'error': 'invoice_already_posted',
+            'message': 'لا يمكن حذف فاتورة مرحّلة.',
+        }), 400
 
     try:
         # Journal entries
@@ -34102,10 +34067,19 @@ def get_admin_dashboard():
         month_start = datetime(now.year, now.month, 1)
         year_start = datetime(now.year, 1, 1)
 
+        # Previous periods for comparison
+        prev_month_end = month_start
+        prev_month_start = (month_start - timedelta(days=1)).replace(day=1)
+        prev_year_start = datetime(now.year - 1, 1, 1)
+        prev_year_end = year_start
+
         _summary_periods = {
             'today': (today_start, tomorrow_start),
             'month': (month_start, tomorrow_start),
             'year': (year_start, tomorrow_start),
+            'prev_today': (yesterday_start, today_start),
+            'prev_month': (prev_month_start, prev_month_end),
+            'prev_year': (prev_year_start, prev_year_end),
         }
 
         _EMPTY_INV_SUMMARY = {

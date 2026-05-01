@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:ui' show ImageFilter;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
@@ -832,6 +833,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     final showInvoiceCount = config?['show_invoice_count'] != false;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     final rankingRows = ranking.whereType<Map>().toList(growable: false);
 
     if (rankingRows.isEmpty) {
@@ -1022,23 +1024,20 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
               _ => valueColor,
             };
             final medalAccent = switch (i) {
-              0 => AppColors.primaryGold,
-              1 => const Color(0xFF98A2B3),
-              2 => const Color(0xFFCD7F32),
+              0 => const Color(0xFFB88913),
+              1 => const Color(0xFF8F99A7),
+              2 => const Color(0xFFA56A36),
               _ => valueColor,
             };
-            final medalSurface = switch (i) {
-              0 => [AppColors.lightGold.withValues(alpha: 0.42), Colors.white],
-              1 => [
-                const Color(0xFFF3F4F6),
-                const Color(0xFFE5E7EB).withValues(alpha: 0.35),
-              ],
-              2 => [
-                const Color(0xFFFDF1E7),
-                const Color(0xFFF6D7BE).withValues(alpha: 0.4),
-              ],
-              _ => [colorScheme.surface, colorScheme.surface],
-            };
+            final isTopThree = i < 3;
+            final glassBaseColor = isDark
+                ? colorScheme.surfaceContainerHigh.withValues(
+                    alpha: isTopThree ? 0.48 : 0.62,
+                  )
+                : Colors.white.withValues(alpha: isTopThree ? 0.72 : 0.92);
+            final glassTintColor = isDark
+                ? medalAccent.withValues(alpha: isTopThree ? 0.08 : 0.03)
+                : medalAccent.withValues(alpha: isTopThree ? 0.06 : 0.02);
             final roleBadgeColor = i == 0
                 ? AppColors.darkGold
                 : colorScheme.onSurface.withValues(alpha: 0.62);
@@ -1054,54 +1053,63 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: Container(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(
+                    sigmaX: isTopThree ? 6 : 4,
+                    sigmaY: isTopThree ? 6 : 4,
+                  ),
+                  child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 14,
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: colorScheme.surface,
-                  gradient: i < 3
-                      ? LinearGradient(
-                          begin: AlignmentDirectional.topStart,
-                          end: AlignmentDirectional.bottomEnd,
-                          colors: medalSurface,
-                        )
-                      : null,
+                  color: glassBaseColor,
+                  gradient: LinearGradient(
+                    begin: AlignmentDirectional.topStart,
+                    end: AlignmentDirectional.bottomEnd,
+                    colors: [
+                      Colors.white.withValues(alpha: isDark ? 0.09 : 0.24),
+                      glassBaseColor,
+                      glassTintColor,
+                    ],
+                  ),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: i < 3
-                        ? medalAccent.withValues(alpha: i == 0 ? 0.42 : 0.22)
+                    color: isTopThree
+                        ? Colors.white.withValues(alpha: isDark ? 0.20 : 0.62)
                         : colorScheme.onSurface.withValues(alpha: 0.08),
                   ),
-                  boxShadow: i < 3
+                  boxShadow: isTopThree
                       ? [
                           BoxShadow(
                             color: medalAccent.withValues(
-                              alpha: i == 0 ? 0.16 : 0.08,
+                              alpha: isDark ? 0.12 : (i == 0 ? 0.12 : 0.08),
                             ),
-                            blurRadius: i == 0 ? 22 : 14,
-                            offset: Offset(0, i == 0 ? 8 : 4),
+                            blurRadius: i == 0 ? 16 : 10,
+                            offset: Offset(0, i == 0 ? 6 : 3),
                           ),
                         ]
                       : null,
                 ),
+                foregroundDecoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.white.withValues(alpha: isDark ? 0.08 : 0.22),
+                      Colors.white.withValues(alpha: 0),
+                      Colors.black.withValues(alpha: isDark ? 0.04 : 0),
+                    ],
+                  ),
+                ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    SizedBox(
-                      width: 28,
-                      child: Text(
-                        '${i + 1}',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: i < 3
-                              ? medalAccent.withValues(alpha: 0.82)
-                              : colorScheme.onSurface.withValues(alpha: 0.3),
-                        ),
-                      ),
-                    ),
+                    _buildRoyalRankBadge(i, medalAccent),
                     const SizedBox(width: 8),
                     Container(
                       width: 42,
@@ -1303,9 +1311,120 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                     ),
                   ],
                 ),
+                  ),
+                ),
               ),
             );
           }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoyalRankBadge(int index, Color medalAccent) {
+    return SizedBox(
+      width: 50,
+      height: index == 0 ? 60 : 50,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: switch (index) {
+                    0 => const [Color(0xFFF7EAC6), Color(0xFFD1AF68)],
+                    1 => const [Color(0xFFF5F7FA), Color(0xFFBEC7D3)],
+                    2 => const [Color(0xFFF1DCC7), Color(0xFFC18A5A)],
+                    _ => [
+                        medalAccent.withValues(alpha: 0.22),
+                        medalAccent.withValues(alpha: 0.10),
+                      ],
+                  },
+                ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: index < 3
+                      ? Colors.white.withValues(alpha: 0.55)
+                      : medalAccent.withValues(alpha: 0.20),
+                ),
+              ),
+              child: Center(
+                child: Text(
+                  '${index + 1}',
+                  style: TextStyle(
+                    fontFamily: 'Cairo',
+                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    color: index < 3 ? const Color(0xFF47340E) : medalAccent,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (index == 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: AlignmentDirectional.topStart,
+                      end: AlignmentDirectional.bottomEnd,
+                      colors: [
+                        Color(0xFF6C2AA6),
+                        Color(0xFF3F1B78),
+                      ],
+                    ),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFFFFE082).withValues(alpha: 0.85),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6C2AA6).withValues(alpha: 0.35),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      const Icon(
+                        Icons.workspace_premium_rounded,
+                        size: 13,
+                        color: Color(0xFFFFE082),
+                      ),
+                      Positioned(
+                        top: 4,
+                        child: Container(
+                          width: 3,
+                          height: 3,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFFFF9C4),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
