@@ -223,21 +223,25 @@ class _ScrapPurchaseInvoiceScreenState
   }
 
   Future<void> _loadDefaultSafeBox() async {
+    // For scrap gold purchases the invoice-level safe_box_id tracks which gold safe
+    // receives the scrap. Prefer the employee's gold safe (set at submission time), then
+    // the system default gold safe. Cash movement is handled via the payment method's
+    // configured safe box — not this field.
     try {
       final api = ApiService();
-      final cash = await api.getDefaultSafeBox('cash');
+      final goldSafe = await api.getDefaultSafeBox('gold');
       if (!mounted) return;
       setState(() {
-        _selectedSafeBoxId = cash.id;
-        if (cash.id != null) {
-          final exists = _safeBoxes.any((sb) => sb.id == cash.id);
+        _selectedSafeBoxId = goldSafe.id;
+        if (goldSafe.id != null) {
+          final exists = _safeBoxes.any((sb) => sb.id == goldSafe.id);
           if (!exists) {
-            _safeBoxes = [cash, ..._safeBoxes];
+            _safeBoxes = [goldSafe, ..._safeBoxes];
           }
         }
       });
     } catch (_) {
-      // Ignore if no default cash safe box exists.
+      // Ignore if no default gold safe box exists; backend resolves it via fallbacks.
     }
   }
 
@@ -1118,6 +1122,33 @@ class _ScrapPurchaseInvoiceScreenState
       final employeeName =
           currentUser?.employee?.name ?? currentUser?.fullName ?? '';
       final employeeGoldSafeId = currentUser?.employee?.goldSafeBoxId;
+
+      // حساب الموظف الحالي غير مربوط بسجل موظف → لن يُسنَد الذهب لخزينته الشخصية.
+      // النظام يتراجع للخزينة الرئيسية للكسر. يُنصح بربط الحساب بموظف من إدارة المستخدمين.
+      if (employeeId == null && mounted) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('تنبيه: حساب غير مرتبط بموظف'),
+            content: const Text(
+              'حسابك الحالي غير مرتبط بسجل موظف، لذلك لن يُسجَّل الذهب المستلم في خزينة موظف شخصية.\n\n'
+              'سيتم حفظ الفاتورة وإسناد الذهب للخزينة الرئيسية للكسر تلقائياً.\n\n'
+              'هل تريد المتابعة؟',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('إلغاء'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('متابعة'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+      }
 
       final effectiveSafeBoxId = employeeGoldSafeId ?? _selectedSafeBoxId;
 

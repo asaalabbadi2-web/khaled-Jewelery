@@ -3415,8 +3415,6 @@ class ApiService {
     double minSettlementAmount = 0.0,
     String settlementMode = 'bulk',
     int depositDelayDays = 0,
-    String depositScheduleType = 'days',
-    int? depositWeekday,
     bool isActive = true,
     List<String>? applicableInvoiceTypes,
   }) async {
@@ -3434,8 +3432,6 @@ class ApiService {
       'min_settlement_amount': minSettlementAmount,
       'settlement_mode': settlementMode,
       'deposit_delay_days': depositDelayDays,
-      'deposit_schedule_type': depositScheduleType,
-      'deposit_weekday': depositWeekday,
       'is_active': isActive,
     };
     if (defaultSafeBoxId != null) {
@@ -3481,8 +3477,6 @@ class ApiService {
     double minSettlementAmount = 0.0,
     String settlementMode = 'bulk',
     int depositDelayDays = 0,
-    String depositScheduleType = 'days',
-    int? depositWeekday,
     required bool isActive,
     int? defaultSafeBoxId,
     List<String>? applicableInvoiceTypes,
@@ -3521,8 +3515,6 @@ class ApiService {
     payload['min_settlement_amount'] = minSettlementAmount;
     payload['settlement_mode'] = settlementMode;
     payload['deposit_delay_days'] = depositDelayDays;
-    payload['deposit_schedule_type'] = depositScheduleType;
-    payload['deposit_weekday'] = depositWeekday;
 
     if (applicableInvoiceTypes != null && applicableInvoiceTypes.isNotEmpty) {
       payload['applicable_invoice_types'] = applicableInvoiceTypes;

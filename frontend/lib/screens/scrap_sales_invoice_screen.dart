@@ -256,24 +256,39 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
   // 🆕 تحميل الخزينة النقدية الافتراضية
   Future<void> _loadDefaultSafeBox() async {
+    // بيع الكسر يخرج دائماً من خزينة الكسر الرئيسية (main_scrap_gold_safe_box_id).
+    // نجلب الإعداد من الـ API ثم نضبط الخزينة تلقائياً.
     try {
       final apiService = ApiService();
-      final boxes = await apiService.getSafeBoxes();
-      final cashBoxes = boxes.where((box) => box.safeType == 'cash').toList();
+      final settings = await apiService.getSettings();
+      final rawId = settings['main_scrap_gold_safe_box_id'];
+      final scrapSafeId =
+          rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
 
+      if (scrapSafeId != null) {
+        final safeBox = await apiService.getSafeBox(
+          scrapSafeId,
+          includeBalance: false,
+        );
+        if (!mounted) return;
+        setState(() {
+          _selectedSafeBoxId = safeBox.id;
+        });
+        return;
+      }
+    } catch (_) {
+      // تراجع للخزينة الذهبية الافتراضية إن لم تُضبط الخزينة الرئيسية للكسر.
+    }
+
+    try {
+      final apiService = ApiService();
+      final goldSafe = await apiService.getDefaultSafeBox('gold');
       if (!mounted) return;
-
       setState(() {
-        if (cashBoxes.isNotEmpty) {
-          final defaultBox = cashBoxes.firstWhere(
-            (box) => box.isDefault == true,
-            orElse: () => cashBoxes.first,
-          );
-          _selectedSafeBoxId = defaultBox.id;
-        }
+        _selectedSafeBoxId = goldSafe.id;
       });
-    } catch (e) {
-      debugPrint('فشل تحميل الخزائن: $e');
+    } catch (_) {
+      // لا خزينة ذهب متاحة — الباكيند يعالجها عبر إعدادات النظام.
     }
   }
 
@@ -1630,6 +1645,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       final invoiceData = {
         'customer_id': customerId,
         'branch_id': _selectedBranchId,
+        'invoice_type': 'بيع',
         'transaction_type': 'sell',
         'gold_type': 'scrap',
         'date': DateTime.now().toIso8601String(),

@@ -2414,7 +2414,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       return StatefulBuilder(
         builder: (context, setHover) {
           return Padding(
-        padding: EdgeInsetsDirectional.only(bottom: 8, top: index == 0 ? 6 : 0),
+        padding: const EdgeInsetsDirectional.only(bottom: 8),
         child: MouseRegion(
           onEnter: (_) => setHover(() => hovered = true),
           onExit: (_) => setHover(() => hovered = false),
@@ -3753,24 +3753,27 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     if (index != 0) return badge;
 
-    // Rank-1: crown with clear gap above the notch
-    return Column(
-      mainAxisSize: MainAxisSize.min,
+    // Rank-1: التاج يطفو فوق الـ badge بدون إضافة ارتفاع للبطاقة.
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
       children: [
-        Text(
-          '👑',
-          style: TextStyle(
-            fontSize: 32,
-            height: 1.0,
-            shadows: const [
-              Shadow(color: Colors.black38, blurRadius: 5, offset: Offset(0, 3)),
-              Shadow(color: Color(0xFFFFAA00), blurRadius: 20),
-              Shadow(color: Color(0xFFFFD700), blurRadius: 10),
-            ],
+        badge,
+        Positioned(
+          top: -26,
+          child: Text(
+            '👑',
+            style: TextStyle(
+              fontSize: 26,
+              height: 1.0,
+              shadows: const [
+                Shadow(color: Colors.black38, blurRadius: 5, offset: Offset(0, 3)),
+                Shadow(color: Color(0xFFFFAA00), blurRadius: 20),
+                Shadow(color: Color(0xFFFFD700), blurRadius: 10),
+              ],
+            ),
           ),
         ),
-        const SizedBox(height: 5),
-        badge,
       ],
     );
   }

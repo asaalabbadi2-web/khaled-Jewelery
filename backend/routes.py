@@ -1502,8 +1502,10 @@ def _next_invoice_type_id(invoice_types):
     Notes:
     - We intentionally keep existing semantics: sequence is per invoice_type (or group of
       invoice types), not per-year.
-    - Uses MAX() + a session cache so multiple invoices created in the same request/flush
-      don't collide.
+    - On PostgreSQL, acquires a transaction-level advisory lock per invoice_type group to
+      prevent race conditions between Gunicorn workers (UniqueViolation on _invoice_type_uc).
+    - On SQLite, the file-level write lock is sufficient.
+    - Uses MAX() + a session cache so multiple invoices in the same request don't collide.
     """
     try:
         types = [str(t) for t in (invoice_types or []) if str(t).strip()]
@@ -1511,8 +1513,24 @@ def _next_invoice_type_id(invoice_types):
         types = []
 
     if not types:
-        # Fallback: global sequence
         types = []
+
+    # PostgreSQL advisory lock: prevents two workers from allocating the same invoice_type_id.
+    _is_postgres = False
+    try:
+        dialect_name = (getattr(getattr(db.engine, 'dialect', None), 'name', '') or '').lower()
+        _is_postgres = 'postgres' in dialect_name
+    except Exception:
+        pass
+
+    if _is_postgres:
+        try:
+            lock_key_str = '|'.join(sorted(types)) or '__global__'
+            # Fit into pg_advisory_xact_lock's signed int8 range using first 15 hex chars.
+            lock_int = int(hashlib.md5(lock_key_str.encode()).hexdigest()[:15], 16) % (2 ** 31 - 1)
+            db.session.execute(db.text('SELECT pg_advisory_xact_lock(:key)'), {'key': lock_int})
+        except Exception:
+            pass
 
     cache = None
     try:
@@ -1521,12 +1539,17 @@ def _next_invoice_type_id(invoice_types):
         cache = {}
 
     cache_key = tuple(sorted(types))
-    last_seq = cache.get(cache_key)
-    if last_seq is None:
-        q = db.session.query(func.max(Invoice.invoice_type_id))
-        if types:
-            q = q.filter(Invoice.invoice_type.in_(types))
-        last_seq = int(q.scalar() or 0)
+
+    # After acquiring the lock, always re-query MAX() from the DB so we see the latest
+    # committed row from any other worker that just released the same lock.
+    q = db.session.query(func.max(Invoice.invoice_type_id))
+    if types:
+        q = q.filter(Invoice.invoice_type.in_(types))
+    last_seq = int(q.scalar() or 0)
+    # Also respect the in-request cache (handles multiple invoices in one request).
+    cached_last = cache.get(cache_key)
+    if cached_last is not None and cached_last > last_seq:
+        last_seq = cached_last
 
     next_seq = int(last_seq) + 1
     while True:
@@ -13467,7 +13490,13 @@ def add_invoice():
             inv_type_for_gold = ''
             inv_gold_type = 'new'
 
-        if (not approval_required) and inv_type_for_gold in ('بيع', 'مرتجع بيع'):
+        # SafeBoxTransaction للبيع/مرتجع البيع حسب نوع الذهب:
+        #   بيع ذهب جديد          → هنا  (sale_gold_safe_box_id)
+        #   مرتجع بيع ذهب جديد   → هنا  (sale_gold_safe_box_id)
+        #   مرتجع بيع كسر        → هنا  (main_scrap_gold_safe_box_id)
+        #   بيع كسر              → block مخصص داخل قسم قيود فاتورة البيع (لا يعمل هنا)
+        _is_scrap_sale = inv_gold_type == 'scrap' and inv_type_for_gold == 'بيع'
+        if (not approval_required) and inv_type_for_gold in ('بيع', 'مرتجع بيع') and not _is_scrap_sale:
             try:
                 settings_row = Settings.query.first()
             except Exception:
@@ -13476,6 +13505,7 @@ def add_invoice():
             target_gold_safe_id = None
             try:
                 if inv_gold_type == 'scrap':
+                    # مرتجع بيع كسر: الذهب يعود لخزينة الكسر الرئيسية
                     target_gold_safe_id = getattr(settings_row, 'main_scrap_gold_safe_box_id', None) if settings_row else None
                 else:
                     target_gold_safe_id = getattr(settings_row, 'sale_gold_safe_box_id', None) if settings_row else None
@@ -13660,29 +13690,33 @@ def add_invoice():
                     if inv_acc_id:
                         inventory_accounts[karat] = inv_acc_id
 
-            # بيع كسر: استخدام حساب صندوق الكسر للوزن بدلاً من 7130001 (مخزون وزني)
-            # يضمن التناسق مع سطر الشراء الذي يُدبن 71310000 (صندوق الكسر الرئيسي وزني)
+            # ─── تحديد الخزينة الدائنة للوزن لبيع الكسر فقط ───
+            # بيع الكسر → دائن حساب خزينة الكسر الرئيسية (main_scrap_gold_safe_box_id)
+            # بيع الذهب الجديد → يبقى inventory_accounts من ربط الحسابات (COA) بدون تغيير،
+            #   لأن حساب الخزينة المالي ليس حساباً وزنياً بالضرورة.
             scrap_sale_safe_account_id = None
             _scrap_sale_target_sb_id = None
             if gold_type == 'scrap':
+                _inventory_accounts_before = dict(inventory_accounts)
                 try:
                     _sale_settings = Settings.query.first()
-                    _scrap_sale_sb_id = getattr(_sale_settings, 'main_scrap_gold_safe_box_id', None) if _sale_settings else None
-                    if not _scrap_sale_sb_id:
-                        _fallback_sale_sb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
-                        if _fallback_sale_sb:
-                            _scrap_sale_sb_id = _fallback_sale_sb.id
-                    if _scrap_sale_sb_id:
-                        _sale_gold_safe = SafeBox.query.get(int(_scrap_sale_sb_id))
-                        if _sale_gold_safe and getattr(_sale_gold_safe, 'account', None):
-                            scrap_sale_safe_account_id = int(_sale_gold_safe.account.id)
-                            _scrap_sale_target_sb_id = int(_sale_gold_safe.id)
-                            # Override: كل العيارات تشير لحساب صندوق الكسر المالي
-                            # _resolve_weight_account_id سيحوله لـ 71310000 عند إنشاء قيد الوزن
+                    _target_sb_id = getattr(_sale_settings, 'main_scrap_gold_safe_box_id', None) if _sale_settings else None
+                    if not _target_sb_id:
+                        _fb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+                        if _fb:
+                            _target_sb_id = _fb.id
+                    if _target_sb_id:
+                        _target_safe = SafeBox.query.get(int(_target_sb_id))
+                        if _target_safe and getattr(_target_safe, 'account', None):
+                            scrap_sale_safe_account_id = int(_target_safe.account.id)
+                            _scrap_sale_target_sb_id = int(_target_safe.id)
+                            # Override: الحساب الدائن للوزن = حساب خزينة الكسر الرئيسية
+                            # (_resolve_weight_account_id يحوّله لنظيره الوزني تلقائياً)
                             inventory_accounts = {k: scrap_sale_safe_account_id for k in ['18', '21', '22', '24']}
                 except Exception:
                     scrap_sale_safe_account_id = None
                     _scrap_sale_target_sb_id = None
+                    inventory_accounts = _inventory_accounts_before
 
             # ✅ تحقق مبكر: منع إنشاء قيود بحساب None وإرجاع رسالة واضحة
             missing = []
@@ -13905,8 +13939,9 @@ def add_invoice():
                             apply_golden_rule=False,
                         )
 
-            # بيع كسر: تسجيل خروج الوزن من صندوق الكسر (يقابل دخول عند الشراء)
-            if _scrap_sale_target_sb_id and not approval_required:
+            # بيع كسر: تسجيل خروج الوزن من صندوق الكسر (يقابل دخول عند الشراء من عميل).
+            # البيع العادي تُعالج حركاته في block منفصل أعلاه (13493-13541) عبر sale_gold_safe_box_id.
+            if gold_type == 'scrap' and _scrap_sale_target_sb_id and not approval_required:
                 _sale_sbt_weights = {
                     'weight_18k': float(gold_by_karat.get('18', 0.0) or 0.0),
                     'weight_21k': float(gold_by_karat.get('21', 0.0) or 0.0),
@@ -21056,7 +21091,7 @@ def update_sales_race_config():
         current['enabled'] = bool(data['enabled'])
     if 'default_period' in data:
         p = str(data['default_period']).strip().lower()
-        current['default_period'] = p if p in {'today', 'week'} else 'today'
+        current['default_period'] = p if p in {'today', 'week', 'month'} else 'today'
     if 'points_per_gram' in data:
         try:
             current['points_per_gram'] = max(0.0, float(data['points_per_gram']))
@@ -21072,6 +21107,13 @@ def update_sales_race_config():
         try:
             settings_row.weekly_sales_target_weight = max(
                 0.0, float(data['weekly_sales_target_weight'] or 0.0)
+            )
+        except Exception:
+            pass
+    if 'monthly_sales_target_weight' in data:
+        try:
+            settings_row.monthly_sales_target_weight = max(
+                0.0, float(data['monthly_sales_target_weight'] or 0.0)
             )
         except Exception:
             pass

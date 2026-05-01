@@ -2277,8 +2277,6 @@ class _PaymentMethodsScreenEnhancedState
                         minSettlementAmount: minSettlementAmount,
                         settlementMode: selectedSettlementMode,
                         depositDelayDays: depositDelayDays,
-                        depositScheduleType: depositScheduleType,
-                        depositWeekday: depositWeekday,
                         isActive: isActive,
                         applicableInvoiceTypes: invoiceTypeList,
                       );
@@ -2300,8 +2298,6 @@ class _PaymentMethodsScreenEnhancedState
                         minSettlementAmount: minSettlementAmount,
                         settlementMode: selectedSettlementMode,
                         depositDelayDays: depositDelayDays,
-                        depositScheduleType: depositScheduleType,
-                        depositWeekday: depositWeekday,
                         isActive: isActive,
                         defaultSafeBoxId: selectedDefaultSafeBoxId,
                         applicableInvoiceTypes: invoiceTypeList,
