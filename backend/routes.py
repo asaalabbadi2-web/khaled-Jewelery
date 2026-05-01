@@ -21067,6 +21067,13 @@ def update_sales_race_config():
             )
         except Exception:
             pass
+    if 'monthly_sales_target_weight' in data:
+        try:
+            settings_row.monthly_sales_target_weight = max(
+                0.0, float(data['monthly_sales_target_weight'] or 0.0)
+            )
+        except Exception:
+            pass
 
     settings_row.sales_race_settings = json.dumps(current, ensure_ascii=False)
 
