@@ -520,28 +520,20 @@ def _resolve_cash_safe_box_id_for_invoice(
     pm_obj: PaymentMethod | None = None,
     explicit_safe_box_id: int | None = None,
 ) -> int | None:
-    """Resolve cash SafeBox for invoice payments.
+    """Resolve SafeBox for an invoice payment.
 
     Precedence:
-    1) explicit_safe_box_id
-    2) invoice.safe_box_id
-    3) employee cash safe (if enabled AND payment method is cash)
-    4) payment_method.default_safe_box_id
-    5) settings.main_cash_safe_box_id
-    6) default cash safe
+    1) explicit_safe_box_id               (from notes JSON — highest priority)
+    2) pm.default_safe_box_id             (non-cash PMs: mada, bank, clearing — before any cash fallback)
+    3) invoice.safe_box_id                (cash PMs only)
+    4) employee cash safe                 (cash PMs, if toggle enabled)
+    5) pm.default_safe_box_id             (cash PMs — secondary PM lookup)
+    6) settings.main_cash_safe_box_id     (cash PMs / unknown PM only)
+    7) default cash safe                  (cash PMs / unknown PM only)
+    8) None → caller must handle          (non-cash PM with no safe configured)
     """
     if explicit_safe_box_id:
         return int(explicit_safe_box_id)
-
-    try:
-        inv_sb = getattr(invoice, 'safe_box_id', None)
-        if inv_sb not in (None, '', 0, '0', False):
-            return int(inv_sb)
-    except Exception:
-        pass
-
-    settings_row = _get_settings_row()
-    emp = _resolve_employee_for_invoice(invoice, for_scrap_purchase=False)
 
     def _is_cash_payment_method(pm: PaymentMethod | None) -> bool:
         if pm is None:
@@ -555,6 +547,28 @@ def _resolve_cash_safe_box_id_for_invoice(
             return 'نقد' in name
         except Exception:
             return False
+
+    # For non-cash payment methods, resolve PM's own safe-box before falling back
+    # to the invoice safe-box (which is the cash safe and would be wrong here).
+    if pm_obj is not None and not _is_cash_payment_method(pm_obj):
+        try:
+            pm_sb = getattr(pm_obj, 'default_safe_box_id', None)
+            if pm_sb not in (None, '', 0, '0', False):
+                return int(pm_sb)
+        except Exception:
+            pass
+
+    # invoice.safe_box_id is the cash safe; only use it for cash payment methods.
+    if _is_cash_payment_method(pm_obj) or pm_obj is None:
+        try:
+            inv_sb = getattr(invoice, 'safe_box_id', None)
+            if inv_sb not in (None, '', 0, '0', False):
+                return int(inv_sb)
+        except Exception:
+            pass
+
+    settings_row = _get_settings_row()
+    emp = _resolve_employee_for_invoice(invoice, for_scrap_purchase=False)
 
     if bool(getattr(settings_row, 'employee_cash_safes_enabled', False)) and _is_cash_payment_method(pm_obj):
         try:
@@ -572,19 +586,23 @@ def _resolve_cash_safe_box_id_for_invoice(
         except Exception:
             pass
 
-    try:
-        main_cash = getattr(settings_row, 'main_cash_safe_box_id', None) if settings_row else None
-        if main_cash not in (None, '', 0, '0', False):
-            return int(main_cash)
-    except Exception:
-        pass
+    # main_cash_safe_box_id and default cash safe are cash-specific fallbacks.
+    # For non-cash PMs (mada, bank, clearing) do NOT fall into a cash safe when
+    # default_safe_box_id is missing — return None so the caller can surface an error.
+    if _is_cash_payment_method(pm_obj) or pm_obj is None:
+        try:
+            main_cash = getattr(settings_row, 'main_cash_safe_box_id', None) if settings_row else None
+            if main_cash not in (None, '', 0, '0', False):
+                return int(main_cash)
+        except Exception:
+            pass
 
-    try:
-        sb = SafeBox.get_default_by_type('cash')
-        if sb and sb.id:
-            return int(sb.id)
-    except Exception:
-        pass
+        try:
+            sb = SafeBox.get_default_by_type('cash')
+            if sb and sb.id:
+                return int(sb.id)
+        except Exception:
+            pass
 
     return None
 
@@ -3360,3 +3378,86 @@ def get_vouchers_stats():
         
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/admin/move-sbt', methods=['POST'])
+@require_permission('admin')
+def admin_move_sbt():
+    """Correct a SafeBoxTransaction that was routed to the wrong safe box.
+
+    Moves a single SBT to a new safe box and also corrects the linked
+    Voucher account lines and JE lines to match the correct safe box account.
+
+    Body params:
+      sbt_id          (int, required)  — the SBT to move
+      new_safe_box_id (int, required)  — the correct safe box id
+      fix_voucher     (bool, default true) — also fix Voucher/JE account lines
+    """
+    data = request.get_json(silent=True) or {}
+    sbt_id = data.get('sbt_id')
+    new_sb_id = data.get('new_safe_box_id')
+    fix_voucher = bool(data.get('fix_voucher', True))
+
+    if not sbt_id or not new_sb_id:
+        return jsonify({'success': False, 'message': 'sbt_id and new_safe_box_id are required'}), 400
+
+    try:
+        sbt = SafeBoxTransaction.query.get(int(sbt_id))
+        if not sbt:
+            return jsonify({'success': False, 'message': f'SBT {sbt_id} not found'}), 404
+
+        new_sb = SafeBox.query.get(int(new_sb_id))
+        if not new_sb:
+            return jsonify({'success': False, 'message': f'SafeBox {new_sb_id} not found'}), 404
+
+        old_sb_id = sbt.safe_box_id
+        old_sb = SafeBox.query.get(int(old_sb_id)) if old_sb_id else None
+        new_account_id = getattr(new_sb, 'account_id', None)
+        old_account_id = getattr(old_sb, 'account_id', None) if old_sb else None
+
+        result = {
+            'sbt_id': sbt_id,
+            'old_safe_box_id': old_sb_id,
+            'new_safe_box_id': new_sb_id,
+            'old_account_id': old_account_id,
+            'new_account_id': new_account_id,
+            'voucher_lines_fixed': [],
+            'je_lines_fixed': [],
+        }
+
+        # 1) Move the SBT
+        sbt.safe_box_id = int(new_sb_id)
+
+        # 2) Optionally fix Voucher + JE account lines
+        if fix_voucher and old_account_id and new_account_id and old_account_id != new_account_id:
+            # ref_id on SBT is the voucher id
+            voucher_id = getattr(sbt, 'ref_id', None)
+            if voucher_id:
+                from models import VoucherAccountLine, JournalEntryLine
+                voucher = Voucher.query.get(int(voucher_id))
+                if voucher:
+                    vlines = VoucherAccountLine.query.filter_by(
+                        voucher_id=voucher.id,
+                        account_id=int(old_account_id),
+                    ).all()
+                    for vl in vlines:
+                        vl.account_id = int(new_account_id)
+                        result['voucher_lines_fixed'].append(vl.id)
+
+                    if getattr(voucher, 'journal_entry_id', None):
+                        jelines = JournalEntryLine.query.filter_by(
+                            journal_entry_id=int(voucher.journal_entry_id),
+                            account_id=int(old_account_id),
+                        ).all()
+                        for jl in jelines:
+                            jl.account_id = int(new_account_id)
+                            result['je_lines_fixed'].append(jl.id)
+
+        db.session.commit()
+        result['success'] = True
+        return jsonify(result), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+

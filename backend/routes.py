@@ -9400,6 +9400,14 @@ def add_invoice_payment(invoice_id: int):
         net_amount = amount - commission_amount - commission_vat
 
     try:
+        try:
+            _stored_notes = json.dumps(
+                {'user_notes': notes, 'safe_box_id': resolved_safe_box_id},
+                ensure_ascii=False,
+            )
+        except Exception:
+            _stored_notes = notes
+
         payment = InvoicePayment(
             invoice_id=invoice.id,
             payment_method_id=pm_id,
@@ -9408,7 +9416,7 @@ def add_invoice_payment(invoice_id: int):
             commission_amount=commission_amount,
             commission_vat=commission_vat,
             net_amount=net_amount,
-            notes=notes,
+            notes=_stored_notes,
         )
 
         db.session.add(payment)
@@ -21064,13 +21072,6 @@ def update_sales_race_config():
         try:
             settings_row.weekly_sales_target_weight = max(
                 0.0, float(data['weekly_sales_target_weight'] or 0.0)
-            )
-        except Exception:
-            pass
-    if 'monthly_sales_target_weight' in data:
-        try:
-            settings_row.monthly_sales_target_weight = max(
-                0.0, float(data['monthly_sales_target_weight'] or 0.0)
             )
         except Exception:
             pass
@@ -34074,19 +34075,10 @@ def get_admin_dashboard():
         month_start = datetime(now.year, now.month, 1)
         year_start = datetime(now.year, 1, 1)
 
-        # Previous periods for comparison
-        prev_month_end = month_start
-        prev_month_start = (month_start - timedelta(days=1)).replace(day=1)
-        prev_year_start = datetime(now.year - 1, 1, 1)
-        prev_year_end = year_start
-
         _summary_periods = {
             'today': (today_start, tomorrow_start),
             'month': (month_start, tomorrow_start),
             'year': (year_start, tomorrow_start),
-            'prev_today': (yesterday_start, today_start),
-            'prev_month': (prev_month_start, prev_month_end),
-            'prev_year': (prev_year_start, prev_year_end),
         }
 
         _EMPTY_INV_SUMMARY = {
