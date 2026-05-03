@@ -18556,10 +18556,7 @@ def delete_journal_entry(id):
         for st in supp_txns:
             st.journal_entry_id = None
         
-        # 6. دفعات الفواتير
-        payments = InvoicePayment.query.filter_by(journal_entry_id=entry.id).all()
-        for pmt in payments:
-            pmt.journal_entry_id = None
+        # 6. دفعات الفواتير — InvoicePayment does not have journal_entry_id column; skip
 
         # 7. حذف SBTs المرتبطة بهذا القيد
         try:
@@ -29953,6 +29950,11 @@ def get_pending_settlement_transactions():
             transfer_credit_by_ip[ip.id] = round(consumed, 2)
             remaining_credit = round(remaining_credit - consumed, 2)
     # ────────────────────────────────────────────────────────────────────────
+    # Compute how much transfer_out_unaccounted remains after IP FIFO attribution.
+    # This remainder covers safe_transfer-in items (inter-safe corrections).
+    transfer_out_remaining_after_ips = max(0.0, round(
+        transfer_out_unaccounted - sum(transfer_credit_by_ip.values()), 2
+    ))
 
     pending = []
     for ip in all_ips:  # already ordered by created_at asc
@@ -30029,6 +30031,7 @@ def get_pending_settlement_transactions():
                     reversed_ref_ids.add(rid)
                     reversal_by_ref[rid] = reversal_by_ref.get(rid, 0.0) + float(r.amount_cash or 0)
 
+            remaining_transfer_credit = transfer_out_remaining_after_ips
             for tx in transfer_in_sbts:
                 tx_amount = float(tx.amount_cash or 0)
                 if tx.ref_id is not None and tx.ref_id in reversed_ref_ids:
@@ -30037,6 +30040,12 @@ def get_pending_settlement_transactions():
                     tx_remaining = max(0.0, round(tx_amount - reversed_amt, 2))
                 else:
                     tx_remaining = round(tx_amount, 2)
+
+                # Apply unaccounted outflow credit FIFO to safe_transfer items too
+                if remaining_transfer_credit > 0.005 and tx_remaining > 0.005:
+                    consumed = min(tx_remaining, remaining_transfer_credit)
+                    tx_remaining = round(tx_remaining - consumed, 2)
+                    remaining_transfer_credit = round(remaining_transfer_credit - consumed, 2)
 
                 if tx_remaining <= 0.005:
                     continue
