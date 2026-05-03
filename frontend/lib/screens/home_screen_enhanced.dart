@@ -57,7 +57,6 @@ import 'audit_log_screen.dart';
 import 'shift_closing_screen.dart';
 import 'weight_closing_execute_screen.dart';
 import 'import_documents_screen.dart';
-import 'reports/admin_dashboard_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
 import 'reports/reports_main_screen.dart';
 import 'printing_center_screen.dart';
@@ -2414,7 +2413,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       return StatefulBuilder(
         builder: (context, setHover) {
           return Padding(
-        padding: const EdgeInsetsDirectional.only(bottom: 8),
+        padding: EdgeInsetsDirectional.only(bottom: 8, top: index == 0 ? 6 : 0),
         child: MouseRegion(
           onEnter: (_) => setHover(() => hovered = true),
           onExit: (_) => setHover(() => hovered = false),
@@ -3711,70 +3710,60 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   /// PATCH 4: شارة الترتيب — 50×50 مع تاج للمتصدر
   Widget _buildRankBadge(int index, Color medalAccent) {
-    final gradientColors = switch (index) {
-      0 => const [Color(0xFFFFE566), Color(0xFFBF8800)],
-      1 => const [Color(0xFFEEEEEE), Color(0xFF888888)],
-      2 => const [Color(0xFFE8A87C), Color(0xFF7A3F0E)],
-      _ => [medalAccent.withValues(alpha: 0.18), medalAccent.withValues(alpha: 0.08)],
-    };
-    final shadowColor = switch (index) {
-      0 => const Color(0xFFDAA520),
-      1 => const Color(0xFF9E9E9E),
-      2 => const Color(0xFFCD7F32),
-      _ => medalAccent,
-    };
-
-    final Widget badge = CustomPaint(
-      painter: _RankBadgeNotchPainter(
-        gradientColors: gradientColors,
-        shadowColor: index < 3 ? shadowColor : Colors.transparent,
-        notchRadius: 0,
-      ),
-      child: SizedBox(
-        width: 54,
-        height: 54,
-        child: Align(
-          alignment: Alignment.center,
-          child: Text(
-            '${index + 1}',
-            style: TextStyle(
-              fontFamily: 'Cairo',
-              fontWeight: FontWeight.w900,
-              fontSize: 20,
-              color: index < 3 ? Colors.white : medalAccent,
-              shadows: index < 3
-                  ? [const Shadow(color: Colors.black45, blurRadius: 5)]
-                  : null,
+    return SizedBox(
+      width: 50,
+      height: index == 0 ? 60 : 50,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: switch (index) {
+                    0 => const [Color(0xFFFFD700), Color(0xFFDAA520)],
+                    1 => const [Color(0xFFE0E0E0), Color(0xFF9E9E9E)],
+                    2 => const [Color(0xFFCD7F32), Color(0xFF8B4513)],
+                    _ => [medalAccent.withValues(alpha: 0.22), medalAccent.withValues(alpha: 0.10)],
+                  },
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: index == 0
+                    ? [BoxShadow(color: const Color(0xFFFFD700).withValues(alpha: 0.40), blurRadius: 14, offset: const Offset(0, 4))]
+                    : null,
+              ),
+              child: Center(
+                child: Text(
+                  '${index + 1}',
+                  style: TextStyle(
+                    fontFamily: 'Cairo',
+                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    color: index < 3 ? Colors.white : medalAccent,
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
-    );
-
-    if (index != 0) return badge;
-
-    // Rank-1: التاج يطفو فوق الـ badge بدون إضافة ارتفاع للبطاقة.
-    return Stack(
-      clipBehavior: Clip.none,
-      alignment: Alignment.center,
-      children: [
-        badge,
-        Positioned(
-          top: -26,
-          child: Text(
-            '👑',
-            style: TextStyle(
-              fontSize: 26,
-              height: 1.0,
-              shadows: const [
-                Shadow(color: Colors.black38, blurRadius: 5, offset: Offset(0, 3)),
-                Shadow(color: Color(0xFFFFAA00), blurRadius: 20),
-                Shadow(color: Color(0xFFFFD700), blurRadius: 10),
-              ],
+          if (index == 0)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text('👑', style: TextStyle(fontSize: 13)),
+              ),
             ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -4972,15 +4961,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           MaterialPageRoute(builder: (_) => const AuditLogScreen()),
         );
         break;
-      case 'admin_dashboard':
-        result = await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                AdminDashboardScreen(api: api, isArabic: widget.isArabic),
-          ),
-        );
-        break;
       case 'weight_closing_execute':
         result = await Navigator.push(
           context,
@@ -5172,65 +5152,4 @@ class _AnimatedExpandSectionState extends State<_AnimatedExpandSection>
       ),
     );
   }
-}
-
-/// Paints a rounded-rectangle badge with an optional concave notch
-/// cut from the top-center edge — used for rank-1 in the leaderboard.
-class _RankBadgeNotchPainter extends CustomPainter {
-  final List<Color> gradientColors;
-  final Color shadowColor;
-  final double notchRadius;
-
-  const _RankBadgeNotchPainter({
-    required this.gradientColors,
-    required this.shadowColor,
-    this.notchRadius = 0,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const r = 14.0;
-    final nx = size.width / 2;
-    final nr = notchRadius;
-
-    final path = Path();
-    path.moveTo(r, 0);
-
-    if (nr > 0) {
-      // Flatten the sides of the notch so it looks like a smooth scallop
-      path.lineTo(nx - nr * 1.4, 0);
-      path.arcToPoint(
-        Offset(nx + nr * 1.4, 0),
-        radius: Radius.circular(nr),
-        clockwise: false,
-      );
-    }
-
-    path.lineTo(size.width - r, 0);
-    path.arcToPoint(Offset(size.width, r), radius: Radius.circular(r));
-    path.lineTo(size.width, size.height - r);
-    path.arcToPoint(Offset(size.width - r, size.height), radius: Radius.circular(r));
-    path.lineTo(r, size.height);
-    path.arcToPoint(Offset(0, size.height - r), radius: Radius.circular(r));
-    path.lineTo(0, r);
-    path.arcToPoint(Offset(r, 0), radius: Radius.circular(r));
-    path.close();
-
-    // Shadow
-    canvas.drawShadow(path, shadowColor, 8, false);
-
-    // Gradient fill
-    final paint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: gradientColors,
-      ).createShader(Offset.zero & size);
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _RankBadgeNotchPainter old) =>
-      old.gradientColors != gradientColors ||
-      old.notchRadius != notchRadius;
 }

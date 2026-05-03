@@ -1,22 +1,22 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_service.dart';
 import '../../providers/settings_provider.dart';
 import '../../theme/app_theme.dart';
 import '../audit_log_screen.dart';
-import '../employees_screen.dart';
-import '../safe_boxes_dashboard_screen.dart';
-import '../shift_closing_screen.dart';
+import '../safe_boxes_screen.dart';
 import 'gold_price_history_report_screen.dart';
+import 'safe_box_hero_details_screen.dart';
 import 'system_alerts_screen.dart';
 import 'widgets/dashboard_summary_tabs_card.dart';
-import 'widgets/hero_profit_section.dart';
-import 'widgets/kpi_cards.dart';
-import 'widgets/sensitive_operations_section.dart';
-import 'widgets/vaults_section.dart';
 
 enum _TimeRange { today, month, year }
 
@@ -39,6 +39,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   bool _isLoading = false;
   String? _error;
 
+  int? _expandedVaultSafeBoxId;
+  int? _pressedVaultSafeBoxId;
+
   _TimeRange _timeRange = _TimeRange.today;
 
   // ── Gram Profit KPI ─────────────────────────────────────────────────────
@@ -46,8 +49,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   bool _gramProfitLoading = false;
 
   // ── Overlay alert state ──────────────────────────────────────────────────
+  /// Alerts that the user has manually dismissed (by id/text key).
   final Set<String> _dismissedAlertKeys = {};
+  /// Live OverlayEntry for the floating toast stack (null = not shown).
   OverlayEntry? _toastOverlayEntry;
+
+  // ── Vault ordering ────────────────────────────────────────────────────────
+  /// Local ordered list of safe-box ids (persisted in SharedPreferences).
+  List<int> _vaultOrder = [];
+  /// Safe-box ids that were opened in the current session ("recently used").
+  final Set<int> _recentVaultIds = {};
+  static const String _kVaultOrderKey = 'dashboard_vault_order';
+  /// Horizontal scroll controller for the vault list (mouse wheel support).
+  final ScrollController _vaultScrollController = ScrollController();
+  /// When true the vault list becomes a drag-and-drop reorderable list.
+  bool _isReorderingVaults = false;
 
   /// Maps the unified top-level time selector to the backend summary key.
   String get _summaryPeriod {
@@ -86,13 +102,75 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       decimalDigits: _currencyDecimals,
     );
     _weightFormat = NumberFormat('#,##0.000');
+    _loadVaultOrder();
     _loadData();
+  }
+
+  // ── Vault order persistence ──────────────────────────────────────────────
+  Future<void> _loadVaultOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList(_kVaultOrderKey) ?? [];
+      if (mounted) {
+        setState(() {
+          _vaultOrder = raw
+              .map((s) => int.tryParse(s))
+              .whereType<int>()
+              .toList();
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveVaultOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _kVaultOrderKey,
+        _vaultOrder.map((id) => id.toString()).toList(),
+      );
+    } catch (_) {}
+  }
+
+  /// Returns safe-box list sorted: recently-used first, then user order.
+  List<Map<String, dynamic>> _sortedVaults(List<dynamic> raw) {
+    final maps = raw.whereType<Map<String, dynamic>>().toList();
+
+    // Seed _vaultOrder with any new ids not yet stored
+    final knownIds = _vaultOrder.toSet();
+    for (final sb in maps) {
+      final id = sb['id'];
+      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+      if (sbId != null && !knownIds.contains(sbId)) {
+        _vaultOrder.add(sbId);
+        knownIds.add(sbId);
+      }
+    }
+
+    maps.sort((a, b) {
+      final aId = a['id'] is int ? a['id'] as int : int.tryParse(a['id']?.toString() ?? '') ?? -1;
+      final bId = b['id'] is int ? b['id'] as int : int.tryParse(b['id']?.toString() ?? '') ?? -1;
+
+      final aRecent = _recentVaultIds.contains(aId);
+      final bRecent = _recentVaultIds.contains(bId);
+      if (aRecent && !bRecent) return -1;
+      if (!aRecent && bRecent) return 1;
+
+      final aPos = _vaultOrder.indexOf(aId);
+      final bPos = _vaultOrder.indexOf(bId);
+      final aRank = aPos < 0 ? 9999 : aPos;
+      final bRank = bPos < 0 ? 9999 : bPos;
+      return aRank.compareTo(bRank);
+    });
+
+    return maps;
   }
 
   @override
   void dispose() {
     _toastOverlayEntry?.remove();
     _toastOverlayEntry = null;
+    _vaultScrollController.dispose();
     super.dispose();
   }
 
@@ -199,6 +277,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   double _asDouble(dynamic value) => value is num ? value.toDouble() : 0.0;
 
+  double? _asDoubleOrNull(dynamic value) =>
+      value is num ? value.toDouble() : null;
+
+  int _asInt(dynamic value) =>
+      value is int ? value : (value is num ? value.toInt() : 0);
+
   String _formatCurrency(num value) => _currencyFormat.format(value);
   String _formatWeight(num value) => '${_weightFormat.format(value)} جم';
 
@@ -294,12 +378,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
           ),
 
-          // === 2b. Critical Alerts Banner ===
-          SliverToBoxAdapter(child: _buildCriticalAlertsBanner()),
-
-          // === 2c. Admin Quick Actions ===
-          SliverToBoxAdapter(child: _buildAdminQuickActionsBar()),
-
           // === 3. Time-range-dependent content ===
           SliverToBoxAdapter(
             child: Column(
@@ -311,15 +389,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
 
                 // Cash Profit Card (follows time range)
-                HeroProfitSection(
-                  kpis: kpis,
-                  liquidity: liquidity,
-                  salesPurchasesSummary: salesPurchasesSummary,
-                  isArabic: widget.isArabic,
-                  scale: _s,
-                  currencyFormat: _currencyFormat,
-                  summaryPeriod: _summaryPeriod,
-                ),
+                _buildHeroProfitSection(kpis, liquidity, salesPurchasesSummary),
 
                 // KPI Grid
                 Padding(
@@ -339,9 +409,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     periodData: (salesPurchasesSummary[_summaryPeriod]
                             as Map<String, dynamic>?) ??
                         {},
-                    prevData: (salesPurchasesSummary['prev_$_summaryPeriod']
-                            as Map<String, dynamic>?) ??
-                        {},
                     isArabic: widget.isArabic,
                     currencyFormat: _currencyFormat,
                     weightFormat: _weightFormat,
@@ -353,24 +420,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
 
           // === 4. Vaults & Custody (Horizontal List) ===
-          SliverToBoxAdapter(
-            child: VaultsSection(
-              safeBoxes: safeBoxes,
-              api: widget.api,
-              isArabic: widget.isArabic,
-              scale: _s,
-              currencyFormat: _currencyFormat,
-              weightFormat: _weightFormat,
-            ),
-          ),
+          SliverToBoxAdapter(child: _buildVaultsSection(safeBoxes)),
 
           // === 5. Sensitive Operations Feed ===
           SliverToBoxAdapter(
-            child: SensitiveOperationsSection(
-              operations: sensitiveOps,
-              isArabic: widget.isArabic,
-              scale: _s,
-            ),
+            child: _buildSensitiveOperationsSection(sensitiveOps),
           ),
 
           SliverToBoxAdapter(child: SizedBox(height: _s(24))),
@@ -559,268 +613,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // CRITICAL ALERTS BANNER
-  // ══════════════════════════════════════════════════════════════════════════
-  Widget _buildCriticalAlertsBanner() {
-    final alerts = _getAllAlerts();
-    if (alerts.isEmpty) return const SizedBox.shrink();
-
-    final hasCritical = alerts.any((a) => a.color == Colors.red);
-    final bannerColor = hasCritical ? Colors.red : Colors.orange;
-    final isAr = widget.isArabic;
-    final first = alerts.first;
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(_s(16), _s(6), _s(16), 0),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(_s(10)),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => SystemAlertsScreen(
-                api: widget.api,
-                isArabic: isAr,
-              ),
-            ),
-          ),
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: _s(12),
-              vertical: _s(9),
-            ),
-            decoration: BoxDecoration(
-              color: bannerColor.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(_s(10)),
-              border: Border.all(
-                color: bannerColor.withValues(alpha: 0.35),
-                width: 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(first.icon, color: bannerColor, size: _s(17)),
-                SizedBox(width: _s(8)),
-                Expanded(
-                  child: Text(
-                    first.text,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: _s(12),
-                      fontWeight: FontWeight.w600,
-                      fontFamily: 'Cairo',
-                      color: bannerColor,
-                    ),
-                  ),
-                ),
-                if (alerts.length > 1) ...[
-                  SizedBox(width: _s(6)),
-                  Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: _s(6),
-                      vertical: _s(2),
-                    ),
-                    decoration: BoxDecoration(
-                      color: bannerColor,
-                      borderRadius: BorderRadius.circular(_s(20)),
-                    ),
-                    child: Text(
-                      '+${alerts.length - 1}',
-                      style: TextStyle(
-                        fontSize: _s(10),
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-                SizedBox(width: _s(6)),
-                Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  size: _s(12),
-                  color: bannerColor,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // ADMIN QUICK ACTIONS BAR
-  // ══════════════════════════════════════════════════════════════════════════
-  Widget _buildAdminQuickActionsBar() {
-    final isAr = widget.isArabic;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    final actions = [
-      (
-        icon: Icons.point_of_sale_outlined,
-        label: isAr ? 'إغلاق الوردية' : 'Shift Close',
-        color: Colors.indigo,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ShiftClosingScreen(
-              api: widget.api,
-              isArabic: isAr,
-            ),
-          ),
-        ),
-      ),
-      (
-        icon: Icons.account_balance_outlined,
-        label: isAr ? 'الخزائن' : 'Safe Boxes',
-        color: Colors.teal,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const SafeBoxesDashboardScreen(),
-          ),
-        ),
-      ),
-      (
-        icon: Icons.people_outline_rounded,
-        label: isAr ? 'الموظفون' : 'Employees',
-        color: Colors.deepPurple,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => EmployeesScreen(
-              api: widget.api,
-              isArabic: isAr,
-            ),
-          ),
-        ),
-      ),
-      (
-        icon: Icons.notifications_outlined,
-        label: isAr ? 'التنبيهات' : 'Alerts',
-        color: Colors.orange,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SystemAlertsScreen(
-              api: widget.api,
-              isArabic: isAr,
-            ),
-          ),
-        ),
-      ),
-      (
-        icon: Icons.history_rounded,
-        label: isAr ? 'سجل العمليات' : 'Audit Log',
-        color: Colors.blueGrey,
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AuditLogScreen()),
-        ),
-      ),
-    ];
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(_s(16), _s(10), _s(16), 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            isAr ? 'إجراءات سريعة' : 'Quick Actions',
-            style: theme.textTheme.labelSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              fontSize: _s(11),
-              color: theme.hintColor,
-              fontFamily: 'Cairo',
-            ),
-          ),
-          SizedBox(height: _s(8)),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: actions.map((a) {
-                return Padding(
-                  padding: EdgeInsets.only(left: isAr ? 0 : _s(8), right: isAr ? _s(8) : 0),
-                  child: _buildQuickActionChip(
-                    icon: a.icon,
-                    label: a.label,
-                    color: a.color,
-                    isDark: isDark,
-                    onTap: a.onTap,
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuickActionChip({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required bool isDark,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: color.withValues(alpha: isDark ? 0.15 : 0.09),
-      borderRadius: BorderRadius.circular(_s(10)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(_s(10)),
-        onTap: onTap,
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: _s(12), vertical: _s(8)),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: color, size: _s(16)),
-              SizedBox(width: _s(6)),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: _s(12),
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'Cairo',
-                  color: color,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildKpiGrid({
     required Map<String, dynamic> goldByKarat,
     required Map<String, dynamic> liquidity,
   }) {
-    return Row(
-      children: [
-        Expanded(
-          child: KaratDistributionCard(
-            goldByKarat: goldByKarat,
-            isArabic: widget.isArabic,
-            scale: _s,
-            weightFormat: _weightFormat,
-          ),
-        ),
-        SizedBox(width: _s(12)),
-        Expanded(
-          child: LiquidityBreakdownCard(
-            liquidity: liquidity,
-            isArabic: widget.isArabic,
-            scale: _s,
-            currencyFormat: _currencyFormat,
-          ),
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 700;
+        if (isWide) {
+          return Row(
+            children: [
+              Expanded(child: _buildKaratDistributionCard(goldByKarat)),
+              SizedBox(width: _s(12)),
+              Expanded(child: _buildLiquidityBreakdownCard(liquidity)),
+            ],
+          );
+        }
+
+        return Column(
+          children: [
+            _buildKaratDistributionCard(goldByKarat),
+            SizedBox(height: _s(12)),
+            _buildLiquidityBreakdownCard(liquidity),
+          ],
+        );
+      },
     );
   }
 
@@ -1259,7 +1076,488 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return spots;
   }
 
+  // Karat Distribution Donut Card
+  Widget _buildKaratDistributionCard(Map<String, dynamic> goldByKarat) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
 
+    final k18 = _asDouble(goldByKarat['18k']);
+    final k21 = _asDouble(goldByKarat['21k']);
+    final k22 = _asDouble(goldByKarat['22k']);
+    final k24 = _asDouble(goldByKarat['24k']);
+    final total = k18 + k21 + k22 + k24;
+
+    return _buildKpiCardWrapper(
+      onTap: () {
+        // Navigate to inventory
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.pie_chart, color: AppColors.primaryGold, size: _s(20)),
+              SizedBox(width: _s(6)),
+              Text(
+                isArabic ? 'توزيع العيارات' : 'Karat Mix',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontSize: _s(12),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(12)),
+          if (total == 0)
+            Center(
+              child: Text(
+                isArabic ? 'لا يوجد ذهب' : 'No gold',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.hintColor,
+                ),
+              ),
+            )
+          else
+            Row(
+              children: [
+                // Mini Donut Chart
+                SizedBox(
+                  width: _s(70),
+                  height: _s(70),
+                  child: PieChart(
+                    PieChartData(
+                      sectionsSpace: 1,
+                      centerSpaceRadius: _s(18),
+                      sections: [
+                        PieChartSectionData(
+                          value: k24,
+                          color: AppColors.primaryGold,
+                          radius: _s(15),
+                          showTitle: false,
+                        ),
+                        PieChartSectionData(
+                          value: k22,
+                          color: Colors.amber.shade600,
+                          radius: _s(15),
+                          showTitle: false,
+                        ),
+                        PieChartSectionData(
+                          value: k21,
+                          color: Colors.orange.shade600,
+                          radius: _s(15),
+                          showTitle: false,
+                        ),
+                        PieChartSectionData(
+                          value: k18,
+                          color: Colors.deepOrange.shade400,
+                          radius: _s(15),
+                          showTitle: false,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(width: _s(10)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildKaratLegendItem(
+                        label: '24K',
+                        value: k24,
+                        color: AppColors.primaryGold,
+                        total: total,
+                      ),
+                      _buildKaratLegendItem(
+                        label: '22K',
+                        value: k22,
+                        color: Colors.amber.shade600,
+                        total: total,
+                      ),
+                      _buildKaratLegendItem(
+                        label: '21K',
+                        value: k21,
+                        color: Colors.orange.shade600,
+                        total: total,
+                      ),
+                      _buildKaratLegendItem(
+                        label: '18K',
+                        value: k18,
+                        color: Colors.deepOrange.shade400,
+                        total: total,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKaratLegendItem({
+    required String label,
+    required double value,
+    required Color color,
+    required double total,
+  }) {
+    final pct = total > 0 ? (value / total * 100).toStringAsFixed(0) : '0';
+    return Padding(
+      padding: EdgeInsets.only(bottom: _s(2)),
+      child: Row(
+        children: [
+          Container(
+            width: _s(9),
+            height: _s(9),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          SizedBox(width: _s(6)),
+          Expanded(
+            child: Text(
+              '$label: ${_formatWeight(value)} • $pct%',
+              style: TextStyle(fontSize: _s(11)),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Liquidity Breakdown Card
+  Widget _buildLiquidityBreakdownCard(Map<String, dynamic> liquidity) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    final cashInHand = _asDouble(liquidity['cash_in_hand']);
+    final cashInBanks = _asDouble(liquidity['cash_in_banks']);
+    final receivables = _asDouble(liquidity['receivables']);
+    final total = cashInHand + cashInBanks + receivables;
+
+    return _buildKpiCardWrapper(
+      onTap: () {},
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.water_drop, color: Colors.blue, size: _s(20)),
+              SizedBox(width: _s(6)),
+              Text(
+                isArabic ? 'مركز السيولة' : 'Liquidity',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontSize: _s(12),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(12)),
+          _buildLiquidityRow(
+            isArabic ? 'نقدية' : 'Cash',
+            cashInHand,
+            Colors.green,
+            total,
+          ),
+          SizedBox(height: _s(4)),
+          _buildLiquidityRow(
+            isArabic ? 'بنوك' : 'Banks',
+            cashInBanks,
+            Colors.blue,
+            total,
+          ),
+          SizedBox(height: _s(4)),
+          _buildLiquidityRow(
+            isArabic ? 'ذمم' : 'Receiv.',
+            receivables,
+            Colors.orange,
+            total,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiquidityRow(
+    String label,
+    double value,
+    Color color,
+    double total,
+  ) {
+    final pct = total > 0 ? value / total : 0.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: TextStyle(fontSize: _s(11))),
+            Text(
+              _formatCurrency(value),
+              style: TextStyle(fontSize: _s(11), fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        SizedBox(height: _s(2)),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(_s(2)),
+          child: LinearProgressIndicator(
+            value: pct,
+            minHeight: _s(4),
+            backgroundColor: color.withValues(alpha: 0.15),
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // HERO PROFIT SECTION (follows selected time range)
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildHeroProfitSection(
+    Map<String, dynamic> kpis,
+    Map<String, dynamic> liquidity,
+    Map<String, dynamic> salesPurchasesSummary,
+  ) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    // Pull period-specific data from salesPurchasesSummary
+    final periodData =
+        (salesPurchasesSummary[_summaryPeriod] as Map<String, dynamic>?) ?? {};
+    final salesData = (periodData['sales'] as Map<String, dynamic>?) ?? {};
+    final purchasesData =
+        (periodData['purchases'] as Map<String, dynamic>?) ?? {};
+    final expensesData =
+        (periodData['expenses'] as Map<String, dynamic>?) ?? {};
+
+    final periodSales = _asDouble(salesData['total_value']);
+    final periodPurchases = _asDouble(purchasesData['total_value']);
+    final periodExpenses = _asDouble(expensesData['total_value']);
+    final periodProfit = periodSales - periodPurchases - periodExpenses;
+    final periodMargin =
+        periodSales > 0 ? (periodProfit / periodSales) * 100 : null;
+
+    final cashAvailable = _asDouble(liquidity['cash_available']);
+
+    // Today-specific comparison data (only shown when range is today)
+    final vsYesterdayPct =
+        _timeRange == _TimeRange.today
+            ? _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct'])
+            : null;
+
+    final isProfit = periodProfit >= 0;
+    final profitColor = isProfit ? AppColors.success : Colors.red.shade600;
+
+    // Period title
+    final String periodTitle;
+    switch (_timeRange) {
+      case _TimeRange.today:
+        periodTitle = isArabic ? 'صافي ربح اليوم' : "Today's Net Profit";
+        break;
+      case _TimeRange.month:
+        periodTitle = isArabic ? 'صافي ربح الشهر' : "Monthly Net Profit";
+        break;
+      case _TimeRange.year:
+        periodTitle = isArabic ? 'صافي ربح السنة' : "Yearly Net Profit";
+        break;
+    }
+
+    // Smart insight
+    String insightText = '';
+    if (vsYesterdayPct != null) {
+      final direction = vsYesterdayPct >= 0
+          ? (isArabic ? 'ارتفع' : 'Up')
+          : (isArabic ? 'انخفض' : 'Down');
+      insightText = isArabic
+          ? 'الربح $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
+          : 'Profit $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% vs yesterday';
+    } else if (isProfit) {
+      insightText = isArabic ? 'النتيجة: ربح ✓' : 'Result: Profit ✓';
+    } else {
+      insightText = isArabic ? 'المصروفات تفوق المبيعات' : 'Expenses exceed sales';
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
+      child: Container(
+        padding: EdgeInsets.all(_s(20)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+            colors: isProfit
+                ? [
+                    AppColors.success.withValues(alpha: 0.10),
+                    theme.cardColor,
+                  ]
+                : [
+                    Colors.red.shade600.withValues(alpha: 0.08),
+                    theme.cardColor,
+                  ],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: profitColor.withValues(alpha: 0.25),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: profitColor.withValues(alpha: 0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title row + vs-yesterday badge
+            Row(
+              children: [
+                Icon(
+                  isProfit ? Icons.trending_up : Icons.trending_down,
+                  color: profitColor,
+                  size: _s(20),
+                ),
+                SizedBox(width: _s(6)),
+                Text(
+                  periodTitle,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.textTheme.bodySmall?.color,
+                  ),
+                ),
+                const Spacer(),
+                if (vsYesterdayPct != null)
+                  Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: _s(8),
+                      vertical: _s(3),
+                    ),
+                    decoration: BoxDecoration(
+                      color: (vsYesterdayPct >= 0 ? Colors.green : Colors.red)
+                          .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          vsYesterdayPct >= 0
+                              ? Icons.arrow_upward
+                              : Icons.arrow_downward,
+                          size: _s(12),
+                          color: vsYesterdayPct >= 0
+                              ? Colors.green.shade700
+                              : Colors.red.shade600,
+                        ),
+                        SizedBox(width: _s(2)),
+                        Text(
+                          '${vsYesterdayPct.abs().toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            fontSize: _s(11),
+                            fontWeight: FontWeight.bold,
+                            color: vsYesterdayPct >= 0
+                                ? Colors.green.shade700
+                                : Colors.red.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            SizedBox(height: _s(10)),
+
+            // The hero number
+            Text(
+              _formatCurrency(periodProfit),
+              style: theme.textTheme.displaySmall?.copyWith(
+                fontWeight: FontWeight.w900,
+                color: profitColor,
+                fontSize: _s(30),
+                letterSpacing: -0.5,
+              ),
+            ),
+
+            // Margin badge
+            if (periodMargin != null) ...[
+              SizedBox(height: _s(4)),
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: _s(8),
+                  vertical: _s(3),
+                ),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${periodMargin.toStringAsFixed(1)}% ${isArabic ? "هامش ربح" : "margin"}',
+                  style: TextStyle(
+                    fontSize: _s(11),
+                    fontWeight: FontWeight.bold,
+                    color: profitColor,
+                  ),
+                ),
+              ),
+            ],
+
+            SizedBox(height: _s(10)),
+            // Smart insight
+            if (insightText.isNotEmpty)
+              Row(
+                children: [
+                  Icon(
+                    Icons.lightbulb_outline,
+                    size: _s(13),
+                    color: theme.hintColor,
+                  ),
+                  SizedBox(width: _s(4)),
+                  Text(
+                    insightText,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: _s(11),
+                      color: theme.hintColor,
+                    ),
+                  ),
+                ],
+              ),
+
+            SizedBox(height: _s(14)),
+            // Quick chips row
+            Wrap(
+              spacing: _s(8),
+              runSpacing: _s(6),
+              children: [
+                _heroChip(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: isArabic ? 'السيولة' : 'Cash',
+                  value: _formatCurrency(cashAvailable),
+                  color: AppColors.primaryGold,
+                ),
+                _heroChip(
+                  icon: Icons.arrow_upward,
+                  label: isArabic ? 'مبيعات' : 'Sales',
+                  value: _formatCurrency(periodSales),
+                  color: const Color(0xFF1B9E4B),
+                ),
+                _heroChip(
+                  icon: Icons.arrow_downward,
+                  label: isArabic ? 'مشتريات' : 'Purch.',
+                  value: _formatCurrency(periodPurchases),
+                  color: Colors.orange.shade700,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _heroChip({
     required IconData icon,
@@ -1616,8 +1914,819 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       ),
     );
   }
-}
 
+  // _buildTodayProfitCard removed (unused).
+  // ignore: unused_element
+  Widget _buildTodayProfitCard(Map<String, dynamic> kpis) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    final todayProfit = _asDouble(kpis['today_profit']);
+    final profitMargin = kpis['today_profit_margin_pct'];
+    final marginValue = profitMargin is num ? profitMargin.toDouble() : null;
+
+    final isPositive = todayProfit >= 0;
+
+    return _buildKpiCardWrapper(
+      onTap: () {},
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.trending_up,
+                color: isPositive ? Colors.green : Colors.red,
+                size: _s(20),
+              ),
+              SizedBox(width: _s(6)),
+              Text(
+                isArabic ? 'هامش الربح اليوم' : 'Today Profit',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontSize: _s(12),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(12)),
+          Text(
+            _formatCurrency(todayProfit),
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: isPositive ? Colors.green : Colors.red,
+              fontSize: _s(20),
+            ),
+          ),
+          if (marginValue != null)
+            Container(
+              margin: EdgeInsets.only(top: _s(4)),
+              padding: EdgeInsets.symmetric(horizontal: _s(6), vertical: _s(2)),
+              decoration: BoxDecoration(
+                color: (isPositive ? Colors.green : Colors.red).withValues(
+                  alpha: 0.1,
+                ),
+                borderRadius: BorderRadius.circular(_s(4)),
+              ),
+              child: Text(
+                '${marginValue.toStringAsFixed(1)}% ${isArabic ? "هامش" : "margin"}',
+                style: TextStyle(
+                  fontSize: _s(11),
+                  fontWeight: FontWeight.bold,
+                  color: isPositive ? Colors.green : Colors.red,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKpiCardWrapper({required Widget child, VoidCallback? onTap}) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.all(_s(12)),
+        decoration: BoxDecoration(
+          color: isDark ? theme.cardColor : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: isDark
+              ? Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.22),
+                  width: 1,
+                )
+              : Border.all(
+                  color: AppColors.primaryGold.withValues(alpha: 0.45),
+                  width: 1.2,
+                ),
+          boxShadow: isDark
+              ? [
+                  BoxShadow(
+                    color: AppColors.primaryGold.withValues(alpha: 0.09),
+                    blurRadius: 16,
+                    offset: const Offset(0, 0),
+                  ),
+                ]
+              : [
+                  BoxShadow(
+                    color: AppColors.primaryGold.withValues(alpha: 0.15),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+        ),
+        child: child,
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 4. VAULTS & CUSTODY (Horizontal List)
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildVaultsSection(List<dynamic> safeBoxes) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    if (safeBoxes.isEmpty) return const SizedBox.shrink();
+
+    final anyExpanded = _expandedVaultSafeBoxId != null;
+    // Give cards enough vertical room to avoid RenderFlex overflow.
+    final listHeight = anyExpanded ? _s(260) : _s(168);
+    final sorted = _sortedVaults(safeBoxes);
+
+    Widget buildCard(int index, Map<String, dynamic> sb, {bool reorderMode = false}) {
+      final id = sb['id'];
+      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+      final heroTag = sbId != null ? 'vault_safe_box_$sbId' : 'vault_safe_box_$index';
+      final isExpanded = (sbId != null && sbId == _expandedVaultSafeBoxId);
+      final isPressed = (sbId != null && sbId == _pressedVaultSafeBoxId);
+
+      return _buildVaultCard(
+        sb,
+        heroTag: heroTag,
+        isExpanded: isExpanded,
+        isPressed: isPressed,
+        reorderMode: reorderMode,
+        onTap: () {
+          if (sbId == null) return;
+          setState(() {
+            _expandedVaultSafeBoxId = isExpanded ? null : sbId;
+          });
+        },
+        onOpenDetails: () {
+          if (sbId != null) {
+            setState(() => _recentVaultIds.add(sbId));
+          }
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => SafeBoxHeroDetailsScreen(
+                api: widget.api,
+                isArabic: widget.isArabic,
+                safeBox: sb,
+                heroTag: heroTag,
+              ),
+            ),
+          );
+        },
+        onPressChanged: (pressed) {
+          if (sbId == null) return;
+          setState(() {
+            if (pressed) {
+              _pressedVaultSafeBoxId = sbId;
+            } else if (_pressedVaultSafeBoxId == sbId) {
+              _pressedVaultSafeBoxId = null;
+            }
+          });
+        },
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: _s(16)),
+          child: Row(
+            children: [
+              Icon(
+                Icons.inventory_2,
+                color: theme.colorScheme.primary,
+                size: _s(22),
+              ),
+              SizedBox(width: _s(8)),
+              Text(
+                isArabic ? 'توزيع العهد والخزائن' : 'Vaults & Custody',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              // Reorder toggle
+              Tooltip(
+                message: _isReorderingVaults
+                    ? (isArabic ? 'تم الترتيب' : 'Done')
+                    : (isArabic ? 'إعادة ترتيب' : 'Reorder'),
+                child: IconButton(
+                  icon: Icon(
+                    _isReorderingVaults ? Icons.check_circle_outline : Icons.swap_horiz,
+                    size: _s(20),
+                    color: _isReorderingVaults
+                        ? theme.colorScheme.primary
+                        : theme.hintColor,
+                  ),
+                  onPressed: () => setState(() => _isReorderingVaults = !_isReorderingVaults),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => SafeBoxesScreen(
+                        api: widget.api,
+                        isArabic: widget.isArabic,
+                        balancesView: true,
+                      ),
+                    ),
+                  );
+                },
+                child: Text(isArabic ? 'عرض الكل' : 'View all'),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: _s(12)),
+        SizedBox(
+          height: listHeight,
+          child: Listener(
+            onPointerSignal: (event) {
+              if (event is PointerScrollEvent) {
+                final offset = (_vaultScrollController.offset +
+                    event.scrollDelta.dy * 1.5)
+                    .clamp(0.0,
+                        _vaultScrollController.position.maxScrollExtent);
+                _vaultScrollController.jumpTo(offset);
+              }
+            },
+            child: _isReorderingVaults
+                ? ReorderableListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    scrollController: _vaultScrollController,
+                    padding: EdgeInsets.symmetric(horizontal: _s(16)),
+                    itemCount: sorted.length,
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) newIndex--;
+                        final item = sorted.removeAt(oldIndex);
+                        sorted.insert(newIndex, item);
+                        // Rebuild _vaultOrder from reordered list
+                        _vaultOrder = sorted
+                            .map((sb) {
+                              final id = sb['id'];
+                              return id is int
+                                  ? id
+                                  : int.tryParse(id?.toString() ?? '');
+                            })
+                            .whereType<int>()
+                            .toList();
+                      });
+                      _saveVaultOrder();
+                    },
+                    itemBuilder: (context, index) {
+                      final sb = sorted[index];
+                      final id = sb['id'];
+                      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+                      return KeyedSubtree(
+                        key: ValueKey(sbId ?? index),
+                        child: buildCard(index, sb, reorderMode: true),
+                      );
+                    },
+                  )
+                : AnimationLimiter(
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      controller: _vaultScrollController,
+                      padding: EdgeInsets.symmetric(horizontal: _s(16)),
+                      itemCount: sorted.length,
+                      itemBuilder: (context, index) {
+                        final sb = sorted[index];
+                        return AnimationConfiguration.staggeredList(
+                          position: index,
+                          duration: const Duration(milliseconds: 420),
+                          child: SlideAnimation(
+                            verticalOffset: 18.0,
+                            child: FadeInAnimation(
+                              child: buildCard(index, sb),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  double _sbWeight(Map<String, dynamic> sb, String key) {
+    final wb = sb['weight_balance'];
+    if (wb is Map) {
+      final raw = wb[key];
+      if (raw is num) return raw.toDouble();
+      return double.tryParse(raw?.toString() ?? '') ?? 0.0;
+    }
+    return 0.0;
+  }
+
+  Widget _buildVaultCard(
+    Map<String, dynamic> sb, {
+    required String heroTag,
+    required bool isExpanded,
+    required bool isPressed,
+    required VoidCallback onTap,
+    required VoidCallback onOpenDetails,
+    required ValueChanged<bool> onPressChanged,
+    bool reorderMode = false,
+  }) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    final name = sb['name'] ?? '-';
+    final safeType = sb['safe_type'] ?? 'cash';
+    final cashBalance = _asDouble(sb['balance_cash']);
+    final goldBalance = _asDouble(sb['balance_gold_21k']);
+    final hasActivity = sb['has_recent_activity'] == true;
+
+    final w18 = _sbWeight(sb, '18k');
+    final w21 = _sbWeight(sb, '21k');
+    final w22 = _sbWeight(sb, '22k');
+    final w24 = _sbWeight(sb, '24k');
+    final totalMain = _asDouble(sb['total_weight_main_karat']);
+    final hasWeightBreakdown = sb['weight_balance'] is Map;
+    final mainKaratFromApi = _asInt(sb['main_karat']);
+    final displayMainKarat = mainKaratFromApi > 0 ? mainKaratFromApi : 21;
+
+    double totalMainFallback() {
+      final mk = displayMainKarat <= 0 ? 21.0 : displayMainKarat.toDouble();
+      return (w18 * (18.0 / mk)) + w21 + (w22 * (22.0 / mk)) + (w24 * (24.0 / mk));
+    }
+
+    final totalMainEffective = (totalMain > 0)
+        ? totalMain
+        : (hasWeightBreakdown ? totalMainFallback() : 0.0);
+
+    final physicalTotal = hasWeightBreakdown ? (w18 + w21 + w22 + w24) : 0.0;
+
+    IconData icon;
+    Color color;
+    String subtitle;
+    double primaryValue;
+    String Function(double) primaryFormatter;
+    String? primaryCaption;
+
+    switch (safeType) {
+      case 'gold':
+        icon = Icons.auto_awesome;
+        color = AppColors.primaryGold;
+        // Collapsed: show main-karat equivalent (dynamic main karat).
+        // Expanded: show physical total across all karats.
+        primaryValue = isExpanded ? physicalTotal : totalMainEffective;
+        primaryFormatter = _formatWeight;
+        subtitle = isArabic ? 'ذهب' : 'Gold';
+        primaryCaption = isExpanded
+            ? (isArabic
+                ? 'إجمالي فعلي (جميع العيارات)'
+                : 'Physical total (all karats)')
+            : (isArabic
+                ? 'مكافئ العيار الرئيسي (${displayMainKarat}k)'
+                : 'Main karat equivalent (${displayMainKarat}k)');
+        break;
+      case 'bank':
+        icon = Icons.account_balance;
+        color = Colors.blue;
+        primaryValue = cashBalance;
+        primaryFormatter = _formatCurrency;
+        subtitle = isArabic ? 'بنك' : 'Bank';
+        break;
+      default:
+        icon = Icons.account_balance_wallet;
+        color = Colors.green;
+        primaryValue = cashBalance;
+        primaryFormatter = _formatCurrency;
+        subtitle = isArabic ? 'نقد' : 'Cash';
+    }
+
+    final cardWidth = isExpanded ? _s(290) : _s(172);
+
+    Widget buildDetailChip(String label, String value, {Color? chipColor}) {
+      final c = chipColor ?? color;
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: _s(8), vertical: _s(5)),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(_s(10)),
+          border: Border.all(color: c.withValues(alpha: 0.28)),
+        ),
+        child: Text(
+          '$label: $value',
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontSize: _s(11),
+            fontWeight: FontWeight.w600,
+            color: theme.brightness == Brightness.dark
+                ? Colors.white
+                : Colors.black87,
+          ),
+        ),
+      );
+    }
+
+    final details = safeType == 'gold'
+        ? (hasWeightBreakdown
+            ? Wrap(
+                spacing: _s(8),
+                runSpacing: _s(8),
+                children: [
+                  buildDetailChip('24k', _formatWeight(w24), chipColor: AppColors.karat24),
+                  buildDetailChip('22k', _formatWeight(w22), chipColor: AppColors.karat22),
+                  buildDetailChip('21k', _formatWeight(w21), chipColor: AppColors.karat21),
+                  buildDetailChip('18k', _formatWeight(w18), chipColor: AppColors.karat18),
+                ],
+              )
+            : Wrap(
+                spacing: _s(8),
+                runSpacing: _s(8),
+                children: [
+                  buildDetailChip('21k', _formatWeight(goldBalance), chipColor: AppColors.karat21),
+                  buildDetailChip(
+                    isArabic ? 'ملاحظة' : 'Note',
+                    isArabic
+                        ? 'تفصيل العيارات غير متوفر بعد'
+                        : 'Karat breakdown not available yet',
+                    chipColor: theme.hintColor,
+                  ),
+                ],
+              ))
+        : Wrap(
+            spacing: _s(8),
+            runSpacing: _s(8),
+            children: [
+              buildDetailChip(
+                isArabic ? 'الرصيد' : 'Balance',
+                _formatCurrency(cashBalance),
+                chipColor: color,
+              ),
+            ],
+          );
+
+    final borderAccent = hasActivity ? Colors.green : theme.hintColor;
+    final borderColor = borderAccent.withValues(alpha: hasActivity ? 0.55 : 0.25);
+    final glowColor = (hasActivity ? Colors.green : color).withValues(
+      alpha: isPressed ? 0.22 : (isExpanded ? 0.14 : 0.10),
+    );
+    final glassBase = theme.colorScheme.surface.withValues(
+      alpha: theme.brightness == Brightness.dark ? 0.25 : 0.78,
+    );
+
+    final heroIconTag = '${heroTag}_icon';
+    final heroNameTag = '${heroTag}_name';
+
+    final cardBody = Material(
+      color: Colors.transparent,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTapDown: (_) => onPressChanged(true),
+            onTapCancel: () => onPressChanged(false),
+            onTap: () {
+              onPressChanged(false);
+              onTap();
+            },
+            child: AnimatedScale(
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOut,
+              scale: isPressed ? 0.985 : 1.0,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                width: cardWidth,
+                padding: EdgeInsets.all(_s(12)),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: borderColor,
+                    width: isPressed ? 1.2 : 1.0,
+                  ),
+                  gradient: LinearGradient(
+                    begin: AlignmentDirectional.topStart,
+                    end: AlignmentDirectional.bottomEnd,
+                    colors: [
+                      glassBase.withValues(alpha: 0.88),
+                      glassBase.withValues(alpha: 0.72),
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: glowColor,
+                      blurRadius: isPressed ? 18 : (isExpanded ? 16 : 12),
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Stack(
+                  children: [
+                    PositionedDirectional(
+                      start: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: _s(4),
+                        decoration: BoxDecoration(
+                          color: color.withValues(
+                            alpha: hasActivity ? 0.85 : 0.55,
+                          ),
+                          borderRadius: BorderRadiusDirectional.horizontal(
+                            start: Radius.circular(_s(14)),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsetsDirectional.only(start: _s(6)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Hero(
+                                tag: heroIconTag,
+                                createRectTween: (begin, end) =>
+                                    MaterialRectArcTween(begin: begin, end: end),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: Icon(
+                                    icon,
+                                    color: color,
+                                    size: _s(20),
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: _s(6)),
+                              if (hasActivity)
+                                Container(
+                                  width: _s(9),
+                                  height: _s(9),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              const Spacer(),
+                              InkResponse(
+                                onTap: () {
+                                  onPressChanged(false);
+                                  onOpenDetails();
+                                },
+                                radius: _s(18),
+                                child: Icon(
+                                  Icons.open_in_new,
+                                  color: theme.hintColor,
+                                  size: _s(18),
+                                ),
+                              ),
+                              SizedBox(width: _s(6)),
+                              AnimatedRotation(
+                                turns: isExpanded ? 0.5 : 0.0,
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                                child: Icon(
+                                  Icons.expand_more,
+                                  color: theme.hintColor,
+                                  size: _s(18),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: _s(8)),
+                          Hero(
+                            tag: heroNameTag,
+                            createRectTween: (begin, end) =>
+                                MaterialRectArcTween(begin: begin, end: end),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: Tooltip(
+                                message: name.toString(),
+                                child: Text(
+                                  name,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: _s(12.5),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(height: _s(2)),
+                          Text(
+                            subtitle,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: _s(11),
+                              color: theme.hintColor,
+                            ),
+                          ),
+                          if (!isExpanded) const Spacer(),
+                          SizedBox(height: _s(10)),
+                          if (primaryCaption != null) ...[
+                            Text(
+                              primaryCaption,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontSize: _s(10.5),
+                                color: theme.hintColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            SizedBox(height: _s(6)),
+                          ],
+                          _AnimatedValueText(
+                            value: primaryValue,
+                            formatter: primaryFormatter,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: color,
+                              fontSize: _s(14),
+                            ),
+                          ),
+                          AnimatedCrossFade(
+                            firstChild: const SizedBox.shrink(),
+                            secondChild: Padding(
+                              padding: EdgeInsets.only(top: _s(12)),
+                              child: details,
+                            ),
+                            crossFadeState: isExpanded
+                                ? CrossFadeState.showSecond
+                                : CrossFadeState.showFirst,
+                            duration: const Duration(milliseconds: 240),
+                            firstCurve: Curves.easeOut,
+                            secondCurve: Curves.easeOutCubic,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Container(
+      margin: EdgeInsetsDirectional.only(start: _s(12)),
+      child: cardBody,
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 5. SENSITIVE OPERATIONS FEED
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildSensitiveOperationsSection(List<dynamic> operations) {
+    final theme = Theme.of(context);
+    final isArabic = widget.isArabic;
+
+    final hasData = operations.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: _s(16)),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: _s(16)),
+          child: Row(
+            children: [
+              Icon(Icons.history, color: Colors.purple, size: _s(22)),
+              SizedBox(width: _s(8)),
+              Text(
+                isArabic ? 'العمليات الحساسة' : 'Audit Trail',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+                  );
+                },
+                child: Text(isArabic ? 'السجل' : 'Log'),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: _s(8)),
+        if (!hasData)
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: _s(16)),
+            padding: EdgeInsets.all(_s(12)),
+            decoration: BoxDecoration(
+              color: Colors.purple.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.purple.withValues(alpha: 0.1)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.shield_outlined,
+                  color: Colors.purple.shade300,
+                  size: _s(22),
+                ),
+                SizedBox(width: _s(10)),
+                Expanded(
+                  child: Text(
+                    isArabic
+                        ? 'لا توجد عمليات حساسة للعرض حالياً'
+                        : 'No sensitive operations to show',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                      fontSize: _s(12),
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+                    );
+                  },
+                  child: Text(isArabic ? 'فتح السجل' : 'Open log'),
+                ),
+              ],
+            ),
+          )
+        else
+          ...operations.take(5).map((op) {
+            final opMap = op as Map<String, dynamic>;
+            final desc = opMap['description'] ?? '-';
+            final user = opMap['user_name'] ?? '-';
+            final timeAgo = opMap['time_ago'] ?? '';
+            final entityNumber = opMap['entity_number'];
+
+            return InkWell(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+                );
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                margin: EdgeInsets.symmetric(
+                  horizontal: _s(16),
+                  vertical: _s(4),
+                ),
+                padding: EdgeInsets.all(_s(10)),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.purple.withValues(alpha: 0.1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.security,
+                      color: Colors.purple.shade300,
+                      size: _s(18),
+                    ),
+                    SizedBox(width: _s(8)),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$desc ${entityNumber != null ? "#$entityNumber" : ""}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              fontSize: _s(12),
+                            ),
+                          ),
+                          Text(
+                            '$user • $timeAgo',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.hintColor,
+                              fontSize: _s(11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_left,
+                      size: _s(20),
+                      color: theme.hintColor,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+      ],
+    );
+  }
+}
 
 class _StickyRangeSelectorDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
@@ -1695,4 +2804,55 @@ class _AlertItem {
   final String text;
 
   _AlertItem({required this.icon, required this.color, required this.text});
+}
+
+class _AnimatedValueText extends StatefulWidget {
+  final double value;
+  final String Function(double) formatter;
+  final TextStyle? style;
+
+  const _AnimatedValueText({
+    required this.value,
+    required this.formatter,
+    this.style,
+  });
+
+  @override
+  State<_AnimatedValueText> createState() => _AnimatedValueTextState();
+}
+
+class _AnimatedValueTextState extends State<_AnimatedValueText> {
+  late double _from;
+  late double _to;
+
+  @override
+  void initState() {
+    super.initState();
+    _from = 0.0;
+    _to = widget.value;
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimatedValueText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value) {
+      _from = _to;
+      _to = widget.value;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: _from, end: _to),
+      duration: const Duration(milliseconds: 650),
+      curve: Curves.easeOutCubic,
+      builder: (context, v, _) {
+        return Text(widget.formatter(v), style: widget.style);
+      },
+      onEnd: () {
+        _from = _to;
+      },
+    );
+  }
 }

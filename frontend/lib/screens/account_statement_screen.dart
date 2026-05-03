@@ -1322,7 +1322,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       builder: (context, constraints) {
         return Column(
           children: [
-            _buildCollapsibleTopChrome(constraints.maxWidth),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: constraints.maxHeight * 0.45,
+              ),
+              child: _buildCollapsibleTopChrome(constraints.maxWidth),
+            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: _buildToolbar(constraints.maxWidth),
