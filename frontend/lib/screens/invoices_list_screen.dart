@@ -1525,9 +1525,15 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
             ),
           ),
         ),
-        body: Column(
+        body: LayoutBuilder(
+          builder: (context, constraints) => Column(
           children: [
-            _buildCollapsibleTopChrome(),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: constraints.maxHeight * 0.45,
+              ),
+              child: _buildCollapsibleTopChrome(),
+            ),
             Padding(
               padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 8, 0),
               child: _buildFilterToolbar(),
@@ -1547,6 +1553,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                     ),
             ),
           ],
+          ),
         ),
       ),
     );

@@ -2658,20 +2658,27 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             ),
           ],
         ),
-        body: Column(
-          children: [
-            _buildCollapsibleTopChrome(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: _buildManagementToolbar(),
-            ),
-            if (_isLoading && _entries.isNotEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: LinearProgressIndicator(minHeight: 2),
+        body: LayoutBuilder(
+          builder: (context, constraints) => Column(
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: constraints.maxHeight * 0.45,
+                ),
+                child: _buildCollapsibleTopChrome(),
               ),
-            Expanded(child: _buildBody()),
-          ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: _buildManagementToolbar(),
+              ),
+              if (_isLoading && _entries.isNotEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+              Expanded(child: _buildBody()),
+            ],
+          ),
         ),
       ),
     );
