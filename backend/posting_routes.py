@@ -712,6 +712,16 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
     if existing:
         return []
 
+    # Remove provisional invoice_scrap_receipt entries created at invoice-save time
+    # (before posting). These are placeholders that would cause double-counting once
+    # the definitive invoice_gold SBT is created here with its matching GL entry.
+    provisional = SafeBoxTransaction.query.filter(
+        SafeBoxTransaction.ref_type.in_(['invoice_scrap_receipt', 'invoice_scrap_return']),
+        SafeBoxTransaction.ref_id == invoice.id,
+    ).all()
+    for _sbt in provisional:
+        db.session.delete(_sbt)
+
     weights_by_karat = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
 
     invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
@@ -770,6 +780,72 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
             if grams <= 0:
                 continue
             weights_by_karat[karat] += float(grams)
+
+    # --- GL fallback: if weight extraction from items/karat-lines yielded nothing,
+    #     read the already-committed GL lines for this invoice.  This handles
+    #     supplier-purchase invoices (شراء, gold_type=new) where item-level
+    #     weights may be None. ---
+    _all_zero = all(v <= 0.0005 for v in weights_by_karat.values())
+    if _all_zero:
+        try:
+            _gl_lines = (
+                db.session.query(JournalEntryLine)
+                .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+                .filter(
+                    JournalEntry.reference_type == 'invoice',
+                    JournalEntry.reference_id == invoice.id,
+                    JournalEntry.is_posted == True,
+                    JournalEntry.is_deleted == False,
+                    JournalEntryLine.is_deleted == False,
+                )
+                .all()
+            )
+            # Collect account_ids from GL lines that touch gold safe accounts
+            _acc_ids = list({int(l.account_id) for l in _gl_lines if l.account_id is not None})
+            _safe_by_acc: dict = {}
+            for _sb in SafeBox.query.filter(
+                SafeBox.account_id.in_(_acc_ids),
+                SafeBox.safe_type == 'gold',
+                SafeBox.is_active == True,
+            ).all():
+                if _sb.account_id is not None:
+                    _safe_by_acc[int(_sb.account_id)] = _sb
+
+            _gl_direction = _direction_for_invoice_gold(getattr(invoice, 'invoice_type', None))
+            _invoice_number = getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', ''))
+            _created_gl = []
+            for _line in _gl_lines:
+                _sb = _safe_by_acc.get(int(_line.account_id))
+                if not _sb:
+                    continue
+                # Pick debit/credit based on the logical direction of this invoice type
+                if _gl_direction == 'in':
+                    _w18 = float(_line.debit_18k or 0); _w21 = float(_line.debit_21k or 0)
+                    _w22 = float(_line.debit_22k or 0); _w24 = float(_line.debit_24k or 0)
+                else:
+                    _w18 = float(_line.credit_18k or 0); _w21 = float(_line.credit_21k or 0)
+                    _w22 = float(_line.credit_22k or 0); _w24 = float(_line.credit_24k or 0)
+                if not any(v > 0.0005 for v in (_w18, _w21, _w22, _w24)):
+                    continue
+                _tx = SafeBoxTransaction(
+                    safe_box_id=_sb.id,
+                    ref_type='invoice_gold',
+                    ref_id=invoice.id,
+                    invoice_id=invoice.id,
+                    direction=_gl_direction,
+                    amount_cash=0.0,
+                    weight_18k=round(_w18, 6),
+                    weight_21k=round(_w21, 6),
+                    weight_22k=round(_w22, 6),
+                    weight_24k=round(_w24, 6),
+                    notes=f"Invoice {_invoice_number} - {getattr(invoice, 'invoice_type', '')} [GL-fallback]",
+                    created_by=created_by,
+                )
+                db.session.add(_tx)
+                _created_gl.append(_tx)
+            return _created_gl
+        except Exception:
+            pass  # GL fallback failed; let the normal path continue (zero weights → no rows → no exception)
 
     direction = _direction_for_invoice_gold(getattr(invoice, 'invoice_type', None))
     invoice_number = getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', ''))
@@ -3456,6 +3532,308 @@ def admin_move_sbt():
         db.session.commit()
         result['success'] = True
         return jsonify(result), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ============================================================
+# 🔧 Repair: Create missing gold SBT from GL lines
+# ============================================================
+
+@posting_bp.route('/admin/repair-sbt-for-invoice/<int:invoice_id>', methods=['POST'])
+@require_permission('admin')
+def repair_sbt_for_invoice(invoice_id: int):
+    """Create missing SafeBoxTransaction gold entries for a posted invoice.
+
+    Instead of relying on weight extraction from invoice items (which may fail
+    for supplier purchase invoices), this reads the *already-posted GL lines*
+    for the invoice, finds which accounts map to gold SafeBoxes, and creates
+    the corresponding SBT rows.
+
+    Idempotent: skips if an invoice_gold SBT already exists for the same safe.
+    """
+    try:
+        invoice = Invoice.query.get(invoice_id)
+        if not invoice:
+            return jsonify({'success': False, 'message': 'الفاتورة غير موجودة'}), 404
+
+        if not getattr(invoice, 'is_posted', False):
+            return jsonify({'success': False, 'message': 'الفاتورة غير مرحلة'}), 400
+
+        created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'repair'
+
+        # Fetch all posted, non-deleted JE lines for this invoice
+        je_lines = (
+            db.session.query(JournalEntryLine)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .filter(
+                JournalEntry.reference_type == 'invoice',
+                JournalEntry.reference_id == invoice_id,
+                JournalEntry.is_posted == True,
+                JournalEntry.is_deleted == False,
+                JournalEntryLine.is_deleted == False,
+            )
+            .all()
+        )
+
+        if not je_lines:
+            return jsonify({'success': False, 'message': 'لا توجد قيود GL مرحلة لهذه الفاتورة'}), 404
+
+        # Map account_id → gold SafeBox
+        account_ids = list({int(l.account_id) for l in je_lines if l.account_id is not None})
+        safe_by_acc: dict[int, SafeBox] = {}
+        for sb in SafeBox.query.filter(
+            SafeBox.account_id.in_(account_ids),
+            SafeBox.safe_type == 'gold',
+            SafeBox.is_active == True,
+        ).all():
+            if sb.account_id is not None:
+                safe_by_acc[int(sb.account_id)] = sb
+
+        if not safe_by_acc:
+            return jsonify({'success': False, 'message': 'لا يوجد حساب GL مرتبط بخزينة ذهب نشطة لهذه الفاتورة'}), 404
+
+        eps = 0.001
+        created = []
+
+        # Aggregate weight per (safe_box_id, direction) across all GL lines
+        agg: dict[tuple[int, str], dict] = {}
+        for line in je_lines:
+            sb = safe_by_acc.get(int(line.account_id))
+            if not sb:
+                continue
+
+            d18 = float(line.debit_18k or 0)
+            c18 = float(line.credit_18k or 0)
+            d21 = float(line.debit_21k or 0)
+            c21 = float(line.credit_21k or 0)
+            d22 = float(line.debit_22k or 0)
+            c22 = float(line.credit_22k or 0)
+            d24 = float(line.debit_24k or 0)
+            c24 = float(line.credit_24k or 0)
+
+            for direction, w18, w21, w22, w24 in [
+                ('in',  d18, d21, d22, d24),
+                ('out', c18, c21, c22, c24),
+            ]:
+                if not any(v > eps for v in (w18, w21, w22, w24)):
+                    continue
+                key = (int(sb.id), direction)
+                if key not in agg:
+                    agg[key] = {'w18': 0.0, 'w21': 0.0, 'w22': 0.0, 'w24': 0.0, 'sb': sb}
+                agg[key]['w18'] += w18
+                agg[key]['w21'] += w21
+                agg[key]['w22'] += w22
+                agg[key]['w24'] += w24
+
+        for (sb_id, direction), vals in agg.items():
+            sb = vals['sb']
+            # Idempotency: skip if invoice_gold SBT already exists for this safe + direction
+            existing = SafeBoxTransaction.query.filter_by(
+                ref_type='invoice_gold',
+                ref_id=invoice_id,
+                safe_box_id=sb_id,
+                direction=direction,
+            ).first()
+            if existing:
+                continue
+
+            sbt = SafeBoxTransaction(
+                safe_box_id=sb_id,
+                ref_type='invoice_gold',
+                ref_id=invoice_id,
+                invoice_id=invoice_id,
+                direction=direction,
+                amount_cash=0.0,
+                weight_18k=round(vals['w18'], 6),
+                weight_21k=round(vals['w21'], 6),
+                weight_22k=round(vals['w22'], 6),
+                weight_24k=round(vals['w24'], 6),
+                notes=f'Repair: Invoice #{invoice_id} - GL-based SBT',
+                created_by=created_by,
+            )
+            db.session.add(sbt)
+            created.append({
+                'safe_box_id': sb_id,
+                'safe_name': getattr(sb, 'name', ''),
+                'direction': direction,
+                'weight_18k': vals['w18'],
+                'weight_21k': vals['w21'],
+                'weight_22k': vals['w22'],
+                'weight_24k': vals['w24'],
+            })
+
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'invoice_id': invoice_id,
+            'created_count': len(created),
+            'created': created,
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/admin/repair-sbt-batch', methods=['POST'])
+@require_permission('admin')
+def repair_sbt_batch():
+    """Batch version of repair_sbt_for_invoice.
+
+    Body: {"invoice_ids": [973, 975, ...]}
+    """
+    try:
+        data = request.get_json() or {}
+        invoice_ids = data.get('invoice_ids') or []
+        if not invoice_ids:
+            return jsonify({'success': False, 'message': 'invoice_ids مطلوب'}), 400
+
+        results = []
+        for inv_id in invoice_ids:
+            try:
+                invoice = Invoice.query.get(int(inv_id))
+                if not invoice:
+                    results.append({'invoice_id': inv_id, 'success': False, 'message': 'not found'})
+                    continue
+                if not getattr(invoice, 'is_posted', False):
+                    results.append({'invoice_id': inv_id, 'success': False, 'message': 'not posted'})
+                    continue
+
+                created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'repair'
+
+                je_lines = (
+                    db.session.query(JournalEntryLine)
+                    .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+                    .filter(
+                        JournalEntry.reference_type == 'invoice',
+                        JournalEntry.reference_id == int(inv_id),
+                        JournalEntry.is_posted == True,
+                        JournalEntry.is_deleted == False,
+                        JournalEntryLine.is_deleted == False,
+                    )
+                    .all()
+                )
+
+                account_ids = list({int(l.account_id) for l in je_lines if l.account_id is not None})
+                safe_by_acc: dict[int, SafeBox] = {}
+                for sb in SafeBox.query.filter(
+                    SafeBox.account_id.in_(account_ids),
+                    SafeBox.safe_type == 'gold',
+                    SafeBox.is_active == True,
+                ).all():
+                    if sb.account_id is not None:
+                        safe_by_acc[int(sb.account_id)] = sb
+
+                if not safe_by_acc:
+                    results.append({'invoice_id': inv_id, 'success': False, 'message': 'no gold safe account in GL'})
+                    continue
+
+                eps = 0.001
+                agg: dict[tuple[int, str], dict] = {}
+                for line in je_lines:
+                    sb = safe_by_acc.get(int(line.account_id))
+                    if not sb:
+                        continue
+                    d18 = float(line.debit_18k or 0); c18 = float(line.credit_18k or 0)
+                    d21 = float(line.debit_21k or 0); c21 = float(line.credit_21k or 0)
+                    d22 = float(line.debit_22k or 0); c22 = float(line.credit_22k or 0)
+                    d24 = float(line.debit_24k or 0); c24 = float(line.credit_24k or 0)
+                    for direction, w18, w21, w22, w24 in [('in', d18, d21, d22, d24), ('out', c18, c21, c22, c24)]:
+                        if not any(v > eps for v in (w18, w21, w22, w24)):
+                            continue
+                        key = (int(sb.id), direction)
+                        if key not in agg:
+                            agg[key] = {'w18': 0.0, 'w21': 0.0, 'w22': 0.0, 'w24': 0.0, 'sb': sb}
+                        agg[key]['w18'] += w18; agg[key]['w21'] += w21
+                        agg[key]['w22'] += w22; agg[key]['w24'] += w24
+
+                created = []
+                for (sb_id, direction), vals in agg.items():
+                    existing = SafeBoxTransaction.query.filter_by(
+                        ref_type='invoice_gold', ref_id=int(inv_id),
+                        safe_box_id=sb_id, direction=direction,
+                    ).first()
+                    if existing:
+                        continue
+                    sbt = SafeBoxTransaction(
+                        safe_box_id=sb_id, ref_type='invoice_gold',
+                        ref_id=int(inv_id), invoice_id=int(inv_id),
+                        direction=direction, amount_cash=0.0,
+                        weight_18k=round(vals['w18'], 6), weight_21k=round(vals['w21'], 6),
+                        weight_22k=round(vals['w22'], 6), weight_24k=round(vals['w24'], 6),
+                        notes=f'Repair batch: Invoice #{inv_id}',
+                        created_by=created_by,
+                    )
+                    db.session.add(sbt)
+                    created.append({'safe_box_id': sb_id, 'direction': direction, 'w21': vals['w21'], 'w18': vals['w18']})
+
+                db.session.commit()
+                results.append({'invoice_id': inv_id, 'success': True, 'created_count': len(created), 'created': created})
+
+            except Exception as inv_err:
+                db.session.rollback()
+                results.append({'invoice_id': inv_id, 'success': False, 'message': str(inv_err)})
+
+        return jsonify({'success': True, 'results': results}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/admin/sbt-cancel/<int:sbt_id>', methods=['POST'])
+@require_permission('admin')
+def cancel_sbt(sbt_id: int):
+    """Create a reversal SafeBoxTransaction for an existing SBT.
+
+    Use this to cancel a wrong SBT entry without deleting it.
+    Body (optional): {"reason": "description"}
+    """
+    try:
+        sbt = SafeBoxTransaction.query.get(sbt_id)
+        if not sbt:
+            return jsonify({'success': False, 'message': 'SBT not found'}), 404
+
+        # Check no reversal already exists
+        existing_rev = SafeBoxTransaction.query.filter_by(
+            ref_type='sbt_cancellation',
+            ref_id=sbt_id,
+        ).first()
+        if existing_rev:
+            return jsonify({'success': False, 'message': f'Reversal already exists: SBT #{existing_rev.id}'}), 400
+
+        data = request.get_json() or {}
+        reason = data.get('reason') or f'Cancellation of SBT #{sbt_id}'
+        created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'admin'
+
+        rev = SafeBoxTransaction(
+            safe_box_id=sbt.safe_box_id,
+            ref_type='sbt_cancellation',
+            ref_id=sbt_id,
+            invoice_id=getattr(sbt, 'invoice_id', None),
+            payment_method_id=getattr(sbt, 'payment_method_id', None),
+            direction='out' if (sbt.direction or 'in') == 'in' else 'in',
+            amount_cash=float(sbt.amount_cash or 0.0),
+            weight_18k=float(sbt.weight_18k or 0.0),
+            weight_21k=float(sbt.weight_21k or 0.0),
+            weight_22k=float(sbt.weight_22k or 0.0),
+            weight_24k=float(sbt.weight_24k or 0.0),
+            notes=reason,
+            created_by=created_by,
+        )
+        db.session.add(rev)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'cancelled_sbt_id': sbt_id,
+            'reversal_sbt_id': rev.id,
+            'direction': rev.direction,
+            'weight_21k': rev.weight_21k,
+        }), 200
 
     except Exception as e:
         db.session.rollback()
