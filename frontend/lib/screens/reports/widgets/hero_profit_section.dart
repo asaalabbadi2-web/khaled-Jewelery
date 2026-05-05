@@ -64,153 +64,217 @@ class HeroProfitSection extends StatelessWidget {
         periodTitle = isArabic ? 'صافي ربح اليوم' : "Today's Net Profit";
     }
 
-    String insightText;
-    if (vsYesterdayPct != null) {
-      final dir = vsYesterdayPct >= 0
-          ? (isArabic ? 'ارتفع' : 'Up')
-          : (isArabic ? 'انخفض' : 'Down');
-      insightText = isArabic
-          ? 'الربح $dir ${vsYesterdayPct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
-          : 'Profit $dir ${vsYesterdayPct.abs().toStringAsFixed(1)}% vs yesterday';
-    } else if (isProfit) {
-      insightText = isArabic ? 'النتيجة: ربح ✓' : 'Result: Profit ✓';
-    } else {
-      insightText = isArabic ? 'المصروفات تفوق المبيعات' : 'Expenses exceed sales';
-    }
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
-      child: Container(
-        padding: EdgeInsets.all(_s(20)),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-            colors: isProfit
-                ? [AppColors.success.withValues(alpha: 0.10), theme.cardColor]
-                : [Colors.red.shade600.withValues(alpha: 0.08), theme.cardColor],
-          ),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: profitColor.withValues(alpha: 0.25), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: profitColor.withValues(alpha: 0.08),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
+    // Compact card — no outer Padding (caller handles spacing)
+    return Container(
+      padding: EdgeInsets.all(_s(14)),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: isProfit
+              ? [AppColors.success.withValues(alpha: 0.06), theme.cardColor]
+              : [Colors.red.shade600.withValues(alpha: 0.06), theme.cardColor],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  isProfit ? Icons.trending_up : Icons.trending_down,
+        borderRadius: BorderRadius.circular(_s(14)),
+        border: Border.all(color: profitColor.withValues(alpha: 0.20)),
+        boxShadow: [
+          BoxShadow(
+            color: profitColor.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header
+          Row(
+            children: [
+              Container(
+                width: _s(32),
+                height: _s(32),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  isProfit ? Icons.trending_up_rounded : Icons.trending_down_rounded,
                   color: profitColor,
-                  size: _s(20),
+                  size: _s(16),
                 ),
-                SizedBox(width: _s(6)),
-                Text(
+              ),
+              SizedBox(width: _s(8)),
+              Expanded(
+                child: Text(
                   periodTitle,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: theme.textTheme.bodySmall?.color,
+                  style: TextStyle(
+                    fontSize: _s(13),
+                    fontWeight: FontWeight.w700,
+                    color: profitColor,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const Spacer(),
-                if (vsYesterdayPct != null)
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: _s(8), vertical: _s(3)),
-                    decoration: BoxDecoration(
-                      color: (vsYesterdayPct >= 0 ? Colors.green : Colors.red)
-                          .withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          vsYesterdayPct >= 0 ? Icons.arrow_upward : Icons.arrow_downward,
-                          size: _s(12),
+              ),
+              if (vsYesterdayPct != null)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: _s(6), vertical: _s(2)),
+                  decoration: BoxDecoration(
+                    color: (vsYesterdayPct >= 0 ? Colors.green : Colors.red)
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        vsYesterdayPct >= 0
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward,
+                        size: _s(10),
+                        color: vsYesterdayPct >= 0
+                            ? Colors.green.shade700
+                            : Colors.red.shade600,
+                      ),
+                      Text(
+                        '${vsYesterdayPct.abs().toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontSize: _s(9),
+                          fontWeight: FontWeight.bold,
                           color: vsYesterdayPct >= 0
                               ? Colors.green.shade700
                               : Colors.red.shade600,
                         ),
-                        SizedBox(width: _s(2)),
-                        Text(
-                          '${vsYesterdayPct.abs().toStringAsFixed(1)}%',
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          SizedBox(height: _s(10)),
+
+          // Hero number + margin + status badges
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        _fmtC(periodProfit).replaceAll(currencyFormat.currencySymbol, '').trim(),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: profitColor,
+                          fontSize: _s(22),
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      SizedBox(width: _s(4)),
+                      Padding(
+                        padding: EdgeInsets.only(bottom: _s(3)),
+                        child: Text(
+                          currencyFormat.currencySymbol,
                           style: TextStyle(
+                            color: profitColor.withValues(alpha: 0.7),
+                            fontWeight: FontWeight.w600,
                             fontSize: _s(11),
-                            fontWeight: FontWeight.bold,
-                            color: vsYesterdayPct >= 0
-                                ? Colors.green.shade700
-                                : Colors.red.shade600,
                           ),
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const Spacer(),
+              if (periodMargin != null)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: _s(7), vertical: _s(3)),
+                  decoration: BoxDecoration(
+                    color: profitColor.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${periodMargin.toStringAsFixed(1)}%',
+                    style: TextStyle(
+                      fontSize: _s(10),
+                      fontWeight: FontWeight.bold,
+                      color: profitColor,
                     ),
                   ),
-              ],
-            ),
-            SizedBox(height: _s(10)),
-            Text(
-              _fmtC(periodProfit),
-              style: theme.textTheme.displaySmall?.copyWith(
-                fontWeight: FontWeight.w900,
-                color: profitColor,
-                fontSize: _s(30),
-                letterSpacing: -0.5,
-              ),
-            ),
-            if (periodMargin != null) ...[
-              SizedBox(height: _s(4)),
+                ),
+              SizedBox(width: _s(4)),
               Container(
-                padding: EdgeInsets.symmetric(horizontal: _s(8), vertical: _s(3)),
+                padding: EdgeInsets.symmetric(
+                    horizontal: _s(7), vertical: _s(3)),
                 decoration: BoxDecoration(
                   color: profitColor.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
-                  '${periodMargin.toStringAsFixed(1)}% ${isArabic ? "هامش ربح" : "margin"}',
-                  style: TextStyle(
-                    fontSize: _s(11),
-                    fontWeight: FontWeight.bold,
-                    color: profitColor,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isProfit ? Icons.check_circle : Icons.cancel,
+                      size: _s(10),
+                      color: profitColor,
+                    ),
+                    SizedBox(width: _s(2)),
+                    Text(
+                      isProfit
+                          ? (isArabic ? 'ربح' : 'Profit')
+                          : (isArabic ? 'خسارة' : 'Loss'),
+                      style: TextStyle(
+                        fontSize: _s(10),
+                        fontWeight: FontWeight.bold,
+                        color: profitColor,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
-            SizedBox(height: _s(10)),
-            if (insightText.isNotEmpty)
-              Row(
-                children: [
-                  Icon(Icons.lightbulb_outline, size: _s(13), color: theme.hintColor),
-                  SizedBox(width: _s(4)),
-                  Text(
-                    insightText,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: _s(11),
-                      color: theme.hintColor,
-                    ),
-                  ),
-                ],
+          ),
+          SizedBox(height: _s(10)),
+
+          // 3 chips
+          Row(
+            children: [
+              Expanded(
+                child: _chip(context, Icons.account_balance_wallet_outlined,
+                    isArabic ? 'السيولة' : 'Cash',
+                    _fmtC(cashAvailable)
+                        .replaceAll(currencyFormat.currencySymbol, '')
+                        .trim(),
+                    AppColors.primaryGold),
               ),
-            SizedBox(height: _s(14)),
-            Wrap(
-              spacing: _s(8),
-              runSpacing: _s(6),
-              children: [
-                _chip(context, Icons.account_balance_wallet_outlined,
-                    isArabic ? 'السيولة' : 'Cash', _fmtC(cashAvailable), AppColors.primaryGold),
-                _chip(context, Icons.arrow_upward,
-                    isArabic ? 'مبيعات' : 'Sales', _fmtC(periodSales), const Color(0xFF1B9E4B)),
-                _chip(context, Icons.arrow_downward,
-                    isArabic ? 'مشتريات' : 'Purch.', _fmtC(periodPurchases), Colors.orange.shade700),
-              ],
-            ),
-          ],
-        ),
+              SizedBox(width: _s(6)),
+              Expanded(
+                child: _chip(context, Icons.arrow_upward,
+                    isArabic ? 'مبيعات' : 'Sales',
+                    _fmtC(periodSales)
+                        .replaceAll(currencyFormat.currencySymbol, '')
+                        .trim(),
+                    const Color(0xFF1B9E4B)),
+              ),
+              SizedBox(width: _s(6)),
+              Expanded(
+                child: _chip(context, Icons.arrow_downward,
+                    isArabic ? 'مشتريات' : 'Purch.',
+                    _fmtC(periodPurchases)
+                        .replaceAll(currencyFormat.currencySymbol, '')
+                        .trim(),
+                    Colors.orange.shade700),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -218,23 +282,34 @@ class HeroProfitSection extends StatelessWidget {
   Widget _chip(BuildContext context, IconData icon, String label, String value, Color color) {
     final theme = Theme.of(context);
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: _s(10), vertical: _s(6)),
+      padding: EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(5)),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: color.withValues(alpha: 0.18)),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: _s(12), color: color),
+          Icon(icon, size: _s(11), color: color),
           SizedBox(width: _s(4)),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: TextStyle(fontSize: _s(9), color: theme.hintColor)),
-              Text(value, style: TextStyle(fontSize: _s(11), fontWeight: FontWeight.bold, color: color)),
-            ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label,
+                    style: TextStyle(fontSize: _s(9), color: theme.hintColor),
+                    overflow: TextOverflow.ellipsis),
+                Text(value,
+                    style: TextStyle(
+                        fontSize: _s(10),
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                        letterSpacing: -0.2),
+                    overflow: TextOverflow.ellipsis),
+              ],
+            ),
           ),
         ],
       ),

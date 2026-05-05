@@ -63,7 +63,6 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   final ScrollController _contentScrollController = ScrollController();
   final ScrollController _horizontalController = ScrollController();
   final ScrollController _verticalController = ScrollController();
-  final GlobalKey _topChromeKey = GlobalKey();
 
   int _viewMode = 0; // 0: dual, 1: gold, 2: cash
   _StatementDisplayMode _displayMode = _StatementDisplayMode.table;
@@ -75,9 +74,6 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   bool _resolvedViewModeDefault = false;
   _StatementSortColumn? _sortColumn = _StatementSortColumn.date;
   bool _sortAscending = false; // newest first by default
-
-  double _topChromeHeight = 0;
-  double _topChromeCollapseOffset = 0;
 
   bool _pdfIncludeValuation = true;
   int? _pdfViewModeOverride;
@@ -345,40 +341,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   void _onContentScroll() {
-    final activeController = _displayMode == _StatementDisplayMode.cards
-        ? _contentScrollController
-        : _verticalController;
-    final nextOffset = activeController.hasClients
-        ? activeController.offset.clamp(0.0, _topChromeHeight)
-        : 0.0;
-    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
-      return;
-    }
-    setState(() {
-      _topChromeCollapseOffset = nextOffset;
-    });
+    // No-op: collapse animation removed; CustomScrollView handles scroll natively.
   }
 
-  void _measureTopChrome() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final context = _topChromeKey.currentContext;
-      if (context == null) return;
-      final renderObject = context.findRenderObject();
-      if (renderObject is! RenderBox) return;
-      final measuredHeight = renderObject.size.height;
-      if (measuredHeight <= 0 ||
-          (measuredHeight - _topChromeHeight).abs() < 0.5) {
-        return;
-      }
-      setState(() {
-        _topChromeHeight = measuredHeight;
-        if (_topChromeCollapseOffset > measuredHeight) {
-          _topChromeCollapseOffset = measuredHeight;
-        }
-      });
-    });
-  }
 
   Future<void> _fetchAccountStatement() async {
     setState(() => _isLoading = true);
@@ -1318,99 +1283,102 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Widget _buildStatementContent() {
+    final isCard = _displayMode == _StatementDisplayMode.cards;
+    final filteredLines = _filteredLines;
+    final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        return Column(
-          children: [
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: constraints.maxHeight * 0.45,
+        // Measure toolbar + totals bar height after first frame
+        final toolbarWidget = _buildToolbar(constraints.maxWidth);
+        final totalsWidget = _buildFilteredTotalsBar();
+
+        return RefreshIndicator(
+          onRefresh: _fetchAccountStatement,
+          child: CustomScrollView(
+            controller: _contentScrollController,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              // Summary cards — scroll away with page
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: _buildSummaryOverview(constraints.maxWidth - 32),
+                ),
               ),
-              child: _buildCollapsibleTopChrome(constraints.maxWidth),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: _buildToolbar(constraints.maxWidth),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: _buildFilteredTotalsBar(),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                child: _buildStatementBody(),
+
+              // ── Sticky: Filter toolbar + totals bar ─────────────────
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _PinnedWidgetDelegate(
+                  height: _stickyHeaderHeight(constraints.maxWidth),
+                  child: Material(
+                    elevation: 2,
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: toolbarWidget,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                          child: totalsWidget,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ],
+
+              // Transaction list
+              if (filteredLines.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    child: _buildEmptyLinesState(),
+                  ),
+                )
+              else if (isCard)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  sliver: SliverList.separated(
+                    itemCount: filteredLines.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) =>
+                        _buildLineCard(filteredLines[index], mainKarat),
+                  ),
+                )
+              else
+                SliverFillRemaining(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    child: _buildStatementTable(),
+                  ),
+                ),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildCollapsibleTopChrome(double maxWidth) {
-    final content = KeyedSubtree(
-      key: _topChromeKey,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: _buildSummaryOverview(maxWidth),
-      ),
-    );
-
-    _measureTopChrome();
-
-    if (_topChromeHeight <= 0) {
-      return content;
-    }
-
-    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(
-      0.0,
-      _topChromeHeight,
-    );
-    if (visibleHeight <= 0) {
-      return const SizedBox.shrink();
-    }
-
-    return ClipRect(
-      child: SizedBox(
-        height: visibleHeight,
-        child: OverflowBox(
-          alignment: Alignment.topCenter,
-          minHeight: _topChromeHeight,
-          maxHeight: _topChromeHeight,
-          child: Transform.translate(
-            offset: Offset(0, -collapse),
-            child: content,
-          ),
-        ),
-      ),
-    );
+  /// Estimated height for the pinned sticky header.
+  /// On narrow screens the toolbar wraps into more rows so we allow more space.
+  double _stickyHeaderHeight(double maxWidth) {
+    // toolbar rows:
+    //   row 1: results badge + filters badge + clear button  ≈ 46
+    //   row 2: search + date range + type dropdown          ≈ 52
+    //   row 3: view mode + karat + movement chip + export   ≈ 52
+    // totals bar                                            ≈ 54
+    // padding (top 8 + bottom 8 + 6 between)               ≈ 22
+    if (maxWidth < 420) return 310;
+    if (maxWidth < 600) return 280;
+    return 240;
   }
 
-  Widget _buildStatementBody() {
-    if (_filteredLines.isEmpty) {
-      return _buildEmptyLinesState();
-    }
-
-    if (_displayMode == _StatementDisplayMode.cards) {
-      return RefreshIndicator(
-        onRefresh: _fetchAccountStatement,
-        child: ListView.separated(
-          controller: _contentScrollController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: _filteredLines.length,
-          separatorBuilder: (context, index) => const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
-            return _buildLineCard(_filteredLines[index], mainKarat);
-          },
-        ),
-      );
-    }
-
-    return _buildStatementTable();
-  }
 
   Widget _buildEmptyLinesState() {
     final theme = Theme.of(context);
@@ -3230,4 +3198,36 @@ class _SummaryMetric extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sliver delegate that pins a widget at the top of a CustomScrollView
+// ─────────────────────────────────────────────────────────────────────────────
+class _PinnedWidgetDelegate extends SliverPersistentHeaderDelegate {
+  const _PinnedWidgetDelegate({
+    required this.child,
+    required this.height,
+  });
+
+  final Widget child;
+  final double height;
+
+  @override
+  double get minExtent => height;
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return SizedBox.expand(child: child);
+  }
+
+  @override
+  bool shouldRebuild(_PinnedWidgetDelegate oldDelegate) =>
+      oldDelegate.height != height || oldDelegate.child != child;
 }

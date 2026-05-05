@@ -383,14 +383,37 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           SliverToBoxAdapter(
             child: Column(
               children: [
-                // Gram Profit KPI (weight hero — top)
+                // Gram Profit KPI + Cash Profit Card (side-by-side on wide, stacked on mobile)
                 Padding(
                   padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
-                  child: _buildGramProfitKpi(),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isWide = constraints.maxWidth >= 760;
+                      final gramKpi = _buildGramProfitKpi();
+                      final heroProfit = _buildHeroProfitSection(
+                          kpis, liquidity, salesPurchasesSummary);
+                      if (isWide) {
+                        return IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(child: gramKpi),
+                              SizedBox(width: _s(12)),
+                              Expanded(child: heroProfit),
+                            ],
+                          ),
+                        );
+                      }
+                      return Column(
+                        children: [
+                          gramKpi,
+                          SizedBox(height: _s(12)),
+                          heroProfit,
+                        ],
+                      );
+                    },
+                  ),
                 ),
-
-                // Cash Profit Card (follows time range)
-                _buildHeroProfitSection(kpis, liquidity, salesPurchasesSummary),
 
                 // KPI Grid
                 Padding(
@@ -648,77 +671,159 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     double netPosition,
   ) {
     final isDark = theme.brightness == Brightness.dark;
+    final isPositive = netPosition >= 0;
+    final accentColor = isPositive ? AppColors.primaryGold : AppColors.error;
     return Container(
       padding: EdgeInsets.all(_s(16)),
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(16),
-        border: isDark
-            ? Border.all(
-                color: AppColors.primaryGold.withValues(alpha: 0.25),
-              )
-            : Border.all(
-                color: AppColors.primaryGold.withValues(alpha: 0.50),
-                width: 1.2,
-              ),
+        border: Border.all(
+          color: accentColor.withValues(alpha: isDark ? 0.30 : 0.50),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryGold.withValues(
-              alpha: isDark ? 0.10 : 0.14,
-            ),
+            color: accentColor.withValues(alpha: isDark ? 0.10 : 0.14),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Row(
-        children: [
-          Container(
-            width: _s(48),
-            height: _s(48),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppColors.primaryGold.withValues(alpha: 0.12),
-            ),
-            child: Icon(
-              Icons.account_balance,
-              color: AppColors.primaryGold,
-              size: _s(26),
-            ),
-          ),
-          SizedBox(width: _s(12)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  isArabic ? 'صافي المركز المالي' : 'Net Position',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.hintColor,
-                    fontSize: _s(12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth >= 500;
+
+          return Row(
+            children: [
+              Container(
+                width: _s(56),
+                height: _s(56),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      accentColor.withValues(alpha: 0.20),
+                      accentColor.withValues(alpha: 0.08),
+                    ],
                   ),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                SizedBox(height: _s(4)),
-                Text(
-                  _formatCurrency(netPosition),
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryGold,
-                    fontSize: _s(22),
-                  ),
+                child: Icon(
+                  isPositive ? Icons.account_balance : Icons.account_balance_outlined,
+                  color: accentColor,
+                  size: _s(28),
                 ),
-                Text(
-                  isArabic ? 'نقد + قيمة الذهب' : 'Cash + Gold Value',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.hintColor,
-                    fontSize: _s(11),
-                  ),
+              ),
+              SizedBox(width: _s(14)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      isArabic ? 'صافي المركز المالي' : 'Net Position',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.hintColor,
+                        fontSize: _s(12),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(height: _s(6)),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(
+                        _formatCurrency(netPosition),
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: accentColor,
+                          fontSize: _s(22),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: _s(2)),
+                    Text(
+                      isArabic ? 'نقد + قيمة الذهب' : 'Cash + Gold Value',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.hintColor,
+                        fontSize: _s(11),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isWide && _response != null) ...[
+                SizedBox(width: _s(16)),
+                Container(
+                  width: 1,
+                  height: _s(60),
+                  color: theme.dividerColor.withValues(alpha: 0.3),
+                ),
+                SizedBox(width: _s(16)),
+                _buildSnapshotMiniStat(
+                  theme: theme,
+                  icon: Icons.water_drop_outlined,
+                  label: isArabic ? 'السيولة' : 'Liquidity',
+                  value: _formatCurrency(_asDouble(
+                    (_response?['liquidity'] as Map?)?['cash_available'] ?? 0,
+                  )),
+                  color: AppColors.invoiceSaleScrap,
+                ),
+                SizedBox(width: _s(20)),
+                _buildSnapshotMiniStat(
+                  theme: theme,
+                  icon: Icons.auto_awesome,
+                  label: isArabic ? 'وزن الذهب' : 'Gold Weight',
+                  value: _formatWeight(_asDouble(
+                    (_response?['kpis'] as Map?)?['gold_equivalent_main_karat'] ?? 0,
+                  )),
+                  color: AppColors.primaryGold,
                 ),
               ],
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
+    );
+  }
+
+  Widget _buildSnapshotMiniStat({
+    required ThemeData theme,
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: _s(13), color: color),
+            SizedBox(width: _s(4)),
+            Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+                fontSize: _s(11),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: _s(4)),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: _s(14),
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1345,7 +1450,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // HERO PROFIT SECTION (follows selected time range)
+  // HERO PROFIT SECTION (follows selected time range) — compact side-by-side
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildHeroProfitSection(
     Map<String, dynamic> kpis,
@@ -1355,7 +1460,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final theme = Theme.of(context);
     final isArabic = widget.isArabic;
 
-    // Pull period-specific data from salesPurchasesSummary
     final periodData =
         (salesPurchasesSummary[_summaryPeriod] as Map<String, dynamic>?) ?? {};
     final salesData = (periodData['sales'] as Map<String, dynamic>?) ?? {};
@@ -1370,10 +1474,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final periodProfit = periodSales - periodPurchases - periodExpenses;
     final periodMargin =
         periodSales > 0 ? (periodProfit / periodSales) * 100 : null;
-
     final cashAvailable = _asDouble(liquidity['cash_available']);
 
-    // Today-specific comparison data (only shown when range is today)
     final vsYesterdayPct =
         _timeRange == _TimeRange.today
             ? _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct'])
@@ -1382,289 +1484,302 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final isProfit = periodProfit >= 0;
     final profitColor = isProfit ? AppColors.success : AppColors.error;
 
-    // Period title
-    final String periodTitle;
+    final String periodLabel;
     switch (_timeRange) {
       case _TimeRange.today:
-        periodTitle = isArabic ? 'صافي ربح اليوم' : "Today's Net Profit";
+        periodLabel = isArabic ? 'اليوم' : 'Today';
         break;
       case _TimeRange.month:
-        periodTitle = isArabic ? 'صافي ربح الشهر' : "Monthly Net Profit";
+        periodLabel = isArabic ? 'الشهر' : 'Month';
         break;
       case _TimeRange.year:
-        periodTitle = isArabic ? 'صافي ربح السنة' : "Yearly Net Profit";
+        periodLabel = isArabic ? 'السنة' : 'Year';
         break;
-    }
-
-    // Smart insight
-    String insightText = '';
-    if (vsYesterdayPct != null) {
-      final direction = vsYesterdayPct >= 0
-          ? (isArabic ? 'ارتفع' : 'Up')
-          : (isArabic ? 'انخفض' : 'Down');
-      insightText = isArabic
-          ? 'الربح $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% مقارنة بالأمس'
-          : 'Profit $direction ${vsYesterdayPct.abs().toStringAsFixed(1)}% vs yesterday';
-    } else if (isProfit) {
-      insightText = isArabic ? 'النتيجة: ربح ✓' : 'Result: Profit ✓';
-    } else {
-      insightText = isArabic ? 'المصروفات تفوق المبيعات' : 'Expenses exceed sales';
     }
 
     final isAllZero =
         periodSales == 0 && periodPurchases == 0 && periodExpenses == 0;
 
     if (isAllZero) {
-      return Padding(
-        padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: _s(16),
-            vertical: _s(12),
-          ),
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: AppColors.primaryGold.withValues(alpha: 0.15),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                Icons.trending_flat,
-                color: Theme.of(context).hintColor,
-                size: _s(18),
-              ),
-              SizedBox(width: _s(8)),
-              Text(
-                isArabic
-                    ? '$periodTitle — لا توجد بيانات'
-                    : '$periodTitle — No data',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).hintColor,
-                      fontSize: _s(12),
-                    ),
-              ),
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: _s(16), vertical: _s(14)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: AlignmentDirectional.centerStart,
+            end: AlignmentDirectional.centerEnd,
+            colors: [
+              AppColors.success.withValues(alpha: 0.08),
+              AppColors.success.withValues(alpha: 0.03),
+              theme.cardColor,
             ],
           ),
+          borderRadius: BorderRadius.circular(_s(14)),
+          border: Border.all(color: AppColors.success.withValues(alpha: 0.18)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: _s(40),
+              height: _s(40),
+              decoration: BoxDecoration(
+                color: AppColors.success.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.trending_up_rounded,
+                  color: AppColors.success, size: _s(20)),
+            ),
+            SizedBox(width: _s(12)),
+            Expanded(
+              child: Text(
+                isArabic
+                    ? 'لا توجد عمليات بعد'
+                    : 'No transactions yet',
+                style: TextStyle(
+                    fontSize: _s(12), color: theme.hintColor),
+              ),
+            ),
+            Text('0 $_currencySymbol',
+                style: TextStyle(
+                    fontSize: _s(14),
+                    fontWeight: FontWeight.w800,
+                    color: theme.hintColor.withValues(alpha: 0.5))),
+          ],
         ),
       );
     }
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
-      child: Container(
-        padding: EdgeInsets.all(_s(20)),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-            colors: isProfit
-                ? [
-                    AppColors.success.withValues(alpha: 0.10),
-                    theme.cardColor,
-                  ]
-                : [
-                    AppColors.error.withValues(alpha: 0.08),
-                    theme.cardColor,
-                  ],
-          ),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: profitColor.withValues(alpha: 0.25),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: profitColor.withValues(alpha: 0.08),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
+    return Container(
+      padding: EdgeInsets.all(_s(14)),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: [profitColor.withValues(alpha: 0.06), theme.cardColor],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Title row + vs-yesterday badge
-            Row(
-              children: [
-                Icon(
-                  isProfit ? Icons.trending_up : Icons.trending_down,
+        borderRadius: BorderRadius.circular(_s(14)),
+        border: Border.all(color: profitColor.withValues(alpha: 0.20)),
+        boxShadow: [
+          BoxShadow(
+            color: profitColor.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header
+          Row(
+            children: [
+              Container(
+                width: _s(32),
+                height: _s(32),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  isProfit
+                      ? Icons.trending_up_rounded
+                      : Icons.trending_down_rounded,
                   color: profitColor,
-                  size: _s(20),
+                  size: _s(16),
                 ),
-                SizedBox(width: _s(6)),
-                Text(
-                  periodTitle,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: theme.textTheme.bodySmall?.color,
+              ),
+              SizedBox(width: _s(8)),
+              Expanded(
+                child: Text(
+                  isArabic ? 'صافي الربح' : 'Net Profit',
+                  style: TextStyle(
+                    fontSize: _s(13),
+                    fontWeight: FontWeight.w700,
+                    color: profitColor,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const Spacer(),
-                if (vsYesterdayPct != null)
-                  Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: _s(8),
-                      vertical: _s(3),
-                    ),
-                    decoration: BoxDecoration(
-                      color: (vsYesterdayPct >= 0 ? AppColors.success : AppColors.error)
-                          .withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          vsYesterdayPct >= 0
-                              ? Icons.arrow_upward
-                              : Icons.arrow_downward,
-                          size: _s(12),
+              ),
+              if (vsYesterdayPct != null)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: _s(6), vertical: _s(2)),
+                  decoration: BoxDecoration(
+                    color: (vsYesterdayPct >= 0
+                            ? AppColors.success
+                            : AppColors.error)
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        vsYesterdayPct >= 0
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward,
+                        size: _s(10),
+                        color: vsYesterdayPct >= 0
+                            ? AppColors.success
+                            : AppColors.error,
+                      ),
+                      Text(
+                        '${vsYesterdayPct.abs().toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontSize: _s(9),
+                          fontWeight: FontWeight.bold,
                           color: vsYesterdayPct >= 0
                               ? AppColors.success
                               : AppColors.error,
                         ),
-                        SizedBox(width: _s(2)),
-                        Text(
-                          '${vsYesterdayPct.abs().toStringAsFixed(1)}%',
-                          style: TextStyle(
-                            fontSize: _s(11),
-                            fontWeight: FontWeight.bold,
-                            color: vsYesterdayPct >= 0
-                                ? AppColors.success
-                                : AppColors.error,
-                          ),
-                        ),
-                      ],
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: _s(8), vertical: _s(3)),
+                  decoration: BoxDecoration(
+                    color: profitColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    periodLabel,
+                    style: TextStyle(
+                      fontSize: _s(10),
+                      fontWeight: FontWeight.w600,
+                      color: profitColor,
                     ),
                   ),
-              ],
-            ),
-            SizedBox(height: _s(10)),
-
-            // The hero number
-            Text(
-              _formatCurrency(periodProfit),
-              style: theme.textTheme.displaySmall?.copyWith(
-                fontWeight: FontWeight.w900,
-                color: profitColor,
-                fontSize: _s(30),
-                letterSpacing: -0.5,
-              ),
-            ),
-
-            // Margin badge
-            if (periodMargin != null) ...[
-              SizedBox(height: _s(4)),
-              Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: _s(8),
-                  vertical: _s(3),
                 ),
+            ],
+          ),
+          SizedBox(height: _s(10)),
+
+          // Hero number + margin badge
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        _formatCurrency(periodProfit)
+                            .replaceAll(_currencySymbol, '')
+                            .trim(),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: profitColor,
+                          fontSize: _s(22),
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      SizedBox(width: _s(4)),
+                      Padding(
+                        padding: EdgeInsets.only(bottom: _s(3)),
+                        child: Text(
+                          _currencySymbol,
+                          style: TextStyle(
+                            color: profitColor.withValues(alpha: 0.7),
+                            fontWeight: FontWeight.w600,
+                            fontSize: _s(11),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const Spacer(),
+              if (periodMargin != null)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: _s(7), vertical: _s(3)),
+                  decoration: BoxDecoration(
+                    color: profitColor.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${periodMargin.toStringAsFixed(1)}%',
+                    style: TextStyle(
+                      fontSize: _s(10),
+                      fontWeight: FontWeight.bold,
+                      color: profitColor,
+                    ),
+                  ),
+                ),
+              SizedBox(width: _s(4)),
+              Container(
+                padding:
+                    EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(3)),
                 decoration: BoxDecoration(
                   color: profitColor.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
-                  '${periodMargin.toStringAsFixed(1)}% ${isArabic ? "هامش ربح" : "margin"}',
-                  style: TextStyle(
-                    fontSize: _s(11),
-                    fontWeight: FontWeight.bold,
-                    color: profitColor,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isProfit ? Icons.check_circle : Icons.cancel,
+                      size: _s(10),
+                      color: profitColor,
+                    ),
+                    SizedBox(width: _s(2)),
+                    Text(
+                      isProfit
+                          ? (isArabic ? 'ربح' : 'Profit')
+                          : (isArabic ? 'خسارة' : 'Loss'),
+                      style: TextStyle(
+                        fontSize: _s(10),
+                        fontWeight: FontWeight.bold,
+                        color: profitColor,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
+          ),
+          SizedBox(height: _s(10)),
 
-            SizedBox(height: _s(10)),
-            // Smart insight
-            if (insightText.isNotEmpty)
-              Row(
-                children: [
-                  Icon(
-                    Icons.lightbulb_outline,
-                    size: _s(13),
-                    color: theme.hintColor,
-                  ),
-                  SizedBox(width: _s(4)),
-                  Text(
-                    insightText,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: _s(11),
-                      color: theme.hintColor,
-                    ),
-                  ),
-                ],
-              ),
-
-            SizedBox(height: _s(14)),
-            // Quick chips row
-            Wrap(
-              spacing: _s(8),
-              runSpacing: _s(6),
-              children: [
-                _heroChip(
-                  icon: Icons.account_balance_wallet_outlined,
+          // 3 chips: Liquidity, Sales, Purchases
+          Row(
+            children: [
+              Expanded(
+                child: _miniStatChip(
+                  icon: Icons.water_drop_outlined,
                   label: isArabic ? 'السيولة' : 'Cash',
-                  value: _formatCurrency(cashAvailable),
+                  value: _formatCurrency(cashAvailable)
+                      .replaceAll(_currencySymbol, '')
+                      .trim(),
                   color: AppColors.primaryGold,
                 ),
-                _heroChip(
+              ),
+              SizedBox(width: _s(6)),
+              Expanded(
+                child: _miniStatChip(
                   icon: Icons.arrow_upward,
                   label: isArabic ? 'مبيعات' : 'Sales',
-                  value: _formatCurrency(periodSales),
-                  color: const Color(0xFF1B9E4B),
-                ),
-                _heroChip(
-                  icon: Icons.arrow_downward,
-                  label: isArabic ? 'مشتريات' : 'Purch.',
-                  value: _formatCurrency(periodPurchases),
-                color: AppColors.warning,                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _heroChip({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: _s(10), vertical: _s(6)),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.18)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: _s(12), color: color),
-          SizedBox(width: _s(4)),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: _s(9),
-                  color: theme.hintColor,
+                  value: _formatCurrency(periodSales)
+                      .replaceAll(_currencySymbol, '')
+                      .trim(),
+                  color: AppColors.success,
                 ),
               ),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: _s(11),
-                  fontWeight: FontWeight.bold,
-                  color: color,
+              SizedBox(width: _s(6)),
+              Expanded(
+                child: _miniStatChip(
+                  icon: Icons.arrow_downward,
+                  label: isArabic ? 'مشتريات' : 'Purch.',
+                  value: _formatCurrency(periodPurchases)
+                      .replaceAll(_currencySymbol, '')
+                      .trim(),
+                  color: AppColors.warning,
                 ),
               ),
             ],
@@ -1674,38 +1789,55 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Widget _layerChip({
+  Widget _miniStatChip({
+    required IconData icon,
     required String label,
-    required double value,
-    required bool isPositive,
-    required ThemeData theme,
+    required String value,
+    required Color color,
   }) {
-    final color = isPositive
-        ? (value >= 0 ? AppColors.success : AppColors.error)
-        : AppColors.error;
-    final sign = isPositive ? '+' : '−';
-    return Column(
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: _s(9),
-            color: theme.hintColor,
-            fontWeight: FontWeight.w500,
+    final theme = Theme.of(context);
+    return Container(
+      padding:
+          EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(5)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: _s(11), color: color),
+          SizedBox(width: _s(4)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(fontSize: _s(9), color: theme.hintColor),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: _s(10),
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                    letterSpacing: -0.2,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
-        ),
-        SizedBox(height: _s(2)),
-        Text(
-          '$sign${_formatWeight(value.abs())}',
-          style: TextStyle(
-            fontSize: _s(11),
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
+
+
 
   // ══════════════════════════════════════════════════════════════════════════
   // 3b. GRAM PROFIT KPI  (follows time range)
@@ -1739,11 +1871,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final marginPerGram = gd('margin_per_gram');
     final netMarginPct = gd('net_margin_pct');
     final weightSold = gd('weight_sold');
-    final tradingProfitWeight = gd('trading_profit_weight');
-    final extraRevenueWeight = gd('total_extra_revenue_weight');
-    final expenseWeightDirect = gd('expense_weight_direct');
-    final expenseCashWeight = gd('expense_cash_as_weight');
-    final totalExpensesWeight = expenseWeightDirect + expenseCashWeight;
+
     final mainKarat = g['main_karat']?.toString() ?? '21';
     final isProfit = netProfitWeight >= 0;
 
@@ -1751,41 +1879,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         weightSold == 0 &&
         avgSell == 0 &&
         avgBuy == 0;
-
-    if (isAllZero) {
-      return Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: _s(16),
-          vertical: _s(12),
-        ),
-        decoration: BoxDecoration(
-          color: theme.cardColor,
-          borderRadius: BorderRadius.circular(_s(16)),
-          border: Border.all(
-            color: AppColors.primaryGold.withValues(alpha: 0.15),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.auto_graph,
-              color: theme.hintColor,
-              size: _s(18),
-            ),
-            SizedBox(width: _s(8)),
-            Text(
-              isArabic ? 'ربح الجرام — لا توجد بيانات' : 'Gram Profit — No data',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
-                fontSize: _s(12),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final profitColor = isProfit ? AppColors.success : AppColors.error;
 
     // Dynamic period label
     final String periodLabel;
@@ -1801,55 +1894,193 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         break;
     }
 
+    if (isAllZero) {
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: _s(16), vertical: _s(14)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: AlignmentDirectional.centerStart,
+            end: AlignmentDirectional.centerEnd,
+            colors: [
+              AppColors.primaryGold.withValues(alpha: 0.10),
+              AppColors.primaryGold.withValues(alpha: 0.04),
+              theme.cardColor,
+            ],
+          ),
+          borderRadius: BorderRadius.circular(_s(14)),
+          border: Border.all(
+            color: AppColors.primaryGold.withValues(alpha: 0.20),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: _s(48),
+              height: _s(48),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    AppColors.primaryGold.withValues(alpha: 0.25),
+                    AppColors.primaryGold.withValues(alpha: 0.10),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.auto_graph,
+                color: AppColors.primaryGold,
+                size: _s(24),
+              ),
+            ),
+            SizedBox(width: _s(12)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
+                        style: TextStyle(
+                          fontSize: _s(13.5),
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primaryGold,
+                        ),
+                      ),
+                      SizedBox(width: _s(8)),
+                      Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: _s(7),
+                          vertical: _s(2),
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryGold.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(_s(20)),
+                        ),
+                        child: Text(
+                          periodLabel,
+                          style: TextStyle(
+                            fontSize: _s(9.5),
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.primaryGold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: _s(4)),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        size: _s(13),
+                        color: theme.hintColor,
+                      ),
+                      SizedBox(width: _s(4)),
+                      Expanded(
+                        child: Text(
+                          isArabic
+                              ? 'في انتظار أول عملية بيع لحساب الربح'
+                              : 'Awaiting first sale to calculate profit',
+                          style: TextStyle(
+                            fontSize: _s(11.5),
+                            color: theme.hintColor,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  isArabic ? 'الربح' : 'Profit',
+                  style: TextStyle(
+                    fontSize: _s(10),
+                    color: theme.hintColor,
+                  ),
+                ),
+                Text(
+                  '0 $_currencySymbol',
+                  style: TextStyle(
+                    fontSize: _s(15),
+                    fontWeight: FontWeight.w800,
+                    color: theme.hintColor.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    final profitColor = isProfit ? AppColors.success : AppColors.error;
+
     return Container(
-      padding: EdgeInsets.all(_s(20)),
+      padding: EdgeInsets.all(_s(14)),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topRight,
           end: Alignment.bottomLeft,
           colors: [
-            AppColors.primaryGold.withValues(alpha: 0.08),
+            AppColors.primaryGold.withValues(alpha: 0.06),
             theme.cardColor,
           ],
         ),
-        borderRadius: BorderRadius.circular(_s(20)),
+        borderRadius: BorderRadius.circular(_s(14)),
         border: Border.all(
           color: AppColors.primaryGold.withValues(alpha: 0.20),
-          width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryGold.withValues(alpha: 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+            color: AppColors.primaryGold.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Title row ────────────────────────────────────────
+          // Header
           Row(
             children: [
-              Icon(
-                Icons.auto_graph,
-                color: AppColors.primaryGold,
-                size: _s(20),
-              ),
-              SizedBox(width: _s(6)),
-              Text(
-                isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: theme.textTheme.bodySmall?.color,
+              Container(
+                width: _s(32),
+                height: _s(32),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGold.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.auto_graph,
+                  color: AppColors.primaryGold,
+                  size: _s(16),
                 ),
               ),
-              const Spacer(),
+              SizedBox(width: _s(8)),
+              Expanded(
+                child: Text(
+                  isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
+                  style: TextStyle(
+                    fontSize: _s(13),
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primaryGold,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               Container(
                 padding: EdgeInsets.symmetric(
-                  horizontal: _s(8),
-                  vertical: _s(3),
-                ),
+                    horizontal: _s(8), vertical: _s(3)),
                 decoration: BoxDecoration(
                   color: AppColors.primaryGold.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(20),
@@ -1867,158 +2098,134 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           SizedBox(height: _s(10)),
 
-          // ── Hero number: WEIGHT PROFIT ───────────────────────
+          // Hero: Weight + karat + ≈Cash + Margin
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                _formatWeight(netProfitWeight),
-                style: theme.textTheme.displaySmall?.copyWith(
-                  fontWeight: FontWeight.w900,
-                  color: profitColor,
-                  fontSize: _s(30),
-                  letterSpacing: -0.5,
-                ),
-              ),
-              SizedBox(width: _s(6)),
-              Padding(
-                padding: EdgeInsets.only(bottom: _s(4)),
-                child: Text(
-                  isArabic ? 'عيار ($mainKarat)' : 'k($mainKarat)',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: profitColor.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w600,
-                    fontSize: _s(13),
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        _formatWeight(netProfitWeight)
+                            .replaceAll(' جم', '')
+                            .replaceAll(' g', ''),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: profitColor,
+                          fontSize: _s(22),
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      SizedBox(width: _s(4)),
+                      Padding(
+                        padding: EdgeInsets.only(bottom: _s(3)),
+                        child: Text(
+                          isArabic
+                              ? 'جم ($mainKarat)'
+                              : 'g (k$mainKarat)',
+                          style: TextStyle(
+                            color: profitColor.withValues(alpha: 0.7),
+                            fontWeight: FontWeight.w600,
+                            fontSize: _s(11),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
-
-          // ── Cash equivalent + Margin badge row ───────────────
-          SizedBox(height: _s(4)),
-          Row(
-            children: [
+              const Spacer(),
               Container(
                 padding: EdgeInsets.symmetric(
-                  horizontal: _s(8),
-                  vertical: _s(3),
-                ),
+                    horizontal: _s(7), vertical: _s(3)),
                 decoration: BoxDecoration(
                   color: profitColor.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   '≈ ${_formatCurrency(netProfit)}',
                   style: TextStyle(
-                    fontSize: _s(11),
+                    fontSize: _s(10),
                     fontWeight: FontWeight.bold,
                     color: profitColor,
                   ),
+                ),
+              ),
+              SizedBox(width: _s(4)),
+              Container(
+                padding: EdgeInsets.symmetric(
+                    horizontal: _s(7), vertical: _s(3)),
+                decoration: BoxDecoration(
+                  color: profitColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '${netMarginPct.toStringAsFixed(1)}%',
+                  style: TextStyle(
+                    fontSize: _s(10),
+                    fontWeight: FontWeight.bold,
+                    color: profitColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: _s(10)),
+
+          // 4 chips
+          Row(
+            children: [
+              Expanded(
+                child: _miniStatChip(
+                  icon: Icons.trending_up,
+                  label: isArabic ? 'بيع/جم' : 'Sell/g',
+                  value: _formatCurrency(avgSell)
+                      .replaceAll(_currencySymbol, '')
+                      .trim(),
+                  color: AppColors.success,
                 ),
               ),
               SizedBox(width: _s(6)),
-              Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: _s(8),
-                  vertical: _s(3),
+              Expanded(
+                child: _miniStatChip(
+                  icon: Icons.trending_down,
+                  label: isArabic ? 'شراء/جم' : 'Buy/g',
+                  value: _formatCurrency(avgBuy)
+                      .replaceAll(_currencySymbol, '')
+                      .trim(),
+                  color: AppColors.warning,
                 ),
-                decoration: BoxDecoration(
-                  color: profitColor.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
+              ),
+              SizedBox(width: _s(6)),
+              Expanded(
+                child: _miniStatChip(
+                  icon: Icons.swap_horiz,
+                  label: isArabic ? 'فارق/جم' : 'Margin/g',
+                  value: _formatCurrency(marginPerGram)
+                      .replaceAll(_currencySymbol, '')
+                      .trim(),
+                  color: marginPerGram >= 0
+                      ? AppColors.success
+                      : AppColors.error,
                 ),
-                child: Text(
-                  '${netMarginPct.toStringAsFixed(1)}% ${isArabic ? "هامش" : "margin"}',
-                  style: TextStyle(
-                    fontSize: _s(11),
-                    fontWeight: FontWeight.bold,
-                    color: profitColor,
-                  ),
+              ),
+              SizedBox(width: _s(6)),
+              Expanded(
+                child: _miniStatChip(
+                  icon: Icons.monitor_weight_outlined,
+                  label: isArabic ? 'المباع' : 'Sold',
+                  value: _formatWeight(weightSold)
+                      .replaceAll(' جم', '')
+                      .replaceAll(' g', ''),
+                  color: AppColors.info,
                 ),
               ),
             ],
           ),
-
-          SizedBox(height: _s(14)),
-
-          // ── Chips row ────────────────────────────────────────
-          Wrap(
-            spacing: _s(8),
-            runSpacing: _s(6),
-            children: [
-              _heroChip(
-                icon: Icons.trending_up,
-                label: isArabic ? 'بيع/جم' : 'Sell/g',
-                value: _formatCurrency(avgSell),
-                color: const Color(0xFF1B9E4B),
-              ),
-              _heroChip(
-                icon: Icons.trending_down,
-                label: isArabic ? 'شراء/جم' : 'Buy/g',
-                value: _formatCurrency(avgBuy),
-                color: Colors.orange.shade700,
-              ),
-              _heroChip(
-                icon: Icons.swap_horiz,
-                label: isArabic ? 'فارق/جم' : 'Margin/g',
-                value: _formatCurrency(marginPerGram),
-                color: marginPerGram >= 0 ? AppColors.success : AppColors.error,
-              ),
-              _heroChip(
-                icon: Icons.monitor_weight_outlined,
-                label: isArabic ? 'المباع' : 'Sold',
-                value: _formatWeight(weightSold),
-                color: AppColors.info,
-              ),
-            ],
-          ),
-
-          // ── Layer breakdown row ──────────────────────────────
-          if (tradingProfitWeight.abs() > 0.001 || extraRevenueWeight.abs() > 0.001 || totalExpensesWeight.abs() > 0.001) ...[
-            SizedBox(height: _s(12)),
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: _s(10), vertical: _s(8)),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(_s(10)),
-                border: Border.all(
-                  color: AppColors.primaryGold.withValues(alpha: 0.10),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _layerChip(
-                      label: isArabic ? 'متاجرة' : 'Trading',
-                      value: tradingProfitWeight,
-                      isPositive: true,
-                      theme: theme,
-                    ),
-                  ),
-                  if (extraRevenueWeight.abs() > 0.001) ...[
-                    SizedBox(width: _s(4)),
-                    Expanded(
-                      child: _layerChip(
-                        label: isArabic ? 'إيرادات' : 'Revenue',
-                        value: extraRevenueWeight,
-                        isPositive: true,
-                        theme: theme,
-                      ),
-                    ),
-                  ],
-                  SizedBox(width: _s(4)),
-                  Expanded(
-                    child: _layerChip(
-                      label: isArabic ? 'مصاريف' : 'Expenses',
-                      value: totalExpensesWeight,
-                      isPositive: false,
-                      theme: theme,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );
