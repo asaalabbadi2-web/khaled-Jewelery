@@ -3839,3 +3839,81 @@ def cancel_sbt(sbt_id: int):
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
+@posting_bp.route('/admin/sbt-create-from-je/<int:je_id>', methods=['POST'])
+@require_permission('admin')
+def create_sbt_from_je(je_id: int):
+    """Create SafeBoxTransaction(s) directly from a posted JE's gold safe lines.
+
+    Use when a standalone correction JE has been posted against a gold safe account
+    but no SBT was automatically created (e.g. manual correction JEs).
+
+    Body (optional): {"ref_type": "je_correction", "invoice_id": null}
+    """
+    try:
+        je = JournalEntry.query.get(je_id)
+        if not je:
+            return jsonify({'success': False, 'message': 'القيد غير موجود'}), 404
+        if not getattr(je, 'is_posted', False):
+            return jsonify({'success': False, 'message': 'القيد غير مرحل'}), 400
+
+        data = request.get_json() or {}
+        ref_type = data.get('ref_type') or 'je_correction'
+        invoice_id_override = data.get('invoice_id') or None
+        created_by = getattr(getattr(g, 'current_user', None), 'username', None) or 'admin'
+
+        # Idempotency
+        existing = SafeBoxTransaction.query.filter_by(ref_type=ref_type, ref_id=je_id).first()
+        if existing:
+            return jsonify({'success': False, 'message': f'SBT already exists for JE {je_id} ref_type={ref_type}: sbt#{existing.id}'}), 400
+
+        lines = [l for l in (je.lines or []) if not getattr(l, 'is_deleted', False)]
+        acc_ids = list({int(l.account_id) for l in lines if l.account_id is not None})
+        safe_by_acc: dict = {}
+        for sb in SafeBox.query.filter(
+            SafeBox.account_id.in_(acc_ids),
+            SafeBox.safe_type == 'gold',
+            SafeBox.is_active == True,
+        ).all():
+            if sb.account_id is not None:
+                safe_by_acc[int(sb.account_id)] = sb
+
+        if not safe_by_acc:
+            return jsonify({'success': False, 'message': 'لا توجد أحسبة خزينة ذهب في هذا القيد'}), 404
+
+        eps = 0.001
+        created = []
+        for line in lines:
+            sb = safe_by_acc.get(int(line.account_id))
+            if not sb:
+                continue
+            for direction, w18, w21, w22, w24 in [
+                ('in',  float(line.debit_18k or 0), float(line.debit_21k or 0), float(line.debit_22k or 0), float(line.debit_24k or 0)),
+                ('out', float(line.credit_18k or 0), float(line.credit_21k or 0), float(line.credit_22k or 0), float(line.credit_24k or 0)),
+            ]:
+                if not any(v > eps for v in (w18, w21, w22, w24)):
+                    continue
+                tx = SafeBoxTransaction(
+                    safe_box_id=sb.id,
+                    ref_type=ref_type,
+                    ref_id=je_id,
+                    invoice_id=invoice_id_override,
+                    direction=direction,
+                    amount_cash=0.0,
+                    weight_18k=round(w18, 6),
+                    weight_21k=round(w21, 6),
+                    weight_22k=round(w22, 6),
+                    weight_24k=round(w24, 6),
+                    notes=f'JE {getattr(je, "entry_number", je_id)} correction',
+                    created_by=created_by,
+                )
+                db.session.add(tx)
+                created.append({'safe_box_id': sb.id, 'direction': direction, 'w21': w21, 'w18': w18})
+
+        db.session.commit()
+        return jsonify({'success': True, 'je_id': je_id, 'created_count': len(created), 'created': created}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
