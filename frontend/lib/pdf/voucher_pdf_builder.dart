@@ -19,7 +19,7 @@ class VoucherPdfColors {
   static const greenTagBg = PdfColor.fromInt(0xFFEAF5EF);
   static const grayBg = PdfColor.fromInt(0xFFF7F6F2);
   static const grayBorder = PdfColor.fromInt(0xFFEBEBEB);
-  static const grayMuted = PdfColor.fromInt(0xFFAAAAAA);
+  static const grayMuted = PdfColor.fromInt(0xFF555555);
   static const black = PdfColor.fromInt(0xFF1A1A1A);
 }
 
@@ -531,7 +531,7 @@ class VoucherPdfBuilder {
                   style: pw.TextStyle(
                     font: fontReg,
                     fontSize: 8,
-                    color: PdfColor.fromInt(0xFF666666),
+                    color: PdfColor.fromInt(0xFF333333),
                   ),
                 ),
               ],
@@ -569,7 +569,7 @@ class VoucherPdfBuilder {
                             style: pw.TextStyle(
                               font: fontReg,
                               fontSize: 7,
-                              color: PdfColor.fromInt(0xFF666666),
+                              color: PdfColor.fromInt(0xFF444444),
                             ),
                           ),
                         ),
@@ -594,7 +594,7 @@ class VoucherPdfBuilder {
                             style: pw.TextStyle(
                               font: fontReg,
                               fontSize: 7,
-                              color: PdfColor.fromInt(0xFF666666),
+                              color: PdfColor.fromInt(0xFF444444),
                             ),
                           ),
                         ),
@@ -626,7 +626,7 @@ class VoucherPdfBuilder {
                               style: pw.TextStyle(
                                 font: fontReg,
                                 fontSize: 7,
-                                color: PdfColor.fromInt(0xFF666666),
+                                color: PdfColor.fromInt(0xFF444444),
                               ),
                             ),
                           ),
@@ -671,7 +671,7 @@ class VoucherPdfBuilder {
                         style: pw.TextStyle(
                           font: fontReg,
                           fontSize: 8.5,
-                          color: PdfColor.fromInt(0xFF666666),
+                          color: PdfColor.fromInt(0xFF333333),
                           letterSpacing: 1.8,
                         ),
                       ),
@@ -705,7 +705,7 @@ class VoucherPdfBuilder {
                               style: pw.TextStyle(
                                 font: fontReg,
                                 fontSize: 6,
-                                color: PdfColor.fromInt(0xFF666666),
+                                color: PdfColor.fromInt(0xFF444444),
                               ),
                             ),
                           ],
@@ -960,8 +960,9 @@ class VoucherPdfBuilder {
                       pw.SizedBox(height: 2),
                       txt(
                         subText,
-                        size: isA5 ? 7 : 8,
-                        color: VoucherPdfColors.amberMid,
+                        size: isA5 ? 8 : 9,
+                        bold: true,
+                        color: const PdfColor.fromInt(0xFF444444),
                       ),
                     ],
                   ],
@@ -973,9 +974,9 @@ class VoucherPdfBuilder {
                   alignment: pw.Alignment.centerRight,
                   child: txt(
                     label,
-                    size: isA5 ? 8 : 9,
+                    size: isA5 ? 9 : 10,
                     bold: true,
-                    color: VoucherPdfColors.amberMid,
+                    color: const PdfColor.fromInt(0xFF333333),
                   ),
                 ),
               ),
@@ -1064,9 +1065,9 @@ class VoucherPdfBuilder {
                       pdfVisualArabic('($heroWords)'),
                       textDirection: pw.TextDirection.ltr,
                       style: pw.TextStyle(
-                        font: fontReg,
-                        fontSize: isA5 ? 8 : 9,
-                        color: VoucherPdfColors.grayMuted,
+                        font: fontBold,
+                        fontSize: isA5 ? 9 : 10,
+                        color: const PdfColor.fromInt(0xFF333333),
                       ),
                     ),
                   ],
@@ -1393,22 +1394,24 @@ class VoucherPdfBuilder {
             children: [
               txt(
                 sigTitle,
-                size: isA5 ? 8 : 9,
-                color: const PdfColor.fromInt(0xFF777777),
+                size: isA5 ? 9 : 10,
+                bold: true,
+                color: const PdfColor.fromInt(0xFF222222),
               ),
               pw.SizedBox(height: isA5 ? 18 : 22),
               pw.Container(
                 decoration: const pw.BoxDecoration(
                   border: pw.Border(
-                    top: pw.BorderSide(color: VoucherPdfColors.grayMuted, width: 0.8),
+                    top: pw.BorderSide(color: PdfColor.fromInt(0xFF555555), width: 1.2),
                   ),
                 ),
                 padding: const pw.EdgeInsets.only(top: 4),
                 child: pw.Center(
                   child: txt(
                     name,
-                    size: isA5 ? 7 : 8,
-                    color: VoucherPdfColors.grayMuted,
+                    size: isA5 ? 8 : 9,
+                    bold: true,
+                    color: const PdfColor.fromInt(0xFF222222),
                   ),
                 ),
               ),

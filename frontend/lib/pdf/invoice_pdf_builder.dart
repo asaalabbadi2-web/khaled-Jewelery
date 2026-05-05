@@ -199,7 +199,7 @@ class InvoicePdfBuilder {
     const goldBg = PdfColor.fromInt(0xFFFBF7EE);
     const border = PdfColor.fromInt(0xFFE8D899);
     const text = PdfColor.fromInt(0xFF1A1A1A);
-    const muted = PdfColor.fromInt(0xFF666666);
+    const muted = PdfColor.fromInt(0xFF444444);
 
     String ar(String s) => options.isArabic ? pdfVisualArabic(s) : s;
 
@@ -1032,7 +1032,7 @@ class InvoicePdfBuilder {
                 pw.SizedBox(height: 10),
                 pw.Text(
                   e.toString(),
-                  style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFF666666)),
+                  style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFF555555)),
                   textDirection: pw.TextDirection.ltr,
                   textAlign: pw.TextAlign.center,
                 ),

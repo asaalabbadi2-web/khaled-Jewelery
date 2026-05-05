@@ -205,15 +205,9 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     }
   }
 
-  Future<Uint8List> _buildVoucherPdfBytes(PdfPageFormat format) async {
+  Future<Uint8List> _buildVoucherPdfBytesWithSp(PdfPageFormat format, SettingsProvider? sp) async {
     final voucher = _voucher;
     if (voucher == null) return Uint8List(0);
-
-    SettingsProvider? sp;
-    try {
-      sp = context.read<SettingsProvider>();
-    } catch (_) {}
-
     return VoucherPdfBuilder.buildBytes(
       voucher: voucher,
       format: format,
@@ -242,47 +236,47 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
 
   Future<void> _printVoucher() async {
     if (_voucher == null) return;
+    SettingsProvider? sp;
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
+    if (widget.asSheet && mounted) Navigator.of(context).pop();
     try {
       await Printing.layoutPdf(
         name: _voucherPdfFilename(),
-        onLayout: (format) => _buildVoucherPdfBytes(format),
+        onLayout: (format) => _buildVoucherPdfBytesWithSp(format, sp),
       );
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('تعذر فتح الطباعة: $e', error: true);
-    }
+    } catch (_) {}
   }
 
   Future<void> _downloadVoucherPdf() async {
     if (_voucher == null) return;
+    SettingsProvider? sp;
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
+    if (widget.asSheet && mounted) Navigator.of(context).pop();
     try {
       final prefs = await _loadPrintPrefs();
       final format = VoucherPdfBuilder.pageFormatFromSettings(
         paperSize: prefs.paperSize,
         orientation: prefs.orientation,
       );
-      final bytes = await _buildVoucherPdfBytes(format);
+      final bytes = await _buildVoucherPdfBytesWithSp(format, sp);
       await Printing.sharePdf(bytes: bytes, filename: _voucherPdfFilename());
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('تعذر تحميل PDF: $e', error: true);
-    }
+    } catch (_) {}
   }
 
   Future<void> _shareVoucherPdf() async {
     if (_voucher == null) return;
+    SettingsProvider? sp;
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
+    if (widget.asSheet && mounted) Navigator.of(context).pop();
     try {
       final prefs = await _loadPrintPrefs();
       final format = VoucherPdfBuilder.pageFormatFromSettings(
         paperSize: prefs.paperSize,
         orientation: prefs.orientation,
       );
-      final bytes = await _buildVoucherPdfBytes(format);
+      final bytes = await _buildVoucherPdfBytesWithSp(format, sp);
       await Printing.sharePdf(bytes: bytes, filename: _voucherPdfFilename());
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('تعذر مشاركة PDF: $e', error: true);
-    }
+    } catch (_) {}
   }
 
   @override

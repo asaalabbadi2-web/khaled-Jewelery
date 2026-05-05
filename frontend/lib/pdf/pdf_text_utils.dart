@@ -1,7 +1,33 @@
-/// Shapes Arabic text so it renders correctly in `package:pdf`.
+/// Sanitizes a string for safe rendering in PDF with the Cairo/Arabic font.
 ///
-/// Why: `package:pdf` doesn't reliably perform Arabic shaping on its own,
-/// which can cause disconnected letters (e.g. isolated ي) and missing marks.
+/// Replaces common Unicode symbols that are not present in the Cairo font
+/// (arrows, em-dash, bullet, etc.) with ASCII/Arabic equivalents so they
+/// do not appear as empty boxes (tofu) in the output.
+String pdfSanitize(String input) {
+  if (input.isEmpty) return input;
+  return input
+      .replaceAll('\u2192', '->') // →
+      .replaceAll('\u2190', '<-') // ←
+      .replaceAll('\u2194', '<->') // ↔
+      .replaceAll('\u21D2', '=>') // ⇒
+      .replaceAll('\u21D0', '<=') // ⇐
+      .replaceAll('\u2014', ' - ') // —  em-dash
+      .replaceAll('\u2013', ' - ') // –  en-dash
+      .replaceAll('\u2022', '*') // •  bullet
+      .replaceAll('\u25CF', '*') // ● filled circle
+      .replaceAll('\u25CB', 'o') // ○ open circle
+      .replaceAll('\u2713', '+') // ✓
+      .replaceAll('\u2714', '+') // ✔
+      .replaceAll('\u2715', 'x') // ✕
+      .replaceAll('\u274C', 'x') // ❌
+      .replaceAll('\u2705', '+') // ✅
+      .replaceAll('\u26A0', '!') // ⚠
+      .replaceAll('\u2248', '~') // ≈
+      .replaceAll('\u2260', '!=') // ≠
+      .replaceAll('\u2264', '<=') // ≤
+      .replaceAll('\u2265', '>='); // ≥
+}
+
 String pdfShapeArabic(String input) {
   if (input.isEmpty) return input;
   if (!_containsArabicLetters(input)) return input;
@@ -264,13 +290,35 @@ class _ProtectedText {
 }
 
 _ProtectedText _protectCurrencyTokens(String input) {
-  // We normalize output to a consistent visual token.
-  // NOTE: Keep it short to avoid QR/PDF layout issues.
-  const normalizedPlain = 'ر.س';
-  const normalizedParen = '(ر.س)';
+  // We store the currency token in VISUAL (reversed) order so that when
+  // `pdfVisualArabic` places it at the START of the visual LTR output string
+  // (because the surrounding RTL run is reversed), an Arabic reader reading
+  // right-to-left sees the characters in the correct logical order.
+  //
+  // Why reversed:
+  //   `pdfVisualArabic` reverses the whole RTL run → the token (a single
+  //   cluster placeholder) ends up at the leftmost position.  The reader
+  //   reads RIGHT→LEFT, so the leftmost char is seen LAST.  If we stored
+  //   "ر.س" (Ra, dot, Seen) the reader would see: Seen·dot·Ra = "س.ر" ✗
+  //   If we store reversed "ﺱ.ﺮ" (Seen, dot, Ra) the reader sees:
+  //   Ra·dot·Seen = "ر.س" ✓
+  //
+  // U+FEB1 = ﺱ  (Seen isolated form)   — leftmost in visual LTR string
+  // U+FEAE = ﺮ  (Ra   isolated form)   — rightmost in visual LTR string
+  const normalizedPlain = '\uFEB1.\uFEAE'; // visual reversed "ر.س"
+  // For the parenthesized form: brackets are also stored reversed so the RTL
+  // reader sees opening "(" on the right and closing ")" on the left.
+  const normalizedParen = ')\uFEB1.\uFEAE('; // visual reversed "(ر.س)"
 
-  // Match either (ر.س) or ر.س with optional internal spaces.
-  final re = RegExp(r'\(\s*ر\s*\.\s*س\s*\)|ر\s*\.\s*س');
+  // "ريال" — visual reversed presentation forms:
+  // Logical:  ر(FEAE) ي(FEF3) ا(FE8E) ل(FEDD)
+  // Reversed: ل(FEDD) ا(FE8E) ي(FEF3) ر(FEAE)
+  const shapedRiyalReversed = '\uFEDD\uFE8E\uFEF3\uFEAE';
+  const normalizedRiyal = shapedRiyalReversed;
+  const normalizedRiyalParen = ')$shapedRiyalReversed(';
+
+  // Match (ر.س), ر.س, (ريال), or ريال — the two most common SAR representations.
+  final re = RegExp(r'\(\s*ر\s*\.\s*س\s*\)|\(\s*ريال\s*\)|ر\s*\.\s*س|ريال');
 
   final matches = re.allMatches(input).toList(growable: false);
   if (matches.isEmpty) return _ProtectedText(input, const {});
@@ -286,8 +334,13 @@ _ProtectedText _protectCurrencyTokens(String input) {
 
     final raw = m.group(0) ?? '';
     final isParen = raw.trimLeft().startsWith('(');
+    final isRiyal = raw.contains('ريال');
     final placeholder = nextPlaceholder++;
-    placeholderToToken[placeholder] = isParen ? normalizedParen : normalizedPlain;
+    if (isRiyal) {
+      placeholderToToken[placeholder] = isParen ? normalizedRiyalParen : normalizedRiyal;
+    } else {
+      placeholderToToken[placeholder] = isParen ? normalizedParen : normalizedPlain;
+    }
     buf.writeCharCode(placeholder);
 
     last = m.end;

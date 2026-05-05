@@ -118,6 +118,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       companyCr: companyCr,
       showCompanyLogo: showCompanyLogo,
       companyLogoBase64: companyLogoBase64,
+      currencySymbol: settingsProvider?.currencySymbol ?? 'ر.س',
     );
   }
 
@@ -1346,7 +1347,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
                   sliver: SliverList.separated(
                     itemCount: filteredLines.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
                     itemBuilder: (context, index) =>
                         _buildLineCard(filteredLines[index], mainKarat),
                   ),

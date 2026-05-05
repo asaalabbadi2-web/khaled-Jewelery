@@ -520,7 +520,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         final ts = row['timestamp']?.toString();
         final price = row['price_usd_per_oz'];
         if (ts == null || price == null) continue;
-        final time = DateTime.tryParse(ts + '+03:00');
+        final time = DateTime.tryParse('$ts+03:00');
         final p = price is num
             ? price.toDouble()
             : double.tryParse(price.toString());
