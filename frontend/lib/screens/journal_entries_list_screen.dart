@@ -150,7 +150,8 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
       if (renderObject is! RenderBox) {
         return;
       }
-      final height = renderObject.size.height;
+      final screenHeight = MediaQuery.of(this.context).size.height;
+      final height = renderObject.size.height.clamp(0.0, screenHeight * 0.38);
       if (height <= 0 || (height - _topChromeHeight).abs() < 0.5) {
         return;
       }
@@ -2658,18 +2659,19 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             ),
           ],
         ),
-        body: LayoutBuilder(
-          builder: (context, constraints) => Column(
+        body: Column(
             children: [
+              _buildCollapsibleTopChrome(),
               ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxHeight: constraints.maxHeight * 0.45,
+                  maxHeight: MediaQuery.of(context).size.height * 0.28,
                 ),
-                child: _buildCollapsibleTopChrome(),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: _buildManagementToolbar(),
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: _buildManagementToolbar(),
+                  ),
+                ),
               ),
               if (_isLoading && _entries.isNotEmpty)
                 const Padding(
@@ -2678,7 +2680,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
                 ),
               Expanded(child: _buildBody()),
             ],
-          ),
         ),
       ),
     );

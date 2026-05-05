@@ -306,11 +306,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   Widget _buildErrorState() {
     final isArabic = widget.isArabic;
+    final hintColor = Theme.of(context).hintColor;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.error_outline, size: _s(52), color: Colors.red.shade400),
+          Icon(Icons.error_outline, size: _s(52), color: AppColors.error),
           SizedBox(height: _s(12)),
           Text(
             isArabic ? 'تعذّر تحميل البيانات' : 'Failed to load data',
@@ -322,7 +323,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             child: Text(
               _error ?? '',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey, fontSize: _s(12)),
+              style: TextStyle(color: hintColor, fontSize: _s(12)),
             ),
           ),
           SizedBox(height: _s(16)),
@@ -670,40 +671,50 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Icon(
-                Icons.account_balance,
-                color: AppColors.primaryGold,
-                size: _s(20),
-              ),
-              SizedBox(width: _s(6)),
-              Text(
-                isArabic ? 'صافي المركز المالي' : 'Net Position',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.hintColor,
-                  fontSize: _s(12),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: _s(8)),
-          Text(
-            _formatCurrency(netPosition),
-            style: theme.textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.bold,
+          Container(
+            width: _s(48),
+            height: _s(48),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.primaryGold.withValues(alpha: 0.12),
+            ),
+            child: Icon(
+              Icons.account_balance,
               color: AppColors.primaryGold,
-              fontSize: _s(22),
+              size: _s(26),
             ),
           ),
-          Text(
-            isArabic ? '(نقد + قيمة الذهب)' : '(Cash + Gold Value)',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.hintColor,
-              fontSize: _s(11),
+          SizedBox(width: _s(12)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isArabic ? 'صافي المركز المالي' : 'Net Position',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.hintColor,
+                    fontSize: _s(12),
+                  ),
+                ),
+                SizedBox(height: _s(4)),
+                Text(
+                  _formatCurrency(netPosition),
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primaryGold,
+                    fontSize: _s(22),
+                  ),
+                ),
+                Text(
+                  isArabic ? 'نقد + قيمة الذهب' : 'Cash + Gold Value',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.hintColor,
+                    fontSize: _s(11),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -735,14 +746,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           color: theme.cardColor,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: (isPositive ? Colors.green : Colors.red).withValues(
+            color: (isPositive ? AppColors.success : AppColors.error).withValues(
               alpha: theme.brightness == Brightness.dark ? 0.40 : 0.55,
             ),
             width: 1.2,
           ),
           boxShadow: [
             BoxShadow(
-              color: (isPositive ? Colors.green : Colors.red).withValues(
+              color: (isPositive ? AppColors.success : AppColors.error).withValues(
                 alpha: theme.brightness == Brightness.dark ? 0.10 : 0.12,
               ),
               blurRadius: 14,
@@ -755,21 +766,56 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           children: [
             Row(
               children: [
-                Icon(
-                  Icons.show_chart,
-                  color: isPositive ? Colors.green : Colors.red,
-                  size: _s(20),
+                Container(
+                  width: _s(36),
+                  height: _s(36),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: (isPositive ? AppColors.success : AppColors.error)
+                        .withValues(alpha: 0.12),
+                  ),
+                  child: Icon(
+                    Icons.show_chart,
+                    color: isPositive ? AppColors.success : AppColors.error,
+                    size: _s(20),
+                  ),
                 ),
-                SizedBox(width: _s(6)),
+                SizedBox(width: _s(8)),
                 Text(
                   '24K',
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                const Spacer(),
+                if (changeValue != null)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isPositive
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward,
+                        size: _s(13),
+                        color: isPositive
+                            ? AppColors.success
+                            : AppColors.error,
+                      ),
+                      Text(
+                        '${changeValue.abs().toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontSize: _s(12),
+                          fontWeight: FontWeight.bold,
+                          color: isPositive
+                              ? AppColors.success
+                              : AppColors.error,
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
-            SizedBox(height: _s(10)),
+            SizedBox(height: _s(6)),
             Text(
               goldPrice > 0
                   ? '${goldPrice.toStringAsFixed(0)} $_currencySymbol'
@@ -779,24 +825,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 fontSize: _s(20),
               ),
             ),
-            if (changeValue != null)
-              Row(
-                children: [
-                  Icon(
-                    isPositive ? Icons.arrow_upward : Icons.arrow_downward,
-                    size: _s(14),
-                    color: isPositive ? Colors.green : Colors.red,
-                  ),
-                  Text(
-                    '${changeValue.abs().toStringAsFixed(1)}%',
-                    style: TextStyle(
-                      fontSize: _s(12),
-                      fontWeight: FontWeight.bold,
-                      color: isPositive ? Colors.green : Colors.red,
-                    ),
-                  ),
-                ],
-              ),
             if ((goldPriceSeries ?? const []).isNotEmpty) ...[
               SizedBox(height: _s(10)),
               SizedBox(
@@ -814,12 +842,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                           goldPriceSeries.take(24).length,
                         ),
                         isCurved: true,
-                        color: isPositive ? Colors.green : Colors.red,
+                        color: isPositive ? AppColors.success : AppColors.error,
                         barWidth: _s(2),
                         dotData: const FlDotData(show: false),
                         belowBarData: BarAreaData(
                           show: true,
-                          color: (isPositive ? Colors.green : Colors.red)
+                          color: (isPositive ? AppColors.success : AppColors.error)
                               .withValues(alpha: 0.12),
                         ),
                       ),
@@ -864,7 +892,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       if (msg.isNotEmpty) {
         items.add(_AlertItem(
           icon: isCrit ? Icons.error_outline : Icons.warning_amber_rounded,
-          color: isCrit ? Colors.red : Colors.orange,
+          color: isCrit ? AppColors.error : AppColors.warning,
           text: msg,
         ));
       }
@@ -883,9 +911,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final gDiff = goldDiff is num ? goldDiff.toDouble() : 0.0;
 
     if (cCount > 0) {
+      final isManyAlerts = cCount > 5;
       items.add(_AlertItem(
-        icon: Icons.warning_amber_rounded,
-        color: Colors.red,
+        icon: isManyAlerts
+            ? Icons.error_outline
+            : Icons.warning_amber_rounded,
+        color: AppColors.error,
         text: isArabic
             ? '$cCount تنبيهات حرجة بانتظار المراجعة'
             : '$cCount critical alerts pending',
@@ -894,7 +925,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (cDiff.abs() > 0.01) {
       items.add(_AlertItem(
         icon: Icons.account_balance_wallet,
-        color: Colors.orange,
+        color: AppColors.warning,
         text: isArabic
             ? 'فرق نقدي (${_formatCurrency(cDiff)}) في آخر إغلاق'
             : 'Cash difference (${_formatCurrency(cDiff)}) in last closing',
@@ -903,7 +934,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (gDiff.abs() > 0.001) {
       items.add(_AlertItem(
         icon: Icons.auto_awesome,
-        color: Colors.orange,
+        color: AppColors.warning,
         text: isArabic
             ? 'فرق ذهب (${_formatWeight(gDiff)}) في آخر إغلاق'
             : 'Gold difference (${_formatWeight(gDiff)}) in last closing',
@@ -912,7 +943,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (uCount > 0) {
       items.add(_AlertItem(
         icon: Icons.pending_actions,
-        color: Colors.blue,
+        color: AppColors.info,
         text: isArabic
             ? '$uCount فاتورة بانتظار الترحيل'
             : '$uCount invoices pending posting',
@@ -1143,7 +1174,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                         PieChartSectionData(
                           value: k21,
-                          color: Colors.orange.shade600,
+                color: AppColors.warning,
                           radius: _s(15),
                           showTitle: false,
                         ),
@@ -1242,7 +1273,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         children: [
           Row(
             children: [
-              Icon(Icons.water_drop, color: Colors.blue, size: _s(20)),
+              Icon(Icons.water_drop, color: AppColors.info, size: _s(20)),
               SizedBox(width: _s(6)),
               Text(
                 isArabic ? 'مركز السيولة' : 'Liquidity',
@@ -1257,21 +1288,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           _buildLiquidityRow(
             isArabic ? 'نقدية' : 'Cash',
             cashInHand,
-            Colors.green,
+            AppColors.success,
             total,
           ),
           SizedBox(height: _s(4)),
           _buildLiquidityRow(
             isArabic ? 'بنوك' : 'Banks',
             cashInBanks,
-            Colors.blue,
+            AppColors.info,
             total,
           ),
           SizedBox(height: _s(4)),
           _buildLiquidityRow(
             isArabic ? 'ذمم' : 'Receiv.',
             receivables,
-            Colors.orange,
+            AppColors.warning,
             total,
           ),
         ],
@@ -1349,7 +1380,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             : null;
 
     final isProfit = periodProfit >= 0;
-    final profitColor = isProfit ? AppColors.success : Colors.red.shade600;
+    final profitColor = isProfit ? AppColors.success : AppColors.error;
 
     // Period title
     final String periodTitle;
@@ -1380,6 +1411,47 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       insightText = isArabic ? 'المصروفات تفوق المبيعات' : 'Expenses exceed sales';
     }
 
+    final isAllZero =
+        periodSales == 0 && periodPurchases == 0 && periodExpenses == 0;
+
+    if (isAllZero) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: _s(16),
+            vertical: _s(12),
+          ),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppColors.primaryGold.withValues(alpha: 0.15),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.trending_flat,
+                color: Theme.of(context).hintColor,
+                size: _s(18),
+              ),
+              SizedBox(width: _s(8)),
+              Text(
+                isArabic
+                    ? '$periodTitle — لا توجد بيانات'
+                    : '$periodTitle — No data',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).hintColor,
+                      fontSize: _s(12),
+                    ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: EdgeInsets.fromLTRB(_s(16), _s(8), _s(16), 0),
       child: Container(
@@ -1394,7 +1466,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     theme.cardColor,
                   ]
                 : [
-                    Colors.red.shade600.withValues(alpha: 0.08),
+                    AppColors.error.withValues(alpha: 0.08),
                     theme.cardColor,
                   ],
           ),
@@ -1438,7 +1510,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       vertical: _s(3),
                     ),
                     decoration: BoxDecoration(
-                      color: (vsYesterdayPct >= 0 ? Colors.green : Colors.red)
+                      color: (vsYesterdayPct >= 0 ? AppColors.success : AppColors.error)
                           .withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(20),
                     ),
@@ -1451,8 +1523,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               : Icons.arrow_downward,
                           size: _s(12),
                           color: vsYesterdayPct >= 0
-                              ? Colors.green.shade700
-                              : Colors.red.shade600,
+                              ? AppColors.success
+                              : AppColors.error,
                         ),
                         SizedBox(width: _s(2)),
                         Text(
@@ -1461,8 +1533,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             fontSize: _s(11),
                             fontWeight: FontWeight.bold,
                             color: vsYesterdayPct >= 0
-                                ? Colors.green.shade700
-                                : Colors.red.shade600,
+                                ? AppColors.success
+                                : AppColors.error,
                           ),
                         ),
                       ],
@@ -1549,8 +1621,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   icon: Icons.arrow_downward,
                   label: isArabic ? 'مشتريات' : 'Purch.',
                   value: _formatCurrency(periodPurchases),
-                  color: Colors.orange.shade700,
-                ),
+                color: AppColors.warning,                ),
               ],
             ),
           ],
@@ -1610,8 +1681,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     required ThemeData theme,
   }) {
     final color = isPositive
-        ? (value >= 0 ? const Color(0xFF1B9E4B) : Colors.red.shade600)
-        : Colors.red.shade600;
+        ? (value >= 0 ? AppColors.success : AppColors.error)
+        : AppColors.error;
     final sign = isPositive ? '+' : '−';
     return Column(
       children: [
@@ -1676,7 +1747,45 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final mainKarat = g['main_karat']?.toString() ?? '21';
     final isProfit = netProfitWeight >= 0;
 
-    final profitColor = isProfit ? AppColors.success : Colors.red.shade600;
+    final isAllZero = netProfitWeight == 0 &&
+        weightSold == 0 &&
+        avgSell == 0 &&
+        avgBuy == 0;
+
+    if (isAllZero) {
+      return Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: _s(16),
+          vertical: _s(12),
+        ),
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(_s(16)),
+          border: Border.all(
+            color: AppColors.primaryGold.withValues(alpha: 0.15),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.auto_graph,
+              color: theme.hintColor,
+              size: _s(18),
+            ),
+            SizedBox(width: _s(8)),
+            Text(
+              isArabic ? 'ربح الجرام — لا توجد بيانات' : 'Gram Profit — No data',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+                fontSize: _s(12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final profitColor = isProfit ? AppColors.success : AppColors.error;
 
     // Dynamic period label
     final String periodLabel;
@@ -1853,13 +1962,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 icon: Icons.swap_horiz,
                 label: isArabic ? 'فارق/جم' : 'Margin/g',
                 value: _formatCurrency(marginPerGram),
-                color: marginPerGram >= 0 ? Colors.teal : Colors.red,
+                color: marginPerGram >= 0 ? AppColors.success : AppColors.error,
               ),
               _heroChip(
                 icon: Icons.monitor_weight_outlined,
                 label: isArabic ? 'المباع' : 'Sold',
                 value: _formatWeight(weightSold),
-                color: Colors.blue,
+                color: AppColors.info,
               ),
             ],
           ),
@@ -1935,8 +2044,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           Row(
             children: [
               Icon(
-                Icons.trending_up,
-                color: isPositive ? Colors.green : Colors.red,
+                isPositive ? Icons.trending_up : Icons.trending_down,
+                color: isPositive ? AppColors.success : AppColors.error,
                 size: _s(20),
               ),
               SizedBox(width: _s(6)),
@@ -1954,7 +2063,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             _formatCurrency(todayProfit),
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.bold,
-              color: isPositive ? Colors.green : Colors.red,
+              color: isPositive ? AppColors.success : AppColors.error,
               fontSize: _s(20),
             ),
           ),
@@ -1963,7 +2072,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               margin: EdgeInsets.only(top: _s(4)),
               padding: EdgeInsets.symmetric(horizontal: _s(6), vertical: _s(2)),
               decoration: BoxDecoration(
-                color: (isPositive ? Colors.green : Colors.red).withValues(
+                color: (isPositive ? AppColors.success : AppColors.error).withValues(
                   alpha: 0.1,
                 ),
                 borderRadius: BorderRadius.circular(_s(4)),
@@ -1973,7 +2082,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 style: TextStyle(
                   fontSize: _s(11),
                   fontWeight: FontWeight.bold,
-                  color: isPositive ? Colors.green : Colors.red,
+                  color: isPositive ? AppColors.success : AppColors.error,
                 ),
               ),
             ),
@@ -2290,14 +2399,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         break;
       case 'bank':
         icon = Icons.account_balance;
-        color = Colors.blue;
+        color = AppColors.info;
         primaryValue = cashBalance;
         primaryFormatter = _formatCurrency;
         subtitle = isArabic ? 'بنك' : 'Bank';
         break;
       default:
         icon = Icons.account_balance_wallet;
-        color = Colors.green;
+        color = AppColors.success;
         primaryValue = cashBalance;
         primaryFormatter = _formatCurrency;
         subtitle = isArabic ? 'نقد' : 'Cash';
@@ -2365,9 +2474,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ],
           );
 
-    final borderAccent = hasActivity ? Colors.green : theme.hintColor;
+    final borderAccent = hasActivity ? AppColors.success : theme.hintColor;
     final borderColor = borderAccent.withValues(alpha: hasActivity ? 0.55 : 0.25);
-    final glowColor = (hasActivity ? Colors.green : color).withValues(
+    final glowColor = (hasActivity ? AppColors.success : color).withValues(
       alpha: isPressed ? 0.22 : (isExpanded ? 0.14 : 0.10),
     );
     final glassBase = theme.colorScheme.surface.withValues(
@@ -2466,7 +2575,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                                   width: _s(9),
                                   height: _s(9),
                                   decoration: const BoxDecoration(
-                                    color: Colors.green,
+                                    color: AppColors.success,
                                     shape: BoxShape.circle,
                                   ),
                                 ),
@@ -2497,31 +2606,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             ],
                           ),
                           SizedBox(height: _s(8)),
+                          Text(
+                            subtitle,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: _s(11),
+                              color: color,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          SizedBox(height: _s(2)),
                           Hero(
                             tag: heroNameTag,
                             createRectTween: (begin, end) =>
                                 MaterialRectArcTween(begin: begin, end: end),
                             child: Material(
                               color: Colors.transparent,
-                              child: Tooltip(
-                                message: name.toString(),
-                                child: Text(
-                                  name,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: _s(12.5),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
+                              child: Text(
+                                name,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: _s(12.5),
                                 ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                          ),
-                          SizedBox(height: _s(2)),
-                          Text(
-                            subtitle,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontSize: _s(11),
-                              color: theme.hintColor,
                             ),
                           ),
                           if (!isExpanded) const Spacer(),

@@ -1521,15 +1521,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       color: theme.colorScheme.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: chips
-                .expand((chip) => [chip, const SizedBox(width: 8)])
-                .toList()
-              ..removeLast(),
-          ),
+        padding: const EdgeInsets.all(12.0),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: chips,
         ),
       ),
     );

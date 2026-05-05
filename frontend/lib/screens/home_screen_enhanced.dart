@@ -59,7 +59,9 @@ import 'weight_closing_execute_screen.dart';
 import 'import_documents_screen.dart';
 import 'reports/admin_dashboard_screen.dart';
 import 'reports/gold_price_history_report_screen.dart';
+import 'reports/gold_position_report_screen.dart';
 import 'reports/reports_main_screen.dart';
+import 'system_reset_screen.dart';
 import 'printing_center_screen.dart';
 import 'security_sessions_screen.dart';
 import 'change_password_screen.dart';
@@ -518,7 +520,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         final ts = row['timestamp']?.toString();
         final price = row['price_usd_per_oz'];
         if (ts == null || price == null) continue;
-        final time = DateTime.tryParse(ts);
+        final time = DateTime.tryParse(ts + '+03:00');
         final p = price is num
             ? price.toDouble()
             : double.tryParse(price.toString());
@@ -2269,29 +2271,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           ? '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
           : '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}');
 
-    String? fallbackText() {
-      if (!isFallback || effectiveStartDate == null) return null;
-      final formatted = DateFormat(
-        'dd/MM/yyyy',
-        'en',
-      ).format(effectiveStartDate);
-      final date = _ltrIsolate(formatted);
-      if (isMonth) {
-        return isAr
-            ? 'لا توجد مبيعات هذا الشهر — يتم عرض آخر شهر بدأ في $date'
-            : 'No sales this month — showing the latest month starting $date';
-      }
-      if (isWeek) {
-        return isAr
-            ? 'لا توجد مبيعات هذا الأسبوع — يتم عرض آخر أسبوع بدأ في $date'
-            : 'No sales this week — showing the latest week starting $date';
-      }
-      return isAr
-          ? 'لا توجد مبيعات اليوم — يتم عرض آخر يوم مبيعات بتاريخ $date'
-          : 'No sales today — showing the latest sales day on $date';
-    }
-
-    final fallbackMessage = fallbackText();
 
     String? effectivePeriodText() {
       if (effectiveStartDate == null) return null;
@@ -2743,7 +2722,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                             if (showChampion &&
                                 championName.isNotEmpty &&
                                 topRanking.isNotEmpty &&
-                                !(isFallback && !isWeek && !isMonth)) ...[
+                                !isFallback) ...[
                               Row(
                                 children: [
                                   Icon(
@@ -2814,8 +2793,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-            // ── إذا كان وضع اليوم + fallback: اعرض البانر فقط ──
-            if (isFallback && !isWeek && !isMonth) ...[
+            // ── إذا لم يكن هناك بيانات للفترة الحالية: اعرض البانر فقط ──
+            if (isFallback) ...[
               _buildNewDayBanner(isAr, isMonth, isWeek),
             ] else ...[
             if (effectivePeriodLabel != null || updateLabel != null) ...[
@@ -2907,58 +2886,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ],
               ),
             ],
-            if (fallbackMessage != null && (isWeek || isMonth)) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: AlignmentDirectional.centerEnd,
-                    end: AlignmentDirectional.centerStart,
-                    colors: [Color(0x17D4AF37), Colors.transparent],
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                  border: const BorderDirectional(
-                    end: BorderSide(color: AppColors.darkGold, width: 3),
-                    start: BorderSide(color: Color(0x1FD4AF37)),
-                    top: BorderSide(color: Color(0x1FD4AF37)),
-                    bottom: BorderSide(color: Color(0x1FD4AF37)),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFFFFD700), Color(0xFFD4AF37)],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: const [BoxShadow(color: Color(0x59D4AF37), blurRadius: 6)],
-                      ),
-                      child: const Icon(Icons.calendar_today_rounded, size: 14, color: Colors.white),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        fallbackMessage,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppColors.deepGold,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
             const SizedBox(height: 10),
             if (!raceEnabled)
               Text(
@@ -3012,217 +2939,94 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // ── عنوان + نسبة الإنجاز ──
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  isAr ? 'هدف الفريق الأسبوعي' : 'Weekly Team Goal',
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: goalColor,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  isGoalAchieved
-                                      ? (isAr
-                                            ? 'أداء جماعي مكتمل بإيقاع قوي'
-                                            : 'A completed team push with strong momentum')
-                                      : (isAr
-                                            ? 'قراءة سريعة لما تحقق هذا الأسبوع'
-                                            : 'A quick view of what the team achieved this week'),
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: colorScheme.onSurface.withValues(
-                                      alpha: 0.68,
-                                    ),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
+                            child: Text(
+                              isAr
+                                  ? (isMonth ? 'هدف الفريق الشهري' : 'هدف الفريق الأسبوعي')
+                                  : (isMonth ? 'Monthly Team Goal' : 'Weekly Team Goal'),
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: goalColor,
+                              ),
                             ),
                           ),
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: goalColor.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: goalColor.withValues(alpha: 0.16),
-                              ),
+                              color: goalColor.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: goalColor.withValues(alpha: 0.18)),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  goalPercentText,
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: goalColor,
-                                  ),
-                                ),
-                                Text(
-                                  isAr ? 'إنجاز' : 'Progress',
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: colorScheme.onSurface.withValues(
-                                      alpha: 0.55,
-                                    ),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
+                            child: Text(
+                              goalPercentText,
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: goalColor,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? colorScheme.surface.withValues(alpha: 0.35)
-                              : Colors.white.withValues(alpha: 0.82),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: colorScheme.onSurface.withValues(alpha: 0.06),
+                      const SizedBox(height: 8),
+                      // ── المحقق / الهدف / المتبقي في سطر واحد ──
+                      Row(
+                        children: [
+                          Text(
+                            goalCurrentText,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: goalColor,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    isAr ? 'المحقق حتى الآن' : 'Achieved so far',
-                                    style: theme.textTheme.labelMedium?.copyWith(
-                                      color: colorScheme.onSurface.withValues(alpha: 0.56),
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    goalCurrentText,
-                                    style: theme.textTheme.titleMedium?.copyWith(
-                                      color: goalColor,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                          Text(
+                            '  /  ',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurface.withValues(alpha: 0.35),
                             ),
-                            Container(
-                              width: 1,
-                              height: 42,
-                              color: colorScheme.onSurface.withValues(alpha: 0.08),
+                          ),
+                          Text(
+                            goalTargetText,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: AppColors.primaryGold,
+                              fontWeight: FontWeight.w700,
                             ),
-                            const SizedBox(width: 14),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  isAr ? 'الهدف' : 'Target',
-                                  style: theme.textTheme.labelMedium?.copyWith(
-                                    color: colorScheme.onSurface.withValues(alpha: 0.56),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  goalTargetText,
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    color: AppColors.primaryGold,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (!isGoalAchieved && goalRemainingText != null) ...[
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 7,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.warning.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: AppColors.warning.withValues(alpha: 0.16),
-                              ),
-                            ),
-                            child: Row(
+                          ),
+                          if (!isGoalAchieved && goalRemainingText != null) ...[
+                            const Spacer(),
+                            Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(
-                                  Icons.timelapse_rounded,
-                                  size: 15,
-                                  color: AppColors.warning,
-                                ),
-                                const SizedBox(width: 6),
+                                Icon(Icons.timelapse_rounded, size: 13, color: AppColors.warning),
+                                const SizedBox(width: 4),
                                 Text(
-                                  isAr
-                                      ? 'المتبقي: $goalRemainingText'
-                                      : 'Remaining: $goalRemainingText',
-                                  style: theme.textTheme.labelMedium?.copyWith(
+                                  goalRemainingText,
+                                  style: theme.textTheme.labelSmall?.copyWith(
                                     color: AppColors.warning,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 12),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // ── شريط التقدم ──
                       ClipRRect(
                         borderRadius: BorderRadius.circular(999),
                         child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(
-                            begin: 0,
-                            end: effectiveTargetProgress,
-                          ),
+                          tween: Tween<double>(begin: 0, end: effectiveTargetProgress),
                           duration: const Duration(milliseconds: 700),
-                          builder: (context, value, child) =>
-                              LinearProgressIndicator(
-                                value: value,
-                                minHeight: 8,
-                                backgroundColor: colorScheme.onSurface
-                                    .withValues(alpha: 0.08),
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  goalColor,
-                                ),
-                              ),
+                          builder: (context, value, child) => LinearProgressIndicator(
+                            value: value,
+                            minHeight: 6,
+                            backgroundColor: colorScheme.onSurface.withValues(alpha: 0.08),
+                            valueColor: AlwaysStoppedAnimation<Color>(goalColor),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                                isGoalAchieved
-                                    ? (isAr
-                                          ? 'استمروا بهذا النسق، الفريق أنهى الهدف وبقيت فرصة لتوسيع الفارق.'
-                                          : 'Keep this tempo, the team has closed the goal and can widen the lead.')
-                                        : (isAr
-                                          ? 'المؤشر يتحرك بوضوح، والهدف ما زال في المتناول هذا الأسبوع.'
-                                          : 'The indicator is moving clearly, and the goal remains within reach this week.'),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface.withValues(alpha: 0.76),
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 12,
-                                ),
                       ),
                     ],
                   ),
@@ -3619,17 +3423,20 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   /// PATCH 2: بانر "يوم جديد" بتصميم نظيف — حد أيمن فقط + dark mode
   Widget _buildNewDayBanner(bool isAr, bool isMonth, bool isWeek) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final title = isAr
+        ? (isMonth ? 'شهر جديد بدأ' : isWeek ? 'أسبوع جديد بدأ' : 'يوم جديد بدأ')
+        : (isMonth ? 'New Month Begins' : isWeek ? 'New Week Begins' : 'New Day Begins');
     final description = isAr
         ? (isMonth
-            ? ' — يتم عرض النتائج بمجرد تسجيل أول فاتورة الشهر.'
+            ? ' — ستظهر النتائج بمجرد تسجيل أول فاتورة هذا الشهر.'
             : isWeek
-                ? ' — يتم عرض النتائج بمجرد تسجيل أول فاتورة الأسبوع.'
-                : ' — يتم عرض نتائج اليوم بمجرد تسجيل أول فاتورة اليوم.')
+                ? ' — ستظهر النتائج بمجرد تسجيل أول فاتورة هذا الأسبوع.'
+                : ' — ستظهر النتائج بمجرد تسجيل أول فاتورة اليوم.')
         : (isMonth
             ? ' — Results appear after the first invoice this month.'
             : isWeek
                 ? ' — Results appear after the first invoice this week.'
-                : ' — Today\'s results appear after recording the first invoice.');
+                : ' — Results appear after recording the first invoice today.');
 
     return Container(
       width: double.infinity,
@@ -3693,7 +3500,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 ),
                 children: [
                   TextSpan(
-                    text: isAr ? 'يوم جديد بدأ' : 'New Day Begins',
+                    text: title,
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       color: isDark ? AppColors.primaryGold : AppColors.darkGold,
@@ -5026,6 +4833,109 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         result = await Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => VouchersListScreen()),
+        );
+        break;
+      case 'invoices_list':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => InvoicesListScreen(isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'return_purchase_supplier':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const PurchaseInvoiceScreen(supplierReturnMode: true),
+          ),
+        );
+        break;
+      case 'recurring_entries':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RecurringTemplatesScreen(isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'general_ledger':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => GeneralLedgerScreenV2()),
+        );
+        break;
+      case 'trial_balance':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => TrialBalanceScreenV2()),
+        );
+        break;
+      case 'chart_of_accounts':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ChartOfAccountsScreen()),
+        );
+        break;
+      case 'gold_position':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GoldPositionReportScreen(
+              api: api,
+              isArabic: widget.isArabic,
+            ),
+          ),
+        );
+        break;
+      case 'payroll_report':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PayrollReportScreen(api: api),
+          ),
+        );
+        break;
+      case 'safe_boxes':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => SafeBoxesScreen(api: api)),
+        );
+        break;
+      case 'bonuses':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => BonusManagementScreen(
+              api: api,
+              isArabic: widget.isArabic,
+            ),
+          ),
+        );
+        break;
+      case 'branches_management':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => BranchesManagementScreen(
+              isArabic: widget.isArabic,
+            ),
+          ),
+        );
+        break;
+      case 'system_reset':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SystemResetScreen()),
+        );
+        break;
+      case 'printer_settings':
+      case 'about':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const SettingsScreenEnhanced(),
+          ),
         );
         break;
       case 'barcode_scan':
