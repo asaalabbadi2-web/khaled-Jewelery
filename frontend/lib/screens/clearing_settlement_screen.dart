@@ -1167,6 +1167,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final themeData = Theme.of(context);
     final isLight = themeData.brightness == Brightness.light;
 

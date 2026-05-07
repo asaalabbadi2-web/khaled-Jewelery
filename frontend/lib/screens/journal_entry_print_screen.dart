@@ -262,6 +262,8 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.isArabic ? 'طباعة قيد يومي' : 'Print Journal Entry'),

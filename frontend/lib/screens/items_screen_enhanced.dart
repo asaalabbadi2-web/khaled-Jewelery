@@ -274,6 +274,8 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final auth = context.watch<AuthProvider>();

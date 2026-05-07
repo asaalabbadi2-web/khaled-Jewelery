@@ -2121,6 +2121,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_getReturnTypeDisplayName()),

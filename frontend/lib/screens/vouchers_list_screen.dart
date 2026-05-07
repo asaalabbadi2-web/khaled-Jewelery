@@ -471,6 +471,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final themeData = Theme.of(context);
 
     return Scaffold(

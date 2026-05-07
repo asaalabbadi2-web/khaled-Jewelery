@@ -3417,6 +3417,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   // ==================== UI Build ====================
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Consumer<SettingsProvider>(
       builder: (context, settings, child) {
         final theme = Theme.of(context);

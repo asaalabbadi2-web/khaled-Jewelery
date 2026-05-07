@@ -122,6 +122,8 @@ class _BonusPayablesReportScreenState extends State<BonusPayablesReportScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isArabic = widget.isArabic;
     return Directionality(
       textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,

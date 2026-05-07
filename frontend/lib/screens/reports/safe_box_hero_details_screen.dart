@@ -123,6 +123,8 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final theme = Theme.of(context);
     final name = _safeBox['name'] ?? '-';
     final safeType = _safeBox['safe_type'] ?? 'cash';

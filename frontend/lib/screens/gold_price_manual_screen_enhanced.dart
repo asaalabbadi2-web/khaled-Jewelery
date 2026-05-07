@@ -299,6 +299,8 @@ class _GoldPriceManualScreenEnhancedState
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(

@@ -352,6 +352,8 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isAr = widget.isArabic;
     final isEdit = widget.office != null;
 

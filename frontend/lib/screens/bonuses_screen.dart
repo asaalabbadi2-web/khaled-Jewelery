@@ -801,6 +801,8 @@ class _BonusesScreenState extends State<BonusesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isAr = widget.isArabic;
     final filtered = _filteredBonuses();
 

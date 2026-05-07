@@ -681,6 +681,8 @@ class _PayrollScreenState extends State<PayrollScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isAr = widget.isArabic;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;

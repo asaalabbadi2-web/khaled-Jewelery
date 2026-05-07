@@ -194,6 +194,8 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(

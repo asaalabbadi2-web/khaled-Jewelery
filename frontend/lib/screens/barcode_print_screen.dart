@@ -46,6 +46,8 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('طباعة الباركود'),

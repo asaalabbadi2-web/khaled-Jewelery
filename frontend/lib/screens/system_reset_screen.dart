@@ -598,6 +598,8 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final theme = Theme.of(context);
     final auth = context.watch<AuthProvider>();
     final data = _systemInfo;

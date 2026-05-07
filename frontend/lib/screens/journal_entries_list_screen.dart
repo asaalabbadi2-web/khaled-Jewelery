@@ -2620,6 +2620,8 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Directionality(
       textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(

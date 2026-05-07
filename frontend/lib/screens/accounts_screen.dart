@@ -1109,6 +1109,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('كشوفات الحسابات'),

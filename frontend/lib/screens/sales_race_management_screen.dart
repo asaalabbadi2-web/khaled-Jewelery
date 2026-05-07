@@ -213,6 +213,8 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isAr = widget.isArabic;
     final auth = context.read<AuthProvider>();
     final canManage = auth.hasPermission('system.settings');

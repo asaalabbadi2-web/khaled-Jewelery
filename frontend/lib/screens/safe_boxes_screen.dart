@@ -1489,6 +1489,8 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isAr = widget.isArabic;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final useWideSummaryLayout = screenWidth >= 900;

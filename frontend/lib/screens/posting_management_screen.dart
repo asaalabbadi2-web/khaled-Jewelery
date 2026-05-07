@@ -1227,6 +1227,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(

@@ -295,6 +295,8 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     if (_isLoading) {
       return widget.asSheet
           ? const Material(

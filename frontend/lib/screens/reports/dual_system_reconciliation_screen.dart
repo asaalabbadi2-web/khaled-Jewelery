@@ -78,6 +78,8 @@ class _DualSystemReconciliationScreenState
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(

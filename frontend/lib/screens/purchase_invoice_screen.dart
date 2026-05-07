@@ -2886,6 +2886,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final size = MediaQuery.of(context).size;
     final isWideLayout = size.width >= 1100;
 

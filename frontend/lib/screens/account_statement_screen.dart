@@ -1247,6 +1247,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_statementTitle()),

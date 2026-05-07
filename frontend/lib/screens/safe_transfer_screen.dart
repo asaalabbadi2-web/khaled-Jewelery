@@ -701,6 +701,8 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final isAr = widget.isArabic;
 
     final fromSafe = _safeByIdOrNull(_fromSafeId);

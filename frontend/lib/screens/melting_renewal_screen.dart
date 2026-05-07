@@ -41,6 +41,8 @@ class _MeltingRenewalScreenState extends State<MeltingRenewalScreen>
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
