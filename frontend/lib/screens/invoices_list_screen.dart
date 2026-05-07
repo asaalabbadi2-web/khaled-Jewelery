@@ -8,7 +8,6 @@ import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
 import '../api_service.dart';
-import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/data_sync_bus.dart';
 import '../utils/invoice_direct_print.dart';
@@ -1445,8 +1444,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
 
   @override
   Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
     final isAr = widget.isArabic;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -2231,7 +2228,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
           ),
           _buildInvoiceMetricHeaderCell(
             label: isAr ? 'المبلغ' : 'Amount',
-            unit: context.read<SettingsProvider>().currencySymbolText,
+            unit: isAr ? 'ر.س' : 'SAR',
             width: widths['amount']!,
             icon: Icons.payments_outlined,
             color: const Color(0xFF2F80ED),
@@ -2354,10 +2351,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                   isAr ? 'ar' : 'en',
                 ).format(totalWeight),
                 sub: showRaw
-                    ? NumberFormat(
-                        '#,##0.###',
-                        isAr ? 'ar' : 'en',
-                      ).format(rawWeight)
+                    ? NumberFormat('#,##0.###', isAr ? 'ar' : 'en').format(rawWeight)
                     : null,
                 icon: Icons.scale_outlined,
                 color: const Color(0xFFD4A017),
@@ -2366,7 +2360,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
               _buildInvoiceMetricValueCell(
                 width: widths['amount']!,
                 value:
-                    '${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(amount)} ${context.read<SettingsProvider>().currencySymbolText}',
+                    '${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(amount)} ${isAr ? 'ر.س' : 'SAR'}',
                 icon: Icons.payments_outlined,
                 color: const Color(0xFF2F80ED),
                 emphasize: false,
@@ -2559,10 +2553,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  context.read<SettingsProvider>().buildText(
+                  Text(
                     value,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
                       color: emphasize ? color.withValues(alpha: 0.98) : color,
@@ -3169,8 +3164,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                           color: colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
                       ),
-                      context.read<SettingsProvider>().buildText(
-                        '${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(((invoice['total'] ?? 0) as num).toDouble())} ${context.read<SettingsProvider>().currencySymbolText}',
+                      Text(
+                        '${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(((invoice['total'] ?? 0) as num).toDouble())} ${isAr ? 'ريال' : 'SAR'}',
                         style: textTheme.titleLarge?.copyWith(
                           color: const Color(0xFF2F80ED),
                           fontWeight: FontWeight.bold,
@@ -3951,11 +3946,11 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                       IconButton(
                                         onPressed: () =>
                                             _showCorrectPaymentMethodDialog(
-                                              sheetContext: sheetContext,
-                                              invoice: invoice,
-                                              paymentId: paymentId,
-                                              currentMethodName: methodName,
-                                            ),
+                                          sheetContext: sheetContext,
+                                          invoice: invoice,
+                                          paymentId: paymentId,
+                                          currentMethodName: methodName,
+                                        ),
                                         tooltip: isAr
                                             ? 'تصحيح وسيلة الدفع'
                                             : 'Correct payment method',
@@ -4228,7 +4223,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text(isAr ? 'خطأ: $e' : 'Error: $e'),
+                              content: Text(
+                                isAr ? 'خطأ: $e' : 'Error: $e',
+                              ),
                               backgroundColor: Colors.red,
                             ),
                           );

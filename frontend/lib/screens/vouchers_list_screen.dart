@@ -17,9 +17,7 @@ import 'voucher_details_screen.dart';
 import 'add_voucher_screen.dart';
 import '../theme/app_theme.dart' as theme;
 import '../providers/auth_provider.dart';
-import '../providers/settings_provider.dart';
 import 'package:provider/provider.dart';
-import '../utils/currency_utils.dart' as cu;
 
 class VouchersListScreen extends StatefulWidget {
   const VouchersListScreen({super.key});
@@ -472,8 +470,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
 
   @override
   Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
     final themeData = Theme.of(context);
 
     return Scaffold(
@@ -709,52 +705,52 @@ class _VouchersListScreenState extends State<VouchersListScreen>
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: _buildManagementToolbar(themeData),
           ),
-          Expanded(
-            child: _viewMode == _VoucherListView.table
-                ? Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: _vouchers.isEmpty
-                              ? _buildEmptyState(themeData)
-                              : _buildVoucherTable(themeData),
-                        ),
-                        Padding(
-                          padding: EdgeInsets.only(
-                            top: 8,
-                            bottom: MediaQuery.of(context).padding.bottom + 8,
-                          ),
-                          child: _buildPaginationStrip(themeData),
-                        ),
-                      ],
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _refresh,
-                    color: theme.AppColors.primaryGold,
-                    displacement: 80,
-                    child: ListView(
-                      controller: _scrollController,
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.only(
-                        left: 16,
-                        top: 8,
-                        right: 16,
-                        bottom: MediaQuery.of(context).padding.bottom + 24,
+        Expanded(
+          child: _viewMode == _VoucherListView.table
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: _vouchers.isEmpty
+                            ? _buildEmptyState(themeData)
+                            : _buildVoucherTable(themeData),
                       ),
-                      children: [
-                        if (_isLoading && _vouchers.isNotEmpty)
-                          _buildPaginationLoader(),
-                        if (_vouchers.isEmpty)
-                          _buildEmptyState(themeData)
-                        else
-                          _buildResultsSection(themeData),
-                        _buildPaginationStrip(themeData),
-                      ],
-                    ),
+                      Padding(
+                        padding: EdgeInsets.only(
+                          top: 8,
+                          bottom: MediaQuery.of(context).padding.bottom + 8,
+                        ),
+                        child: _buildPaginationStrip(themeData),
+                      ),
+                    ],
                   ),
-          ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _refresh,
+                  color: theme.AppColors.primaryGold,
+                  displacement: 80,
+                  child: ListView(
+                    controller: _scrollController,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.only(
+                      left: 16,
+                      top: 8,
+                      right: 16,
+                      bottom: MediaQuery.of(context).padding.bottom + 24,
+                    ),
+                    children: [
+                      if (_isLoading && _vouchers.isNotEmpty)
+                        _buildPaginationLoader(),
+                      if (_vouchers.isEmpty)
+                        _buildEmptyState(themeData)
+                      else
+                        _buildResultsSection(themeData),
+                      _buildPaginationStrip(themeData),
+                    ],
+                  ),
+                ),
+        ),
         ],
       ),
     );
@@ -1107,8 +1103,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
         _buildSummaryCard(
           themeData,
           title: 'إجمالي النقد',
-          value:
-              '${_currencyFormat.format(totalCash)} ${context.read<SettingsProvider>().currencySymbolText}',
+          value: '${_currencyFormat.format(totalCash)} ر.س',
           subtitle: 'لكل النتائج المطابقة',
           icon: Icons.payments_outlined,
           color: const Color(0xFF2F80ED),
@@ -1623,7 +1618,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
           ),
           _buildVoucherMetricHeaderCell(
             label: 'النقد',
-            unit: context.read<SettingsProvider>().currencySymbolText,
+            unit: 'ر.س',
             width: widths['cash']!,
             icon: Icons.payments_outlined,
             color: const Color(0xFF2F80ED),
@@ -1768,7 +1763,9 @@ class _VouchersListScreenState extends State<VouchersListScreen>
               ),
               _buildVoucherMetricValueCell(
                 width: widths['gold']!,
-                value: _formatPrimaryGoldDisplay(voucher) ?? '—',
+                value:
+                    _formatPrimaryGoldDisplay(voucher) ??
+                    '—',
                 icon: Icons.scale_outlined,
                 color: const Color(0xFFD4A017),
                 emphasize: true,
@@ -2218,12 +2215,11 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     if (partyType == 'other') {
       final voucherType = (voucher['voucher_type'] ?? '').toString();
       final partyLineType = voucherType == 'receipt' ? 'credit' : 'debit';
-      final lines =
-          (voucher['account_lines'] as List?)?.cast<Map<String, dynamic>>() ??
-          [];
+      final lines = (voucher['account_lines'] as List?)?.cast<Map<String, dynamic>>() ?? [];
       for (final line in lines) {
         if ((line['line_type'] ?? '') == partyLineType) {
-          final accName = (line['account']?['name'] ?? '').toString().trim();
+          final accName =
+              (line['account']?['name'] ?? '').toString().trim();
           if (accName.isNotEmpty) return accName;
         }
       }
@@ -2464,9 +2460,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           if (cashAmount != null)
-                            cu.SarAwareText(
-                              'نقداً: $cashAmount ${context.read<SettingsProvider>().currencySymbolText}',
-              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
+                            Text(
+                              'نقداً: $cashAmount ر.س',
                               style: themeData.textTheme.titleSmall?.copyWith(
                                 fontWeight: FontWeight.w800,
                                 color: const Color(0xFF2F80ED),

@@ -2086,7 +2086,7 @@ class Settings(db.Model):
     
     # إعدادات أساسية
     main_karat = db.Column(db.Integer, default=21)
-    currency_symbol = db.Column(db.String(10), default='ر.س')
+    currency_symbol = db.Column(db.String(20), default='ر.س')
     manufacturing_wage_mode = db.Column(db.String(20), default='expense')  # expense | inventory
     
     # إعدادات الضريبة
