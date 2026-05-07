@@ -38,11 +38,13 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
   int _totalPages = 1;
   final int _perPage = 50;
 
-  String _currencySymbol = 'ر.س';
   int _currencyDecimals = 2;
   int _mainKarat = 21;
   late NumberFormat _cashFormatter;
   late NumberFormat _goldFormatter;
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -55,7 +57,7 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
-    final newSymbol = settings.currencySymbol;
+    final newSymbol = settings.currencySymbolText;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
@@ -63,7 +65,6 @@ class _SupplierLedgerScreenState extends State<SupplierLedgerScreen> {
         newDecimals != _currencyDecimals ||
         newMainKarat != _mainKarat) {
       setState(() {
-        _currencySymbol = newSymbol;
         _currencyDecimals = newDecimals;
         _mainKarat = newMainKarat;
         _updateFormatters();

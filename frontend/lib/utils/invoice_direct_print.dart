@@ -22,6 +22,7 @@ Future<void> printInvoiceDirect({
   SettingsProvider? sp;
   try {
     sp = context.read<SettingsProvider>();
+    await sp.ensureLoadedForPrint();
   } catch (_) {}
 
   String filename() {
@@ -61,6 +62,7 @@ Future<Uint8List> buildInvoicePdfBytes({
   SettingsProvider? sp;
   try {
     sp = context.read<SettingsProvider>();
+    await sp.ensureLoadedForPrint();
   } catch (_) {}
 
   return InvoicePdfBuilder.buildBytes(
@@ -81,14 +83,18 @@ Future<void> shareInvoicePdf({
   SettingsProvider? sp;
   try {
     sp = context.read<SettingsProvider>();
+    await sp.ensureLoadedForPrint();
   } catch (_) {}
 
   final format = (paperSize == 'A5')
       ? PdfPageFormat.a5
       : (paperSize == 'thermal' || paperSize == '80mm')
-          ? const PdfPageFormat(80 * PdfPageFormat.mm, double.infinity,
-              marginAll: 4 * PdfPageFormat.mm)
-          : PdfPageFormat.a4;
+      ? const PdfPageFormat(
+          80 * PdfPageFormat.mm,
+          double.infinity,
+          marginAll: 4 * PdfPageFormat.mm,
+        )
+      : PdfPageFormat.a4;
 
   final numStr = (invoice['invoice_type_id'] ?? '').toString().trim();
   final idStr = (invoice['id'] ?? '').toString().trim();
@@ -133,14 +139,18 @@ Future<void> shareInvoiceWhatsApp({
   SettingsProvider? sp;
   try {
     sp = context.read<SettingsProvider>();
+    await sp.ensureLoadedForPrint();
   } catch (_) {}
 
   final format = (paperSize == 'A5')
       ? PdfPageFormat.a5
       : (paperSize == 'thermal' || paperSize == '80mm')
-          ? const PdfPageFormat(80 * PdfPageFormat.mm, double.infinity,
-              marginAll: 4 * PdfPageFormat.mm)
-          : PdfPageFormat.a4;
+      ? const PdfPageFormat(
+          80 * PdfPageFormat.mm,
+          double.infinity,
+          marginAll: 4 * PdfPageFormat.mm,
+        )
+      : PdfPageFormat.a4;
 
   // ── بناء PDF bytes ──────────────────────────────────────────────────────
   final bytes = await InvoicePdfBuilder.buildBytes(
@@ -165,7 +175,9 @@ Future<void> shareInvoiceWhatsApp({
   }
 
   final body = response.body;
-  final tokenMatch = RegExp(r'"token"\s*:\s*"([A-Za-z0-9_\-]+)"').firstMatch(body);
+  final tokenMatch = RegExp(
+    r'"token"\s*:\s*"([A-Za-z0-9_\-]+)"',
+  ).firstMatch(body);
   if (tokenMatch == null) {
     throw Exception('استجابة غير متوقعة من الخادم');
   }
@@ -175,16 +187,18 @@ Future<void> shareInvoiceWhatsApp({
   final pdfUrl = '$apiBase/temp-pdf/$token';
 
   // ── بناء نص واتساب ──────────────────────────────────────────────────────
-  final invoiceNum = (invoice['invoice_type_id'] ?? invoice['id'] ?? '').toString();
-  final customerName = (invoice['customer_name'] ?? invoice['supplier_name'] ?? '').toString();
-  final total = (invoice['total_amount'] ?? invoice['net_weight'] ?? '').toString();
+  final invoiceNum = (invoice['invoice_type_id'] ?? invoice['id'] ?? '')
+      .toString();
+  final customerName =
+      (invoice['customer_name'] ?? invoice['supplier_name'] ?? '').toString();
+  final total = (invoice['total_amount'] ?? invoice['net_weight'] ?? '')
+      .toString();
 
   final textLines = <String>[
     isArabic ? 'فاتورة رقم: $invoiceNum' : 'Invoice #$invoiceNum',
     if (customerName.isNotEmpty)
       isArabic ? 'العميل: $customerName' : 'Customer: $customerName',
-    if (total.isNotEmpty)
-      isArabic ? 'الإجمالي: $total' : 'Total: $total',
+    if (total.isNotEmpty) isArabic ? 'الإجمالي: $total' : 'Total: $total',
     '',
     isArabic ? '📎 رابط الفاتورة:' : '📎 Invoice link:',
     pdfUrl,
@@ -196,8 +210,6 @@ Future<void> shareInvoiceWhatsApp({
   if (await canLaunchUrl(waUrl)) {
     await launchUrl(waUrl, mode: LaunchMode.externalApplication);
   } else {
-    throw Exception(isArabic
-        ? 'تعذر فتح واتساب'
-        : 'Could not open WhatsApp');
+    throw Exception(isArabic ? 'تعذر فتح واتساب' : 'Could not open WhatsApp');
   }
 }

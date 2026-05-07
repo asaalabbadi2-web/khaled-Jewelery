@@ -33,7 +33,7 @@ class _CustomerBalancesAgingReportScreenState
   int? _customerGroupId;
   final TextEditingController _groupController = TextEditingController();
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   late NumberFormat _currencyFormat;
   final NumberFormat _weightFormat = NumberFormat('#,##0.000');
@@ -55,7 +55,7 @@ class _CustomerBalancesAgingReportScreenState
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context, listen: true);
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
     if (symbol != _currencySymbol || decimals != _currencyDecimals) {
       setState(() {
@@ -345,7 +345,9 @@ class _CustomerBalancesAgingReportScreenState
 
     final metrics = [
       _SummaryMetric(
-        label: isArabic ? 'إجمالي الذمم (ر.س)' : 'Outstanding (Cash)',
+        label: isArabic
+            ? 'إجمالي الذمم ($_currencySymbol)'
+            : 'Outstanding (Cash)',
         value: _formatCurrency(
           _asDouble(summary['total_outstanding_cash'] ?? 0),
         ),
@@ -530,7 +532,7 @@ class _CustomerBalancesAgingReportScreenState
               children: [
                 _LegendChip(
                   color: Colors.teal,
-                  label: isArabic ? 'القيمة (ر.س)' : 'Cash',
+                  label: isArabic ? 'القيمة ($_currencySymbol)' : 'Cash',
                 ),
                 _LegendChip(
                   color: Colors.amber.shade700,
@@ -622,7 +624,11 @@ class _CustomerBalancesAgingReportScreenState
 
     final columns = [
       DataColumn(label: Text(isArabic ? 'العميل' : 'Customer')),
-      DataColumn(label: Text(isArabic ? 'الرصيد (ر.س)' : 'Outstanding (cash)')),
+      DataColumn(
+        label: Text(
+          isArabic ? 'الرصيد ($_currencySymbol)' : 'Outstanding (cash)',
+        ),
+      ),
       DataColumn(label: Text(isArabic ? 'الرصيد (جم)' : 'Outstanding (g)')),
       DataColumn(label: Text(isArabic ? '0-30' : '0-30')),
       DataColumn(label: Text(isArabic ? '31-60' : '31-60')),

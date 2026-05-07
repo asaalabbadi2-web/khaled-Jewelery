@@ -10,6 +10,7 @@ import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../providers/sales_race_refresh_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/currency_utils.dart' as cu;
 import 'accounting_mapping_screen_enhanced.dart';
 import 'payment_methods_screen_enhanced.dart';
 import 'safe_boxes_screen.dart';
@@ -73,7 +74,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   final TextEditingController _companyPhoneController = TextEditingController();
   final TextEditingController _companyTaxNumberController =
       TextEditingController();
-    final TextEditingController _companyCrNumberController =
+  final TextEditingController _companyCrNumberController =
       TextEditingController();
   final TextEditingController _invoicePrefixController =
       TextEditingController();
@@ -255,7 +256,7 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           settings['company_phone']?.toString() ?? '';
       _companyTaxNumberController.text =
           settings['company_tax_number']?.toString() ?? '';
-        _companyCrNumberController.text =
+      _companyCrNumberController.text =
           settings['company_cr_number']?.toString() ?? '';
       _invoicePrefixController.text =
           settings['invoice_prefix']?.toString() ?? 'INV';
@@ -478,8 +479,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       // Notify the home screen to re-fetch the leaderboard with the latest
       // settings config. This is the reliable trigger path (watched in build()).
       try {
-        Provider.of<SalesRaceRefreshProvider>(context, listen: false)
-            .notifySettingsChanged();
+        Provider.of<SalesRaceRefreshProvider>(
+          context,
+          listen: false,
+        ).notifySettingsChanged();
       } catch (_) {}
       _showSnack('✅ تم حفظ الإعدادات وتطبيقها على جميع الشاشات');
     } catch (error) {
@@ -624,15 +627,72 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
           title: 'التنسيق والعملة',
           children: [
             Text('رمز العملة', style: _fieldLabelStyle()),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _currencyController,
-              textDirection: TextDirection.rtl,
-              decoration: _inputDecoration(
-                icon: Icons.attach_money,
-                accentColor: _accentColor,
-              ),
+            const SizedBox(height: 8),
+            // Quick-select currency symbol chips (uses kCurrencyOptions from currency_utils)
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final opt in cu.kCurrencyOptions)
+                  Builder(
+                    builder: (context) {
+                      final isSelected =
+                          _currencyController.text.trim() == opt.$2;
+                      final fg = isSelected
+                          ? _colors.onPrimary
+                          : _strongTextColor;
+                      final bg = isSelected ? _accentColor : _cardColor;
+                      return ActionChip(
+                        backgroundColor: bg,
+                        label: opt.$2 == cu.kSarNewSymbol
+                            ? cu.SarSymbolImage(size: 20, color: fg)
+                            : Text(
+                                opt.$1,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: fg,
+                                ),
+                              ),
+                        onPressed: () =>
+                            setState(() => _currencyController.text = opt.$2),
+                      );
+                    },
+                  ),
+              ],
             ),
+            const SizedBox(height: 8),
+            if (_currencyController.text.trim() == cu.kSarNewSymbol)
+              Container(
+                height: 48,
+                decoration: BoxDecoration(
+                  color: _cardColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _accentColor.withOpacity(0.5)),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.attach_money, color: _accentColor, size: 20),
+                    const SizedBox(width: 8),
+                    cu.SarSymbolImage(size: 20, color: _strongTextColor),
+                    const SizedBox(width: 6),
+                    Text(
+                      'رمز الريال الجديد',
+                      style: TextStyle(color: _mutedTextColor),
+                    ),
+                  ],
+                ),
+              )
+            else
+              TextFormField(
+                controller: _currencyController,
+                textDirection: TextDirection.rtl,
+                decoration: _inputDecoration(
+                  icon: Icons.attach_money,
+                  accentColor: _accentColor,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
             const SizedBox(height: 20),
             Text('عدد المنازل العشرية', style: _fieldLabelStyle()),
             const SizedBox(height: 12),
@@ -2146,16 +2206,18 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                '${amount.toStringAsFixed(0)} $_currencySymbol',
+              child: cu.SarAwareText(
+                '${amount.toStringAsFixed(0)} ${cu.isNewSarSymbol(_currencySymbol) ? 'ر.س' : _currencySymbol}',
+                isNewSar: cu.isNewSarSymbol(_currencySymbol),
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ),
             Icon(Icons.arrow_forward_ios, size: 16, color: _mutedTextColor),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                'ضريبة: ${taxValue.toStringAsFixed(2)} $_currencySymbol',
+              child: cu.SarAwareText(
+                'ضريبة: ${taxValue.toStringAsFixed(2)} ${cu.isNewSarSymbol(_currencySymbol) ? 'ر.س' : _currencySymbol}',
+                isNewSar: cu.isNewSarSymbol(_currencySymbol),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: _colors.tertiary,
                   fontWeight: FontWeight.w600,
@@ -2165,8 +2227,9 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             Icon(Icons.arrow_forward_ios, size: 16, color: _mutedTextColor),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                'الإجمالي: ${total.toStringAsFixed(2)} $_currencySymbol',
+              child: cu.SarAwareText(
+                'الإجمالي: ${total.toStringAsFixed(2)} ${cu.isNewSarSymbol(_currencySymbol) ? 'ر.س' : _currencySymbol}',
+                isNewSar: cu.isNewSarSymbol(_currencySymbol),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: _primaryColor,
                   fontWeight: FontWeight.bold,
@@ -2383,9 +2446,12 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       children: [
         Text(label, style: _fieldLabelStyle()),
         const SizedBox(height: 4),
-        Text(subtitle,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline)),
+        Text(
+          subtitle,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
+        ),
         const SizedBox(height: 8),
         Row(
           children: [

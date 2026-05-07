@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 440" fill="#0D3B27">
+  <!-- Left vertical stroke with curved bottom (like ر) -->
+  <path d="M30 20 L30 300 Q30 370 90 400 L140 420 Q110 410 105 370 L105 20 Z"/>
+  <!-- Right vertical stroke with curved bottom -->
+  <path d="M185 20 L185 290 Q185 360 245 390 L295 410 Q265 400 260 360 L260 20 Z"/>
+  <!-- Three horizontal bars crossing both strokes, slanted slightly -->
+  <!-- Top bar -->
+  <path d="M20 90 L370 60 L370 90 L20 120 Z"/>
+  <!-- Middle bar -->
+  <path d="M20 175 L370 145 L370 175 L20 205 Z"/>
+  <!-- Bottom bar -->
+  <path d="M155 265 L370 235 L370 265 L155 295 Z"/>
+</svg>

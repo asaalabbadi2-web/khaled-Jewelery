@@ -32,7 +32,7 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
   Map<String, dynamic>? _ledgerData;
   bool _isLoading = false;
   String? _errorMessage;
-  String currencySymbol = 'ر.س';
+  String currencySymbol = '';
   int currencyDecimalPlaces = 2;
   int mainKarat = 21;
 
@@ -53,7 +53,7 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
 
-    final newSymbol = settings.currencySymbol;
+    final newSymbol = settings.currencySymbolText;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
@@ -351,7 +351,8 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
                   ),
                   const Spacer(),
                   TextButton.icon(
-                    onPressed: (_startDate != null ||
+                    onPressed:
+                        (_startDate != null ||
                             _endDate != null ||
                             _searchQuery.isNotEmpty)
                         ? () {
@@ -734,7 +735,9 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
     );
   }
 
-  List<Map<String, dynamic>> _filterEntries(List<Map<String, dynamic>> entries) {
+  List<Map<String, dynamic>> _filterEntries(
+    List<Map<String, dynamic>> entries,
+  ) {
     final q = _searchQuery.trim().toLowerCase();
     if (q.isEmpty) return entries;
 
@@ -815,7 +818,10 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
                     (entry['journal_entry_id'] ?? '-').toString(),
                   ),
                   const Divider(height: 24),
-                  _buildKvRow('نقد مدين', cashDebit > 0 ? _formatCash(cashDebit) : '-'),
+                  _buildKvRow(
+                    'نقد مدين',
+                    cashDebit > 0 ? _formatCash(cashDebit) : '-',
+                  ),
                   _buildKvRow(
                     'نقد دائن',
                     cashCredit > 0 ? _formatCash(cashCredit) : '-',
@@ -877,10 +883,7 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              v,
-              style: const TextStyle(fontWeight: FontWeight.w500),
-            ),
+            child: Text(v, style: const TextStyle(fontWeight: FontWeight.w500)),
           ),
         ],
       ),
@@ -923,19 +926,14 @@ class _AccountLedgerScreenState extends State<AccountLedgerScreen> {
 
           return TableRow(
             children: [
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Text(karat),
-              ),
+              Padding(padding: const EdgeInsets.all(8.0), child: Text(karat)),
               Padding(
                 padding: const EdgeInsets.all(8.0),
                 child: Text(
                   debit.toStringAsFixed(3),
                   style: TextStyle(
                     color: debit > 0 ? Colors.blue : Colors.grey,
-                    fontWeight: debit > 0
-                        ? FontWeight.bold
-                        : FontWeight.normal,
+                    fontWeight: debit > 0 ? FontWeight.bold : FontWeight.normal,
                   ),
                 ),
               ),

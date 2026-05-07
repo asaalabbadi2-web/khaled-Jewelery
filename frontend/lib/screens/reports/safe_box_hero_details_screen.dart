@@ -5,9 +5,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../api_service.dart';
 import '../../models/safe_box_model.dart';
+import '../../providers/settings_provider.dart';
 import '../../theme/app_theme.dart';
 import '../safe_boxes_screen.dart';
 
@@ -104,10 +106,7 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
       final model = await widget.api.getSafeBox(id, includeBalance: true);
       if (!mounted) return;
       setState(() {
-        _safeBox = {
-          ..._safeBox,
-          ..._mergeFromSafeBoxModel(model),
-        };
+        _safeBox = {..._safeBox, ..._mergeFromSafeBoxModel(model)};
       });
     } catch (e) {
       if (!mounted) return;
@@ -189,8 +188,9 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
           color: theme.cardColor,
           borderRadius: BorderRadius.circular(_s(context, 16)),
           border: Border.all(
-            color: (hasActivity ? Colors.green : theme.hintColor)
-                .withValues(alpha: 0.25),
+            color: (hasActivity ? Colors.green : theme.hintColor).withValues(
+              alpha: 0.25,
+            ),
           ),
           boxShadow: [
             BoxShadow(
@@ -283,8 +283,9 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
                   children: [
                     Text(
                       widget.isArabic ? 'أرصدة مباشرة' : 'Live balances',
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.bold),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const Spacer(),
                     if (_loading)
@@ -301,14 +302,26 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
                     spacing: _s(context, 10),
                     runSpacing: _s(context, 10),
                     children: [
-                      buildDetailChip('24k', _weightFmt(w24),
-                          chipColor: AppColors.karat24),
-                      buildDetailChip('22k', _weightFmt(w22),
-                          chipColor: AppColors.karat22),
-                      buildDetailChip('21k', _weightFmt(w21),
-                          chipColor: AppColors.karat21),
-                      buildDetailChip('18k', _weightFmt(w18),
-                          chipColor: AppColors.karat18),
+                      buildDetailChip(
+                        '24k',
+                        _weightFmt(w24),
+                        chipColor: AppColors.karat24,
+                      ),
+                      buildDetailChip(
+                        '22k',
+                        _weightFmt(w22),
+                        chipColor: AppColors.karat22,
+                      ),
+                      buildDetailChip(
+                        '21k',
+                        _weightFmt(w21),
+                        chipColor: AppColors.karat21,
+                      ),
+                      buildDetailChip(
+                        '18k',
+                        _weightFmt(w18),
+                        chipColor: AppColors.karat18,
+                      ),
                     ],
                   )
                 else
@@ -389,6 +402,7 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
       decimalDigits: 2,
     );
     final s = f.format(v).trim();
-    return widget.isArabic ? '$s ر.س' : '$s SAR';
+    final symbol = context.read<SettingsProvider>().currencySymbolText;
+    return '$s $symbol';
   }
 }

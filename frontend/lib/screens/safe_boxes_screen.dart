@@ -7,6 +7,8 @@ import 'account_statement_screen.dart';
 import 'add_voucher_screen.dart';
 import 'clearing_settlement_screen.dart';
 import 'safe_transfer_screen.dart';
+import '../providers/settings_provider.dart';
+import 'package:provider/provider.dart';
 
 enum _SafeCardMenuAction { statement, edit, settlement, delete }
 
@@ -58,6 +60,9 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
     }
     return _filterType;
   }
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -673,7 +678,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   }
 
   String _formatCurrency(double value) {
-    final unit = widget.isArabic ? 'ر.س' : 'SAR';
+    final unit = _currencySymbol;
     return '${value.toStringAsFixed(2)} $unit';
   }
 

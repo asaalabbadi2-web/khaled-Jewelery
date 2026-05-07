@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../models/category_model.dart';
 import '../providers/auth_provider.dart';
+import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 import '../services/data_sync_bus.dart';
 import 'add_item_screen_enhanced.dart';
@@ -712,7 +713,7 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  '${item['stones_value']?.toStringAsFixed(2) ?? '0'} ر.س',
+                                  '${item['stones_value']?.toStringAsFixed(2) ?? '0'} ${context.read<SettingsProvider>().currencySymbolText}',
                                   style: textTheme.bodySmall?.copyWith(
                                     color: Colors.purple.shade400,
                                   ),
@@ -1086,9 +1087,9 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
               const SizedBox(height: 16),
 
               // مدى المصنعية
-              const Text(
-                'مدى المصنعية (ر.س)',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              Text(
+                'مدى المصنعية (${context.read<SettingsProvider>().currencySymbolText})',
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               Row(
@@ -1122,9 +1123,9 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
               const SizedBox(height: 16),
 
               // مدى السعر
-              const Text(
-                'مدى السعر (ر.س)',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              Text(
+                'مدى السعر (${context.read<SettingsProvider>().currencySymbolText})',
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               Row(
@@ -1304,7 +1305,9 @@ class _CategoriesManagementDialogState
         final response = await widget.api.addCategory({
           'name': nameController.text,
           'description': descController.text,
-          'karat': karatController.text.isNotEmpty ? karatController.text : null,
+          'karat': karatController.text.isNotEmpty
+              ? karatController.text
+              : null,
         });
         final newCategory = Category.fromJson(response);
         setState(() {
@@ -1391,7 +1394,9 @@ class _CategoriesManagementDialogState
         final response = await widget.api.updateCategory(category.id!, {
           'name': nameController.text,
           'description': descController.text,
-          'karat': karatController.text.isNotEmpty ? karatController.text : null,
+          'karat': karatController.text.isNotEmpty
+              ? karatController.text
+              : null,
         });
         final updatedCategory = Category.fromJson(response);
         setState(() {

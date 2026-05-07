@@ -43,7 +43,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
   bool _uiAutoOpenPrintAfterSave = false;
   String _uiPaperSize = 'A4';
 
-  double get _effectiveVatRate => _uiDisableVat ? 0.0 : _settingsProvider.taxRate;
+  double get _effectiveVatRate =>
+      _uiDisableVat ? 0.0 : _settingsProvider.taxRate;
 
   double _effectiveTaxRateForKarat(double karat) {
     if (_uiDisableVat) return 0.0;
@@ -90,6 +91,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     });
     _smartInputFocus.requestFocus();
   }
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -262,8 +266,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       final apiService = ApiService();
       final settings = await apiService.getSettings();
       final rawId = settings['main_scrap_gold_safe_box_id'];
-      final scrapSafeId =
-          rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
+      final scrapSafeId = rawId is int
+          ? rawId
+          : int.tryParse(rawId?.toString() ?? '');
 
       if (scrapSafeId != null) {
         final safeBox = await apiService.getSafeBox(
@@ -321,7 +326,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     if (amount > remaining + 0.01) {
       // إضافة tolerance صغير
       _showError(
-        'المبلغ أكبر من المتبقي (${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        'المبلغ أكبر من المتبقي (${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText})',
       );
       return;
     }
@@ -385,7 +390,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       _payments.fold<double>(0, (sum, p) => sum + p.netAmount);
   double get _remainingAmount {
     final remaining = _calculateGrandTotal() - _totalPayments;
-    // تجاهل الفروقات الصغيرة (أقل من 0.01 ريال)
+    // تجاهل الفروقات الصغيرة (أقل من 0.01 $_currencySymbol)
     return remaining.abs() < 0.01 ? 0.0 : remaining;
   }
 
@@ -757,7 +762,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           prefixIcon: const Icon(Icons.attach_money),
                           helperText:
                               'اترك الحقل فارغاً ليتم احتساب السعر تلقائياً',
-                          suffixText: _settingsProvider.currencySymbol,
+                          suffixText: _settingsProvider.currencySymbolText,
                         ),
                       ),
                     ],
@@ -844,7 +849,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       builder: (_) => _CategoryLineDialog(
         categories: _categories,
         mainKarat: _settingsProvider.mainKarat,
-        currencySymbol: _settingsProvider.currencySymbol,
+        currencySymbol: _settingsProvider.currencySymbolText,
       ),
     );
 
@@ -972,10 +977,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     if (!item._hasManualTotal || item._targetTotal == null) return;
 
     final targetTotal = item._targetTotal!;
-    final targetNet =
-        _effectiveVatRate <= 0
-          ? targetTotal
-          : targetTotal / (1 + _effectiveVatRate); // إزالة الضريبة
+    final targetNet = _effectiveVatRate <= 0
+        ? targetTotal
+        : targetTotal / (1 + _effectiveVatRate); // إزالة الضريبة
 
     // حساب التكلفة الحالية
     final currentCost = item.cost;
@@ -1011,8 +1015,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'الإجمالي الحالي: ${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+            _settingsProvider.buildText(
+              'الإجمالي الحالي: ${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
             ),
             const SizedBox(height: 16),
             TextField(
@@ -1032,7 +1036,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               },
               decoration: InputDecoration(
                 labelText: 'المبلغ المستهدف',
-                suffixText: _settingsProvider.currencySymbol,
+                suffixText: _settingsProvider.currencySymbolText,
                 border: const OutlineInputBorder(),
               ),
             ),
@@ -1066,8 +1070,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
     // الخطوة 2: حساب المبلغ بدون ضريبة
     final amountWithoutTax = _effectiveVatRate <= 0
-      ? targetTotal
-      : targetTotal / (1 + _effectiveVatRate);
+        ? targetTotal
+        : targetTotal / (1 + _effectiveVatRate);
 
     // الخطوة 3: حساب الربح المتاح للتوزيع
     final profitPool = amountWithoutTax - totalCosts;
@@ -1093,8 +1097,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbol} على ${_items.length} صنف\n'
+        content: _settingsProvider.buildText(
+          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbolText} على ${_items.length} صنف\n'
           'التكاليف: ${totalCosts.toStringAsFixed(2)} • الربح الموزع: ${profitPool.toStringAsFixed(2)}',
         ),
         backgroundColor: AppColors.success,
@@ -1112,9 +1116,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     required bool saleBelowCost,
   }) async {
     final lines = <String>[
-      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
+      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
+      'المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
     ];
 
     if (totalCost > 0 && (paidBelowCost || saleBelowCost)) {
@@ -1122,11 +1126,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       lines.add('⚠️ تحذير:');
       if (saleBelowCost) {
         lines.add(
-          'سعر البيع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+          'سعر البيع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText})',
         );
       } else if (paidBelowCost) {
         lines.add(
-          'المدفوع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+          'المدفوع أقل من تكلفة الأصناف (التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText})',
         );
       }
     }
@@ -1175,9 +1179,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     required bool saleBelowCost,
   }) async {
     final lines = <String>[
-      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
-      'التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+      'إجمالي الفاتورة: ${total.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
+      'المدفوع: ${totalPaid.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
+      'التكلفة: ${totalCost.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
       '',
       '⚠️ تحذير قبل الحفظ:',
       if (saleBelowCost) 'سعر البيع أقل من تكلفة الأصناف.',
@@ -1236,15 +1240,16 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     final totalTax = asDouble(invoice['total_tax']);
     final invoiceId = invoice['id']?.toString() ?? '';
 
-    final customerName =
-        (invoice['customer_name'] ?? invoice['customer'] ?? '')
-            .toString()
-            .trim();
+    final customerName = (invoice['customer_name'] ?? invoice['customer'] ?? '')
+        .toString()
+        .trim();
     final weightBreakdown = _buildWeightBreakdownLines(
-      invoice['items'] is List ? List<dynamic>.from(invoice['items']) : const [],
+      invoice['items'] is List
+          ? List<dynamic>.from(invoice['items'])
+          : const [],
     );
 
-    final currency = _settingsProvider.currencySymbol;
+    final currency = _settingsProvider.currencySymbolText;
     final notices = <String>[
       if ((approvalWarning ?? '').trim().isNotEmpty) approvalWarning!,
     ];
@@ -1255,7 +1260,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       subtitle: approvalRequired
           ? 'تم الحفظ لكن الفاتورة تحتاج اعتماد مدير قبل الترحيل.'
           : 'يمكنك المتابعة بالطباعة أو المشاركة أو الإغلاق.',
-      icon: approvalRequired ? Icons.pending_actions_rounded : Icons.check_circle,
+      icon: approvalRequired
+          ? Icons.pending_actions_rounded
+          : Icons.check_circle,
       accentColor: approvalRequired ? AppColors.warning : AppColors.success,
       highlightMessage: approvalRequired
           ? 'تم حفظ الفاتورة وتنتظر الاعتماد'
@@ -1359,10 +1366,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       warnings.add('الفاتورة آجل/جزئي: يوجد مبلغ متبقي قبل الإغلاق.');
     }
     if (totalCost > 0 && total + 0.01 < totalCost) {
-      warnings.add('سعر البيع أقل من التكلفة وقد تحتاج الفاتورة إلى اعتماد مدير.');
+      warnings.add(
+        'سعر البيع أقل من التكلفة وقد تحتاج الفاتورة إلى اعتماد مدير.',
+      );
     }
 
-    final currency = _settingsProvider.currencySymbol;
+    final currency = _settingsProvider.currencySymbolText;
     final weightBreakdown = _buildWeightBreakdownLines(
       _items.map((item) => item.toJson()),
     );
@@ -1418,7 +1427,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               label: 'المتبقي',
               value: '${remaining.toStringAsFixed(2)} $currency',
               icon: Icons.pending_outlined,
-              accentColor: remaining > 0.01 ? AppColors.error : AppColors.success,
+              accentColor: remaining > 0.01
+                  ? AppColors.error
+                  : AppColors.success,
             ),
             if (totalWeight > 0)
               InvoiceSummaryMetric(
@@ -1475,7 +1486,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     }
 
     final entries = byKarat.entries.toList()
-      ..sort((a, b) => (double.tryParse(b.key) ?? 0).compareTo(double.tryParse(a.key) ?? 0));
+      ..sort(
+        (a, b) => (double.tryParse(b.key) ?? 0).compareTo(
+          double.tryParse(a.key) ?? 0,
+        ),
+      );
 
     return entries
         .map(
@@ -1541,7 +1556,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       if (remaining > 0.01) {
         if (!allowPartialPayments) {
           _showError(
-            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+            'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}\nيرجى إكمال الدفع',
           );
           return;
         }
@@ -1594,8 +1609,10 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       0.0,
       (sum, item) => sum + item.weight,
     );
-    final totalTaxForSummary =
-        _items.fold<double>(0.0, (sum, item) => sum + item.tax);
+    final totalTaxForSummary = _items.fold<double>(
+      0.0,
+      (sum, item) => sum + item.tax,
+    );
 
     final proceed = await _showPreSaveInvoiceSummary(
       customerLabel: customerLabel,
@@ -2108,9 +2125,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                               Icons.check_circle_outline,
                               size: 24,
                             ),
-                            label: Text(
+                            label: _settingsProvider.buildText(
                               _remainingAmount > 0.01
-                                  ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+                                  ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText} متبقية)'
                                   : 'حفظ الفاتورة',
                             ),
                             style: FilledButton.styleFrom(
@@ -2154,9 +2171,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       ? null
                       : _submitInvoice,
                   icon: const Icon(Icons.check_circle_outline, size: 24),
-                  label: Text(
+                  label: _settingsProvider.buildText(
                     _remainingAmount > 0.01
-                        ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+                        ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText} متبقية)'
                         : 'حفظ الفاتورة',
                   ),
                   style: FilledButton.styleFrom(
@@ -2190,35 +2207,65 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
               preferredSize: const Size.fromHeight(26.0),
               child: Container(
                 color: Colors.black.withValues(alpha: 0.20),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 child: Directionality(
                   textDirection: TextDirection.ltr,
                   child: _goldPrice24k > 0
-                      ? Row(children: [
-                          const Icon(Icons.monetization_on_outlined, size: 12, color: Colors.amber),
-                          const SizedBox(width: 4),
-                          Text(
-                            'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
-                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
-                          ),
-                          const Padding(padding: EdgeInsets.symmetric(horizontal: 5), child: Text('|', style: TextStyle(color: Colors.white38, fontSize: 10))),
-                          ...([24, 22, 21, 18].map((k) {
-                            final gp = _goldPrice24k * k / 24;
-                            final isMain = k == _settingsProvider.mainKarat;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 10),
+                      ? Row(
+                          children: [
+                            const Icon(
+                              Icons.monetization_on_outlined,
+                              size: 12,
+                              color: Colors.amber,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 5),
                               child: Text(
-                                '${k}k: ${gp.toStringAsFixed(2)}',
+                                '|',
                                 style: TextStyle(
-                                  color: isMain ? Colors.amber : Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: isMain ? FontWeight.w800 : FontWeight.w500,
+                                  color: Colors.white38,
+                                  fontSize: 10,
                                 ),
                               ),
-                            );
-                          }).toList()),
-                          const Text('ر.س/جم', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                        ])
+                            ),
+                            ...([24, 22, 21, 18].map((k) {
+                              final gp = _goldPrice24k * k / 24;
+                              final isMain = k == _settingsProvider.mainKarat;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 10),
+                                child: Text(
+                                  '${k}k: ${gp.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    color: isMain ? Colors.amber : Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: isMain
+                                        ? FontWeight.w800
+                                        : FontWeight.w500,
+                                  ),
+                                ),
+                              );
+                            }).toList()),
+                            const Text(
+                              '/جم',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        )
                       : const Text(
                           'جاري تحميل سعر الذهب...',
                           style: TextStyle(color: Colors.white54, fontSize: 11),
@@ -2229,18 +2276,38 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
             actions: [
               Consumer<AuthProvider>(
                 builder: (context, auth, _) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.person_outline, size: 14, color: Colors.white),
-                      const SizedBox(width: 4),
-                      Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                    ]),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.person_outline,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          auth.fullName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -2273,7 +2340,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           }
                         } else {
                           for (final item in _items) {
-                            item.taxRate = _effectiveTaxRateForKarat(item.karat);
+                            item.taxRate = _effectiveTaxRateForKarat(
+                              item.karat,
+                            );
                           }
                         }
                       });
@@ -3067,8 +3136,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                         color: AppColors.karat24.withValues(alpha: 0.3),
                       ),
                     ),
-                    child: Text(
-                      '${item.totalWithTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    child: _settingsProvider.buildText(
+                      '${item.totalWithTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                       style: cellStyle,
                     ),
                   ),
@@ -3281,8 +3350,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                     ),
                   ],
                 ),
-                Text(
-                  '${grandTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                _settingsProvider.buildText(
+                  '${grandTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                   style: theme.textTheme.headlineMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: isDark ? Colors.white : Colors.black87,
@@ -3350,8 +3419,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       color: AppColors.success.withValues(alpha: 0.4),
                     ),
                   ),
-                  child: Text(
-                    'الإجمالي: ${totalAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                  child: _settingsProvider.buildText(
+                    'الإجمالي: ${totalAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
@@ -3558,8 +3627,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
-                                '${payment.amount.toStringAsFixed(2)} ر.س',
+                              child: _settingsProvider.buildText(
+                                '${payment.amount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.success,
@@ -3569,9 +3638,9 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
+                              child: _settingsProvider.buildText(
                                 payment.commissionAmount > 0
-                                    ? '${payment.commissionAmount.toStringAsFixed(2)} ر.س'
+                                    ? '${payment.commissionAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}'
                                     : '-',
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color: payment.commissionAmount > 0
@@ -3584,8 +3653,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
-                                '${payment.netAmount.toStringAsFixed(2)} ر.س',
+                              child: _settingsProvider.buildText(
+                                '${payment.netAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.info,
@@ -3840,7 +3909,7 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                                       horizontal: 12,
                                       vertical: 12,
                                     ),
-                                    suffixText: 'ر.س',
+                                    suffixText: _currencySymbol,
                                     suffixStyle: theme.textTheme.bodySmall
                                         ?.copyWith(fontWeight: FontWeight.w500),
                                   ),
@@ -3940,8 +4009,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           color: AppColors.warning,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          'المتبقي: ${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          'المتبقي: ${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontSize: 14,
                             color: AppColors.warning,
@@ -4021,8 +4090,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -4047,8 +4116,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_calculateTotalVAT().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_calculateTotalVAT().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: AppColors.info,
@@ -4077,8 +4146,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                           ),
                         ],
                       ),
-                      Text(
-                        '${_totalPayments.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      _settingsProvider.buildText(
+                        '${_totalPayments.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                         style: theme.textTheme.bodyLarge?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -4104,8 +4173,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalCommission.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalCommission.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.warning,
@@ -4131,8 +4200,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalCommissionVAT.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalCommissionVAT.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: AppColors.info,
@@ -4160,8 +4229,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalNet.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalNet.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.success,
@@ -4209,8 +4278,8 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                             color: colorScheme.error,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text(
-                            '${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                          child: _settingsProvider.buildText(
+                            '${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                             style: theme.textTheme.bodyLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                               color: colorScheme.onError,
@@ -4713,7 +4782,10 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                             _selectFirstMatchingCategory(limited);
                           }
                           if (_selectedCategory != null) {
-                            _focusAndSelect(_weightFocusNode, _weightController);
+                            _focusAndSelect(
+                              _weightFocusNode,
+                              _weightController,
+                            );
                           }
                         },
                       ),
@@ -4742,8 +4814,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                   border: Border.all(
                                     color: state.hasError
                                         ? theme.colorScheme.error
-                                        : theme.dividerColor
-                                              .withValues(alpha: 0.3),
+                                        : theme.dividerColor.withValues(
+                                            alpha: 0.3,
+                                          ),
                                     width: 1.5,
                                   ),
                                   borderRadius: BorderRadius.circular(12),
@@ -4853,7 +4926,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                           ? const Color(
                                                               0xFFD4AF37,
                                                             )
-                                                          : theme.iconTheme.color,
+                                                          : theme
+                                                                .iconTheme
+                                                                .color,
                                                     ),
                                                     const SizedBox(width: 12),
                                                     Expanded(
@@ -4870,8 +4945,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                     if (isSelected)
                                                       const Icon(
                                                         Icons.check_circle,
-                                                        color:
-                                                            Color(0xFFD4AF37),
+                                                        color: Color(
+                                                          0xFFD4AF37,
+                                                        ),
                                                         size: 20,
                                                       ),
                                                   ],
@@ -4923,8 +4999,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                               ),
                             )
                             .toList(),
-                        onChanged: (v) =>
-                            setState(() => _selectedKarat = v ?? _selectedKarat),
+                        onChanged: (v) => setState(
+                          () => _selectedKarat = v ?? _selectedKarat,
+                        ),
                       ),
                       const SizedBox(height: 12),
                       Row(
@@ -5016,8 +5093,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
-                                prefixIcon:
-                                    const Icon(Icons.numbers, size: 20),
+                                prefixIcon: const Icon(Icons.numbers, size: 20),
                                 filled: true,
                                 fillColor: theme.colorScheme.surface,
                               ),

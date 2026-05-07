@@ -33,7 +33,7 @@ class _SalesVsPurchasesTrendReportScreenState
   bool _includeUnposted = false;
   String? _goldType;
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   late NumberFormat _currencyFormat;
   final NumberFormat _weightFormat = NumberFormat('#,##0.000');
@@ -59,7 +59,7 @@ class _SalesVsPurchasesTrendReportScreenState
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context, listen: true);
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
 
     if (symbol != _currencySymbol || decimals != _currencyDecimals) {
@@ -366,13 +366,17 @@ class _SalesVsPurchasesTrendReportScreenState
         color: Colors.orange,
       ),
       _SummaryMetric(
-        label: isArabic ? 'هامش المبيعات (ر.س)' : 'Sales Margin (Cash)',
+        label: isArabic
+            ? 'هامش المبيعات ($_currencySymbol)'
+            : 'Sales Margin (Cash)',
         value: _formatCurrency(_asDouble(summary['sales_margin_cash'] ?? 0)),
         icon: Icons.stacked_line_chart,
         color: Colors.purple,
       ),
       _SummaryMetric(
-        label: isArabic ? 'هامش المشتريات (ر.س)' : 'Purchases Margin (Cash)',
+        label: isArabic
+            ? 'هامش المشتريات ($_currencySymbol)'
+            : 'Purchases Margin (Cash)',
         value: _formatCurrency(
           _asDouble(summary['purchases_margin_cash'] ?? 0),
         ),

@@ -3,5 +3,9 @@
     "python.defaultInterpreterPath": "/Users/salehalabbadi/yasargold/backend/venv/bin/python",
     "python.analysis.extraPaths": [
         "${workspaceFolder}/backend"
-    ]
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "cd": true,
+        "/usr/bin/python3": true
+    }
 }

@@ -304,21 +304,26 @@ _ProtectedText _protectCurrencyTokens(String input) {
   //   Ra·dot·Seen = "ر.س" ✓
   //
   // U+FEB1 = ﺱ  (Seen isolated form)   — leftmost in visual LTR string
-  // U+FEAE = ﺮ  (Ra   isolated form)   — rightmost in visual LTR string
-  const normalizedPlain = '\uFEB1.\uFEAE'; // visual reversed "ر.س"
+  // U+FEAD = ﺭ  (Ra   isolated form)   — rightmost in visual LTR string
+  // (Ra in ر.س / ريال is always first letter → no preceding connector → isolated form)
+  const normalizedPlain = '\uFEB1.\uFEAD'; // visual reversed "ر.س"
   // For the parenthesized form: brackets are also stored reversed so the RTL
   // reader sees opening "(" on the right and closing ")" on the left.
-  const normalizedParen = ')\uFEB1.\uFEAE('; // visual reversed "(ر.س)"
+  const normalizedParen = ')\uFEB1.\uFEAD('; // visual reversed "(ر.س)"
 
   // "ريال" — visual reversed presentation forms:
-  // Logical:  ر(FEAE) ي(FEF3) ا(FE8E) ل(FEDD)
-  // Reversed: ل(FEDD) ا(FE8E) ي(FEF3) ر(FEAE)
-  const shapedRiyalReversed = '\uFEDD\uFE8E\uFEF3\uFEAE';
+  // Logical:  ر(FEAD) ي(FEF3) ا(FE8E) ل(FEDD)   — Ra is first letter → isolated (FEAD)
+  // Reversed: ل(FEDD) ا(FE8E) ي(FEF3) ر(FEAD)
+  const shapedRiyalReversed = '\uFEDD\uFE8E\uFEF3\uFEAD';
   const normalizedRiyal = shapedRiyalReversed;
   const normalizedRiyalParen = ')$shapedRiyalReversed(';
 
-  // Match (ر.س), ر.س, (ريال), or ريال — the two most common SAR representations.
-  final re = RegExp(r'\(\s*ر\s*\.\s*س\s*\)|\(\s*ريال\s*\)|ر\s*\.\s*س|ريال');
+  // ﷼ (U+FDFC) Arabic Rial Sign — single code point, stored as-is.
+  // Protected so the placeholder mechanism keeps it in visual position order.
+  const normalizedRialSign = '\uFDFC';
+
+  // Match (ر.س), ر.س, (ريال), ريال, (﷼), or ﷼.
+  final re = RegExp('\\(\\s*ر\\s*\\.\\s*س\\s*\\)|\\(\\s*ريال\\s*\\)|\\(\\s*\uFDFC\\s*\\)|ر\\s*\\.\\s*س|ريال|\uFDFC');
 
   final matches = re.allMatches(input).toList(growable: false);
   if (matches.isEmpty) return _ProtectedText(input, const {});
@@ -335,8 +340,11 @@ _ProtectedText _protectCurrencyTokens(String input) {
     final raw = m.group(0) ?? '';
     final isParen = raw.trimLeft().startsWith('(');
     final isRiyal = raw.contains('ريال');
+    final isRialSign = raw.contains('\uFDFC');
     final placeholder = nextPlaceholder++;
-    if (isRiyal) {
+    if (isRialSign) {
+      placeholderToToken[placeholder] = normalizedRialSign;
+    } else if (isRiyal) {
       placeholderToToken[placeholder] = isParen ? normalizedRiyalParen : normalizedRiyal;
     } else {
       placeholderToToken[placeholder] = isParen ? normalizedParen : normalizedPlain;

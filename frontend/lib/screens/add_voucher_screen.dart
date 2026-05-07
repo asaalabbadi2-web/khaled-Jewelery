@@ -194,13 +194,15 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   bool _checkedLocalDraft = false;
 
-  String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
 
   SettingsProvider? _settingsProvider;
 
   final List<double> _availableKarats = const [24, 22, 21, 18];
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -612,7 +614,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         _mainKarat != provider.mainKarat) {
       setState(() {
         _settingsProvider = provider;
-        _currencySymbol = provider.currencySymbol;
         _currencyDecimalPlaces = provider.decimalPlaces;
         _mainKarat = provider.mainKarat;
       });
@@ -3574,7 +3575,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     children: [
                       Text(
                         bal != null
-                            ? 'الرصيد الفعلي الحالي: ${bal.toStringAsFixed(2)} ر.س'
+                            ? 'الرصيد الفعلي الحالي: ${bal.toStringAsFixed(2)} $_currencySymbol'
                             : (isLoadingFallback
                                   ? 'جاري تحميل الرصيد الاحتياطي للخزنة...'
                                   : 'الرصيد الفعلي غير متاح'),

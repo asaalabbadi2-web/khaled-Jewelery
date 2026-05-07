@@ -246,7 +246,8 @@ class _LoginScreenState extends State<LoginScreen> {
             if (settings.showGoldPriceTickerOnLogin)
               GoldPriceTickerBar(
                 isArabic: true,
-                currencySymbol: settings.currencySymbol,
+                currencySymbol: settings.currencySymbolText,
+                isNewSar: settings.currencyIsNewSar,
                 refreshInterval: settings.goldPriceTickerRefreshInterval,
               ),
           ],

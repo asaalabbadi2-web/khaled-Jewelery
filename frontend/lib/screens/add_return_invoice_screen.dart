@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/auth_provider.dart';
+import '../providers/settings_provider.dart';
 import '../api_service.dart';
 import '../widgets/currency_manager_dialog.dart';
 import '../widgets/widgets.dart'; // Import shared widgets
 import '../theme/app_theme.dart';
 import '../utils.dart';
 import '../utils/invoice_direct_print.dart';
+import '../utils/currency_utils.dart' as cu;
 
 class _ReturnPaymentEntry {
   final int paymentMethodId;
@@ -29,13 +31,13 @@ class _ReturnPaymentEntry {
   });
 
   Map<String, dynamic> toJson() => {
-        'payment_method_id': paymentMethodId,
-        'payment_method_name': paymentMethodName,
-        'amount': amount,
-        'commission_rate': commissionRate,
-        'commission_amount': commissionAmount,
-        'net_amount': netAmount,
-      };
+    'payment_method_id': paymentMethodId,
+    'payment_method_name': paymentMethodName,
+    'amount': amount,
+    'commission_rate': commissionRate,
+    'commission_amount': commissionAmount,
+    'net_amount': netAmount,
+  };
 }
 
 /// Screen for creating return invoices (مرتجعات)
@@ -203,6 +205,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   // Currency settings
   double exchangeRate = 1.0;
   String currencySymbol = '\$';
+  bool _isNewSar = false;
   String currencyName = 'USD';
 
   // Payment — multi-method (mirrors sales screen)
@@ -263,7 +266,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   double get _totalPayments => _payments.fold(0.0, (s, p) => s + p.amount);
 
   double get _originalInvoiceTotal => _parseDouble(
-    selectedOriginalInvoice?['total'] ?? selectedOriginalInvoice?['total_amount'],
+    selectedOriginalInvoice?['total'] ??
+        selectedOriginalInvoice?['total_amount'],
   );
 
   double get _originalInvoiceWeight =>
@@ -297,7 +301,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       return _originalInvoiceTotal;
     }
 
-    if (_originalInvoiceTotal > 0 && _originalInvoiceWeight > 0 && totalWeight > 0) {
+    if (_originalInvoiceTotal > 0 &&
+        _originalInvoiceWeight > 0 &&
+        totalWeight > 0) {
       final proportional =
           (_originalInvoiceTotal * (totalWeight / _originalInvoiceWeight));
       return proportional.clamp(0.0, _originalInvoiceTotal).toDouble();
@@ -306,8 +312,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     return grandTotal;
   }
 
-  double get _effectiveReturnTotal =>
-      _totalPayments > 0 ? _totalPayments : (_enteredPaymentAmount ?? _suggestedTotal);
+  double get _effectiveReturnTotal => _totalPayments > 0
+      ? _totalPayments
+      : (_enteredPaymentAmount ?? _suggestedTotal);
 
   _ReturnPaymentEntry _buildPaymentEntry({
     required Map<String, dynamic> method,
@@ -415,7 +422,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       if (lineTotal <= 0) {
         final net = _parseDouble(item['net']);
         final tax = _parseDouble(item['tax']);
-        lineTotal = (net > 0 || tax > 0) ? (net + tax) : _parseDouble(item['price']);
+        lineTotal = (net > 0 || tax > 0)
+            ? (net + tax)
+            : _parseDouble(item['price']);
       }
       if (lineTotal <= 0) continue;
       baseSum += lineTotal;
@@ -428,7 +437,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     final weightedDelta = (invoiceTotal - weightedSum).abs();
     final tolerance = math.max(5.0, invoiceTotal * 0.02);
 
-    return weightedDelta <= tolerance && (weightedDelta + tolerance) < baseDelta;
+    return weightedDelta <= tolerance &&
+        (weightedDelta + tolerance) < baseDelta;
   }
 
   ReturnItemRow _mapInvoiceItemToReturnRow(
@@ -436,8 +446,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     bool assumePerGramAmounts = false,
   }) {
     final originalWeight = _parseDouble(item['weight']);
-    final lineMultiplier =
-        assumePerGramAmounts && originalWeight > 0 ? originalWeight : 1.0;
+    final lineMultiplier = assumePerGramAmounts && originalWeight > 0
+        ? originalWeight
+        : 1.0;
     final originalTax = _parseDouble(item['tax']) * lineMultiplier;
     double originalNet = _parseDouble(item['net']) * lineMultiplier;
     final originalPriceField = _parseDouble(item['price']) * lineMultiplier;
@@ -466,12 +477,14 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           ? item['name']
           : 'صنف بدون اسم',
       karat: _parseDouble(item['karat'], 21),
-        originalWeight: originalWeight,
+      originalWeight: originalWeight,
       originalQuantity: normalizedQuantity,
       originalWage: _parseDouble(item['wage']),
       originalNet: originalNet,
       originalTax: originalTax,
-      originalTotal: originalTotal > 0 ? originalTotal : originalNet + originalTax,
+      originalTotal: originalTotal > 0
+          ? originalTotal
+          : originalNet + originalTax,
     );
   }
 
@@ -509,7 +522,8 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
         'customer_name': editData['customer_name'],
         'supplier_name': editData['supplier_name'],
       };
-      _returnItems = (editData['items'] as List?)
+      _returnItems =
+          (editData['items'] as List?)
               ?.whereType<Map<String, dynamic>>()
               .map(_mapInvoiceItemToReturnRow)
               .toList() ??
@@ -520,18 +534,21 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       final savedPayments = editData['payments'];
       if (savedPayments is List && savedPayments.isNotEmpty) {
         for (final p in savedPayments.whereType<Map>()) {
-          _payments.add(_ReturnPaymentEntry(
-            paymentMethodId: _parseInt(p['payment_method_id']),
-            paymentMethodName: (p['payment_method_name'] ?? '').toString(),
-            amount: _parseDouble(p['amount']),
-            commissionRate: _parseDouble(p['commission_rate']),
-            commissionAmount: _parseDouble(p['commission_amount']),
-            netAmount: _parseDouble(p['net_amount']),
-          ));
+          _payments.add(
+            _ReturnPaymentEntry(
+              paymentMethodId: _parseInt(p['payment_method_id']),
+              paymentMethodName: (p['payment_method_name'] ?? '').toString(),
+              amount: _parseDouble(p['amount']),
+              commissionRate: _parseDouble(p['commission_rate']),
+              commissionAmount: _parseDouble(p['commission_amount']),
+              netAmount: _parseDouble(p['net_amount']),
+            ),
+          );
         }
       } else {
         // Resolve after payment methods are fetched
-        _legacyEditPaymentMethod = (editData['payment_method'] ?? 'cash').toString();
+        _legacyEditPaymentMethod = (editData['payment_method'] ?? 'cash')
+            .toString();
         _legacyEditAmount = _parseDouble(editData['amount_paid']);
       }
     }
@@ -592,8 +609,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     } else {
       if (mounted) {
         setState(() {
-          currencyName = 'ريال سعودي';
-          currencySymbol = 'ر.س';
+          currencyName = 'العملة المحلية';
+          currencySymbol = context.read<SettingsProvider>().currencySymbolText;
+          _isNewSar = context.read<SettingsProvider>().currencyIsNewSar;
           exchangeRate = 3.75;
         });
       }
@@ -723,21 +741,26 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     try {
       final List<dynamic> methods = await widget.api.getPaymentMethods();
       if (!mounted) return;
-      final normalized = methods
-          .whereType<Map<String, dynamic>>()
-          .map<Map<String, dynamic>>((m) {
-            final map = Map<String, dynamic>.from(m);
-            return {
-              ...map,
-              'id': _parseInt(map['id']),
-              'commission_rate': _parseDouble(map['commission_rate']),
-              'settlement_days': _parseInt(map['settlement_days']),
-              'display_order': _parseInt(map['display_order'], 999),
-            };
-          })
-          .where((m) => m['id'] != null && m['id'] != 0)
-          .toList()
-        ..sort((a, b) => (a['display_order'] as int).compareTo(b['display_order'] as int));
+      final normalized =
+          methods
+              .whereType<Map<String, dynamic>>()
+              .map<Map<String, dynamic>>((m) {
+                final map = Map<String, dynamic>.from(m);
+                return {
+                  ...map,
+                  'id': _parseInt(map['id']),
+                  'commission_rate': _parseDouble(map['commission_rate']),
+                  'settlement_days': _parseInt(map['settlement_days']),
+                  'display_order': _parseInt(map['display_order'], 999),
+                };
+              })
+              .where((m) => m['id'] != null && m['id'] != 0)
+              .toList()
+            ..sort(
+              (a, b) => (a['display_order'] as int).compareTo(
+                b['display_order'] as int,
+              ),
+            );
 
       if (!mounted) return;
       setState(() {
@@ -745,32 +768,49 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       });
 
       // Resolve legacy edit-mode payment
-      if (_legacyEditPaymentMethod != null && _legacyEditAmount > 0 && _payments.isEmpty) {
+      if (_legacyEditPaymentMethod != null &&
+          _legacyEditAmount > 0 &&
+          _payments.isEmpty) {
         final legacy = _legacyEditPaymentMethod!.toLowerCase();
         final pm = normalized.firstWhere(
           (m) {
             final type = (m['payment_type'] ?? '').toString().toLowerCase();
             final name = (m['name'] ?? '').toString();
-            if (legacy == 'cash' || legacy.contains('نقد')) return type == 'cash' || name.contains('نقد');
-            if (legacy == 'transfer' || legacy.contains('تحويل')) return name.contains('تحويل') || type == 'bank_transfer';
-            if (legacy == 'card' || legacy == 'mada') return type == 'mada' || type == 'card';
-            if (legacy == 'deferred' || legacy.contains('آجل')) return type == 'receivable' || type == 'credit';
+            if (legacy == 'cash' || legacy.contains('نقد')) {
+              return type == 'cash' || name.contains('نقد');
+            }
+            if (legacy == 'transfer' || legacy.contains('تحويل')) {
+              return name.contains('تحويل') || type == 'bank_transfer';
+            }
+            if (legacy == 'card' || legacy == 'mada') {
+              return type == 'mada' || type == 'card';
+            }
+            if (legacy == 'deferred' || legacy.contains('آجل')) {
+              return type == 'receivable' || type == 'credit';
+            }
             return false;
           },
-          orElse: () => normalized.isNotEmpty ? normalized.first : <String, dynamic>{},
+          orElse: () =>
+              normalized.isNotEmpty ? normalized.first : <String, dynamic>{},
         );
         if (pm.isNotEmpty) {
           final rate = pm['commission_rate'] as double;
-          final commission = double.parse((_legacyEditAmount * rate / 100).toStringAsFixed(2));
+          final commission = double.parse(
+            (_legacyEditAmount * rate / 100).toStringAsFixed(2),
+          );
           setState(() {
-            _payments.add(_ReturnPaymentEntry(
-              paymentMethodId: pm['id'] as int,
-              paymentMethodName: (pm['name'] ?? '').toString(),
-              amount: _legacyEditAmount,
-              commissionRate: rate,
-              commissionAmount: commission,
-              netAmount: double.parse((_legacyEditAmount - commission).toStringAsFixed(2)),
-            ));
+            _payments.add(
+              _ReturnPaymentEntry(
+                paymentMethodId: pm['id'] as int,
+                paymentMethodName: (pm['name'] ?? '').toString(),
+                amount: _legacyEditAmount,
+                commissionRate: rate,
+                commissionAmount: commission,
+                netAmount: double.parse(
+                  (_legacyEditAmount - commission).toStringAsFixed(2),
+                ),
+              ),
+            );
           });
         }
         _legacyEditPaymentMethod = null;
@@ -782,9 +822,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
   void _addPayment({double? customAmount}) {
     if (_selectedPaymentMethodId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('اختر وسيلة الدفع أولاً')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('اختر وسيلة الدفع أولاً')));
       return;
     }
     final method = _paymentMethods.firstWhere(
@@ -882,40 +922,40 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       final shouldPrint = _uiAutoOpenPrintAfterSave
           ? 'print'
           : await showDialog<String>(
-                context: context,
-                barrierDismissible: false,
-                builder: (dialogContext) {
-                  return AlertDialog(
-                    title: const Text('تم حفظ المرتجع'),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          '✅ تم حفظ المرتجع #${invoiceForPrint['id'] ?? ''}\nاختر الإجراء:',
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton.icon(
-                          onPressed: () => Navigator.pop(dialogContext, 'print'),
-                          icon: const Icon(Icons.print),
-                          label: const Text('طباعة'),
-                        ),
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                          onPressed: () => Navigator.pop(dialogContext, 'share'),
-                          icon: const Icon(Icons.share, size: 18),
-                          label: const Text('مشاركة'),
-                        ),
-                        const SizedBox(height: 4),
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext, null),
-                          child: const Text('تم'),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              );
+              context: context,
+              barrierDismissible: false,
+              builder: (dialogContext) {
+                return AlertDialog(
+                  title: const Text('تم حفظ المرتجع'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '✅ تم حفظ المرتجع #${invoiceForPrint['id'] ?? ''}\nاختر الإجراء:',
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, 'print'),
+                        icon: const Icon(Icons.print),
+                        label: const Text('طباعة'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, 'share'),
+                        icon: const Icon(Icons.share, size: 18),
+                        label: const Text('مشاركة'),
+                      ),
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext, null),
+                        child: const Text('تم'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
 
       if (!mounted) return;
       if (shouldPrint == 'print') {
@@ -928,9 +968,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           );
         } catch (e) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('تعذر فتح الطباعة: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('تعذر فتح الطباعة: $e')));
         }
       } else if (shouldPrint == 'share') {
         try {
@@ -942,9 +982,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           );
         } catch (e) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('تعذر مشاركة الفاتورة: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('تعذر مشاركة الفاتورة: $e')));
         }
       }
 
@@ -975,7 +1015,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
     String originalParty = '';
 
     if (original != null) {
-      originalTotal = _parseDouble(original['total'] ?? original['total_amount']);
+      originalTotal = _parseDouble(
+        original['total'] ?? original['total_amount'],
+      );
       originalTax = _parseDouble(original['total_tax']);
       originalWeight = _parseDouble(original['total_weight']);
       originalDate = (original['date'] ?? '').toString();
@@ -1245,7 +1287,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
       child: Row(
         children: [
           Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold)),
-          Text(value),
+          cu.SarAwareText(value, isNewSar: _isNewSar),
         ],
       ),
     );
@@ -1258,7 +1300,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
   }) {
     return Chip(
       avatar: Icon(icon, size: 18, color: Colors.black87),
-      label: Text('$label: $value'),
+      label: cu.SarAwareText('$label: $value', isNewSar: _isNewSar),
       backgroundColor: Colors.grey.shade200,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
     );
@@ -1496,14 +1538,18 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
             children: [
               Text('وسائل الدفع', style: theme.textTheme.titleLarge),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: cs.primary.withValues(alpha: isDark ? 0.25 : 0.12),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: cs.primary.withValues(alpha: 0.4)),
                 ),
-                child: Text(
+                child: cu.SarAwareText(
                   'القيمة المرجعية حسب الوزن: ${_suggestedTotal.toStringAsFixed(2)} $currencySymbol',
+                  isNewSar: _isNewSar,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: cs.primary,
@@ -1518,24 +1564,67 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           if (_payments.isNotEmpty) ...[
             Container(
               decoration: BoxDecoration(
-                border: Border.all(color: cs.primary.withValues(alpha: 0.4), width: 2),
+                border: Border.all(
+                  color: cs.primary.withValues(alpha: 0.4),
+                  width: 2,
+                ),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
                 children: [
                   // Header
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: cs.primary.withValues(alpha: isDark ? 0.25 : 0.15),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(6),
+                      ),
                     ),
                     child: Row(
                       children: [
-                        Expanded(flex: 3, child: Text('الوسيلة', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold))),
-                        Expanded(flex: 2, child: Text('المبلغ', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
-                        Expanded(flex: 2, child: Text('عمولة', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
-                        Expanded(flex: 2, child: Text('صافي', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            'الوسيلة',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            'المبلغ',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            'عمولة',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            'صافي',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
                         const SizedBox(width: 40),
                       ],
                     ),
@@ -1544,12 +1633,20 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                   ...List.generate(_payments.length, (i) {
                     final p = _payments[i];
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: i % 2 == 0
                             ? theme.colorScheme.surface
-                            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: isDark ? 0.3 : 0.5),
-                        border: Border(bottom: BorderSide(color: theme.dividerColor.withValues(alpha: 0.4))),
+                            : theme.colorScheme.surfaceContainerHighest
+                                  .withValues(alpha: isDark ? 0.3 : 0.5),
+                        border: Border(
+                          bottom: BorderSide(
+                            color: theme.dividerColor.withValues(alpha: 0.4),
+                          ),
+                        ),
                       ),
                       child: Row(
                         children: [
@@ -1558,15 +1655,61 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(p.paymentMethodName, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                                Text(
+                                  p.paymentMethodName,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                                 if (p.commissionRate > 0)
-                                  Text('عمولة ${p.commissionRate}%', style: theme.textTheme.bodySmall?.copyWith(color: Colors.orange)),
+                                  Text(
+                                    'عمولة ${p.commissionRate}%',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: Colors.orange,
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
-                          Expanded(flex: 2, child: Text('${p.amount.toStringAsFixed(2)} $currencySymbol', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: Colors.green))),
-                          Expanded(flex: 2, child: Text(p.commissionAmount > 0 ? '${p.commissionAmount.toStringAsFixed(2)} $currencySymbol' : '-', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(color: p.commissionAmount > 0 ? Colors.red : theme.disabledColor))),
-                          Expanded(flex: 2, child: Text('${p.netAmount.toStringAsFixed(2)} $currencySymbol', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: cs.primary))),
+                          Expanded(
+                            flex: 2,
+                            child: cu.SarAwareText(
+                              '${p.amount.toStringAsFixed(2)} $currencySymbol',
+                              isNewSar: _isNewSar,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: cu.SarAwareText(
+                              p.commissionAmount > 0
+                                  ? '${p.commissionAmount.toStringAsFixed(2)} $currencySymbol'
+                                  : '-',
+                              isNewSar: _isNewSar,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: p.commissionAmount > 0
+                                    ? Colors.red
+                                    : theme.disabledColor,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: cu.SarAwareText(
+                              '${p.netAmount.toStringAsFixed(2)} $currencySymbol',
+                              isNewSar: _isNewSar,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: cs.primary,
+                              ),
+                            ),
+                          ),
                           SizedBox(
                             width: 40,
                             child: IconButton(
@@ -1584,16 +1727,45 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                   // Totals row
                   if (_payments.length > 1)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
-                        color: cs.primary.withValues(alpha: isDark ? 0.15 : 0.08),
-                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(6)),
+                        color: cs.primary.withValues(
+                          alpha: isDark ? 0.15 : 0.08,
+                        ),
+                        borderRadius: const BorderRadius.vertical(
+                          bottom: Radius.circular(6),
+                        ),
                       ),
                       child: Row(
                         children: [
-                          Expanded(flex: 3, child: Text('الإجمالي', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold))),
-                          Expanded(flex: 2, child: Text('${_totalPayments.toStringAsFixed(2)} $currencySymbol', textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: Colors.green))),
-                          Expanded(flex: 2, child: Text('', textAlign: TextAlign.center)),
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              'الإجمالي',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: cu.SarAwareText(
+                              '${_totalPayments.toStringAsFixed(2)} $currencySymbol',
+                              isNewSar: _isNewSar,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text('', textAlign: TextAlign.center),
+                          ),
                           Expanded(flex: 2, child: Text('')),
                           const SizedBox(width: 40),
                         ],
@@ -1633,8 +1805,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                     color: _payments.isEmpty ? Colors.orange : Colors.green,
                   ),
                 ),
-                Text(
+                cu.SarAwareText(
                   '${_effectiveReturnTotal.toStringAsFixed(2)} $currencySymbol',
+                  isNewSar: _isNewSar,
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: _payments.isEmpty ? Colors.orange : Colors.green,
@@ -1647,10 +1820,20 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
           // ── Add payment row (only if no payment added yet — single payment) ──
           if (_payments.isEmpty) ...[
-            Text('إضافة وسيلة دفع', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
+            Text(
+              'إضافة وسيلة دفع',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const SizedBox(height: 8),
             if (_paymentMethods.isEmpty)
-              const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: CircularProgressIndicator(),
+                ),
+              )
             else ...[
               DropdownButtonFormField<int>(
                 value: _selectedPaymentMethodId,
@@ -1663,12 +1846,16 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                   final label = commission > 0
                       ? '${m['name']} (${commission.toStringAsFixed(1)}%)'
                       : '${m['name']}';
-                  return DropdownMenuItem<int>(value: m['id'] as int, child: Text(label));
+                  return DropdownMenuItem<int>(
+                    value: m['id'] as int,
+                    child: Text(label),
+                  );
                 }).toList(),
                 onChanged: (v) {
                   setState(() => _selectedPaymentMethodId = v);
                   if ((_enteredPaymentAmount ?? 0) <= 0 && _payments.isEmpty) {
-                    _customAmountController.text = _suggestedTotal.toStringAsFixed(2);
+                    _customAmountController.text = _suggestedTotal
+                        .toStringAsFixed(2);
                   }
                 },
               ),
@@ -1693,7 +1880,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                     label: const Text('إضافة'),
                     onPressed: () {
                       final txt = _customAmountController.text.trim();
-                      final custom = txt.isEmpty ? null : double.tryParse(txt.replaceAll(',', '.'));
+                      final custom = txt.isEmpty
+                          ? null
+                          : double.tryParse(txt.replaceAll(',', '.'));
                       _addPayment(customAmount: custom);
                     },
                   ),
@@ -1807,8 +1996,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
                               style: const TextStyle(color: Colors.black54),
                             ),
                             const SizedBox(width: 8),
-                            Text(
+                            cu.SarAwareText(
                               '${item.total.toStringAsFixed(2)} $currencySymbol',
+                              isNewSar: _isNewSar,
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -1916,8 +2106,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
               fontSize: isTotal ? 18 : 14,
             ),
           ),
-          Text(
+          cu.SarAwareText(
             value,
+            isNewSar: _isNewSar,
             style: TextStyle(
               fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
               fontSize: isTotal ? 18 : 14,
@@ -1941,16 +2132,33 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
             builder: (context, auth, _) => Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.person_outline, size: 14, color: Colors.white),
-                  const SizedBox(width: 4),
-                  Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                ]),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.person_outline,
+                      size: 14,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      auth.fullName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

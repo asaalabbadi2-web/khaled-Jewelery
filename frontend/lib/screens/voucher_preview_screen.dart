@@ -56,6 +56,7 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
     SettingsProvider? sp;
     try {
       sp = context.read<SettingsProvider>();
+      await sp.ensureLoadedForPrint();
     } catch (_) {}
 
     return VoucherPdfBuilder.buildBytes(

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../api_service.dart';
+import 'package:provider/provider.dart';
+import '../../providers/settings_provider.dart';
 
 class DualSystemReconciliationScreen extends StatefulWidget {
   const DualSystemReconciliationScreen({super.key});
@@ -245,7 +247,7 @@ class _DualSystemReconciliationScreenState
         ),
         const SizedBox(height: 4),
         Text(
-          '$value ر.س/جم',
+          '$value ${context.read<SettingsProvider>().currencySymbolText}/جم',
           style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -279,11 +281,11 @@ class _DualSystemReconciliationScreenState
             const Divider(),
             _buildInfoRow(
               'إجمالي قيمة المخزون',
-              '${totalValue.toStringAsFixed(2)} ر.س',
+              '${totalValue.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
             ),
             _buildInfoRow(
               'متوسط التكلفة',
-              '${avgCost.toStringAsFixed(2)} ر.س/جم',
+              '${avgCost.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
             ),
           ],
         ),
@@ -317,7 +319,7 @@ class _DualSystemReconciliationScreenState
             ),
             _buildInfoRow(
               'القيمة الحالية',
-              '${currentValue.toStringAsFixed(2)} ر.س',
+              '${currentValue.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
             ),
           ],
         ),
@@ -352,12 +354,12 @@ class _DualSystemReconciliationScreenState
             const Divider(),
             _buildInfoRow(
               'الربح/الخسارة غير المحققة',
-              '${unrealizedGain.toStringAsFixed(2)} ر.س',
+              '${unrealizedGain.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
               color: unrealizedGain >= 0 ? Colors.green : Colors.red,
             ),
             _buildInfoRow(
               'فرق القيمة',
-              '${variance.toStringAsFixed(2)} ر.س (${variancePct.toStringAsFixed(2)}%)',
+              '${variance.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} (${variancePct.toStringAsFixed(2)}%)',
             ),
             _buildInfoRow(
               'توازن القيود الوزنية',
@@ -584,9 +586,10 @@ class _DualSystemReconciliationScreenState
             ),
             const SizedBox(height: 16),
             TextField(
-              decoration: const InputDecoration(
-                labelText: 'حد التحذير (ر.س)',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText:
+                    'حد التحذير (${context.read<SettingsProvider>().currencySymbolText})',
+                border: const OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
               controller: TextEditingController(text: _threshold.toString()),

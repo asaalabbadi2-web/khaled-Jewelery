@@ -35,7 +35,7 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
   bool _includeUnposted = false;
   _ChartType _chartType = _ChartType.curvedLine;
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   int _mainKarat = 21;
 
@@ -65,7 +65,7 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
 
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
     final mainKarat = settings.mainKarat;
 

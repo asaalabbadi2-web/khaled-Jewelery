@@ -28,10 +28,11 @@ class _AnalyticsDashboardScreenState extends State<AnalyticsDashboardScreen> {
   String? _error;
 
   DateTimeRange? _selectedRange;
-  String _groupBy = 'branch'; // branch | gold_office | transaction_type | employee
+  String _groupBy =
+      'branch'; // branch | gold_office | transaction_type | employee
   bool _postedOnly = true;
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
 
   // weight_main | amount_cash | weight_out_main | weight_in_main | cash_in | cash_out
@@ -65,7 +66,7 @@ class _AnalyticsDashboardScreenState extends State<AnalyticsDashboardScreen> {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
 
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
 
     if (symbol != _currencySymbol || decimals != _currencyDecimals) {

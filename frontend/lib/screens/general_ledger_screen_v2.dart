@@ -29,7 +29,6 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
   List<Map<String, dynamic>> _accounts = [];
   bool _isLoading = false;
   String? _errorMessage;
-  String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
 
@@ -37,6 +36,9 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
   int _currentPage = 1;
   static const int _perPage = 500;
   bool _hasMore = false;
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -50,7 +52,7 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
 
-    final newSymbol = settings.currencySymbol;
+    final newSymbol = settings.currencySymbolText;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
@@ -58,7 +60,6 @@ class _GeneralLedgerScreenV2State extends State<GeneralLedgerScreenV2> {
         newDecimals != _currencyDecimalPlaces ||
         newMainKarat != _mainKarat) {
       setState(() {
-        _currencySymbol = newSymbol;
         _currencyDecimalPlaces = newDecimals;
         _mainKarat = newMainKarat;
       });

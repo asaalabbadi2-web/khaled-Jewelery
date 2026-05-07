@@ -787,7 +787,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       setState(() {
         _paymentMethods = normalizedMethods;
-        _selectedPaymentMethodId = null; // لا توجد وسيلة دفع افتراضية — يجب على الموظف الاختيار يدوياً
+        _selectedPaymentMethodId =
+            null; // لا توجد وسيلة دفع افتراضية — يجب على الموظف الاختيار يدوياً
       });
     } catch (e) {
       _showError('فشل تحميل وسائل الدفع: $e');
@@ -1111,7 +1112,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
   }
 
   String _formatCurrency(double amount) {
-    return '${amount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}';
+    return '${amount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}';
   }
 
   String get _costingMethodLabel {
@@ -1295,7 +1296,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             ),
           ],
         ),
-        Text(
+        _settingsProvider.buildText(
           value,
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.bold,
@@ -1339,7 +1340,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     if (amount > remaining + 0.01) {
       // إضافة tolerance صغير
       _showError(
-        'المبلغ أكبر من المتبقي (${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        'المبلغ أكبر من المتبقي (${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText})',
       );
       return;
     }
@@ -1445,7 +1446,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
   double get _remainingAmount {
     final remaining = _calculateGrandTotal() - _totalPayments - _barterTotal;
-    // تجاهل الفروقات الصغيرة (أقل من 0.01 ريال)
+    // تجاهل الفروقات الصغيرة (أقل من 0.01 ${context.read<SettingsProvider>().currencySymbolText})
     return remaining.abs() < 0.01 ? 0.0 : remaining;
   }
 
@@ -1863,7 +1864,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           prefixIcon: const Icon(Icons.attach_money),
                           helperText:
                               'اترك الحقل فارغاً ليتم احتساب السعر تلقائياً',
-                          suffixText: _settingsProvider.currencySymbol,
+                          suffixText: _settingsProvider.currencySymbolText,
                         ),
                       ),
                     ],
@@ -1989,7 +1990,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       builder: (dialogContext) => _CategoryLineDialog(
         categories: _categories,
         mainKarat: _settingsProvider.mainKarat,
-        currencySymbol: _settingsProvider.currencySymbol,
+        currencySymbol: _settingsProvider.currencySymbolText,
       ),
     );
 
@@ -2167,8 +2168,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'الإجمالي الحالي: ${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+            _settingsProvider.buildText(
+              'الإجمالي الحالي: ${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
             ),
             const SizedBox(height: 16),
             TextField(
@@ -2187,7 +2188,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               },
               decoration: InputDecoration(
                 labelText: 'المبلغ المستهدف',
-                suffixText: _settingsProvider.currencySymbol,
+                suffixText: _settingsProvider.currencySymbolText,
                 border: const OutlineInputBorder(),
               ),
             ),
@@ -2248,8 +2249,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbol} على ${_items.length} صنف\n'
+        content: _settingsProvider.buildText(
+          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbolText} على ${_items.length} صنف\n'
           'التكاليف: ${totalCosts.toStringAsFixed(2)} • الربح الموزع: ${profitPool.toStringAsFixed(2)}',
         ),
         backgroundColor: AppColors.success,
@@ -2279,10 +2280,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       warnings.add('الفاتورة آجل/جزئي: يوجد مبلغ متبقي قبل الإغلاق.');
     }
     if (totalCost > 0 && total + 0.01 < totalCost) {
-      warnings.add('سعر البيع أقل من التكلفة وقد تحتاج الفاتورة إلى اعتماد مدير.');
+      warnings.add(
+        'سعر البيع أقل من التكلفة وقد تحتاج الفاتورة إلى اعتماد مدير.',
+      );
     }
 
-    final currency = _settingsProvider.currencySymbol;
+    final currency = _settingsProvider.currencySymbolText;
     final weightBreakdown = _buildWeightBreakdownLines(
       _items.map((item) => item.toJson()),
     );
@@ -2338,7 +2341,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               label: 'المتبقي',
               value: '${remaining.toStringAsFixed(2)} $currency',
               icon: Icons.pending_outlined,
-              accentColor: remaining > 0.01 ? AppColors.error : AppColors.success,
+              accentColor: remaining > 0.01
+                  ? AppColors.error
+                  : AppColors.success,
             ),
             if (totalWeight > 0)
               InvoiceSummaryMetric(
@@ -2416,7 +2421,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     if (remaining > 0.01 && !allowPartialPayments) {
       _showError(
-        'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}\nيرجى إكمال الدفع',
+        'المبلغ المتبقي: ${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}\nيرجى إكمال الدفع',
       );
       return;
     }
@@ -2880,10 +2885,12 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         .toString()
         .trim();
     final weightBreakdown = _buildWeightBreakdownLines(
-      invoice['items'] is List ? List<dynamic>.from(invoice['items']) : const [],
+      invoice['items'] is List
+          ? List<dynamic>.from(invoice['items'])
+          : const [],
     );
 
-    final currency = _settingsProvider.currencySymbol;
+    final currency = _settingsProvider.currencySymbolText;
     final notices = <String>[
       if ((approvalWarning ?? '').trim().isNotEmpty) approvalWarning!,
     ];
@@ -2894,7 +2901,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       subtitle: approvalRequired
           ? 'تم الحفظ لكن الفاتورة تحتاج اعتماد مدير قبل الترحيل.'
           : 'يمكنك الطباعة أو المشاركة أو الإغلاق من هنا.',
-      icon: approvalRequired ? Icons.pending_actions_rounded : Icons.check_circle,
+      icon: approvalRequired
+          ? Icons.pending_actions_rounded
+          : Icons.check_circle,
       accentColor: approvalRequired ? AppColors.warning : AppColors.success,
       highlightMessage: approvalRequired
           ? 'تم حفظ الفاتورة وتنتظر الاعتماد'
@@ -3006,7 +3015,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
 
     final entries = byKarat.entries.toList()
-      ..sort((a, b) => (double.tryParse(b.key) ?? 0).compareTo(double.tryParse(a.key) ?? 0));
+      ..sort(
+        (a, b) => (double.tryParse(b.key) ?? 0).compareTo(
+          double.tryParse(a.key) ?? 0,
+        ),
+      );
 
     return entries
         .map(
@@ -3457,9 +3470,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                               Icons.check_circle_outline,
                               size: 24,
                             ),
-                            label: Text(
+                            label: _settingsProvider.buildText(
                               _remainingAmount > 0.01
-                                  ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+                                  ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText} متبقية)'
                                   : 'حفظ الفاتورة',
                             ),
                             style: FilledButton.styleFrom(
@@ -3504,9 +3517,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       ? null
                       : _submitInvoice,
                   icon: const Icon(Icons.check_circle_outline, size: 24),
-                  label: Text(
+                  label: _settingsProvider.buildText(
                     _remainingAmount > 0.01
-                        ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+                        ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText} متبقية)'
                         : 'حفظ الفاتورة',
                   ),
                   style: FilledButton.styleFrom(
@@ -3542,35 +3555,65 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               preferredSize: const Size.fromHeight(26.0),
               child: Container(
                 color: Colors.black.withValues(alpha: 0.20),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 child: Directionality(
                   textDirection: TextDirection.ltr,
                   child: _goldPrice24k > 0
-                      ? Row(children: [
-                          const Icon(Icons.monetization_on_outlined, size: 12, color: Colors.amber),
-                          const SizedBox(width: 4),
-                          Text(
-                            'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
-                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
-                          ),
-                          const Padding(padding: EdgeInsets.symmetric(horizontal: 5), child: Text('|', style: TextStyle(color: Colors.white38, fontSize: 10))),
-                          ...([24, 22, 21, 18].map((k) {
-                            final gp = _goldPrice24k * k / 24;
-                            final isMain = k == _settingsProvider.mainKarat;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 10),
+                      ? Row(
+                          children: [
+                            const Icon(
+                              Icons.monetization_on_outlined,
+                              size: 12,
+                              color: Colors.amber,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 5),
                               child: Text(
-                                '${k}k: ${gp.toStringAsFixed(2)}',
+                                '|',
                                 style: TextStyle(
-                                  color: isMain ? Colors.amber : Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: isMain ? FontWeight.w800 : FontWeight.w500,
+                                  color: Colors.white38,
+                                  fontSize: 10,
                                 ),
                               ),
-                            );
-                          }).toList()),
-                          const Text('ر.س/جم', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                        ])
+                            ),
+                            ...([24, 22, 21, 18].map((k) {
+                              final gp = _goldPrice24k * k / 24;
+                              final isMain = k == _settingsProvider.mainKarat;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 10),
+                                child: Text(
+                                  '${k}k: ${gp.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    color: isMain ? Colors.amber : Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: isMain
+                                        ? FontWeight.w800
+                                        : FontWeight.w500,
+                                  ),
+                                ),
+                              );
+                            }).toList()),
+                            Text(
+                              '${context.read<SettingsProvider>().currencySymbolText}/جم',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        )
                       : const Text(
                           'جاري تحميل سعر الذهب...',
                           style: TextStyle(color: Colors.white54, fontSize: 11),
@@ -3581,18 +3624,38 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
             actions: [
               Consumer<AuthProvider>(
                 builder: (context, auth, _) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.person_outline, size: 14, color: Colors.white),
-                      const SizedBox(width: 4),
-                      Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                    ]),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.person_outline,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          auth.fullName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -3690,7 +3753,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           ),
           subtitle: Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(
+            child: _settingsProvider.buildText(
               hasSnapshot
                   ? 'متوسط: ${_formatCurrency(_avgTotalCostPerMainGram)}/جم${_invoiceCostTotal > 0 ? ' • تكلفة الفاتورة: ${_formatCurrency(_invoiceCostTotal)}' : ''}'
                   : 'اضغط لعرض تفاصيل التكلفة والمتوسط المتحرك',
@@ -3772,7 +3835,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            Text(
+                            _settingsProvider.buildText(
                               _formatCurrency(_invoiceCostTotal),
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
@@ -4736,8 +4799,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                         color: AppColors.karat24.withValues(alpha: 0.3),
                       ),
                     ),
-                    child: Text(
-                      '${item.totalWithTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    child: _settingsProvider.buildText(
+                      '${item.totalWithTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                       style: cellStyle,
                     ),
                   ),
@@ -4991,8 +5054,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     ),
                   ],
                 ),
-                Text(
-                  '${grandTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                _settingsProvider.buildText(
+                  '${grandTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                   style: theme.textTheme.headlineMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: isDark ? Colors.white : Colors.black87,
@@ -5091,8 +5154,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                       color: AppColors.success.withValues(alpha: 0.4),
                     ),
                   ),
-                  child: Text(
-                    'الإجمالي: ${totalAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                  child: _settingsProvider.buildText(
+                    'الإجمالي: ${totalAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
@@ -5299,8 +5362,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
-                                '${payment.amount.toStringAsFixed(2)} ر.س',
+                              child: _settingsProvider.buildText(
+                                '${payment.amount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.success,
@@ -5310,9 +5373,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
+                              child: _settingsProvider.buildText(
                                 payment.commissionAmount > 0
-                                    ? '${payment.commissionAmount.toStringAsFixed(2)} ر.س'
+                                    ? '${payment.commissionAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}'
                                     : '-',
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color: payment.commissionAmount > 0
@@ -5325,8 +5388,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
-                                '${payment.netAmount.toStringAsFixed(2)} ر.س',
+                              child: _settingsProvider.buildText(
+                                '${payment.netAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.info,
@@ -5622,7 +5685,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                     decoration: InputDecoration(
                                       labelText: 'سعر الشراء/جرام',
                                       suffixText:
-                                          _settingsProvider.currencySymbol,
+                                          _settingsProvider.currencySymbolText,
                                     ),
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
@@ -5647,7 +5710,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                     decoration: InputDecoration(
                                       labelText: 'المبلغ الإجمالي',
                                       suffixText:
-                                          _settingsProvider.currencySymbol,
+                                          _settingsProvider.currencySymbolText,
                                     ),
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
@@ -5677,8 +5740,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                                Text(
-                                  'القيمة: ${value.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                                _settingsProvider.buildText(
+                                  'القيمة: ${value.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                     color: AppColors.primaryGold,
@@ -5700,8 +5763,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        Text(
-                          '${_barterTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_barterTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.primaryGold,
@@ -5759,7 +5822,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: colorScheme.primary.withValues(alpha: 0.16),
+                                color: colorScheme.primary.withValues(
+                                  alpha: 0.16,
+                                ),
                                 blurRadius: 4,
                                 offset: const Offset(0, 2),
                               ),
@@ -6096,7 +6161,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                       horizontal: 12,
                                       vertical: 12,
                                     ),
-                                    suffixText: 'ر.س',
+                                    suffixText: context
+                                        .read<SettingsProvider>()
+                                        .currencySymbolText,
                                     suffixStyle: theme.textTheme.bodySmall
                                         ?.copyWith(fontWeight: FontWeight.w500),
                                   ),
@@ -6201,8 +6268,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           color: AppColors.warning,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          'المتبقي: ${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          'المتبقي: ${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontSize: 14,
                             color: AppColors.warning,
@@ -6282,8 +6349,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -6308,8 +6375,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_calculateTotalVAT().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_calculateTotalVAT().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: AppColors.info,
@@ -6338,8 +6405,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                           ),
                         ],
                       ),
-                      Text(
-                        '${_totalPayments.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      _settingsProvider.buildText(
+                        '${_totalPayments.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                         style: theme.textTheme.bodyLarge?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -6365,8 +6432,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalCommission.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalCommission.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.warning,
@@ -6392,8 +6459,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalCommissionVAT.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalCommissionVAT.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: AppColors.info,
@@ -6421,8 +6488,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalNet.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalNet.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.success,
@@ -6470,8 +6537,8 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                             color: colorScheme.error,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text(
-                            '${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                          child: _settingsProvider.buildText(
+                            '${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                             style: theme.textTheme.bodyLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                               color: colorScheme.onError,

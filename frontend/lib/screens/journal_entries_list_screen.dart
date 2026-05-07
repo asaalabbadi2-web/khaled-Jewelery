@@ -9,6 +9,7 @@ import '../api_service.dart';
 import '../app_route_observer.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/currency_utils.dart' as cu;
 import '../widgets/account_picker_sheet.dart';
 import 'journal_entry_form.dart';
 
@@ -43,7 +44,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   bool _isLoading = true;
   String? _error;
 
-  String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
 
@@ -67,6 +67,9 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   Timer? _searchDebounce;
   double _topChromeHeight = 0;
   double _topChromeCollapseOffset = 0;
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -108,21 +111,15 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
 
   void _syncSettings() {
     final settings = context.read<SettingsProvider>();
-    final nextSymbol = settings.currencySymbol;
     final nextDecimals = settings.decimalPlaces;
     final nextMainKarat = settings.mainKarat;
 
-    if (_currencySymbol == nextSymbol &&
-        _currencyDecimalPlaces == nextDecimals &&
-        _mainKarat == nextMainKarat) {
-      return;
+    if (nextDecimals != _currencyDecimalPlaces || nextMainKarat != _mainKarat) {
+      setState(() {
+        _currencyDecimalPlaces = nextDecimals;
+        _mainKarat = nextMainKarat;
+      });
     }
-
-    setState(() {
-      _currencySymbol = nextSymbol;
-      _currencyDecimalPlaces = nextDecimals;
-      _mainKarat = nextMainKarat;
-    });
   }
 
   void _onContentScroll() {
@@ -2899,35 +2896,42 @@ class _JournalEntryDetailSheet extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _totalCard(isArabic ? 'مدين نقد' : 'Cash Debit', _fmt(cashDebit, decimals: 2),
-              isArabic ? 'ر.س' : 'SAR', Colors.green[700]!),
+          _totalCard(context, isArabic ? 'مدين نقد' : 'Cash Debit', _fmt(cashDebit, decimals: 2),
+              context.read<SettingsProvider>().currencySymbolText, Colors.green[700]!),
           Container(width: 1, height: 40, color: Colors.grey[300]),
-          _totalCard(isArabic ? 'دائن نقد' : 'Cash Credit', _fmt(cashCredit, decimals: 2),
-              isArabic ? 'ر.س' : 'SAR', Colors.red[700]!),
+          _totalCard(context, isArabic ? 'دائن نقد' : 'Cash Credit', _fmt(cashCredit, decimals: 2),
+              context.read<SettingsProvider>().currencySymbolText, Colors.red[700]!),
           Container(width: 1, height: 40, color: Colors.grey[300]),
-          _totalCard(isArabic ? 'مدين ذهب' : 'Gold Debit', _fmt(goldDebit),
+          _totalCard(context, isArabic ? 'مدين ذهب' : 'Gold Debit', _fmt(goldDebit),
               isArabic ? 'جم' : 'g', _gold),
           Container(width: 1, height: 40, color: Colors.grey[300]),
-          _totalCard(isArabic ? 'دائن ذهب' : 'Gold Credit', _fmt(goldCredit),
+          _totalCard(context, isArabic ? 'دائن ذهب' : 'Gold Credit', _fmt(goldCredit),
               isArabic ? 'جم' : 'g', Colors.orange[700]!),
         ],
       ),
     );
   }
 
-  Widget _totalCard(String label, String value, String unit, Color color) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-      const SizedBox(height: 2),
-      RichText(text: TextSpan(
-        children: [
-          TextSpan(text: value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color)),
-          TextSpan(text: ' $unit', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-        ],
-      )),
-    ],
-  );
+  Widget _totalCard(BuildContext context, String label, String value, String unit, Color color) {
+    final isNewSar = context.read<SettingsProvider>().currencyIsNewSar;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        const SizedBox(height: 2),
+        RichText(text: TextSpan(
+          children: [
+            TextSpan(text: value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color)),
+            const TextSpan(text: ' '),
+            if (isNewSar)
+              cu.SarSymbolSpan(fontSize: 11, color: Colors.grey[600]!)
+            else
+              TextSpan(text: unit, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+          ],
+        )),
+      ],
+    );
+  }
 
   Widget _buildLinesHeader(BuildContext context) {
     final style = TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey[700]);

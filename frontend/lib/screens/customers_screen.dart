@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../api_service.dart';
+import '../providers/settings_provider.dart';
 import 'add_customer_screen.dart';
 import 'account_statement_screen.dart';
 
@@ -437,8 +439,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
                                           color: subtitleColor,
                                         ),
                                         const SizedBox(width: 4),
-                                        Text(
-                                          '${cashBalance.toStringAsFixed(2)} ${isAr ? 'ر.س' : 'SAR'}',
+                                        context.read<SettingsProvider>().buildText(
+                                          '${cashBalance.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
                                           style: TextStyle(
                                             fontSize: 12,
                                             fontWeight: FontWeight.w700,

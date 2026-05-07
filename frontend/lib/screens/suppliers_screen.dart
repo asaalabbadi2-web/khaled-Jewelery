@@ -48,6 +48,9 @@ class SuppliersScreenState extends State<SuppliersScreen> {
   static const double _epsCash = 0.01;
   static const double _epsGold = 0.0005;
 
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
+
   @override
   void initState() {
     super.initState();
@@ -435,7 +438,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                   title: widget.isArabic ? 'النقد' : 'Cash',
                   value: cash,
                   formattedAbsValue: cashFormatted,
-                  unit: widget.isArabic ? 'ر.س' : 'SAR',
+                  unit: _currencySymbol,
                   isCash: true,
                 ),
               ),
@@ -1345,8 +1348,8 @@ class SuppliersScreenState extends State<SuppliersScreen> {
               ),
               Expanded(
                 flex: 2,
-                child: Text(
-                  '${moneyFmt.format(cash)} ${widget.isArabic ? 'ر.س' : 'SAR'}',
+                child: context.read<SettingsProvider>().buildText(
+                  '${moneyFmt.format(cash)} $_currencySymbol',
                   textAlign: TextAlign.end,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w700,

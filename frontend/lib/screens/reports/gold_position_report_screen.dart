@@ -1,8 +1,10 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../api_service.dart';
+import '../../providers/settings_provider.dart';
 
 class GoldPositionReportScreen extends StatefulWidget {
   final ApiService api;
@@ -34,7 +36,8 @@ class _GoldPositionReportScreenState extends State<GoldPositionReportScreen> {
   final TextEditingController _officeController = TextEditingController();
 
   late final NumberFormat _weightFormat;
-  late final NumberFormat _currencyFormat;
+  late NumberFormat _currencyFormat;
+  String _currencySymbol = '';
 
   final List<_SafeTypeOption> _safeTypeOptions = const [
     _SafeTypeOption('cash', Icons.savings_outlined),
@@ -52,10 +55,24 @@ class _GoldPositionReportScreenState extends State<GoldPositionReportScreen> {
     _weightFormat = NumberFormat('#,##0.000');
     _currencyFormat = NumberFormat.currency(
       locale: widget.isArabic ? 'ar' : 'en',
-      symbol: 'ر.س',
+      symbol: _currencySymbol,
       decimalDigits: 2,
     );
     _loadReport();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final symbol = context.watch<SettingsProvider>().currencySymbolText;
+    if (symbol != _currencySymbol) {
+      _currencySymbol = symbol;
+      _currencyFormat = NumberFormat.currency(
+        locale: widget.isArabic ? 'ar' : 'en',
+        symbol: _currencySymbol,
+        decimalDigits: 2,
+      );
+    }
   }
 
   @override

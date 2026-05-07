@@ -78,13 +78,15 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     double credit21,
     double credit22,
     double credit24,
-  }) _karatAmounts(dynamic raw) {
+  })
+  _karatAmounts(dynamic raw) {
     final m = (raw is Map)
         ? raw.map((k, v) => MapEntry(k.toString(), v))
         : <String, dynamic>{};
 
     // Support both keys used across endpoints/versions.
-    double get(String primary, String fallback) => _num(m[primary] ?? m[fallback]);
+    double get(String primary, String fallback) =>
+        _num(m[primary] ?? m[fallback]);
 
     return (
       debit18: get('debit_18k', 'debit_gold_18k'),
@@ -107,7 +109,8 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     double goldCredit,
     String weightType,
     String lineDescription,
-  }) _normalizeLine(dynamic raw) {
+  })
+  _normalizeLine(dynamic raw) {
     final m = (raw is Map)
         ? raw.map((k, v) => MapEntry(k.toString(), v))
         : <String, dynamic>{};
@@ -134,12 +137,22 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
 
     // Fallback to per-karat totals if weight-equivalent is missing.
     final debitKaratSum =
-        _num(m['debit_18k']) + _num(m['debit_21k']) + _num(m['debit_22k']) + _num(m['debit_24k']);
+        _num(m['debit_18k']) +
+        _num(m['debit_21k']) +
+        _num(m['debit_22k']) +
+        _num(m['debit_24k']);
     final creditKaratSum =
-        _num(m['credit_18k']) + _num(m['credit_21k']) + _num(m['credit_22k']) + _num(m['credit_24k']);
+        _num(m['credit_18k']) +
+        _num(m['credit_21k']) +
+        _num(m['credit_22k']) +
+        _num(m['credit_24k']);
 
-    final goldDebit = (debitWeight.abs() > 0.0000001) ? debitWeight : debitKaratSum;
-    final goldCredit = (creditWeight.abs() > 0.0000001) ? creditWeight : creditKaratSum;
+    final goldDebit = (debitWeight.abs() > 0.0000001)
+        ? debitWeight
+        : debitKaratSum;
+    final goldCredit = (creditWeight.abs() > 0.0000001)
+        ? creditWeight
+        : creditKaratSum;
 
     final weightType = (m['weight_type']?.toString() ?? '').trim();
     final lineDescription = (m['description']?.toString() ?? '').trim();
@@ -156,12 +169,8 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     );
   }
 
-  ({
-    double cashDebit,
-    double cashCredit,
-    double goldDebit,
-    double goldCredit,
-  }) _computeTotals(List<dynamic> lines) {
+  ({double cashDebit, double cashCredit, double goldDebit, double goldCredit})
+  _computeTotals(List<dynamic> lines) {
     double cashDebit = 0;
     double cashCredit = 0;
     double goldDebit = 0;
@@ -192,7 +201,8 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     double credit21,
     double credit22,
     double credit24,
-  }) _computeKaratTotals(List<dynamic> lines) {
+  })
+  _computeKaratTotals(List<dynamic> lines) {
     double debit18 = 0;
     double debit21 = 0;
     double debit22 = 0;
@@ -226,16 +236,19 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     );
   }
 
-  bool _hasAnyKaratTotals(({
-    double debit18,
-    double debit21,
-    double debit22,
-    double debit24,
-    double credit18,
-    double credit21,
-    double credit22,
-    double credit24,
-  }) t) {
+  bool _hasAnyKaratTotals(
+    ({
+      double debit18,
+      double debit21,
+      double debit22,
+      double debit24,
+      double credit18,
+      double credit21,
+      double credit22,
+      double credit24,
+    })
+    t,
+  ) {
     const eps = 0.0000001;
     return (t.debit18.abs() > eps) ||
         (t.debit21.abs() > eps) ||
@@ -280,7 +293,8 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
   Widget _buildWebPreview() {
     final entry = widget.journalEntry;
     final lines = (entry['lines'] as List<dynamic>?) ?? [];
-    final entryNumber = (entry['entry_number']?.toString().trim().isNotEmpty ?? false)
+    final entryNumber =
+        (entry['entry_number']?.toString().trim().isNotEmpty ?? false)
         ? entry['entry_number'].toString()
         : '#${entry['id']}';
 
@@ -345,11 +359,15 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     final totalDebitGold = totals.goldDebit;
     final totalCreditGold = totals.goldCredit;
 
-    final hasAnyGold = (totalDebitGold.abs() > 0.0000001) || (totalCreditGold.abs() > 0.0000001);
+    final hasAnyGold =
+        (totalDebitGold.abs() > 0.0000001) ||
+        (totalCreditGold.abs() > 0.0000001);
     final karatTotals = _computeKaratTotals(lines);
-    final hasKaratBreakdown = _showKaratBreakdown && _hasAnyKaratTotals(karatTotals);
+    final hasKaratBreakdown =
+        _showKaratBreakdown && _hasAnyKaratTotals(karatTotals);
 
-    final entryNumber = (entry['entry_number']?.toString().trim().isNotEmpty ?? false)
+    final entryNumber =
+        (entry['entry_number']?.toString().trim().isNotEmpty ?? false)
         ? entry['entry_number'].toString()
         : '#${entry['id']}';
     final createdBy = entry['created_by']?.toString().trim();
@@ -437,12 +455,12 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             const SizedBox(height: 8),
             _buildInfoRow(
               widget.isArabic ? 'إجمالي المدين (نقداً)' : 'Total Debit (Cash)',
-              '${currencyFormat.format(totalDebitCash)} ${widget.isArabic ? 'ريال' : 'SAR'}',
+              '${currencyFormat.format(totalDebitCash)} ${widget.isArabic ? 'ريال' : context.read<SettingsProvider>().currencySymbolText}',
               isAmount: true,
             ),
             _buildInfoRow(
               widget.isArabic ? 'إجمالي الدائن (نقداً)' : 'Total Credit (Cash)',
-              '${currencyFormat.format(totalCreditCash)} ${widget.isArabic ? 'ريال' : 'SAR'}',
+              '${currencyFormat.format(totalCreditCash)} ${widget.isArabic ? 'ريال' : context.read<SettingsProvider>().currencySymbolText}',
               isAmount: true,
             ),
             if (totalDebitGold > 0 || totalCreditGold > 0) ...[
@@ -460,26 +478,35 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             if (hasKaratBreakdown && hasAnyGold) ...[
               const SizedBox(height: 6),
               Text(
-                widget.isArabic ? 'تفصيل الأعيرة (ذهب):' : 'Gold Karat Breakdown:',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                widget.isArabic
+                    ? 'تفصيل الأعيرة (ذهب):'
+                    : 'Gold Karat Breakdown:',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
               const SizedBox(height: 6),
-              if (karatTotals.debit18.abs() > 0.0000001 || karatTotals.credit18.abs() > 0.0000001)
+              if (karatTotals.debit18.abs() > 0.0000001 ||
+                  karatTotals.credit18.abs() > 0.0000001)
                 _buildInfoRow(
                   widget.isArabic ? 'عيار 18' : '18K',
                   '${widget.isArabic ? 'مدين' : 'Dr'} ${goldFormat.format(karatTotals.debit18)} | ${widget.isArabic ? 'دائن' : 'Cr'} ${goldFormat.format(karatTotals.credit18)}',
                 ),
-              if (karatTotals.debit21.abs() > 0.0000001 || karatTotals.credit21.abs() > 0.0000001)
+              if (karatTotals.debit21.abs() > 0.0000001 ||
+                  karatTotals.credit21.abs() > 0.0000001)
                 _buildInfoRow(
                   widget.isArabic ? 'عيار 21' : '21K',
                   '${widget.isArabic ? 'مدين' : 'Dr'} ${goldFormat.format(karatTotals.debit21)} | ${widget.isArabic ? 'دائن' : 'Cr'} ${goldFormat.format(karatTotals.credit21)}',
                 ),
-              if (karatTotals.debit22.abs() > 0.0000001 || karatTotals.credit22.abs() > 0.0000001)
+              if (karatTotals.debit22.abs() > 0.0000001 ||
+                  karatTotals.credit22.abs() > 0.0000001)
                 _buildInfoRow(
                   widget.isArabic ? 'عيار 22' : '22K',
                   '${widget.isArabic ? 'مدين' : 'Dr'} ${goldFormat.format(karatTotals.debit22)} | ${widget.isArabic ? 'دائن' : 'Cr'} ${goldFormat.format(karatTotals.credit22)}',
                 ),
-              if (karatTotals.debit24.abs() > 0.0000001 || karatTotals.credit24.abs() > 0.0000001)
+              if (karatTotals.debit24.abs() > 0.0000001 ||
+                  karatTotals.credit24.abs() > 0.0000001)
                 _buildInfoRow(
                   widget.isArabic ? 'عيار 24' : '24K',
                   '${widget.isArabic ? 'مدين' : 'Dr'} ${goldFormat.format(karatTotals.debit24)} | ${widget.isArabic ? 'دائن' : 'Cr'} ${goldFormat.format(karatTotals.credit24)}',
@@ -592,30 +619,40 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     // ── Fonts: local assets → fallback to Google Fonts ─────────────────
     pw.Font fontReg, fontBold;
     try {
-      fontReg  = pw.Font.ttf(await rootBundle.load('assets/fonts/Cairo-Regular.ttf'));
-      fontBold = pw.Font.ttf(await rootBundle.load('assets/fonts/Cairo-Bold.ttf'));
+      fontReg = pw.Font.ttf(
+        await rootBundle.load('assets/fonts/Cairo-Regular.ttf'),
+      );
+      fontBold = pw.Font.ttf(
+        await rootBundle.load('assets/fonts/Cairo-Bold.ttf'),
+      );
     } catch (_) {
-      fontReg  = await PdfGoogleFonts.cairoRegular();
+      fontReg = await PdfGoogleFonts.cairoRegular();
       fontBold = await PdfGoogleFonts.cairoBold();
     }
 
     // ── Company branding from SettingsProvider ───────────────────────────────
     SettingsProvider? sp;
-    try { sp = context.read<SettingsProvider>(); } catch (_) {}
-    final company    = (sp?.companyName.trim().isNotEmpty ?? false)
+    try {
+      sp = context.read<SettingsProvider>();
+    } catch (_) {}
+    final company = (sp?.companyName.trim().isNotEmpty ?? false)
         ? sp!.companyName.trim()
         : (widget.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry');
-    final companyCr    = sp?.companyCrNumber.trim() ?? '';
-    final companyVat   = sp?.companyTaxNumber.trim() ?? '';
+    final companyCr = sp?.companyCrNumber.trim() ?? '';
+    final companyVat = sp?.companyTaxNumber.trim() ?? '';
     final companyPhone = sp?.companyPhone.trim() ?? '';
-    final showLogo     = sp?.showCompanyLogo ?? true;
-    final logoBase64   = (sp?.settings['company_logo_base64'] ?? '').toString().trim();
+    final showLogo = sp?.showCompanyLogo ?? true;
+    final logoBase64 = (sp?.settings['company_logo_base64'] ?? '')
+        .toString()
+        .trim();
     pw.MemoryImage? logoImage;
     if (showLogo && logoBase64.isNotEmpty) {
       try {
         var payload = logoBase64;
         final idx = payload.indexOf(',');
-        if (payload.startsWith('data:') && idx >= 0) payload = payload.substring(idx + 1);
+        if (payload.startsWith('data:') && idx >= 0) {
+          payload = payload.substring(idx + 1);
+        }
         final raw = base64Decode(payload);
         if (raw.isNotEmpty) logoImage = pw.MemoryImage(raw);
       } catch (_) {}
@@ -634,11 +671,16 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     final totalDebitGold = totals.goldDebit;
     final totalCreditGold = totals.goldCredit;
 
-    final hasAnyGold = (totalDebitGold.abs() > 0.0000001) || (totalCreditGold.abs() > 0.0000001);
+    final hasAnyGold =
+        (totalDebitGold.abs() > 0.0000001) ||
+        (totalCreditGold.abs() > 0.0000001);
     final showGoldColumns = !_hideGoldColumnsWhenZero || hasAnyGold;
 
     final karatTotals = _computeKaratTotals(lines);
-    final hasKaratBreakdown = _showKaratBreakdown && showGoldColumns && _hasAnyKaratTotals(karatTotals);
+    final hasKaratBreakdown =
+        _showKaratBreakdown &&
+        showGoldColumns &&
+        _hasAnyKaratTotals(karatTotals);
 
     final cashDiff = (totalDebitCash - totalCreditCash).abs();
     final goldDiff = (totalDebitGold - totalCreditGold).abs();
@@ -646,7 +688,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
     final isGoldBalanced = goldDiff <= 0.0005;
 
     final entryNumber =
-      (entry['entry_number']?.toString().trim().isNotEmpty ?? false)
+        (entry['entry_number']?.toString().trim().isNotEmpty ?? false)
         ? entry['entry_number'].toString()
         : '#${entry['id']}';
     final createdBy = entry['created_by']?.toString().trim();
@@ -666,7 +708,10 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
           padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: const pw.BoxDecoration(
             border: pw.Border(
-              top: pw.BorderSide(color: PdfColor.fromInt(0xFFE8D899), width: 0.8),
+              top: pw.BorderSide(
+                color: PdfColor.fromInt(0xFFE8D899),
+                width: 0.8,
+              ),
             ),
           ),
           child: pw.Row(
@@ -674,17 +719,31 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             children: [
               pw.Text(
                 pdfVisualArabic(company),
-                style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColor.fromInt(0xFFA07820)),
+                style: pw.TextStyle(
+                  fontSize: 8,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColor.fromInt(0xFFA07820),
+                ),
                 textDirection: pw.TextDirection.ltr,
               ),
               pw.Text(
-                pdfVisualArabic('${widget.isArabic ? 'طُبع بتاريخ' : 'Printed'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}'),
+                pdfVisualArabic(
+                  '${widget.isArabic ? 'طُبع بتاريخ' : 'Printed'}: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
+                ),
                 textDirection: pw.TextDirection.ltr,
-                style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFF666666)),
+                style: pw.TextStyle(
+                  fontSize: 8,
+                  color: PdfColor.fromInt(0xFF666666),
+                ),
               ),
               pw.Text(
-                pdfVisualArabic('${widget.isArabic ? 'صفحة' : 'Page'} ${context.pageNumber} / ${context.pagesCount}'),
-                style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFFA07820)),
+                pdfVisualArabic(
+                  '${widget.isArabic ? 'صفحة' : 'Page'} ${context.pageNumber} / ${context.pagesCount}',
+                ),
+                style: pw.TextStyle(
+                  fontSize: 8,
+                  color: PdfColor.fromInt(0xFFA07820),
+                ),
                 textDirection: pw.TextDirection.ltr,
               ),
             ],
@@ -693,16 +752,20 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
         build: (context) {
           pw.Widget header() {
             // Shared text helper
-            pw.Widget t(String text, {double size = 10, bool bold = false, PdfColor? color}) =>
-              pw.Text(
-                pdfVisualArabic(text),
-                textDirection: pw.TextDirection.ltr,
-                style: pw.TextStyle(
-                  fontSize: size,
-                  fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
-                  color: color ?? PdfColor.fromInt(0xFF333333),
-                ),
-              );
+            pw.Widget t(
+              String text, {
+              double size = 10,
+              bool bold = false,
+              PdfColor? color,
+            }) => pw.Text(
+              pdfVisualArabic(text),
+              textDirection: pw.TextDirection.ltr,
+              style: pw.TextStyle(
+                fontSize: size,
+                fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+                color: color ?? PdfColor.fromInt(0xFF333333),
+              ),
+            );
 
             pw.Widget metaChip(String label, String value) => pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -725,18 +788,20 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                     pdfVisualArabic('$lbl:'),
                     textDirection: pw.TextDirection.ltr,
                     style: pw.TextStyle(
-                        font: fontReg,
-                        fontSize: 8,
-                        color: PdfColor.fromInt(0xFF444444)),
+                      font: fontReg,
+                      fontSize: 8,
+                      color: PdfColor.fromInt(0xFF444444),
+                    ),
                   ),
                   pw.SizedBox(width: 6),
                   pw.Text(
                     pdfVisualArabic(val),
                     textDirection: pw.TextDirection.ltr,
                     style: pw.TextStyle(
-                        font: fontReg,
-                        fontSize: 8,
-                        color: PdfColor.fromInt(0xFF666666)),
+                      font: fontReg,
+                      fontSize: 8,
+                      color: PdfColor.fromInt(0xFF666666),
+                    ),
                   ),
                 ],
               ),
@@ -757,52 +822,80 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                         mainAxisSize: pw.MainAxisSize.min,
                         crossAxisAlignment: pw.CrossAxisAlignment.center,
                         children: [
-                          if (logoImage != null) ...[  
-                            pw.Image(logoImage,
-                                width: 38, height: 38,
-                                fit: pw.BoxFit.contain),
+                          if (logoImage != null) ...[
+                            pw.Image(
+                              logoImage,
+                              width: 38,
+                              height: 38,
+                              fit: pw.BoxFit.contain,
+                            ),
                             pw.SizedBox(width: 6),
                           ],
-                            pw.Text(
-                              pdfVisualArabic(company),
-                              textDirection: pw.TextDirection.ltr,
-                              style: pw.TextStyle(font: fontBold, fontSize: 14,
-                                  color: PdfColor.fromInt(0xFF111111)),
+                          pw.Text(
+                            pdfVisualArabic(company),
+                            textDirection: pw.TextDirection.ltr,
+                            style: pw.TextStyle(
+                              font: fontBold,
+                              fontSize: 14,
+                              color: PdfColor.fromInt(0xFF111111),
                             ),
+                          ),
                         ],
                       ),
                     ),
                   ),
                   pw.SizedBox(height: 4),
-                  pw.Container(height: 0.6, color: PdfColor.fromInt(0xFFE8D899)),
+                  pw.Container(
+                    height: 0.6,
+                    color: PdfColor.fromInt(0xFFE8D899),
+                  ),
                   pw.SizedBox(height: 5),
                   if (companyCr.isNotEmpty)
-                    pw.Align(alignment: pw.Alignment.centerRight,
-                        child: infoLine('سجل تجاري', companyCr)),
+                    pw.Align(
+                      alignment: pw.Alignment.centerRight,
+                      child: infoLine('سجل تجاري', companyCr),
+                    ),
                   if (companyVat.isNotEmpty)
-                    pw.Align(alignment: pw.Alignment.centerRight,
-                        child: infoLine('الرقم الضريبي', companyVat)),
+                    pw.Align(
+                      alignment: pw.Alignment.centerRight,
+                      child: infoLine('الرقم الضريبي', companyVat),
+                    ),
                   if (companyPhone.isNotEmpty)
-                    pw.Align(alignment: pw.Alignment.centerRight,
-                        child: infoLine('الجوال', companyPhone)),
-                  if (companyCr.isNotEmpty || companyVat.isNotEmpty || companyPhone.isNotEmpty)
+                    pw.Align(
+                      alignment: pw.Alignment.centerRight,
+                      child: infoLine('الجوال', companyPhone),
+                    ),
+                  if (companyCr.isNotEmpty ||
+                      companyVat.isNotEmpty ||
+                      companyPhone.isNotEmpty)
                     pw.SizedBox(height: 4),
                   pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Container(
-                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: pw.BoxDecoration(
                         color: PdfColor.fromInt(0xFFC9A84C),
                         borderRadius: pw.BorderRadius.circular(10),
                       ),
-                      child: t(entryNumber, size: 9, bold: true, color: PdfColors.white),
+                      child: t(
+                        entryNumber,
+                        size: 9,
+                        bold: true,
+                        color: PdfColors.white,
+                      ),
                     ),
                   ),
                   pw.SizedBox(height: 5),
                   pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Container(
-                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: pw.BoxDecoration(
                         color: isPosted
                             ? PdfColor.fromInt(0xFF1A5C35)
@@ -813,7 +906,9 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                         widget.isArabic
                             ? (isPosted ? 'مُرحّل' : 'غير مُرحّل')
                             : (isPosted ? 'Posted' : 'Unposted'),
-                        size: 8, bold: true, color: PdfColors.white,
+                        size: 8,
+                        bold: true,
+                        color: PdfColors.white,
                       ),
                     ),
                   ),
@@ -825,22 +920,33 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             final centerZone = pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.center,
               children: [
-                t(widget.isArabic ? 'قيد يومي' : 'Journal Entry',
-                    size: 22, bold: true, color: PdfColor.fromInt(0xFF8B6914)),
+                t(
+                  widget.isArabic ? 'قيد يومي' : 'Journal Entry',
+                  size: 22,
+                  bold: true,
+                  color: PdfColor.fromInt(0xFF8B6914),
+                ),
                 pw.SizedBox(height: 3),
-                t(widget.isArabic ? 'Journal Entry' : 'قيد يومي',
-                    size: 8.5, color: PdfColor.fromInt(0xFF888888)),
+                t(
+                  widget.isArabic ? 'Journal Entry' : 'قيد يومي',
+                  size: 8.5,
+                  color: PdfColor.fromInt(0xFF888888),
+                ),
                 pw.SizedBox(height: 8),
                 pw.BarcodeWidget(
                   barcode: pw.Barcode.qrCode(),
-                  data: 'JE:$entryNumber|${entry['date'] ?? ''}|${isPosted ? 'posted' : 'draft'}',
+                  data:
+                      'JE:$entryNumber|${entry['date'] ?? ''}|${isPosted ? 'posted' : 'draft'}',
                   width: 50,
                   height: 50,
                   color: PdfColor.fromInt(0xFF8B6914),
                 ),
                 pw.SizedBox(height: 3),
-                t(widget.isArabic ? 'تحقق من القيد' : 'Verify Entry',
-                    size: 6.5, color: PdfColor.fromInt(0xFF888888)),
+                t(
+                  widget.isArabic ? 'تحقق من القيد' : 'Verify Entry',
+                  size: 6.5,
+                  color: PdfColor.fromInt(0xFF888888),
+                ),
               ],
             );
 
@@ -850,18 +956,31 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  metaChip(widget.isArabic ? 'التاريخ' : 'Date', _fmtDate(entry['date'])),
+                  metaChip(
+                    widget.isArabic ? 'التاريخ' : 'Date',
+                    _fmtDate(entry['date']),
+                  ),
                   if (referenceType != null && referenceType.isNotEmpty) ...[
                     pw.SizedBox(height: 5),
-                    metaChip(widget.isArabic ? 'نوع المرجع' : 'Ref. Type', referenceType),
+                    metaChip(
+                      widget.isArabic ? 'نوع المرجع' : 'Ref. Type',
+                      referenceType,
+                    ),
                   ],
-                  if (referenceNumber != null && referenceNumber.isNotEmpty) ...[
+                  if (referenceNumber != null &&
+                      referenceNumber.isNotEmpty) ...[
                     pw.SizedBox(height: 5),
-                    metaChip(widget.isArabic ? 'رقم المرجع' : 'Ref. No.', referenceNumber),
+                    metaChip(
+                      widget.isArabic ? 'رقم المرجع' : 'Ref. No.',
+                      referenceNumber,
+                    ),
                   ],
                   if (createdBy != null && createdBy.isNotEmpty) ...[
                     pw.SizedBox(height: 5),
-                    metaChip(widget.isArabic ? 'أنشئ بواسطة' : 'Created By', createdBy),
+                    metaChip(
+                      widget.isArabic ? 'أنشئ بواسطة' : 'Created By',
+                      createdBy,
+                    ),
                   ],
                 ],
               ),
@@ -891,7 +1010,10 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                   decoration: const pw.BoxDecoration(
                     color: PdfColor.fromInt(0xFFFBF7EE),
                     border: pw.Border(
-                      bottom: pw.BorderSide(color: PdfColor.fromInt(0xFFE8D899), width: 1.5),
+                      bottom: pw.BorderSide(
+                        color: PdfColor.fromInt(0xFFE8D899),
+                        width: 1.5,
+                      ),
                     ),
                   ),
                   child: pw.Stack(
@@ -915,8 +1037,14 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
           }
 
           final infoChildren = <pw.Widget>[
-            _buildPdfRow(widget.isArabic ? 'التاريخ' : 'Date', _fmtDate(entry['date'])),
-            _buildPdfRow(widget.isArabic ? 'نوع القيد' : 'Entry Type', (entry['entry_type'] ?? '').toString()),
+            _buildPdfRow(
+              widget.isArabic ? 'التاريخ' : 'Date',
+              _fmtDate(entry['date']),
+            ),
+            _buildPdfRow(
+              widget.isArabic ? 'نوع القيد' : 'Entry Type',
+              (entry['entry_type'] ?? '').toString(),
+            ),
             _buildPdfRow(
               widget.isArabic ? 'الترحيل' : 'Posting',
               widget.isArabic
@@ -924,23 +1052,38 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                   : (isPosted ? 'Posted' : 'Not posted'),
             ),
             if (createdBy != null && createdBy.isNotEmpty)
-              _buildPdfRow(widget.isArabic ? 'أنشئ بواسطة' : 'Created By', createdBy),
+              _buildPdfRow(
+                widget.isArabic ? 'أنشئ بواسطة' : 'Created By',
+                createdBy,
+              ),
             if (postedBy != null && postedBy.isNotEmpty)
-              _buildPdfRow(widget.isArabic ? 'رُحّل بواسطة' : 'Posted By', postedBy),
+              _buildPdfRow(
+                widget.isArabic ? 'رُحّل بواسطة' : 'Posted By',
+                postedBy,
+              ),
             if (referenceType != null && referenceType.isNotEmpty)
-              _buildPdfRow(widget.isArabic ? 'نوع المرجع' : 'Reference Type', referenceType),
+              _buildPdfRow(
+                widget.isArabic ? 'نوع المرجع' : 'Reference Type',
+                referenceType,
+              ),
             if (referenceNumber != null && referenceNumber.isNotEmpty)
-              _buildPdfRow(widget.isArabic ? 'رقم المرجع' : 'Reference No.', referenceNumber),
+              _buildPdfRow(
+                widget.isArabic ? 'رقم المرجع' : 'Reference No.',
+                referenceNumber,
+              ),
           ];
 
-          if (entry['description'] != null && entry['description'].toString().trim().isNotEmpty) {
+          if (entry['description'] != null &&
+              entry['description'].toString().trim().isNotEmpty) {
             infoChildren.add(
               pw.Container(
                 margin: const pw.EdgeInsets.only(top: 8),
                 padding: const pw.EdgeInsets.all(8),
                 decoration: pw.BoxDecoration(
                   color: PdfColor.fromHex('#F5F5F5'),
-                  borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+                  borderRadius: const pw.BorderRadius.all(
+                    pw.Radius.circular(6),
+                  ),
                 ),
                 child: pw.Text(
                   '${widget.isArabic ? 'البيان' : 'Description'}: ${entry['description'].toString()}',
@@ -951,7 +1094,9 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
           }
 
           pw.Widget balanceBanner() {
-            if (isCashBalanced && (totalDebitGold == 0 && totalCreditGold == 0 || isGoldBalanced)) {
+            if (isCashBalanced &&
+                (totalDebitGold == 0 && totalCreditGold == 0 ||
+                    isGoldBalanced)) {
               return pw.Container();
             }
             return pw.Container(
@@ -964,8 +1109,7 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
               child: pw.Text(
                 widget.isArabic
                     ? '⚠️ تنبيه: القيد غير متوازن (قد يكون بسبب التقريب)'
-                    : '⚠️ Warning: Entry is not balanced (may be rounding)'
-                ,
+                    : '⚠️ Warning: Entry is not balanced (may be rounding)',
                 style: pw.TextStyle(
                   fontSize: 10,
                   fontWeight: pw.FontWeight.bold,
@@ -980,7 +1124,10 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
 
             final normalized = lines.map(_normalizeLine).toList();
 
-            pw.Widget headerCell(String text, {pw.TextAlign align = pw.TextAlign.center}) {
+            pw.Widget headerCell(
+              String text, {
+              pw.TextAlign align = pw.TextAlign.center,
+            }) {
               return pw.Text(
                 text,
                 style: pw.TextStyle(
@@ -992,7 +1139,11 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
               );
             }
 
-            pw.Widget cell(String text, {pw.TextAlign align = pw.TextAlign.center, bool bold = false}) {
+            pw.Widget cell(
+              String text, {
+              pw.TextAlign align = pw.TextAlign.center,
+              bool bold = false,
+            }) {
               return pw.Text(
                 text,
                 style: pw.TextStyle(
@@ -1003,8 +1154,10 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
               );
             }
 
-            String moneyOrDash(double v) => v.abs() > 0.000001 ? currencyFormat.format(v) : '—';
-            String goldOrDash(double v) => v.abs() > 0.0000001 ? goldFormat.format(v) : '—';
+            String moneyOrDash(double v) =>
+                v.abs() > 0.000001 ? currencyFormat.format(v) : '—';
+            String goldOrDash(double v) =>
+                v.abs() > 0.0000001 ? goldFormat.format(v) : '—';
 
             final accountFlex = showGoldColumns ? 4 : 6;
             final cashFlex = 2;
@@ -1012,7 +1165,10 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
 
             return pw.Container(
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 0.8),
+                border: pw.Border.all(
+                  color: PdfColor.fromHex('#E8D899'),
+                  width: 0.8,
+                ),
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
               ),
               child: pw.Column(
@@ -1030,13 +1186,36 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                       children: [
                         pw.Expanded(
                           flex: accountFlex,
-                          child: headerCell(widget.isArabic ? 'الحساب (الكود - الاسم)' : 'Account (Code - Name)', align: pw.TextAlign.left),
+                          child: headerCell(
+                            widget.isArabic
+                                ? 'الحساب (الكود - الاسم)'
+                                : 'Account (Code - Name)',
+                            align: pw.TextAlign.left,
+                          ),
                         ),
-                        pw.Expanded(flex: cashFlex, child: headerCell(widget.isArabic ? 'مدين' : 'Debit')),
-                        pw.Expanded(flex: cashFlex, child: headerCell(widget.isArabic ? 'دائن' : 'Credit')),
+                        pw.Expanded(
+                          flex: cashFlex,
+                          child: headerCell(widget.isArabic ? 'مدين' : 'Debit'),
+                        ),
+                        pw.Expanded(
+                          flex: cashFlex,
+                          child: headerCell(
+                            widget.isArabic ? 'دائن' : 'Credit',
+                          ),
+                        ),
                         if (showGoldColumns) ...[
-                          pw.Expanded(flex: goldFlex, child: headerCell(widget.isArabic ? 'مدين ذهب' : 'Gold Dr')),
-                          pw.Expanded(flex: goldFlex, child: headerCell(widget.isArabic ? 'دائن ذهب' : 'Gold Cr')),
+                          pw.Expanded(
+                            flex: goldFlex,
+                            child: headerCell(
+                              widget.isArabic ? 'مدين ذهب' : 'Gold Dr',
+                            ),
+                          ),
+                          pw.Expanded(
+                            flex: goldFlex,
+                            child: headerCell(
+                              widget.isArabic ? 'دائن ذهب' : 'Gold Cr',
+                            ),
+                          ),
                         ],
                       ],
                     ),
@@ -1051,9 +1230,14 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                         : line.accountName;
 
                     return pw.Container(
-                      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
                       decoration: pw.BoxDecoration(
-                        color: isEven ? PdfColors.white : PdfColor.fromHex('#F9F9F9'),
+                        color: isEven
+                            ? PdfColors.white
+                            : PdfColor.fromHex('#F9F9F9'),
                       ),
                       child: pw.Column(
                         children: [
@@ -1061,17 +1245,33 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                             children: [
                               pw.Expanded(
                                 flex: accountFlex,
-                                child: cell(accountDisplay, align: pw.TextAlign.left),
+                                child: cell(
+                                  accountDisplay,
+                                  align: pw.TextAlign.left,
+                                ),
                               ),
-                              pw.Expanded(flex: cashFlex, child: cell(moneyOrDash(line.cashDebit))),
-                              pw.Expanded(flex: cashFlex, child: cell(moneyOrDash(line.cashCredit))),
+                              pw.Expanded(
+                                flex: cashFlex,
+                                child: cell(moneyOrDash(line.cashDebit)),
+                              ),
+                              pw.Expanded(
+                                flex: cashFlex,
+                                child: cell(moneyOrDash(line.cashCredit)),
+                              ),
                               if (showGoldColumns) ...[
-                                pw.Expanded(flex: goldFlex, child: cell(goldOrDash(line.goldDebit))),
-                                pw.Expanded(flex: goldFlex, child: cell(goldOrDash(line.goldCredit))),
+                                pw.Expanded(
+                                  flex: goldFlex,
+                                  child: cell(goldOrDash(line.goldDebit)),
+                                ),
+                                pw.Expanded(
+                                  flex: goldFlex,
+                                  child: cell(goldOrDash(line.goldCredit)),
+                                ),
                               ],
                             ],
                           ),
-                          if (line.lineDescription.isNotEmpty || line.weightType.isNotEmpty)
+                          if (line.lineDescription.isNotEmpty ||
+                              line.weightType.isNotEmpty)
                             pw.Padding(
                               padding: const pw.EdgeInsets.only(top: 4),
                               child: pw.Row(
@@ -1079,10 +1279,15 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                                   pw.Expanded(
                                     child: pw.Text(
                                       [
-                                        if (line.lineDescription.isNotEmpty) line.lineDescription,
-                                        if (line.weightType.isNotEmpty) '${widget.isArabic ? 'نوع الوزن' : 'Weight'}: ${line.weightType}',
+                                        if (line.lineDescription.isNotEmpty)
+                                          line.lineDescription,
+                                        if (line.weightType.isNotEmpty)
+                                          '${widget.isArabic ? 'نوع الوزن' : 'Weight'}: ${line.weightType}',
                                       ].join(' | '),
-                                      style: pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+                                      style: pw.TextStyle(
+                                        fontSize: 8,
+                                        color: PdfColors.grey700,
+                                      ),
                                       textAlign: pw.TextAlign.left,
                                     ),
                                   ),
@@ -1094,24 +1299,58 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
                     );
                   }),
                   pw.Container(
-                    padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    padding: const pw.EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
                     decoration: pw.BoxDecoration(
                       color: PdfColor.fromHex('#FBF7EE'),
                       border: pw.Border(
-                        top: pw.BorderSide(color: PdfColor.fromHex('#C9A84C'), width: 1.5),
+                        top: pw.BorderSide(
+                          color: PdfColor.fromHex('#C9A84C'),
+                          width: 1.5,
+                        ),
                       ),
                     ),
                     child: pw.Row(
                       children: [
                         pw.Expanded(
                           flex: accountFlex,
-                          child: cell(widget.isArabic ? 'الإجمالي' : 'Total', align: pw.TextAlign.left, bold: true),
+                          child: cell(
+                            widget.isArabic ? 'الإجمالي' : 'Total',
+                            align: pw.TextAlign.left,
+                            bold: true,
+                          ),
                         ),
-                        pw.Expanded(flex: cashFlex, child: cell(currencyFormat.format(totalDebitCash), bold: true)),
-                        pw.Expanded(flex: cashFlex, child: cell(currencyFormat.format(totalCreditCash), bold: true)),
+                        pw.Expanded(
+                          flex: cashFlex,
+                          child: cell(
+                            currencyFormat.format(totalDebitCash),
+                            bold: true,
+                          ),
+                        ),
+                        pw.Expanded(
+                          flex: cashFlex,
+                          child: cell(
+                            currencyFormat.format(totalCreditCash),
+                            bold: true,
+                          ),
+                        ),
                         if (showGoldColumns) ...[
-                          pw.Expanded(flex: goldFlex, child: cell(goldFormat.format(totalDebitGold), bold: true)),
-                          pw.Expanded(flex: goldFlex, child: cell(goldFormat.format(totalCreditGold), bold: true)),
+                          pw.Expanded(
+                            flex: goldFlex,
+                            child: cell(
+                              goldFormat.format(totalDebitGold),
+                              bold: true,
+                            ),
+                          ),
+                          pw.Expanded(
+                            flex: goldFlex,
+                            child: cell(
+                              goldFormat.format(totalCreditGold),
+                              bold: true,
+                            ),
+                          ),
                         ],
                       ],
                     ),
@@ -1141,21 +1380,52 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             }
 
             final items = <pw.Widget>[];
-            if (karatTotals.debit18.abs() > 0.0000001 || karatTotals.credit18.abs() > 0.0000001) {
-              items.add(row(widget.isArabic ? 'عيار 18' : '18K', karatTotals.debit18, karatTotals.credit18));
+            if (karatTotals.debit18.abs() > 0.0000001 ||
+                karatTotals.credit18.abs() > 0.0000001) {
+              items.add(
+                row(
+                  widget.isArabic ? 'عيار 18' : '18K',
+                  karatTotals.debit18,
+                  karatTotals.credit18,
+                ),
+              );
             }
-            if (karatTotals.debit21.abs() > 0.0000001 || karatTotals.credit21.abs() > 0.0000001) {
-              items.add(row(widget.isArabic ? 'عيار 21' : '21K', karatTotals.debit21, karatTotals.credit21));
+            if (karatTotals.debit21.abs() > 0.0000001 ||
+                karatTotals.credit21.abs() > 0.0000001) {
+              items.add(
+                row(
+                  widget.isArabic ? 'عيار 21' : '21K',
+                  karatTotals.debit21,
+                  karatTotals.credit21,
+                ),
+              );
             }
-            if (karatTotals.debit22.abs() > 0.0000001 || karatTotals.credit22.abs() > 0.0000001) {
-              items.add(row(widget.isArabic ? 'عيار 22' : '22K', karatTotals.debit22, karatTotals.credit22));
+            if (karatTotals.debit22.abs() > 0.0000001 ||
+                karatTotals.credit22.abs() > 0.0000001) {
+              items.add(
+                row(
+                  widget.isArabic ? 'عيار 22' : '22K',
+                  karatTotals.debit22,
+                  karatTotals.credit22,
+                ),
+              );
             }
-            if (karatTotals.debit24.abs() > 0.0000001 || karatTotals.credit24.abs() > 0.0000001) {
-              items.add(row(widget.isArabic ? 'عيار 24' : '24K', karatTotals.debit24, karatTotals.credit24));
+            if (karatTotals.debit24.abs() > 0.0000001 ||
+                karatTotals.credit24.abs() > 0.0000001) {
+              items.add(
+                row(
+                  widget.isArabic ? 'عيار 24' : '24K',
+                  karatTotals.debit24,
+                  karatTotals.credit24,
+                ),
+              );
             }
 
             if (items.isEmpty) return pw.Container();
-            return _buildPdfSection(widget.isArabic ? 'تفصيل الأعيرة (ذهب)' : 'Gold Karat Breakdown', items);
+            return _buildPdfSection(
+              widget.isArabic ? 'تفصيل الأعيرة (ذهب)' : 'Gold Karat Breakdown',
+              items,
+            );
           }
 
           return [
@@ -1163,7 +1433,10 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             pw.SizedBox(height: 14),
             balanceBanner(),
             if (!isCashBalanced || !isGoldBalanced) pw.SizedBox(height: 10),
-            _buildPdfSection(widget.isArabic ? 'معلومات القيد' : 'Entry Information', infoChildren),
+            _buildPdfSection(
+              widget.isArabic ? 'معلومات القيد' : 'Entry Information',
+              infoChildren,
+            ),
             if (hasKaratBreakdown) pw.SizedBox(height: 12),
             karatBreakdownSection(),
             pw.SizedBox(height: 14),
@@ -1172,13 +1445,18 @@ class _JournalEntryPrintScreenState extends State<JournalEntryPrintScreen> {
             pw.Container(
               padding: const pw.EdgeInsets.all(16),
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: PdfColor.fromHex('#E8D899'), width: 0.8),
+                border: pw.Border.all(
+                  color: PdfColor.fromHex('#E8D899'),
+                  width: 0.8,
+                ),
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
               ),
               child: pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildSignatureBox(widget.isArabic ? 'المحاسب' : 'Accountant'),
+                  _buildSignatureBox(
+                    widget.isArabic ? 'المحاسب' : 'Accountant',
+                  ),
                   _buildSignatureBox(widget.isArabic ? 'المراجع' : 'Reviewer'),
                   _buildSignatureBox(widget.isArabic ? 'المدير' : 'Manager'),
                 ],

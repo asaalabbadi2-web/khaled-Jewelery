@@ -37,6 +37,9 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
   final Map<int, bool> _actualEditable = {};
   final Map<int, Map<String, int>> _cashDenominations = {};
 
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
+
   @override
   void initState() {
     super.initState();
@@ -218,7 +221,7 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
                               SizedBox(
                                 width: 80,
                                 child: Text(
-                                  widget.isArabic ? '$d ر.س' : '$d SAR',
+                                  widget.isArabic ? '$d $_currencySymbol' : '$d _currencySymbol',
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -446,9 +449,9 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
   @override
   Widget build(BuildContext context) {
     final currencySymbol =
-        context.watch<SettingsProvider>().currencySymbol.isNotEmpty
-        ? context.watch<SettingsProvider>().currencySymbol
-        : 'ر.س';
+        context.watch<SettingsProvider>().currencySymbolText.isNotEmpty
+        ? context.watch<SettingsProvider>().currencySymbolText
+        : _currencySymbol;
 
     double totalExpected = 0.0;
     double totalActual = 0.0;
@@ -531,7 +534,7 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
                           ),
                         ),
                         DataCell(
-                          Text(
+                          context.watch<SettingsProvider>().buildText(
                             '${expected.toStringAsFixed(2)} $currencySymbol',
                           ),
                         ),
@@ -638,7 +641,7 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
                         Text(
                           widget.isArabic ? 'إجمالي المتوقع' : 'Total expected',
                         ),
-                        Text(
+                        context.watch<SettingsProvider>().buildText(
                           '${totalExpected.toStringAsFixed(2)} $currencySymbol',
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
@@ -651,7 +654,7 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
                         Text(
                           widget.isArabic ? 'إجمالي الفعلي' : 'Total actual',
                         ),
-                        Text(
+                        context.watch<SettingsProvider>().buildText(
                           '${totalActual.toStringAsFixed(2)} $currencySymbol',
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
@@ -668,7 +671,7 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
                             color: diffColor,
                           ),
                         ),
-                        Text(
+                        context.watch<SettingsProvider>().buildText(
                           '${totalDiff.toStringAsFixed(2)} $currencySymbol',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,

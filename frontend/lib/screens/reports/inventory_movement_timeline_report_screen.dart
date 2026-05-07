@@ -50,7 +50,7 @@ class _InventoryMovementTimelineReportScreenState
 
   late NumberFormat _currencyFormat;
   late NumberFormat _weightFormat;
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   int _mainKarat = 21;
 
@@ -71,11 +71,11 @@ class _InventoryMovementTimelineReportScreenState
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
-    if (settings.currencySymbol != _currencySymbol ||
+    if (settings.currencySymbolText != _currencySymbol ||
         settings.decimalPlaces != _currencyDecimals ||
         settings.mainKarat != _mainKarat) {
       setState(() {
-        _currencySymbol = settings.currencySymbol;
+        _currencySymbol = settings.currencySymbolText;
         _currencyDecimals = settings.decimalPlaces;
         _mainKarat = settings.mainKarat;
         _currencyFormat = NumberFormat.currency(

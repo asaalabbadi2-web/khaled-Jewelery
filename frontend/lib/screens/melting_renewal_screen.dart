@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../utils.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 // ═══════════════════════════════════════════════════════════════════
 //  الشاشة الرئيسية
@@ -48,7 +50,7 @@ class _MeltingRenewalScreenState extends State<MeltingRenewalScreen>
           indicatorColor: cs.primary,
           labelColor: cs.primary,
           tabs: const [
-            Tab(icon: Icon(Icons.recycling),     text: 'تكسير المخزون'),
+            Tab(icon: Icon(Icons.recycling), text: 'تكسير المخزون'),
             Tab(icon: Icon(Icons.auto_fix_high), text: 'تجديد القطع'),
           ],
         ),
@@ -69,12 +71,12 @@ class _MeltingRenewalScreenState extends State<MeltingRenewalScreen>
 // ═══════════════════════════════════════════════════════════════════
 class _WeightLine {
   int karat;
-  final TextEditingController goldCtrl   = TextEditingController();
+  final TextEditingController goldCtrl = TextEditingController();
   final TextEditingController stonesCtrl = TextEditingController();
 
   _WeightLine({this.karat = 21});
 
-  double get goldWeight   => double.tryParse(goldCtrl.text.trim())   ?? 0.0;
+  double get goldWeight => double.tryParse(goldCtrl.text.trim()) ?? 0.0;
   double get stonesWeight => double.tryParse(stonesCtrl.text.trim()) ?? 0.0;
 
   void dispose() {
@@ -100,8 +102,8 @@ class _OperationFormState extends State<_OperationForm> {
   final _formKey = GlobalKey<FormState>();
 
   // ── بيانات محملة ─────────────────────────────────────────────
-  List<SafeBoxModel> _safes      = [];
-  Map<int, double>   _stonesMap  = {};   // safe_box_id → stones grams
+  List<SafeBoxModel> _safes = [];
+  Map<int, double> _stonesMap = {}; // safe_box_id → stones grams
   List<Map<String, dynamic>> _wageAccounts = [];
   bool _loading = true;
 
@@ -123,7 +125,7 @@ class _OperationFormState extends State<_OperationForm> {
 
   bool get _isMelting => widget.opType == 'melting';
   String get _prefFrom => 'mr2_from_${widget.opType}';
-  String get _prefTo   => 'mr2_to_${widget.opType}';
+  String get _prefTo => 'mr2_to_${widget.opType}';
 
   static const _availableKarats = [24, 22, 21, 18];
 
@@ -136,7 +138,9 @@ class _OperationFormState extends State<_OperationForm> {
 
   @override
   void dispose() {
-    for (final l in _lines) { l.dispose(); }
+    for (final l in _lines) {
+      l.dispose();
+    }
     _wageCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
@@ -153,10 +157,10 @@ class _OperationFormState extends State<_OperationForm> {
         SharedPreferences.getInstance(),
       ]);
 
-      final safes    = results[0] as List<SafeBoxModel>;
-      final stones   = results[1] as Map<int, double>;
+      final safes = results[0] as List<SafeBoxModel>;
+      final stones = results[1] as Map<int, double>;
       final accounts = results[2] as List;
-      final prefs    = results[3] as SharedPreferences;
+      final prefs = results[3] as SharedPreferences;
 
       final wageAccs = accounts
           .whereType<Map<String, dynamic>>()
@@ -164,16 +168,18 @@ class _OperationFormState extends State<_OperationForm> {
           .toList();
 
       setState(() {
-        _safes       = safes;
-        _stonesMap   = stones;
+        _safes = safes;
+        _stonesMap = stones;
         _wageAccounts = wageAccs;
 
         // استعادة آخر اختيار
-        final ids       = safes.map((s) => s.id).toSet();
+        final ids = safes.map((s) => s.id).toSet();
         final savedFrom = prefs.getInt(_prefFrom);
-        final savedTo   = prefs.getInt(_prefTo);
-        if (savedFrom != null && ids.contains(savedFrom)) _fromSafeId = savedFrom;
-        if (savedTo   != null && ids.contains(savedTo))   _toSafeId   = savedTo;
+        final savedTo = prefs.getInt(_prefTo);
+        if (savedFrom != null && ids.contains(savedFrom)) {
+          _fromSafeId = savedFrom;
+        }
+        if (savedTo != null && ids.contains(savedTo)) _toSafeId = savedTo;
 
         _applyDefaults();
         _loading = false;
@@ -195,11 +201,17 @@ class _OperationFormState extends State<_OperationForm> {
           ? _safes.firstWhere(
               (s) => s.isDefault || s.name.contains('كسر'),
               orElse: () => _safes.firstWhere(
-                  (s) => s.id != _fromSafeId, orElse: () => _safes.first))
+                (s) => s.id != _fromSafeId,
+                orElse: () => _safes.first,
+              ),
+            )
           : _safes.firstWhere(
               (s) => s.isDefault,
               orElse: () => _safes.firstWhere(
-                  (s) => s.id != _fromSafeId, orElse: () => _safes.first));
+                (s) => s.id != _fromSafeId,
+                orElse: () => _safes.first,
+              ),
+            );
       if (target.id != _fromSafeId) _toSafeId = target.id;
     }
 
@@ -207,31 +219,42 @@ class _OperationFormState extends State<_OperationForm> {
     if (_lines.isNotEmpty) {
       final s = _safeById(_fromSafeId);
       if (s != null) {
-        final best = {
-          24: s.goldBalance24k,
-          22: s.goldBalance22k,
-          21: s.goldBalance21k,
-          18: s.goldBalance18k,
-        }.entries.where((e) => e.value > 0).fold<MapEntry<int, double>?>(
-              null, (p, e) => p == null || e.value > p.value ? e : p);
+        final best =
+            {
+                  24: s.goldBalance24k,
+                  22: s.goldBalance22k,
+                  21: s.goldBalance21k,
+                  18: s.goldBalance18k,
+                }.entries
+                .where((e) => e.value > 0)
+                .fold<MapEntry<int, double>?>(
+                  null,
+                  (p, e) => p == null || e.value > p.value ? e : p,
+                );
         if (best != null) _lines[0].karat = best.key;
       }
     }
   }
 
   // ── مساعدات الرصيد ───────────────────────────────────────────
-  SafeBoxModel? _safeById(int? id) =>
-      id == null ? null : _safes.firstWhere((s) => s.id == id, orElse: () => _safes.first);
+  SafeBoxModel? _safeById(int? id) => id == null
+      ? null
+      : _safes.firstWhere((s) => s.id == id, orElse: () => _safes.first);
 
   double _goldAvailable(int? safeId, int karat) {
     final s = _safeById(safeId);
     if (s == null) return 0.0;
     switch (karat) {
-      case 18: return s.goldBalance18k;
-      case 21: return s.goldBalance21k;
-      case 22: return s.goldBalance22k;
-      case 24: return s.goldBalance24k;
-      default: return 0.0;
+      case 18:
+        return s.goldBalance18k;
+      case 21:
+        return s.goldBalance21k;
+      case 22:
+        return s.goldBalance22k;
+      case 24:
+        return s.goldBalance24k;
+      default:
+        return 0.0;
     }
   }
 
@@ -255,18 +278,21 @@ class _OperationFormState extends State<_OperationForm> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_fromSafeId == null || _toSafeId == null) {
-      _snack('اختر خزينة المصدر والوجهة', error: true); return;
+      _snack('اختر خزينة المصدر والوجهة', error: true);
+      return;
     }
     if (_fromSafeId == _toSafeId) {
-      _snack('المصدر والوجهة يجب أن يختلفا', error: true); return;
+      _snack('المصدر والوجهة يجب أن يختلفا', error: true);
+      return;
     }
 
     // التحقق من الأسطر
     for (int i = 0; i < _lines.length; i++) {
-      final line  = _lines[i];
+      final line = _lines[i];
       final avail = _goldAvailable(_fromSafeId, line.karat);
       if (line.goldWeight <= 0) {
-        _snack('السطر ${i + 1}: أدخل وزن الذهب', error: true); return;
+        _snack('السطر ${i + 1}: أدخل وزن الذهب', error: true);
+        return;
       }
       if (line.goldWeight > avail + 1e-6) {
         _snack(
@@ -284,7 +310,9 @@ class _OperationFormState extends State<_OperationForm> {
 
     setState(() => _submitting = true);
     final wageAmt = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
-    final notes   = _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim();
+    final notes = _notesCtrl.text.trim().isEmpty
+        ? null
+        : _notesCtrl.text.trim();
     final vouchers = <String>[];
 
     try {
@@ -292,25 +320,30 @@ class _OperationFormState extends State<_OperationForm> {
         final res = await widget.api.createMeltingRenewal(
           operationType: widget.opType,
           fromSafeBoxId: _fromSafeId!,
-          toSafeBoxId:   _toSafeId!,
-          fromKarat:     line.karat,
-          toKarat:       line.karat,
-          goldWeight:    line.goldWeight,
-          stonesWeight:  line.stonesWeight > 0 ? line.stonesWeight : null,
-          damageWageAmount:    (_isMelting && wageAmt > 0) ? wageAmt : null,
-          damageWageAccountId: (_isMelting && wageAmt > 0) ? _wageAccountId : null,
+          toSafeBoxId: _toSafeId!,
+          fromKarat: line.karat,
+          toKarat: line.karat,
+          goldWeight: line.goldWeight,
+          stonesWeight: line.stonesWeight > 0 ? line.stonesWeight : null,
+          damageWageAmount: (_isMelting && wageAmt > 0) ? wageAmt : null,
+          damageWageAccountId: (_isMelting && wageAmt > 0)
+              ? _wageAccountId
+              : null,
           notes: notes,
         );
-        final num = (res['voucher'] as Map?)?['voucher_number']?.toString() ?? '';
+        final num =
+            (res['voucher'] as Map?)?['voucher_number']?.toString() ?? '';
         if (num.isNotEmpty) vouchers.add(num);
       }
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_prefFrom, _fromSafeId!);
-      await prefs.setInt(_prefTo,   _toSafeId!);
+      await prefs.setInt(_prefTo, _toSafeId!);
 
       if (!mounted) return;
-      _snack('تم بنجاح${vouchers.isNotEmpty ? ": ${vouchers.join(', ')}" : ""}');
+      _snack(
+        'تم بنجاح${vouchers.isNotEmpty ? ": ${vouchers.join(', ')}" : ""}',
+      );
       _reset();
       _load();
     } catch (e) {
@@ -322,9 +355,9 @@ class _OperationFormState extends State<_OperationForm> {
 
   Future<bool?> _showConfirm() {
     final fromSafe = _safeById(_fromSafeId);
-    final toSafe   = _safeById(_toSafeId);
-    final opLabel  = _isMelting ? 'التكسير' : 'التجديد';
-    final wageAmt  = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
+    final toSafe = _safeById(_toSafeId);
+    final opLabel = _isMelting ? 'التكسير' : 'التجديد';
+    final wageAmt = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
 
     return showDialog<bool>(
       context: context,
@@ -336,19 +369,30 @@ class _OperationFormState extends State<_OperationForm> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _cRow('من', fromSafe?.name ?? '—'),
-              _cRow('إلى', toSafe?.name  ?? '—'),
+              _cRow('إلى', toSafe?.name ?? '—'),
               const Divider(),
-              ..._lines.map((l) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _cRow('عيار ${l.karat}k — ذهب', '${l.goldWeight.toStringAsFixed(3)} جم'),
-                  if (l.stonesWeight > 0)
-                    _cRow('فصوص ${l.karat}k', '${l.stonesWeight.toStringAsFixed(3)} جم'),
-                ],
-              )),
+              ..._lines.map(
+                (l) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _cRow(
+                      'عيار ${l.karat}k — ذهب',
+                      '${l.goldWeight.toStringAsFixed(3)} جم',
+                    ),
+                    if (l.stonesWeight > 0)
+                      _cRow(
+                        'فصوص ${l.karat}k',
+                        '${l.stonesWeight.toStringAsFixed(3)} جم',
+                      ),
+                  ],
+                ),
+              ),
               if (wageAmt > 0 && _isMelting) ...[
                 const Divider(),
-                _cRow('مصنعية تالفة', '${wageAmt.toStringAsFixed(2)} ر.س'),
+                _cRow(
+                  'مصنعية تالفة',
+                  '${wageAmt.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
+                ),
               ],
             ],
           ),
@@ -376,18 +420,23 @@ class _OperationFormState extends State<_OperationForm> {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13)),
-        Text(value,  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        Text(
+          value,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        ),
       ],
     ),
   );
 
   void _reset() {
     setState(() {
-      for (final l in _lines) { l.dispose(); }
+      for (final l in _lines) {
+        l.dispose();
+      }
       _lines.clear();
       _lines.add(_WeightLine());
-      _fromSafeId    = null;
-      _toSafeId      = null;
+      _fromSafeId = null;
+      _toSafeId = null;
       _wageAccountId = null;
       _wageCtrl.clear();
       _notesCtrl.clear();
@@ -397,10 +446,12 @@ class _OperationFormState extends State<_OperationForm> {
 
   void _snack(String msg, {bool error = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: error ? Colors.red[700] : Colors.green[700],
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: error ? Colors.red[700] : Colors.green[700],
+      ),
+    );
   }
 
   // ── بناء الواجهة ──────────────────────────────────────────────
@@ -408,9 +459,9 @@ class _OperationFormState extends State<_OperationForm> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
 
-    final cs       = Theme.of(context).colorScheme;
-    final opColor  = _isMelting ? Colors.orange[800]! : cs.primary;
-    final wageAmt  = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
+    final cs = Theme.of(context).colorScheme;
+    final opColor = _isMelting ? Colors.orange[800]! : cs.primary;
+    final wageAmt = double.tryParse(_wageCtrl.text.trim()) ?? 0.0;
 
     return Form(
       key: _formKey,
@@ -425,32 +476,39 @@ class _OperationFormState extends State<_OperationForm> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: _VaultCard(
-                title: 'خزينة المصدر',
-                icon: Icons.output,
-                color: opColor,
-                safes: _safes,
-                value: _fromSafeId,
-                excludeId: _toSafeId,
-                stonesBalance: _stonesFor(_fromSafeId),
-                onChanged: (v) => setState(() { _fromSafeId = v; _applyDefaults(); }),
-                highlightKarats: _lines.map((l) => l.karat).toSet(),
-                goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
-              )),
+              Expanded(
+                child: _VaultCard(
+                  title: 'خزينة المصدر',
+                  icon: Icons.output,
+                  color: opColor,
+                  safes: _safes,
+                  value: _fromSafeId,
+                  excludeId: _toSafeId,
+                  stonesBalance: _stonesFor(_fromSafeId),
+                  onChanged: (v) => setState(() {
+                    _fromSafeId = v;
+                    _applyDefaults();
+                  }),
+                  highlightKarats: _lines.map((l) => l.karat).toSet(),
+                  goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
+                ),
+              ),
               const SizedBox(width: 12),
-              Expanded(child: _VaultCard(
-                title: 'خزينة الوجهة',
-                icon: Icons.input,
-                color: opColor,
-                safes: _safes,
-                value: _toSafeId,
-                excludeId: _fromSafeId,
-                stonesBalance: _stonesFor(_toSafeId),
-                onChanged: (v) => setState(() => _toSafeId = v),
-                highlightKarats: const {},
-                goldAvailable: (k) => _goldAvailable(_toSafeId, k),
-                isDestination: true,
-              )),
+              Expanded(
+                child: _VaultCard(
+                  title: 'خزينة الوجهة',
+                  icon: Icons.input,
+                  color: opColor,
+                  safes: _safes,
+                  value: _toSafeId,
+                  excludeId: _fromSafeId,
+                  stonesBalance: _stonesFor(_toSafeId),
+                  onChanged: (v) => setState(() => _toSafeId = v),
+                  highlightKarats: const {},
+                  goldAvailable: (k) => _goldAvailable(_toSafeId, k),
+                  isDestination: true,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -464,13 +522,32 @@ class _OperationFormState extends State<_OperationForm> {
               children: [
                 // رأس الجدول
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 4,
+                  ),
                   child: Row(
                     children: [
-                      const SizedBox(width: 110, child: Text('العيار', style: TextStyle(fontSize: 11, color: Colors.grey))),
-                      const Expanded(child: Text('وزن الذهب (جم)', style: TextStyle(fontSize: 11, color: Colors.grey))),
+                      const SizedBox(
+                        width: 110,
+                        child: Text(
+                          'العيار',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ),
+                      const Expanded(
+                        child: Text(
+                          'وزن الذهب (جم)',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ),
                       const SizedBox(width: 8),
-                      const Expanded(child: Text('فصوص (جم)', style: TextStyle(fontSize: 11, color: Colors.grey))),
+                      const Expanded(
+                        child: Text(
+                          'فصوص (جم)',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ),
                       const SizedBox(width: 32),
                     ],
                   ),
@@ -478,16 +555,19 @@ class _OperationFormState extends State<_OperationForm> {
                 const Divider(height: 4),
 
                 // أسطر البيانات
-                ...List.generate(_lines.length, (i) => _WeightLineRow(
-                  key: ValueKey(i),
-                  line: _lines[i],
-                  availableKarats: _availableKarats,
-                  goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
-                  stonesAvailable: _stonesFor(_fromSafeId),
-                  canRemove: _lines.length > 1,
-                  onRemove: () => _removeLine(i),
-                  onChanged: () => setState(() {}),
-                )),
+                ...List.generate(
+                  _lines.length,
+                  (i) => _WeightLineRow(
+                    key: ValueKey(i),
+                    line: _lines[i],
+                    availableKarats: _availableKarats,
+                    goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
+                    stonesAvailable: _stonesFor(_fromSafeId),
+                    canRemove: _lines.length > 1,
+                    onRemove: () => _removeLine(i),
+                    onChanged: () => setState(() {}),
+                  ),
+                ),
 
                 const Divider(height: 12),
 
@@ -502,8 +582,11 @@ class _OperationFormState extends State<_OperationForm> {
                     ),
                     const Spacer(),
                     _TotalBadge(
-                      goldTotal:   _lines.fold(0.0, (s, l) => s + l.goldWeight),
-                      stonesTotal: _lines.fold(0.0, (s, l) => s + l.stonesWeight),
+                      goldTotal: _lines.fold(0.0, (s, l) => s + l.goldWeight),
+                      stonesTotal: _lines.fold(
+                        0.0,
+                        (s, l) => s + l.stonesWeight,
+                      ),
                     ),
                   ],
                 ),
@@ -522,13 +605,18 @@ class _OperationFormState extends State<_OperationForm> {
                 children: [
                   TextFormField(
                     controller: _wageCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     inputFormatters: [NormalizeNumberFormatter()],
-                    decoration: const InputDecoration(
-                      labelText: 'المبلغ (ر.س)',
-                      prefixIcon: Icon(Icons.payments_outlined),
-                      suffixText: 'ر.س',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText:
+                          'المبلغ (${context.read<SettingsProvider>().currencySymbolText})',
+                      prefixIcon: const Icon(Icons.payments_outlined),
+                      suffixText: context
+                          .read<SettingsProvider>()
+                          .currencySymbolText,
+                      border: const OutlineInputBorder(),
                       helperText: 'قيمة أجرة الصنعة المهدرة بالتكسير',
                     ),
                     onChanged: (_) => setState(() {}),
@@ -543,13 +631,15 @@ class _OperationFormState extends State<_OperationForm> {
                         border: OutlineInputBorder(),
                       ),
                       items: _wageAccounts
-                          .map((a) => DropdownMenuItem<int>(
-                                value: a['id'] as int?,
-                                child: Text(
-                                  '${a['account_number'] ?? ''} · ${a['name'] ?? ''}',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ))
+                          .map(
+                            (a) => DropdownMenuItem<int>(
+                              value: a['id'] as int?,
+                              child: Text(
+                                '${a['account_number'] ?? ''} · ${a['name'] ?? ''}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
                           .toList(),
                       onChanged: (v) => setState(() => _wageAccountId = v),
                     ),
@@ -575,28 +665,39 @@ class _OperationFormState extends State<_OperationForm> {
           const SizedBox(height: 20),
 
           // ── أزرار ────────────────────────────────────────────
-          Row(children: [
-            OutlinedButton.icon(
-              onPressed: _reset,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('إعادة'),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _submitting ? null : _submit,
-                style: _isMelting
-                    ? FilledButton.styleFrom(backgroundColor: Colors.orange[800])
-                    : null,
-                icon: _submitting
-                    ? const SizedBox(
-                        width: 18, height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : Icon(_isMelting ? Icons.recycling : Icons.auto_fix_high),
-                label: Text(_isMelting ? 'تنفيذ التكسير' : 'تنفيذ التجديد'),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _reset,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('إعادة'),
               ),
-            ),
-          ]),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _submitting ? null : _submit,
+                  style: _isMelting
+                      ? FilledButton.styleFrom(
+                          backgroundColor: Colors.orange[800],
+                        )
+                      : null,
+                  icon: _submitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Icon(
+                          _isMelting ? Icons.recycling : Icons.auto_fix_high,
+                        ),
+                  label: Text(_isMelting ? 'تنفيذ التكسير' : 'تنفيذ التجديد'),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 32),
         ],
       ),
@@ -634,10 +735,10 @@ class _WeightLineRow extends StatefulWidget {
 class _WeightLineRowState extends State<_WeightLineRow> {
   @override
   Widget build(BuildContext context) {
-    final cs      = Theme.of(context).colorScheme;
-    final avail   = widget.goldAvailable(widget.line.karat);
+    final cs = Theme.of(context).colorScheme;
+    final avail = widget.goldAvailable(widget.line.karat);
     final entered = widget.line.goldWeight;
-    final over    = entered > 0 && entered > avail + 1e-6;
+    final over = entered > 0 && entered > avail + 1e-6;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -654,11 +755,16 @@ class _WeightLineRowState extends State<_WeightLineRow> {
                   value: widget.line.karat,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 12,
+                    ),
                     isDense: true,
                   ),
                   items: widget.availableKarats
-                      .map((k) => DropdownMenuItem(value: k, child: Text('${k}k')))
+                      .map(
+                        (k) => DropdownMenuItem(value: k, child: Text('${k}k')),
+                      )
                       .toList(),
                   onChanged: (v) {
                     if (v == null) return;
@@ -673,14 +779,22 @@ class _WeightLineRowState extends State<_WeightLineRow> {
               Expanded(
                 child: TextFormField(
                   controller: widget.line.goldCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   inputFormatters: [NormalizeNumberFormatter()],
-                  onChanged: (_) { setState(() {}); widget.onChanged(); },
+                  onChanged: (_) {
+                    setState(() {});
+                    widget.onChanged();
+                  },
                   decoration: InputDecoration(
                     hintText: '0.000',
                     suffixText: 'جم',
                     border: const OutlineInputBorder(),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 12,
+                    ),
                     isDense: true,
                     errorText: over ? '>${avail.toStringAsFixed(2)}' : null,
                     errorStyle: const TextStyle(fontSize: 10),
@@ -698,15 +812,23 @@ class _WeightLineRowState extends State<_WeightLineRow> {
               Expanded(
                 child: TextFormField(
                   controller: widget.line.stonesCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   inputFormatters: [NormalizeNumberFormatter()],
-                  onChanged: (_) { setState(() {}); widget.onChanged(); },
+                  onChanged: (_) {
+                    setState(() {});
+                    widget.onChanged();
+                  },
                   decoration: const InputDecoration(
                     hintText: '—',
                     suffixText: 'جم',
                     prefixIcon: Icon(Icons.diamond_outlined, size: 14),
                     border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 12,
+                    ),
                     isDense: true,
                   ),
                 ),
@@ -719,8 +841,11 @@ class _WeightLineRowState extends State<_WeightLineRow> {
                 child: widget.canRemove
                     ? IconButton(
                         padding: EdgeInsets.zero,
-                        icon: const Icon(Icons.remove_circle_outline,
-                            size: 20, color: Colors.red),
+                        icon: const Icon(
+                          Icons.remove_circle_outline,
+                          size: 20,
+                          color: Colors.red,
+                        ),
                         onPressed: widget.onRemove,
                       )
                     : const SizedBox(),
@@ -749,10 +874,10 @@ class _WeightLineRowState extends State<_WeightLineRow> {
 //  رصيد مدمج أسفل كل سطر
 // ═══════════════════════════════════════════════════════════════════
 class _InlineBalance extends StatelessWidget {
-  final int    karat;
+  final int karat;
   final double goldAvail;
   final double stonesAvail;
-  final bool   over;
+  final bool over;
   final ColorScheme cs;
 
   const _InlineBalance({
@@ -793,7 +918,11 @@ class _InlineBalance extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.diamond_outlined, size: 12, color: Colors.purple),
+              const Icon(
+                Icons.diamond_outlined,
+                size: 12,
+                color: Colors.purple,
+              ),
               const SizedBox(width: 3),
               Text(
                 'فصوص: ${stonesAvail.toStringAsFixed(3)} جم',
@@ -836,14 +965,15 @@ class _VaultCard extends StatelessWidget {
     this.isDestination = false,
   });
 
-  SafeBoxModel? _safe() =>
-      value == null ? null : safes.firstWhere((s) => s.id == value, orElse: () => safes.first);
+  SafeBoxModel? _safe() => value == null
+      ? null
+      : safes.firstWhere((s) => s.id == value, orElse: () => safes.first);
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cs    = theme.colorScheme;
-    final safe  = _safe();
+    final cs = theme.colorScheme;
+    final safe = _safe();
 
     return Container(
       decoration: BoxDecoration(
@@ -861,17 +991,22 @@ class _VaultCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: color.withOpacity(0.08),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(11),
+              ),
             ),
             child: Row(
               children: [
                 Icon(icon, size: 15, color: color),
                 const SizedBox(width: 6),
-                Text(title,
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: color)),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
               ],
             ),
           ),
@@ -883,7 +1018,10 @@ class _VaultCard extends StatelessWidget {
               value: value,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 12,
+                ),
                 isDense: true,
               ),
               items: safes.map((s) {
@@ -891,10 +1029,12 @@ class _VaultCard extends StatelessWidget {
                 return DropdownMenuItem<int>(
                   value: s.id,
                   enabled: !disabled,
-                  child: Text(s.name,
-                      style: disabled
-                          ? const TextStyle(color: Colors.grey)
-                          : null),
+                  child: Text(
+                    s.name,
+                    style: disabled
+                        ? const TextStyle(color: Colors.grey)
+                        : null,
+                  ),
                 );
               }).toList(),
               onChanged: onChanged,
@@ -936,7 +1076,7 @@ class _BalancePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs     = Theme.of(context).colorScheme;
+    final cs = Theme.of(context).colorScheme;
     final karats = {
       24: safe.goldBalance24k,
       22: safe.goldBalance22k,
@@ -964,31 +1104,40 @@ class _BalancePanel extends StatelessWidget {
                 runSpacing: 6,
                 children: karats.entries
                     .where((e) => e.value > 0)
-                    .map((e) => _KaratPill(
-                          karat: e.key,
-                          weight: e.value,
-                          highlighted: highlightKarats.contains(e.key),
-                          cs: cs,
-                        ))
+                    .map(
+                      (e) => _KaratPill(
+                        karat: e.key,
+                        weight: e.value,
+                        highlighted: highlightKarats.contains(e.key),
+                        cs: cs,
+                      ),
+                    )
                     .toList(),
               )
             else
-              Text('لا يوجد رصيد',
-                  style: TextStyle(fontSize: 11, color: cs.outline)),
+              Text(
+                'لا يوجد رصيد',
+                style: TextStyle(fontSize: 11, color: cs.outline),
+              ),
 
             // فصوص
             if (stonesBalance > 0) ...[
               const SizedBox(height: 6),
               Row(
                 children: [
-                  const Icon(Icons.diamond_outlined, size: 13, color: Colors.purple),
+                  const Icon(
+                    Icons.diamond_outlined,
+                    size: 13,
+                    color: Colors.purple,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'فصوص: ${stonesBalance.toStringAsFixed(3)} جم',
                     style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.purple,
-                        fontWeight: FontWeight.w500),
+                      fontSize: 11,
+                      color: Colors.purple,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
@@ -1026,9 +1175,7 @@ class _KaratPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(16),
-        border: highlighted
-            ? Border.all(color: cs.primary, width: 1.5)
-            : null,
+        border: highlighted ? Border.all(color: cs.primary, width: 1.5) : null,
       ),
       child: Text(
         '${karat}k  ${weight.toStringAsFixed(3)}',
@@ -1056,17 +1203,19 @@ class _TotalBadge extends StatelessWidget {
         Text(
           'إجمالي الذهب: ${goldTotal.toStringAsFixed(3)} جم',
           style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: cs.onSurface),
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: cs.onSurface,
+          ),
         ),
         if (stonesTotal > 0)
           Text(
             'إجمالي الفصوص: ${stonesTotal.toStringAsFixed(3)} جم',
             style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: Colors.purple),
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: Colors.purple,
+            ),
           ),
       ],
     );
@@ -1093,8 +1242,11 @@ class _InfoBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(isMelting ? Icons.recycling : Icons.auto_fix_high,
-              color: color, size: 18),
+          Icon(
+            isMelting ? Icons.recycling : Icons.auto_fix_high,
+            color: color,
+            size: 18,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -1138,24 +1290,26 @@ class _SectionCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             decoration: BoxDecoration(
               color: color.withOpacity(0.07),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(11),
+              ),
             ),
             child: Row(
               children: [
                 Icon(icon, size: 16, color: color),
                 const SizedBox(width: 8),
-                Text(title,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        color: color)),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: color,
+                  ),
+                ),
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: child,
-          ),
+          Padding(padding: const EdgeInsets.all(14), child: child),
         ],
       ),
     );

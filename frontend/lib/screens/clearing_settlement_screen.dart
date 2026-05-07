@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 import 'package:flutter/material.dart';
 
@@ -1483,7 +1485,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                             helperText: (_clearingSafe == null)
                                 ? null
                                 : _dueAmount != null
-                                ? 'المستحق: ${_formatMoney(_dueAmount!)} ر.س  |  رصيد الخزينة: ${_formatMoney(availableClearing)}'
+                                ? 'المستحق: ${_formatMoney(_dueAmount!)} ${context.read<SettingsProvider>().currencySymbolText}  |  رصيد الخزينة: ${_formatMoney(availableClearing)}'
                                 : 'الحد الأقصى المتاح: ${_formatMoney(availableClearing)}',
                             helperMaxLines: 2,
                             errorText: exceedsAvailable
@@ -1880,7 +1882,7 @@ class _PaymentMethodInfoCard extends StatelessWidget {
               if (fixed > 0)
                 _InfoChip(
                   label:
-                      'ثابت ${fixed.toStringAsFixed(fixed == fixed.truncateToDouble() ? 0 : 2)} ر.س/عملية',
+                      'ثابت ${fixed.toStringAsFixed(fixed == fixed.truncateToDouble() ? 0 : 2)} ${context.read<SettingsProvider>().currencySymbolText}/عملية',
                   color: Colors.purple.shade700,
                   icon: Icons.attach_money,
                 ),
@@ -2005,8 +2007,8 @@ class _SummaryCard extends StatelessWidget {
                       color: chipColor(value).withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(99),
                     ),
-                    child: Text(
-                      'SAR',
+                    child: context.read<SettingsProvider>().buildText(
+                      context.read<SettingsProvider>().currencySymbolText,
                       style: TextStyle(
                         color: chipColor(value),
                         fontWeight: FontWeight.w700,
@@ -2057,8 +2059,8 @@ class _SummaryCard extends StatelessWidget {
             ),
             if (feeVat > 0) ...[
               const SizedBox(height: 10),
-              Text(
-                'ضريبة العمولة: ${feeVat.toStringAsFixed(2)} SAR',
+              context.read<SettingsProvider>().buildText(
+                'ضريبة العمولة: ${feeVat.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
                 style: themeData.textTheme.bodyMedium?.copyWith(
                   color: Colors.grey.shade800,
                   fontWeight: FontWeight.w700,

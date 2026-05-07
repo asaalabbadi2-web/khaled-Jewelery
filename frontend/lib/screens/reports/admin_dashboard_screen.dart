@@ -51,17 +51,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // ── Overlay alert state ──────────────────────────────────────────────────
   /// Alerts that the user has manually dismissed (by id/text key).
   final Set<String> _dismissedAlertKeys = {};
+
   /// Live OverlayEntry for the floating toast stack (null = not shown).
   OverlayEntry? _toastOverlayEntry;
 
   // ── Vault ordering ────────────────────────────────────────────────────────
   /// Local ordered list of safe-box ids (persisted in SharedPreferences).
   List<int> _vaultOrder = [];
+
   /// Safe-box ids that were opened in the current session ("recently used").
   final Set<int> _recentVaultIds = {};
   static const String _kVaultOrderKey = 'dashboard_vault_order';
+
   /// Horizontal scroll controller for the vault list (mouse wheel support).
   final ScrollController _vaultScrollController = ScrollController();
+
   /// When true the vault list becomes a drag-and-drop reorderable list.
   bool _isReorderingVaults = false;
 
@@ -87,7 +91,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   double _s(double value) => value * _uiScale(context);
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
 
   late NumberFormat _currencyFormat;
@@ -148,8 +152,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
 
     maps.sort((a, b) {
-      final aId = a['id'] is int ? a['id'] as int : int.tryParse(a['id']?.toString() ?? '') ?? -1;
-      final bId = b['id'] is int ? b['id'] as int : int.tryParse(b['id']?.toString() ?? '') ?? -1;
+      final aId = a['id'] is int
+          ? a['id'] as int
+          : int.tryParse(a['id']?.toString() ?? '') ?? -1;
+      final bId = b['id'] is int
+          ? b['id'] as int
+          : int.tryParse(b['id']?.toString() ?? '') ?? -1;
 
       final aRecent = _recentVaultIds.contains(aId);
       final bRecent = _recentVaultIds.contains(bId);
@@ -178,7 +186,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
 
     if (symbol != _currencySymbol || decimals != _currencyDecimals) {
@@ -262,10 +270,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: alerts
-                .map((a) => _buildToastCard(a, onDismiss: () {
+                .map(
+                  (a) => _buildToastCard(
+                    a,
+                    onDismiss: () {
                       setState(() => _dismissedAlertKeys.add(a.text));
                       _updateToastOverlay();
-                    }))
+                    },
+                  ),
+                )
                 .toList(),
           ),
         ),
@@ -350,8 +363,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         (_response?['sales_purchases_summary'] as Map<String, dynamic>?) ?? {};
 
     final goldByKarat = (kpis['gold_by_karat'] as Map<String, dynamic>?) ?? {};
-    final rangeSelectorHeight =
-      MediaQuery.sizeOf(context).width < 760 ? _s(96) : _s(56);
+    final rangeSelectorHeight = MediaQuery.sizeOf(context).width < 760
+        ? _s(96)
+        : _s(56);
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -391,7 +405,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       final isWide = constraints.maxWidth >= 760;
                       final gramKpi = _buildGramProfitKpi();
                       final heroProfit = _buildHeroProfitSection(
-                          kpis, liquidity, salesPurchasesSummary);
+                        kpis,
+                        liquidity,
+                        salesPurchasesSummary,
+                      );
                       if (isWide) {
                         return IntrinsicHeight(
                           child: Row(
@@ -430,7 +447,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     vertical: _s(8),
                   ),
                   child: DashboardSummaryTabsCard(
-                    periodData: (salesPurchasesSummary[_summaryPeriod]
+                    periodData:
+                        (salesPurchasesSummary[_summaryPeriod]
                             as Map<String, dynamic>?) ??
                         {},
                     isArabic: widget.isArabic,
@@ -711,7 +729,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Icon(
-                  isPositive ? Icons.account_balance : Icons.account_balance_outlined,
+                  isPositive
+                      ? Icons.account_balance
+                      : Icons.account_balance_outlined,
                   color: accentColor,
                   size: _s(28),
                 ),
@@ -766,9 +786,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   theme: theme,
                   icon: Icons.water_drop_outlined,
                   label: isArabic ? 'السيولة' : 'Liquidity',
-                  value: _formatCurrency(_asDouble(
-                    (_response?['liquidity'] as Map?)?['cash_available'] ?? 0,
-                  )),
+                  value: _formatCurrency(
+                    _asDouble(
+                      (_response?['liquidity'] as Map?)?['cash_available'] ?? 0,
+                    ),
+                  ),
                   color: AppColors.invoiceSaleScrap,
                 ),
                 SizedBox(width: _s(20)),
@@ -776,9 +798,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   theme: theme,
                   icon: Icons.auto_awesome,
                   label: isArabic ? 'وزن الذهب' : 'Gold Weight',
-                  value: _formatWeight(_asDouble(
-                    (_response?['kpis'] as Map?)?['gold_equivalent_main_karat'] ?? 0,
-                  )),
+                  value: _formatWeight(
+                    _asDouble(
+                      (_response?['kpis']
+                              as Map?)?['gold_equivalent_main_karat'] ??
+                          0,
+                    ),
+                  ),
                   color: AppColors.primaryGold,
                 ),
               ],
@@ -851,16 +877,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           color: theme.cardColor,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: (isPositive ? AppColors.success : AppColors.error).withValues(
-              alpha: theme.brightness == Brightness.dark ? 0.40 : 0.55,
-            ),
+            color: (isPositive ? AppColors.success : AppColors.error)
+                .withValues(
+                  alpha: theme.brightness == Brightness.dark ? 0.40 : 0.55,
+                ),
             width: 1.2,
           ),
           boxShadow: [
             BoxShadow(
-              color: (isPositive ? AppColors.success : AppColors.error).withValues(
-                alpha: theme.brightness == Brightness.dark ? 0.10 : 0.12,
-              ),
+              color: (isPositive ? AppColors.success : AppColors.error)
+                  .withValues(
+                    alpha: theme.brightness == Brightness.dark ? 0.10 : 0.12,
+                  ),
               blurRadius: 14,
               offset: const Offset(0, 4),
             ),
@@ -898,13 +926,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        isPositive
-                            ? Icons.arrow_upward
-                            : Icons.arrow_downward,
+                        isPositive ? Icons.arrow_upward : Icons.arrow_downward,
                         size: _s(13),
-                        color: isPositive
-                            ? AppColors.success
-                            : AppColors.error,
+                        color: isPositive ? AppColors.success : AppColors.error,
                       ),
                       Text(
                         '${changeValue.abs().toStringAsFixed(1)}%',
@@ -921,7 +945,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ],
             ),
             SizedBox(height: _s(6)),
-            Text(
+            context.read<SettingsProvider>().buildText(
               goldPrice > 0
                   ? '${goldPrice.toStringAsFixed(0)} $_currencySymbol'
                   : '-',
@@ -952,8 +976,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         dotData: const FlDotData(show: false),
                         belowBarData: BarAreaData(
                           show: true,
-                          color: (isPositive ? AppColors.success : AppColors.error)
-                              .withValues(alpha: 0.12),
+                          color:
+                              (isPositive ? AppColors.success : AppColors.error)
+                                  .withValues(alpha: 0.12),
                         ),
                       ),
                     ],
@@ -987,19 +1012,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final rawItems = (alerts['critical_bar'] as List?) ?? [];
     for (final raw in rawItems) {
       final item = raw is Map ? raw : <String, dynamic>{};
-      final severity = (item['severity']?.toString().toLowerCase() ?? 'warning');
+      final severity =
+          (item['severity']?.toString().toLowerCase() ?? 'warning');
       final isCrit = severity == 'critical';
-      final msg = (isArabic
+      final msg =
+          (isArabic
               ? item['message_ar']?.toString()
               : item['message_en']?.toString()) ??
           item['message']?.toString() ??
           '';
       if (msg.isNotEmpty) {
-        items.add(_AlertItem(
-          icon: isCrit ? Icons.error_outline : Icons.warning_amber_rounded,
-          color: isCrit ? AppColors.error : AppColors.warning,
-          text: msg,
-        ));
+        items.add(
+          _AlertItem(
+            icon: isCrit ? Icons.error_outline : Icons.warning_amber_rounded,
+            color: isCrit ? AppColors.error : AppColors.warning,
+            text: msg,
+          ),
+        );
       }
     }
 
@@ -1017,42 +1046,50 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     if (cCount > 0) {
       final isManyAlerts = cCount > 5;
-      items.add(_AlertItem(
-        icon: isManyAlerts
-            ? Icons.error_outline
-            : Icons.warning_amber_rounded,
-        color: AppColors.error,
-        text: isArabic
-            ? '$cCount تنبيهات حرجة بانتظار المراجعة'
-            : '$cCount critical alerts pending',
-      ));
+      items.add(
+        _AlertItem(
+          icon: isManyAlerts
+              ? Icons.error_outline
+              : Icons.warning_amber_rounded,
+          color: AppColors.error,
+          text: isArabic
+              ? '$cCount تنبيهات حرجة بانتظار المراجعة'
+              : '$cCount critical alerts pending',
+        ),
+      );
     }
     if (cDiff.abs() > 0.01) {
-      items.add(_AlertItem(
-        icon: Icons.account_balance_wallet,
-        color: AppColors.warning,
-        text: isArabic
-            ? 'فرق نقدي (${_formatCurrency(cDiff)}) في آخر إغلاق'
-            : 'Cash difference (${_formatCurrency(cDiff)}) in last closing',
-      ));
+      items.add(
+        _AlertItem(
+          icon: Icons.account_balance_wallet,
+          color: AppColors.warning,
+          text: isArabic
+              ? 'فرق نقدي (${_formatCurrency(cDiff)}) في آخر إغلاق'
+              : 'Cash difference (${_formatCurrency(cDiff)}) in last closing',
+        ),
+      );
     }
     if (gDiff.abs() > 0.001) {
-      items.add(_AlertItem(
-        icon: Icons.auto_awesome,
-        color: AppColors.warning,
-        text: isArabic
-            ? 'فرق ذهب (${_formatWeight(gDiff)}) في آخر إغلاق'
-            : 'Gold difference (${_formatWeight(gDiff)}) in last closing',
-      ));
+      items.add(
+        _AlertItem(
+          icon: Icons.auto_awesome,
+          color: AppColors.warning,
+          text: isArabic
+              ? 'فرق ذهب (${_formatWeight(gDiff)}) في آخر إغلاق'
+              : 'Gold difference (${_formatWeight(gDiff)}) in last closing',
+        ),
+      );
     }
     if (uCount > 0) {
-      items.add(_AlertItem(
-        icon: Icons.pending_actions,
-        color: AppColors.info,
-        text: isArabic
-            ? '$uCount فاتورة بانتظار الترحيل'
-            : '$uCount invoices pending posting',
-      ));
+      items.add(
+        _AlertItem(
+          icon: Icons.pending_actions,
+          color: AppColors.info,
+          text: isArabic
+              ? '$uCount فاتورة بانتظار الترحيل'
+              : '$uCount invoices pending posting',
+        ),
+      );
     }
 
     return items.where((a) => !_dismissedAlertKeys.contains(a.text)).toList();
@@ -1141,8 +1178,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: Icon(
                   Icons.close,
                   size: 14,
-                  color: (isDark ? Colors.white : Colors.black)
-                      .withValues(alpha: 0.40),
+                  color: (isDark ? Colors.white : Colors.black).withValues(
+                    alpha: 0.40,
+                  ),
                 ),
               ),
             ),
@@ -1279,7 +1317,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                         PieChartSectionData(
                           value: k21,
-                color: AppColors.warning,
+                          color: AppColors.warning,
                           radius: _s(15),
                           showTitle: false,
                         ),
@@ -1472,14 +1510,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final periodPurchases = _asDouble(purchasesData['total_value']);
     final periodExpenses = _asDouble(expensesData['total_value']);
     final periodProfit = periodSales - periodPurchases - periodExpenses;
-    final periodMargin =
-        periodSales > 0 ? (periodProfit / periodSales) * 100 : null;
+    final periodMargin = periodSales > 0
+        ? (periodProfit / periodSales) * 100
+        : null;
     final cashAvailable = _asDouble(liquidity['cash_available']);
 
-    final vsYesterdayPct =
-        _timeRange == _TimeRange.today
-            ? _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct'])
-            : null;
+    final vsYesterdayPct = _timeRange == _TimeRange.today
+        ? _asDoubleOrNull(kpis['today_profit_vs_yesterday_pct'])
+        : null;
 
     final isProfit = periodProfit >= 0;
     final profitColor = isProfit ? AppColors.success : AppColors.error;
@@ -1525,24 +1563,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 color: AppColors.success.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(Icons.trending_up_rounded,
-                  color: AppColors.success, size: _s(20)),
+              child: Icon(
+                Icons.trending_up_rounded,
+                color: AppColors.success,
+                size: _s(20),
+              ),
             ),
             SizedBox(width: _s(12)),
             Expanded(
               child: Text(
-                isArabic
-                    ? 'لا توجد عمليات بعد'
-                    : 'No transactions yet',
-                style: TextStyle(
-                    fontSize: _s(12), color: theme.hintColor),
+                isArabic ? 'لا توجد عمليات بعد' : 'No transactions yet',
+                style: TextStyle(fontSize: _s(12), color: theme.hintColor),
               ),
             ),
-            Text('0 $_currencySymbol',
-                style: TextStyle(
-                    fontSize: _s(14),
-                    fontWeight: FontWeight.w800,
-                    color: theme.hintColor.withValues(alpha: 0.5))),
+            context.read<SettingsProvider>().buildText(
+              '0 $_currencySymbol',
+              style: TextStyle(
+                fontSize: _s(14),
+                fontWeight: FontWeight.w800,
+                color: theme.hintColor.withValues(alpha: 0.5),
+              ),
+            ),
           ],
         ),
       );
@@ -1603,12 +1644,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               if (vsYesterdayPct != null)
                 Container(
                   padding: EdgeInsets.symmetric(
-                      horizontal: _s(6), vertical: _s(2)),
+                    horizontal: _s(6),
+                    vertical: _s(2),
+                  ),
                   decoration: BoxDecoration(
-                    color: (vsYesterdayPct >= 0
-                            ? AppColors.success
-                            : AppColors.error)
-                        .withValues(alpha: 0.12),
+                    color:
+                        (vsYesterdayPct >= 0
+                                ? AppColors.success
+                                : AppColors.error)
+                            .withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Row(
@@ -1639,7 +1683,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               else
                 Container(
                   padding: EdgeInsets.symmetric(
-                      horizontal: _s(8), vertical: _s(3)),
+                    horizontal: _s(8),
+                    vertical: _s(3),
+                  ),
                   decoration: BoxDecoration(
                     color: profitColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(20),
@@ -1669,9 +1715,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        _formatCurrency(periodProfit)
-                            .replaceAll(_currencySymbol, '')
-                            .trim(),
+                        _formatCurrency(
+                          periodProfit,
+                        ).replaceAll(_currencySymbol, '').trim(),
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
                           color: profitColor,
@@ -1682,7 +1728,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       SizedBox(width: _s(4)),
                       Padding(
                         padding: EdgeInsets.only(bottom: _s(3)),
-                        child: Text(
+                        child: context.read<SettingsProvider>().buildText(
                           _currencySymbol,
                           style: TextStyle(
                             color: profitColor.withValues(alpha: 0.7),
@@ -1699,7 +1745,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               if (periodMargin != null)
                 Container(
                   padding: EdgeInsets.symmetric(
-                      horizontal: _s(7), vertical: _s(3)),
+                    horizontal: _s(7),
+                    vertical: _s(3),
+                  ),
                   decoration: BoxDecoration(
                     color: profitColor.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(6),
@@ -1715,8 +1763,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
               SizedBox(width: _s(4)),
               Container(
-                padding:
-                    EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(3)),
+                padding: EdgeInsets.symmetric(
+                  horizontal: _s(7),
+                  vertical: _s(3),
+                ),
                 decoration: BoxDecoration(
                   color: profitColor.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(6),
@@ -1754,9 +1804,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.water_drop_outlined,
                   label: isArabic ? 'السيولة' : 'Cash',
-                  value: _formatCurrency(cashAvailable)
-                      .replaceAll(_currencySymbol, '')
-                      .trim(),
+                  value: _formatCurrency(
+                    cashAvailable,
+                  ).replaceAll(_currencySymbol, '').trim(),
                   color: AppColors.primaryGold,
                 ),
               ),
@@ -1765,9 +1815,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.arrow_upward,
                   label: isArabic ? 'مبيعات' : 'Sales',
-                  value: _formatCurrency(periodSales)
-                      .replaceAll(_currencySymbol, '')
-                      .trim(),
+                  value: _formatCurrency(
+                    periodSales,
+                  ).replaceAll(_currencySymbol, '').trim(),
                   color: AppColors.success,
                 ),
               ),
@@ -1776,9 +1826,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.arrow_downward,
                   label: isArabic ? 'مشتريات' : 'Purch.',
-                  value: _formatCurrency(periodPurchases)
-                      .replaceAll(_currencySymbol, '')
-                      .trim(),
+                  value: _formatCurrency(
+                    periodPurchases,
+                  ).replaceAll(_currencySymbol, '').trim(),
                   color: AppColors.warning,
                 ),
               ),
@@ -1797,8 +1847,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }) {
     final theme = Theme.of(context);
     return Container(
-      padding:
-          EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(5)),
+      padding: EdgeInsets.symmetric(horizontal: _s(7), vertical: _s(5)),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(6),
@@ -1837,8 +1886,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-
-
   // ══════════════════════════════════════════════════════════════════════════
   // 3b. GRAM PROFIT KPI  (follows time range)
   // ══════════════════════════════════════════════════════════════════════════
@@ -1875,10 +1922,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final mainKarat = g['main_karat']?.toString() ?? '21';
     final isProfit = netProfitWeight >= 0;
 
-    final isAllZero = netProfitWeight == 0 &&
-        weightSold == 0 &&
-        avgSell == 0 &&
-        avgBuy == 0;
+    final isAllZero =
+        netProfitWeight == 0 && weightSold == 0 && avgSell == 0 && avgBuy == 0;
 
     // Dynamic period label
     final String periodLabel;
@@ -2001,12 +2046,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               children: [
                 Text(
                   isArabic ? 'الربح' : 'Profit',
-                  style: TextStyle(
-                    fontSize: _s(10),
-                    color: theme.hintColor,
-                  ),
+                  style: TextStyle(fontSize: _s(10), color: theme.hintColor),
                 ),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   '0 $_currencySymbol',
                   style: TextStyle(
                     fontSize: _s(15),
@@ -2080,7 +2122,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
               Container(
                 padding: EdgeInsets.symmetric(
-                    horizontal: _s(8), vertical: _s(3)),
+                  horizontal: _s(8),
+                  vertical: _s(3),
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.primaryGold.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(20),
@@ -2110,9 +2154,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        _formatWeight(netProfitWeight)
-                            .replaceAll(' جم', '')
-                            .replaceAll(' g', ''),
+                        _formatWeight(
+                          netProfitWeight,
+                        ).replaceAll(' جم', '').replaceAll(' g', ''),
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
                           color: profitColor,
@@ -2124,9 +2168,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       Padding(
                         padding: EdgeInsets.only(bottom: _s(3)),
                         child: Text(
-                          isArabic
-                              ? 'جم ($mainKarat)'
-                              : 'g (k$mainKarat)',
+                          isArabic ? 'جم ($mainKarat)' : 'g (k$mainKarat)',
                           style: TextStyle(
                             color: profitColor.withValues(alpha: 0.7),
                             fontWeight: FontWeight.w600,
@@ -2141,7 +2183,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               const Spacer(),
               Container(
                 padding: EdgeInsets.symmetric(
-                    horizontal: _s(7), vertical: _s(3)),
+                  horizontal: _s(7),
+                  vertical: _s(3),
+                ),
                 decoration: BoxDecoration(
                   color: profitColor.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(6),
@@ -2158,7 +2202,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               SizedBox(width: _s(4)),
               Container(
                 padding: EdgeInsets.symmetric(
-                    horizontal: _s(7), vertical: _s(3)),
+                  horizontal: _s(7),
+                  vertical: _s(3),
+                ),
                 decoration: BoxDecoration(
                   color: profitColor.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(6),
@@ -2183,9 +2229,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.trending_up,
                   label: isArabic ? 'بيع/جم' : 'Sell/g',
-                  value: _formatCurrency(avgSell)
-                      .replaceAll(_currencySymbol, '')
-                      .trim(),
+                  value: _formatCurrency(
+                    avgSell,
+                  ).replaceAll(_currencySymbol, '').trim(),
                   color: AppColors.success,
                 ),
               ),
@@ -2194,9 +2240,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.trending_down,
                   label: isArabic ? 'شراء/جم' : 'Buy/g',
-                  value: _formatCurrency(avgBuy)
-                      .replaceAll(_currencySymbol, '')
-                      .trim(),
+                  value: _formatCurrency(
+                    avgBuy,
+                  ).replaceAll(_currencySymbol, '').trim(),
                   color: AppColors.warning,
                 ),
               ),
@@ -2205,9 +2251,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.swap_horiz,
                   label: isArabic ? 'فارق/جم' : 'Margin/g',
-                  value: _formatCurrency(marginPerGram)
-                      .replaceAll(_currencySymbol, '')
-                      .trim(),
+                  value: _formatCurrency(
+                    marginPerGram,
+                  ).replaceAll(_currencySymbol, '').trim(),
                   color: marginPerGram >= 0
                       ? AppColors.success
                       : AppColors.error,
@@ -2218,9 +2264,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 child: _miniStatChip(
                   icon: Icons.monitor_weight_outlined,
                   label: isArabic ? 'المباع' : 'Sold',
-                  value: _formatWeight(weightSold)
-                      .replaceAll(' جم', '')
-                      .replaceAll(' g', ''),
+                  value: _formatWeight(
+                    weightSold,
+                  ).replaceAll(' جم', '').replaceAll(' g', ''),
                   color: AppColors.info,
                 ),
               ),
@@ -2279,9 +2325,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               margin: EdgeInsets.only(top: _s(4)),
               padding: EdgeInsets.symmetric(horizontal: _s(6), vertical: _s(2)),
               decoration: BoxDecoration(
-                color: (isPositive ? AppColors.success : AppColors.error).withValues(
-                  alpha: 0.1,
-                ),
+                color: (isPositive ? AppColors.success : AppColors.error)
+                    .withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(_s(4)),
               ),
               child: Text(
@@ -2357,10 +2402,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final listHeight = anyExpanded ? _s(260) : _s(168);
     final sorted = _sortedVaults(safeBoxes);
 
-    Widget buildCard(int index, Map<String, dynamic> sb, {bool reorderMode = false}) {
+    Widget buildCard(
+      int index,
+      Map<String, dynamic> sb, {
+      bool reorderMode = false,
+    }) {
       final id = sb['id'];
       final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
-      final heroTag = sbId != null ? 'vault_safe_box_$sbId' : 'vault_safe_box_$index';
+      final heroTag = sbId != null
+          ? 'vault_safe_box_$sbId'
+          : 'vault_safe_box_$index';
       final isExpanded = (sbId != null && sbId == _expandedVaultSafeBoxId);
       final isPressed = (sbId != null && sbId == _pressedVaultSafeBoxId);
 
@@ -2431,13 +2482,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     : (isArabic ? 'إعادة ترتيب' : 'Reorder'),
                 child: IconButton(
                   icon: Icon(
-                    _isReorderingVaults ? Icons.check_circle_outline : Icons.swap_horiz,
+                    _isReorderingVaults
+                        ? Icons.check_circle_outline
+                        : Icons.swap_horiz,
                     size: _s(20),
                     color: _isReorderingVaults
                         ? theme.colorScheme.primary
                         : theme.hintColor,
                   ),
-                  onPressed: () => setState(() => _isReorderingVaults = !_isReorderingVaults),
+                  onPressed: () => setState(
+                    () => _isReorderingVaults = !_isReorderingVaults,
+                  ),
                 ),
               ),
               TextButton(
@@ -2463,10 +2518,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           child: Listener(
             onPointerSignal: (event) {
               if (event is PointerScrollEvent) {
-                final offset = (_vaultScrollController.offset +
-                    event.scrollDelta.dy * 1.5)
-                    .clamp(0.0,
-                        _vaultScrollController.position.maxScrollExtent);
+                final offset =
+                    (_vaultScrollController.offset + event.scrollDelta.dy * 1.5)
+                        .clamp(
+                          0.0,
+                          _vaultScrollController.position.maxScrollExtent,
+                        );
                 _vaultScrollController.jumpTo(offset);
               }
             },
@@ -2497,7 +2554,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     itemBuilder: (context, index) {
                       final sb = sorted[index];
                       final id = sb['id'];
-                      final sbId = id is int ? id : int.tryParse(id?.toString() ?? '');
+                      final sbId = id is int
+                          ? id
+                          : int.tryParse(id?.toString() ?? '');
                       return KeyedSubtree(
                         key: ValueKey(sbId ?? index),
                         child: buildCard(index, sb, reorderMode: true),
@@ -2517,9 +2576,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                           duration: const Duration(milliseconds: 420),
                           child: SlideAnimation(
                             verticalOffset: 18.0,
-                            child: FadeInAnimation(
-                              child: buildCard(index, sb),
-                            ),
+                            child: FadeInAnimation(child: buildCard(index, sb)),
                           ),
                         );
                       },
@@ -2571,7 +2628,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     double totalMainFallback() {
       final mk = displayMainKarat <= 0 ? 21.0 : displayMainKarat.toDouble();
-      return (w18 * (18.0 / mk)) + w21 + (w22 * (22.0 / mk)) + (w24 * (24.0 / mk));
+      return (w18 * (18.0 / mk)) +
+          w21 +
+          (w22 * (22.0 / mk)) +
+          (w24 * (24.0 / mk));
     }
 
     final totalMainEffective = (totalMain > 0)
@@ -2598,11 +2658,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         subtitle = isArabic ? 'ذهب' : 'Gold';
         primaryCaption = isExpanded
             ? (isArabic
-                ? 'إجمالي فعلي (جميع العيارات)'
-                : 'Physical total (all karats)')
+                  ? 'إجمالي فعلي (جميع العيارات)'
+                  : 'Physical total (all karats)')
             : (isArabic
-                ? 'مكافئ العيار الرئيسي (${displayMainKarat}k)'
-                : 'Main karat equivalent (${displayMainKarat}k)');
+                  ? 'مكافئ العيار الرئيسي (${displayMainKarat}k)'
+                  : 'Main karat equivalent (${displayMainKarat}k)');
         break;
       case 'bank':
         icon = Icons.account_balance;
@@ -2645,30 +2705,50 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     final details = safeType == 'gold'
         ? (hasWeightBreakdown
-            ? Wrap(
-                spacing: _s(8),
-                runSpacing: _s(8),
-                children: [
-                  buildDetailChip('24k', _formatWeight(w24), chipColor: AppColors.karat24),
-                  buildDetailChip('22k', _formatWeight(w22), chipColor: AppColors.karat22),
-                  buildDetailChip('21k', _formatWeight(w21), chipColor: AppColors.karat21),
-                  buildDetailChip('18k', _formatWeight(w18), chipColor: AppColors.karat18),
-                ],
-              )
-            : Wrap(
-                spacing: _s(8),
-                runSpacing: _s(8),
-                children: [
-                  buildDetailChip('21k', _formatWeight(goldBalance), chipColor: AppColors.karat21),
-                  buildDetailChip(
-                    isArabic ? 'ملاحظة' : 'Note',
-                    isArabic
-                        ? 'تفصيل العيارات غير متوفر بعد'
-                        : 'Karat breakdown not available yet',
-                    chipColor: theme.hintColor,
-                  ),
-                ],
-              ))
+              ? Wrap(
+                  spacing: _s(8),
+                  runSpacing: _s(8),
+                  children: [
+                    buildDetailChip(
+                      '24k',
+                      _formatWeight(w24),
+                      chipColor: AppColors.karat24,
+                    ),
+                    buildDetailChip(
+                      '22k',
+                      _formatWeight(w22),
+                      chipColor: AppColors.karat22,
+                    ),
+                    buildDetailChip(
+                      '21k',
+                      _formatWeight(w21),
+                      chipColor: AppColors.karat21,
+                    ),
+                    buildDetailChip(
+                      '18k',
+                      _formatWeight(w18),
+                      chipColor: AppColors.karat18,
+                    ),
+                  ],
+                )
+              : Wrap(
+                  spacing: _s(8),
+                  runSpacing: _s(8),
+                  children: [
+                    buildDetailChip(
+                      '21k',
+                      _formatWeight(goldBalance),
+                      chipColor: AppColors.karat21,
+                    ),
+                    buildDetailChip(
+                      isArabic ? 'ملاحظة' : 'Note',
+                      isArabic
+                          ? 'تفصيل العيارات غير متوفر بعد'
+                          : 'Karat breakdown not available yet',
+                      chipColor: theme.hintColor,
+                    ),
+                  ],
+                ))
         : Wrap(
             spacing: _s(8),
             runSpacing: _s(8),
@@ -2682,7 +2762,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           );
 
     final borderAccent = hasActivity ? AppColors.success : theme.hintColor;
-    final borderColor = borderAccent.withValues(alpha: hasActivity ? 0.55 : 0.25);
+    final borderColor = borderAccent.withValues(
+      alpha: hasActivity ? 0.55 : 0.25,
+    );
     final glowColor = (hasActivity ? AppColors.success : color).withValues(
       alpha: isPressed ? 0.22 : (isExpanded ? 0.14 : 0.10),
     );
@@ -2766,14 +2848,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               Hero(
                                 tag: heroIconTag,
                                 createRectTween: (begin, end) =>
-                                    MaterialRectArcTween(begin: begin, end: end),
+                                    MaterialRectArcTween(
+                                      begin: begin,
+                                      end: end,
+                                    ),
                                 child: Material(
                                   color: Colors.transparent,
-                                  child: Icon(
-                                    icon,
-                                    color: color,
-                                    size: _s(20),
-                                  ),
+                                  child: Icon(icon, color: color, size: _s(20)),
                                 ),
                               ),
                               SizedBox(width: _s(6)),

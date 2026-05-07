@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../api_service.dart';
+import '../utils/currency_utils.dart' as cu;
 
 class SettingsProvider with ChangeNotifier {
   static const Map<String, dynamic> _defaultWeightClosingSettings = {
@@ -16,6 +17,8 @@ class SettingsProvider with ChangeNotifier {
   Map<String, dynamic> _settings = {};
   bool _isLoading = false;
   String? _error;
+  bool _didFreshSyncForPrint = false;
+  DateTime? _lastPrintSyncAttemptAt;
 
   static const String _showGoldPriceTickerOnLoginKey =
       'ui_show_gold_price_ticker_on_login_v1';
@@ -42,6 +45,52 @@ class SettingsProvider with ChangeNotifier {
 
   // Getters للإعدادات الهامة
   String get currencySymbol => _settings['currency_symbol'] ?? 'ر.س';
+
+  /// Returns true when the user has selected the new 2020 SAR graphic symbol.
+  bool get currencyIsNewSar => cu.isNewSarSymbol(currencySymbol);
+
+  /// Format cash amount as plain text (PDF, clipboard, plain labels).
+  /// For the new SAR graphic symbol uses 'ر.س' as fallback text.
+  String formatCash(double amount, {bool isArabic = true}) {
+    return cu.formatCashText(
+      amount,
+      currencySymbol: currencySymbol,
+      decimalPlaces: decimalPlaces,
+      isArabic: isArabic,
+    );
+  }
+
+  /// Text-safe currency symbol (for PDF / plain-text contexts).
+  /// If the new SAR graphic is selected, falls back to 'ر.س'.
+  String get currencySymbolText {
+    if (currencyIsNewSar) return 'ر.س';
+    return currencySymbol;
+  }
+
+  /// Build a Flutter [Widget] that displays [text] with the new SAR graphic
+  /// rendered inline as an image wherever 'ر.س' appears in the string.
+  ///
+  /// Use this instead of `Text(...)` in any Widget tree where the text may
+  /// contain a currency symbol produced by [currencySymbolText].
+  ///
+  /// Falls back to a plain [Text] widget when the symbol is not __SAR_NEW__.
+  Widget buildText(
+    String text, {
+    TextStyle? style,
+    TextAlign textAlign = TextAlign.start,
+    int? maxLines,
+    TextOverflow? overflow,
+  }) {
+    return cu.SarAwareText(
+      text,
+      isNewSar: currencyIsNewSar,
+      style: style,
+      textAlign: textAlign,
+      maxLines: maxLines,
+      overflow: overflow,
+    );
+  }
+
   int get mainKarat => _safeInt(_settings['main_karat'], fallback: 21);
   int get decimalPlaces => _safeInt(_settings['decimal_places'], fallback: 2);
   String get dateFormat => _settings['date_format']?.toString() ?? 'DD/MM/YYYY';
@@ -168,7 +217,8 @@ class SettingsProvider with ChangeNotifier {
   String get companyPhone => _settings['company_phone']?.toString() ?? '';
   String get companyTaxNumber =>
       _settings['company_tax_number']?.toString() ?? '';
-  String get companyCrNumber => _settings['company_cr_number']?.toString() ?? '';
+  String get companyCrNumber =>
+      _settings['company_cr_number']?.toString() ?? '';
 
   // Workflow: whether vouchers should be auto-posted on save
   bool get voucherAutoPost =>
@@ -332,6 +382,42 @@ class SettingsProvider with ChangeNotifier {
     }
   }
 
+  /// Ensures settings are available for print/export flows.
+  /// Waits for any in-flight load and performs one best-effort fresh sync
+  /// per app session to avoid stale first-print values.
+  Future<void> ensureLoadedForPrint() async {
+    // If startup settings loading is still in progress, wait briefly so we
+    // don't race and print with stale defaults.
+    if (_isLoading) {
+      var attempts = 0;
+      while (_isLoading && attempts < 80) {
+        await Future.delayed(const Duration(milliseconds: 25));
+        attempts++;
+      }
+    }
+
+    // Ensure at least cached settings are loaded.
+    if (_settings.isEmpty) {
+      await loadSettings(fetchRemote: false);
+    }
+
+    // One-time best-effort refresh from API. If the account lacks
+    // permissions or network is unavailable, we silently keep cached values.
+    if (!_didFreshSyncForPrint) {
+      final now = DateTime.now();
+      final canAttempt =
+          _lastPrintSyncAttemptAt == null ||
+          now.difference(_lastPrintSyncAttemptAt!).inSeconds >= 20;
+      if (canAttempt) {
+        _lastPrintSyncAttemptAt = now;
+        try {
+          await fetchSettings();
+          _didFreshSyncForPrint = true;
+        } catch (_) {}
+      }
+    }
+  }
+
   Future<void> fetchSettings() async {
     try {
       _settings = await ApiService().getSettings();
@@ -361,6 +447,7 @@ class SettingsProvider with ChangeNotifier {
       // stale PUT-response data being cached and served to the home/race screens.
       final confirmed = await ApiService().getSettings();
       _settings = confirmed;
+      _didFreshSyncForPrint = true;
 
       // Step 3: Cache the server-confirmed settings locally.
       final prefs = await SharedPreferences.getInstance();

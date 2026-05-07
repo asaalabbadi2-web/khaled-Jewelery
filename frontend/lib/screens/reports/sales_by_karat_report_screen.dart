@@ -28,7 +28,7 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
   DateTimeRange? _selectedRange;
   bool _includeUnposted = false;
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   int _mainKarat = 21;
 
@@ -52,8 +52,11 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     super.initState();
     final today = DateTime.now();
     _selectedRange = DateTimeRange(
-      start: DateTime(today.year, today.month, today.day)
-          .subtract(const Duration(days: 29)),
+      start: DateTime(
+        today.year,
+        today.month,
+        today.day,
+      ).subtract(const Duration(days: 29)),
       end: DateTime(today.year, today.month, today.day),
     );
     _currencyFormat = NumberFormat.currency(
@@ -68,11 +71,11 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
-    if (settings.currencySymbol != _currencySymbol ||
+    if (settings.currencySymbolText != _currencySymbol ||
         settings.decimalPlaces != _currencyDecimals ||
         settings.mainKarat != _mainKarat) {
       setState(() {
-        _currencySymbol = settings.currencySymbol;
+        _currencySymbol = settings.currencySymbolText;
         _currencyDecimals = settings.decimalPlaces;
         _mainKarat = settings.mainKarat;
         _currencyFormat = NumberFormat.currency(
@@ -111,7 +114,8 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
       context: context,
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 1),
-      initialDateRange: _selectedRange ??
+      initialDateRange:
+          _selectedRange ??
           DateTimeRange(
             start: now.subtract(const Duration(days: 29)),
             end: now,
@@ -152,8 +156,8 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : _error != null
-                  ? _buildErrorState()
-                  : _buildContent(),
+              ? _buildErrorState()
+              : _buildContent(),
         ),
       ),
     );
@@ -223,13 +227,13 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment:
-              isArabic ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isArabic
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             Text(
               isArabic ? 'خيارات التقرير' : 'Report Options',
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 16),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -363,14 +367,18 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                   Text(
                     item.value,
                     style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 13),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (item.sub != null)
                     Text(
                       item.sub!,
                       style: TextStyle(
-                          fontSize: 10, color: Colors.grey.shade500),
+                        fontSize: 10,
+                        color: Colors.grey.shade500,
+                      ),
                     ),
                 ],
               ),
@@ -388,7 +396,9 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     if (karats.isEmpty) return const SizedBox.shrink();
 
     final totalNetWeight = karats.fold<double>(
-        0.0, (s, k) => s + _asDouble((k as Map)['net_weight']));
+      0.0,
+      (s, k) => s + _asDouble((k as Map)['net_weight']),
+    );
     if (totalNetWeight <= 0) return const SizedBox.shrink();
 
     return Card(
@@ -397,13 +407,13 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment:
-              isArabic ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isArabic
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             Text(
               isArabic ? 'توزيع الوزن حسب العيار' : 'Weight by Karat',
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 15),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
             ),
             const SizedBox(height: 16),
             ...karats.map((k) {
@@ -437,20 +447,20 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                           child: Text(
                             'عيار $karat',
                             style: const TextStyle(
-                                fontWeight: FontWeight.w600, fontSize: 13),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
                           ),
                         ),
-                        Text(
-                          _fw(nw),
-                          style: const TextStyle(fontSize: 12),
-                        ),
+                        Text(_fw(nw), style: const TextStyle(fontSize: 12)),
                         const SizedBox(width: 8),
                         Text(
                           '${_pctFormat.format(pct)}%',
                           style: TextStyle(
-                              fontSize: 12,
-                              color: color,
-                              fontWeight: FontWeight.bold),
+                            fontSize: 12,
+                            color: color,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ],
                     ),
@@ -483,7 +493,9 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Text(
-            isArabic ? 'لا توجد بيانات في هذه الفترة' : 'No data for this period',
+            isArabic
+                ? 'لا توجد بيانات في هذه الفترة'
+                : 'No data for this period',
             style: const TextStyle(color: Colors.grey, fontSize: 16),
           ),
         ),
@@ -506,7 +518,9 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     final rw = _asDouble(km['returns_weight']);
     final nwMk = _asDouble(km['net_weight_main_karat'] ?? km['net_weight']);
     final swMk = _asDouble(km['sales_weight_main_karat'] ?? km['sales_weight']);
-    final rwMk = _asDouble(km['returns_weight_main_karat'] ?? km['returns_weight']);
+    final rwMk = _asDouble(
+      km['returns_weight_main_karat'] ?? km['returns_weight'],
+    );
     final mainK = (_report?['summary']?['main_karat'] ?? _mainKarat) as num;
     final nv = _asDouble(km['net_value']);
     final sv = _asDouble(km['sales_value']);
@@ -528,11 +542,11 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
           Container(
             decoration: BoxDecoration(
               color: color.withOpacity(0.08),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
             ),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
                 // دائرة رقم العيار
@@ -571,12 +585,16 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                           Text(
                             '$docs فاتورة',
                             style: TextStyle(
-                                fontSize: 11, color: Colors.grey.shade600),
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
                           ),
                           const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: color.withOpacity(0.15),
                               borderRadius: BorderRadius.circular(6),
@@ -611,7 +629,9 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                     Text(
                       'صافي المبيعات',
                       style: TextStyle(
-                          fontSize: 10, color: Colors.grey.shade500),
+                        fontSize: 10,
+                        color: Colors.grey.shade500,
+                      ),
                     ),
                   ],
                 ),
@@ -621,8 +641,7 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
 
           // ── شريط الوزن البارز ──
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -634,7 +653,9 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                       Text(
                         'صافي الوزن (عيار $mainK)',
                         style: TextStyle(
-                            fontSize: 10, color: Colors.grey.shade500),
+                          fontSize: 10,
+                          color: Colors.grey.shade500,
+                        ),
                       ),
                       const SizedBox(height: 3),
                       Text(
@@ -659,64 +680,68 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                 const SizedBox(width: 12),
                 // وزن مبيعات
                 _buildWeightChip(
-                    label: 'مبيعات',
-                    value: _fw(swMk),
-                    sub: _fw(sw),
-                    color: Colors.green.shade700),
+                  label: 'مبيعات',
+                  value: _fw(swMk),
+                  sub: _fw(sw),
+                  color: Colors.green.shade700,
+                ),
                 const SizedBox(width: 8),
                 // وزن مرتجعات
                 if (rw > 0)
                   _buildWeightChip(
-                      label: 'مرتجع',
-                      value: _fw(rwMk),
-                      sub: _fw(rw),
-                      color: Colors.red.shade600),
+                    label: 'مرتجع',
+                    value: _fw(rwMk),
+                    sub: _fw(rw),
+                    color: Colors.red.shade600,
+                  ),
               ],
             ),
           ),
 
           // ── تفاصيل قابلة للطي ──
           Theme(
-            data: Theme.of(context).copyWith(
-              dividerColor: Colors.transparent,
-            ),
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
-              tilePadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+              tilePadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 0,
+              ),
               title: Text(
                 'تفاصيل إضافية',
                 style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500),
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: _buildDetailGrid([
                     _DetailItem(
-                        label: isArabic ? 'إجمالي المبيعات' : 'Sales Value',
-                        value: _fv(sv),
-                        icon: Icons.sell,
-                        color: Colors.green),
+                      label: isArabic ? 'إجمالي المبيعات' : 'Sales Value',
+                      value: _fv(sv),
+                      icon: Icons.sell,
+                      color: Colors.green,
+                    ),
                     _DetailItem(
-                        label: isArabic
-                            ? 'إجمالي المرتجعات'
-                            : 'Returns Value',
-                        value: _fv(rv),
-                        icon: Icons.undo,
-                        color: Colors.orange),
+                      label: isArabic ? 'إجمالي المرتجعات' : 'Returns Value',
+                      value: _fv(rv),
+                      icon: Icons.undo,
+                      color: Colors.orange,
+                    ),
                     _DetailItem(
-                        label:
-                            isArabic ? 'متوسط سعر/جم' : 'Avg Price/g',
-                        value: _fv(avg),
-                        icon: Icons.speed,
-                        color: Colors.blue),
+                      label: isArabic ? 'متوسط سعر/جم' : 'Avg Price/g',
+                      value: _fv(avg),
+                      icon: Icons.speed,
+                      color: Colors.blue,
+                    ),
                     _DetailItem(
-                        label: isArabic ? 'عدد الفواتير' : 'Invoices',
-                        value: '$docs',
-                        icon: Icons.receipt_long,
-                        color: Colors.purple),
+                      label: isArabic ? 'عدد الفواتير' : 'Invoices',
+                      value: '$docs',
+                      icon: Icons.receipt_long,
+                      color: Colors.purple,
+                    ),
                   ]),
                 ),
               ],
@@ -736,21 +761,18 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text(
-          label,
-          style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
-        ),
+        Text(label, style: TextStyle(fontSize: 9, color: Colors.grey.shade500)),
         const SizedBox(height: 2),
         Text(
           value,
           style: TextStyle(
-              fontSize: 12, fontWeight: FontWeight.bold, color: color),
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
         ),
         if (sub != null)
-          Text(
-            sub,
-            style: TextStyle(fontSize: 9, color: Colors.grey.shade400),
-          ),
+          Text(sub, style: TextStyle(fontSize: 9, color: Colors.grey.shade400)),
       ],
     );
   }
@@ -780,7 +802,9 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
                   Text(
                     item.value,
                     style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 12),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
@@ -793,16 +817,19 @@ class _SalesByKaratReportScreenState extends State<SalesByKaratReportScreen> {
 
     final rows = <Widget>[];
     for (var i = 0; i < items.length; i += 2) {
-      rows.add(Row(
-        children: [
-          Expanded(child: buildCell(items[i])),
-          const SizedBox(width: 8),
-          Expanded(
+      rows.add(
+        Row(
+          children: [
+            Expanded(child: buildCell(items[i])),
+            const SizedBox(width: 8),
+            Expanded(
               child: i + 1 < items.length
                   ? buildCell(items[i + 1])
-                  : const SizedBox.shrink()),
-        ],
-      ));
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      );
       if (i + 2 < items.length) rows.add(const SizedBox(height: 8));
     }
     return Column(mainAxisSize: MainAxisSize.min, children: rows);
@@ -815,12 +842,13 @@ class _SummaryItem {
   final String label;
   final String value;
   final String? sub;
-  const _SummaryItem(
-      {required this.icon,
-      required this.color,
-      required this.label,
-      required this.value,
-      this.sub});
+  const _SummaryItem({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+    this.sub,
+  });
 }
 
 class _DetailItem {
@@ -828,9 +856,10 @@ class _DetailItem {
   final String value;
   final IconData icon;
   final Color color;
-  const _DetailItem(
-      {required this.label,
-      required this.value,
-      required this.icon,
-      required this.color});
+  const _DetailItem({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
 }

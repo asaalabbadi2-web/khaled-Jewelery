@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import '../../providers/settings_provider.dart';
 
 import '../../api_service.dart';
 
@@ -274,13 +276,22 @@ class _InventoryCostAnalysisScreenState
               ),
             ),
             const Divider(),
-            _infoRow('القيمة الدفترية', '${totalValue.toStringAsFixed(2)} ر.س'),
+            _infoRow(
+              'القيمة الدفترية',
+              '${totalValue.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
+            ),
             _infoRow('الوزن', '${totalWeight.toStringAsFixed(3)} جم'),
-            _infoRow('متوسط التكلفة', '${avgCost.toStringAsFixed(2)} ر.س/جم'),
-            _infoRow('القيمة السوقية', '${marketValue.toStringAsFixed(2)} ر.س'),
+            _infoRow(
+              'متوسط التكلفة',
+              '${avgCost.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
+            ),
+            _infoRow(
+              'القيمة السوقية',
+              '${marketValue.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
+            ),
             _infoRow(
               'ربح/خسارة غير محققة',
-              '${unrealized.toStringAsFixed(2)} ر.س',
+              '${unrealized.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
               valueColor: unrealized >= 0 ? Colors.green : Colors.red,
             ),
             const SizedBox(height: 6),
@@ -344,12 +355,21 @@ class _InventoryCostAnalysisScreenState
             const Divider(),
             _infoRow(
               'القيمة الإجمالية',
-              '${totalValue.toStringAsFixed(2)} ر.س',
+              '${totalValue.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
             ),
             _infoRow('الوزن الإجمالي', '${totalWeight.toStringAsFixed(3)} جم'),
-            _infoRow('متوسط تكلفة الشراء', '${avg.toStringAsFixed(2)} ر.س/جم'),
-            _infoRow('أقل سعر شراء', '${min.toStringAsFixed(2)} ر.س/جم'),
-            _infoRow('أعلى سعر شراء', '${max.toStringAsFixed(2)} ر.س/جم'),
+            _infoRow(
+              'متوسط تكلفة الشراء',
+              '${avg.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
+            ),
+            _infoRow(
+              'أقل سعر شراء',
+              '${min.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
+            ),
+            _infoRow(
+              'أعلى سعر شراء',
+              '${max.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
+            ),
             _infoRow(
               'اتجاه الأسعار',
               '$trend (${trendPct.toStringAsFixed(2)}%)',
@@ -386,11 +406,14 @@ class _InventoryCostAnalysisScreenState
               ),
             ),
             const Divider(),
-            _infoRow('فرق التكلفة', '${diff.toStringAsFixed(2)} ر.س'),
+            _infoRow(
+              'فرق التكلفة',
+              '${diff.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
+            ),
             _infoRow('نسبة الفرق', '${diffPct.toStringAsFixed(2)}%'),
             _infoRow(
               'السعر الحالي',
-              '${marketPrice.toStringAsFixed(2)} ر.س/جم',
+              '${marketPrice.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
             ),
             const SizedBox(height: 6),
             Text(
@@ -461,11 +484,11 @@ class _InventoryCostAnalysisScreenState
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(
-                          '${value.toStringAsFixed(0)} ر.س',
+                          '${value.toStringAsFixed(0)} ${context.read<SettingsProvider>().currencySymbolText}',
                           style: const TextStyle(fontFamily: 'Cairo'),
                         ),
                         Text(
-                          '${weight.toStringAsFixed(2)} جم | ${avg.toStringAsFixed(2)} ر.س/جم',
+                          '${weight.toStringAsFixed(2)} جم | ${avg.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
                           style: const TextStyle(
                             fontFamily: 'Cairo',
                             color: Colors.grey,

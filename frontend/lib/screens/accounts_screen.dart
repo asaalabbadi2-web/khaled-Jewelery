@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 import '../api_service.dart';
 import 'account_ledger_screen.dart';
@@ -68,7 +70,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
       }
       _allAccounts = allAccounts
           .whereType<Map>()
-          .map((entry) => entry.map((key, value) => MapEntry(key.toString(), value)))
+          .map(
+            (entry) =>
+                entry.map((key, value) => MapEntry(key.toString(), value)),
+          )
           .toList(growable: false);
       _filterAccounts();
       setState(() {
@@ -82,9 +87,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
         _isLoading = false;
         _error = e.toString();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تحميل الحسابات: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('تعذر تحميل الحسابات: $e')));
     }
   }
 
@@ -114,7 +119,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
         return;
       }
       final measuredHeight = renderObject.size.height;
-      if (measuredHeight <= 0 || (measuredHeight - _topChromeHeight).abs() < 0.5) {
+      if (measuredHeight <= 0 ||
+          (measuredHeight - _topChromeHeight).abs() < 0.5) {
         return;
       }
       setState(() {
@@ -159,7 +165,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
     return subAccounts != null && subAccounts.isNotEmpty;
   }
 
-  bool _tracksWeight(Map<String, dynamic> account) => account['tracks_weight'] == true;
+  bool _tracksWeight(Map<String, dynamic> account) =>
+      account['tracks_weight'] == true;
 
   double _cashBalanceOf(Map<String, dynamic> account) {
     return _asDouble(_balancesOf(account)?['cash']);
@@ -174,7 +181,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   bool _hasAnyBalance(Map<String, dynamic> account) {
-    return _cashBalanceOf(account).abs() > 0.01 || _goldBalanceOf(account).abs() > 0.001;
+    return _cashBalanceOf(account).abs() > 0.01 ||
+        _goldBalanceOf(account).abs() > 0.001;
   }
 
   String _accountTypeLabel(Map<String, dynamic> account) {
@@ -204,38 +212,43 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
   void _filterAccounts() {
     final query = _searchController.text.trim().toLowerCase();
-    final filtered = _allAccounts.where((account) {
-      final name = (account['name'] ?? '').toString().toLowerCase();
-      final accountNumber = _accountNumber(account).toLowerCase();
-      final type = _accountTypeLabel(account).toLowerCase();
-      final parent = _parentLabel(account).toLowerCase();
+    final filtered = _allAccounts
+        .where((account) {
+          final name = (account['name'] ?? '').toString().toLowerCase();
+          final accountNumber = _accountNumber(account).toLowerCase();
+          final type = _accountTypeLabel(account).toLowerCase();
+          final parent = _parentLabel(account).toLowerCase();
 
-      final matchesQuery = query.isEmpty ||
-          name.contains(query) ||
-          accountNumber.contains(query) ||
-          type.contains(query) ||
-          parent.contains(query);
+          final matchesQuery =
+              query.isEmpty ||
+              name.contains(query) ||
+              accountNumber.contains(query) ||
+              type.contains(query) ||
+              parent.contains(query);
 
-      if (!matchesQuery) {
-        return false;
-      }
-      if (_onlyDetailAccounts && _hasChildren(account)) {
-        return false;
-      }
-      if (_onlyWithBalance && !_hasAnyBalance(account)) {
-        return false;
-      }
-      if (_onlyWeightAccounts && !_tracksWeight(account)) {
-        return false;
-      }
-      return true;
-    }).toList(growable: false);
+          if (!matchesQuery) {
+            return false;
+          }
+          if (_onlyDetailAccounts && _hasChildren(account)) {
+            return false;
+          }
+          if (_onlyWithBalance && !_hasAnyBalance(account)) {
+            return false;
+          }
+          if (_onlyWeightAccounts && !_tracksWeight(account)) {
+            return false;
+          }
+          return true;
+        })
+        .toList(growable: false);
 
     filtered.sort((a, b) {
       int comparison;
       switch (_sortBy) {
         case 'name':
-          comparison = (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString());
+          comparison = (a['name'] ?? '').toString().compareTo(
+            (b['name'] ?? '').toString(),
+          );
           break;
         case 'cash':
           comparison = _cashBalanceOf(a).compareTo(_cashBalanceOf(b));
@@ -247,7 +260,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
           comparison = _accountTypeLabel(a).compareTo(_accountTypeLabel(b));
           break;
         case 'children':
-          comparison = (_hasChildren(a) ? 1 : 0).compareTo(_hasChildren(b) ? 1 : 0);
+          comparison = (_hasChildren(a) ? 1 : 0).compareTo(
+            _hasChildren(b) ? 1 : 0,
+          );
           break;
         default:
           comparison = _accountNumber(a).compareTo(_accountNumber(b));
@@ -255,7 +270,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
       }
 
       if (comparison == 0) {
-        comparison = (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString());
+        comparison = (a['name'] ?? '').toString().compareTo(
+          (b['name'] ?? '').toString(),
+        );
       }
       return _sortAscending ? comparison : -comparison;
     });
@@ -280,9 +297,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
     if (accountNumber.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: accountNumber));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('تم نسخ رقم الحساب $accountNumber')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('تم نسخ رقم الحساب $accountNumber')));
   }
 
   void _openStatement(Map<String, dynamic> account) {
@@ -351,7 +368,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 children: [
                   Text(
                     title,
-                    style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -365,7 +384,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   Text(
                     subtitle,
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.62,
+                      ),
                     ),
                   ),
                 ],
@@ -379,7 +400,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
   Widget _buildStatisticsSection() {
     final totalAccounts = _filteredAccounts.length;
-    final detailAccounts = _filteredAccounts.where((account) => !_hasChildren(account)).length;
+    final detailAccounts = _filteredAccounts
+        .where((account) => !_hasChildren(account))
+        .length;
     final weightAccounts = _filteredAccounts.where(_tracksWeight).length;
     final withBalance = _filteredAccounts.where(_hasAnyBalance).length;
 
@@ -435,7 +458,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
     }
 
     final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(0.0, _topChromeHeight);
+    final visibleHeight = (_topChromeHeight - collapse).clamp(
+      0.0,
+      _topChromeHeight,
+    );
     if (visibleHeight <= 0) {
       return const SizedBox.shrink();
     }
@@ -463,7 +489,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.14)),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.14),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -536,7 +564,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 child: TextField(
                   controller: _searchController,
                   decoration: InputDecoration(
-                    hintText: 'ابحث بالاسم أو رقم الحساب أو النوع أو الحساب الرئيسي',
+                    hintText:
+                        'ابحث بالاسم أو رقم الحساب أو النوع أو الحساب الرئيسي',
                     prefixIcon: const Icon(Icons.search, size: 18),
                     suffixIcon: _searchController.text.trim().isEmpty
                         ? null
@@ -559,12 +588,24 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     isDense: true,
                   ),
                   items: const [
-                    DropdownMenuItem(value: 'number', child: Text('رقم الحساب')),
+                    DropdownMenuItem(
+                      value: 'number',
+                      child: Text('رقم الحساب'),
+                    ),
                     DropdownMenuItem(value: 'name', child: Text('الاسم')),
                     DropdownMenuItem(value: 'type', child: Text('التصنيف')),
-                    DropdownMenuItem(value: 'cash', child: Text('الرصيد النقدي')),
-                    DropdownMenuItem(value: 'gold', child: Text('الرصيد الذهبي')),
-                    DropdownMenuItem(value: 'children', child: Text('عدد الأبناء')),
+                    DropdownMenuItem(
+                      value: 'cash',
+                      child: Text('الرصيد النقدي'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'gold',
+                      child: Text('الرصيد الذهبي'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'children',
+                      child: Text('عدد الأبناء'),
+                    ),
                   ],
                   onChanged: (value) {
                     if (value == null) return;
@@ -589,14 +630,21 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 label: Text(_sortAscending ? 'تصاعدي' : 'تنازلي'),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.55,
+                  ),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   'النتائج: ${_filteredAccounts.length}',
-                  style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -672,7 +720,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      _tracksWeight(account) ? Icons.scale_outlined : Icons.account_balance_wallet_outlined,
+                      _tracksWeight(account)
+                          ? Icons.scale_outlined
+                          : Icons.account_balance_wallet_outlined,
                       color: colorScheme.primary,
                     ),
                   ),
@@ -683,7 +733,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       children: [
                         Text(
                           (account['name'] ?? 'N/A').toString(),
-                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
@@ -691,7 +743,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                               ? _accountTypeLabel(account)
                               : '$accountNumber • ${_accountTypeLabel(account)}',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurface.withValues(alpha: 0.65),
+                            color: colorScheme.onSurface.withValues(
+                              alpha: 0.65,
+                            ),
                           ),
                         ),
                       ],
@@ -709,9 +763,18 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       }
                     },
                     itemBuilder: (context) => const [
-                      PopupMenuItem(value: 'statement', child: Text('كشف الحساب')),
-                      PopupMenuItem(value: 'ledger', child: Text('دفتر الأستاذ')),
-                      PopupMenuItem(value: 'copy', child: Text('نسخ رقم الحساب')),
+                      PopupMenuItem(
+                        value: 'statement',
+                        child: Text('كشف الحساب'),
+                      ),
+                      PopupMenuItem(
+                        value: 'ledger',
+                        child: Text('دفتر الأستاذ'),
+                      ),
+                      PopupMenuItem(
+                        value: 'copy',
+                        child: Text('نسخ رقم الحساب'),
+                      ),
                     ],
                   ),
                 ],
@@ -727,13 +790,20 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       label: const Text('وزني'),
                     ),
                   Chip(
-                    avatar: Icon(hasChildren ? Icons.account_tree_outlined : Icons.subdirectory_arrow_left_outlined, size: 16),
+                    avatar: Icon(
+                      hasChildren
+                          ? Icons.account_tree_outlined
+                          : Icons.subdirectory_arrow_left_outlined,
+                      size: 16,
+                    ),
                     label: Text(hasChildren ? 'رئيسي' : 'فرعي'),
                   ),
                   if (hasChildren)
                     Chip(
                       avatar: const Icon(Icons.layers_outlined, size: 16),
-                      label: Text('أبناء: ${((account['sub_accounts'] as List?) ?? const []).length}'),
+                      label: Text(
+                        'أبناء: ${((account['sub_accounts'] as List?) ?? const []).length}',
+                      ),
                     ),
                   Chip(
                     avatar: const Icon(Icons.link_outlined, size: 16),
@@ -748,7 +818,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     child: _buildBalanceTile(
                       icon: Icons.payments_outlined,
                       label: 'الرصيد النقدي',
-                      value: '${_cashFormat.format(cashBalance)} ر.س',
+                      value:
+                          '${_cashFormat.format(cashBalance)} ${context.read<SettingsProvider>().currencySymbolText}',
                       color: Colors.green,
                     ),
                   ),
@@ -804,7 +875,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             border: Border(
-              bottom: BorderSide(color: colorScheme.outline.withValues(alpha: 0.1)),
+              bottom: BorderSide(
+                color: colorScheme.outline.withValues(alpha: 0.1),
+              ),
             ),
           ),
           child: Row(
@@ -818,7 +891,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       (account['name'] ?? 'N/A').toString(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -835,7 +910,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
               Expanded(
                 flex: 2,
                 child: Text(
-                  '${_cashFormat.format(cashBalance)} ر.س',
+                  '${_cashFormat.format(cashBalance)} ${context.read<SettingsProvider>().currencySymbolText}',
                   textAlign: TextAlign.end,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w700,
@@ -892,7 +967,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
           ),
           const SizedBox(height: 16),
           Text(
-            _activeFiltersCount > 0 ? 'لا توجد حسابات مطابقة' : 'لا توجد حسابات للعرض',
+            _activeFiltersCount > 0
+                ? 'لا توجد حسابات مطابقة'
+                : 'لا توجد حسابات للعرض',
             style: theme.textTheme.titleMedium?.copyWith(
               color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
@@ -921,7 +998,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('تعذر تحميل الحسابات', style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'تعذر تحميل الحسابات',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               Text(_error!, textAlign: TextAlign.center),
               const SizedBox(height: 12),
@@ -952,31 +1032,55 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.outline.withValues(alpha: 0.12),
                 ),
               ),
               child: Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withValues(alpha: 0.45),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(16),
+                      ),
                     ),
                     child: Row(
                       children: [
                         Expanded(
                           flex: 4,
-                          child: Text('الحساب', style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800)),
+                          child: Text(
+                            'الحساب',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
                         ),
                         Expanded(
                           flex: 2,
-                          child: Text('نقد', textAlign: TextAlign.end, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800)),
+                          child: Text(
+                            'نقد',
+                            textAlign: TextAlign.end,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           flex: 2,
-                          child: Text('ذهب', textAlign: TextAlign.end, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w800)),
+                          child: Text(
+                            'ذهب',
+                            textAlign: TextAlign.end,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
                         ),
                         const SizedBox(width: 44),
                       ],
@@ -997,7 +1101,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
         controller: _scrollController,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
         itemCount: _filteredAccounts.length,
-        itemBuilder: (context, index) => _buildAccountCard(_filteredAccounts[index]),
+        itemBuilder: (context, index) =>
+            _buildAccountCard(_filteredAccounts[index]),
       ),
     );
   }
@@ -1009,7 +1114,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
         title: const Text('كشوفات الحسابات'),
         actions: [
           IconButton(
-            tooltip: _viewMode == _AccountsViewMode.cards ? 'عرض مضغوط' : 'عرض البطاقات',
+            tooltip: _viewMode == _AccountsViewMode.cards
+                ? 'عرض مضغوط'
+                : 'عرض البطاقات',
             icon: Icon(
               _viewMode == _AccountsViewMode.cards
                   ? Icons.table_rows_outlined

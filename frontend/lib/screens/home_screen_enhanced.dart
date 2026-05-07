@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/currency_utils.dart' as cu;
 import '../providers/quick_actions_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
@@ -110,8 +111,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   List safeBoxes = []; // 🆕 خزائن الذهب
 
   // Currency data
-  double exchangeRate = 3.75; // سعر الصرف الافتراضي (دولار -> ريال سعودي)
-  String currencySymbol = 'ر.س';
+  double exchangeRate = 3.75; // سعر الصرف الافتراضي (دولار -> عملة محلية)
   int currencyDecimalPlaces = 2;
   int mainKarat = 21;
 
@@ -241,6 +241,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     });
   }
 
+  String get currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
+
   @override
   void initState() {
     super.initState();
@@ -249,9 +252,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       vsync: this,
       duration: const Duration(seconds: 4),
     )..repeat(reverse: true);
-    _sunScale = Tween<double>(begin: 0.85, end: 1.0).animate(
-      CurvedAnimation(parent: _sunController, curve: Curves.easeInOut),
-    );
+    _sunScale = Tween<double>(
+      begin: 0.85,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _sunController, curve: Curves.easeInOut));
     _loadAllData();
   }
 
@@ -262,15 +266,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
     final settings = Provider.of<SettingsProvider>(context);
 
-    final newSymbol = settings.currencySymbol;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
-    if (newSymbol != currencySymbol ||
-        newDecimals != currencyDecimalPlaces ||
-        newMainKarat != mainKarat) {
+    if (newDecimals != currencyDecimalPlaces || newMainKarat != mainKarat) {
       setState(() {
-        currencySymbol = newSymbol;
         currencyDecimalPlaces = newDecimals;
         mainKarat = newMainKarat;
       });
@@ -286,7 +286,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     _loadPendingApprovalsCount();
     // Returned from a sub-screen — refresh leaderboard but only if data is stale (>30s).
     final last = _leaderboardFetchedAt;
-    if (last == null || DateTime.now().difference(last) > const Duration(seconds: 30)) {
+    if (last == null ||
+        DateTime.now().difference(last) > const Duration(seconds: 30)) {
       _loadLeaderboard(period: _leaderboardPeriod);
     }
     // Collapse any expanded quick-action groups so the home screen
@@ -305,19 +306,26 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     // unnecessary full-tree rebuilds (BackdropFilter is GPU-expensive).
     if (state == AppLifecycleState.resumed) {
       final last = _leaderboardFetchedAt;
-      if (last == null || DateTime.now().difference(last) > const Duration(minutes: 2)) {
+      if (last == null ||
+          DateTime.now().difference(last) > const Duration(minutes: 2)) {
         _loadLeaderboard(period: _leaderboardPeriod);
       }
     }
   }
 
   // Unused WidgetsBindingObserver stubs
-  @override void didChangeAccessibilityFeatures() {}
-  @override void didChangeLocales(List<Locale>? locales) {}
-  @override void didChangeMetrics() {}
-  @override void didChangePlatformBrightness() {}
-  @override void didChangeTextScaleFactor() {}
-  @override void didHaveMemoryPressure() {}
+  @override
+  void didChangeAccessibilityFeatures() {}
+  @override
+  void didChangeLocales(List<Locale>? locales) {}
+  @override
+  void didChangeMetrics() {}
+  @override
+  void didChangePlatformBrightness() {}
+  @override
+  void didChangeTextScaleFactor() {}
+  @override
+  void didHaveMemoryPressure() {}
 
   Future<void> _loadAllData() async {
     try {
@@ -1676,7 +1684,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           actions: [
             if (_pendingApprovalsCount > 0)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 10,
+                ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(20),
                   onTap: () => PendingApprovalsDialog.show(
@@ -1738,7 +1749,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     : Icons.dark_mode,
               ),
               tooltip: isAr ? 'تبديل الوضع' : 'Toggle Theme',
-              onPressed: () => Provider.of<ThemeProvider>(context, listen: false).toggleTheme(),
+              onPressed: () => Provider.of<ThemeProvider>(
+                context,
+                listen: false,
+              ).toggleTheme(),
             ),
             IconButton(
               icon: const Icon(Icons.language),
@@ -1775,7 +1789,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                               overflow: TextOverflow.ellipsis,
                               softWrap: false,
                               style: TextStyle(
-                                color: Theme.of(context).brightness == Brightness.dark
+                                color:
+                                    Theme.of(context).brightness ==
+                                        Brightness.dark
                                     ? AppColors.primaryGold
                                     : Colors.white,
                                 fontWeight: FontWeight.w600,
@@ -1793,7 +1809,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                                   ? displayName[0].toUpperCase()
                                   : '?',
                               style: TextStyle(
-                                color: Theme.of(context).brightness == Brightness.dark
+                                color:
+                                    Theme.of(context).brightness ==
+                                        Brightness.dark
                                     ? const Color(0xFF1A1A1A)
                                     : AppColors.darkGold,
                                 fontWeight: FontWeight.w800,
@@ -2167,7 +2185,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(flex: 9, child: _buildLeaderboardCard(isAr)),
+                              Expanded(
+                                flex: 9,
+                                child: _buildLeaderboardCard(isAr),
+                              ),
                               const SizedBox(width: 20),
                               Expanded(flex: 11, child: _buildQuickActions()),
                             ],
@@ -2231,51 +2252,52 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     final teamPoints = (data?['team_points'] as num?)?.toInt();
     final remainingPoints = (data?['remaining_points'] as num?)?.toInt();
     final targetProgress =
-      (data?['target_progress'] as num?)?.toDouble() ?? 0.0;
+        (data?['target_progress'] as num?)?.toDouble() ?? 0.0;
     final usePointsGoal = metric == 'points';
     final goalCurrentValue = usePointsGoal
-      ? (teamPoints?.toDouble())
-      : teamWeight;
+        ? (teamPoints?.toDouble())
+        : teamWeight;
     final goalTargetValue = usePointsGoal
-      ? (weeklyTargetPoints?.toDouble())
-      : weeklyTarget;
+        ? (weeklyTargetPoints?.toDouble())
+        : weeklyTarget;
     final goalRemainingValue = usePointsGoal
-      ? (remainingPoints?.toDouble())
-      : remainingWeight;
+        ? (remainingPoints?.toDouble())
+        : remainingWeight;
     final effectiveTargetProgress =
-      (goalCurrentValue != null &&
-        goalTargetValue != null &&
-        goalTargetValue > 0)
-      ? (goalCurrentValue / goalTargetValue).clamp(0.0, 1.0)
-      : targetProgress.clamp(0.0, 1.0);
+        (goalCurrentValue != null &&
+            goalTargetValue != null &&
+            goalTargetValue > 0)
+        ? (goalCurrentValue / goalTargetValue).clamp(0.0, 1.0)
+        : targetProgress.clamp(0.0, 1.0);
     final isGoalAchieved =
-      (goalCurrentValue != null &&
-        goalTargetValue != null &&
-        goalTargetValue > 0 &&
-        goalCurrentValue >= goalTargetValue) ||
-      targetProgress >= 0.9999;
+        (goalCurrentValue != null &&
+            goalTargetValue != null &&
+            goalTargetValue > 0 &&
+            goalCurrentValue >= goalTargetValue) ||
+        targetProgress >= 0.9999;
     final Color goalColor = isGoalAchieved
         ? AppColors.success
-      : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);
-    final goalPercentText =
-      '${(effectiveTargetProgress * 100).round()}%';
+        : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);
+    final goalPercentText = '${(effectiveTargetProgress * 100).round()}%';
     final goalCurrentText = usePointsGoal
-      ? '${(goalCurrentValue ?? 0).toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
-      : '${(goalCurrentValue ?? 0).toStringAsFixed(1)} ${isAr ? 'جم' : 'g'}';
+        ? '${(goalCurrentValue ?? 0).toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
+        : '${(goalCurrentValue ?? 0).toStringAsFixed(1)} ${isAr ? 'جم' : 'g'}';
     final goalTargetText = usePointsGoal
-      ? '${(goalTargetValue ?? 0).toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
-      : '${(goalTargetValue ?? 0).toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}';
+        ? '${(goalTargetValue ?? 0).toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
+        : '${(goalTargetValue ?? 0).toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}';
     final goalRemainingText = goalRemainingValue == null
-      ? null
-      : (usePointsGoal
-          ? '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
-          : '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}');
-
+        ? null
+        : (usePointsGoal
+              ? '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'نقطة' : 'pts'}'
+              : '${goalRemainingValue.toStringAsFixed(0)} ${isAr ? 'جم' : 'g'}');
 
     String? effectivePeriodText() {
       if (effectiveStartDate == null) return null;
       if (isMonth) {
-        final monthName = DateFormat('MMMM yyyy', isAr ? 'ar' : 'en').format(effectiveStartDate);
+        final monthName = DateFormat(
+          'MMMM yyyy',
+          isAr ? 'ar' : 'en',
+        ).format(effectiveStartDate);
         return isAr ? 'بيانات الشهر: $monthName' : 'Month: $monthName';
       }
       if (isWeek) {
@@ -2321,7 +2343,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     // Current user position for "me card"
     final meEmpId = context.read<AuthProvider>().currentUser?.employeeId;
-    final meIsInTop = meEmpId != null &&
+    final meIsInTop =
+        meEmpId != null &&
         topRanking.any((r) => (r['id'] as num?)?.toInt() == meEmpId);
     final meRankIndex = meEmpId == null
         ? -1
@@ -2340,7 +2363,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final share = (row['share'] as num?)?.toDouble() ?? 0.0;
       final count = (row['count'] as num?)?.toInt() ?? 0;
       final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
-      final purchaseAmount = (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
+      final purchaseAmount =
+          (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
 
       final isLeader = index == 0;
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
@@ -2363,11 +2387,17 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final invoiceLabelPointsAr = count == 1 ? 'فاتورة' : 'فواتير';
       final invoiceSummary = showInvoiceCount
           ? (metric == 'points'
-            ? (isAr ? '$count $invoiceLabelPointsAr' : '$count transactions')
-            : (isAr ? '$count $invoiceLabelAr' : '$count sales $invoiceLabelEn'))
+                ? (isAr
+                      ? '$count $invoiceLabelPointsAr'
+                      : '$count transactions')
+                : (isAr
+                      ? '$count $invoiceLabelAr'
+                      : '$count sales $invoiceLabelEn'))
           : (metric == 'points'
-            ? (isAr ? 'فواتير مبيعات ومشتريات' : 'Sales and purchases activity')
-            : (isAr ? 'فواتير بيع' : 'Sales activity'));
+                ? (isAr
+                      ? 'فواتير مبيعات ومشتريات'
+                      : 'Sales and purchases activity')
+                : (isAr ? 'فواتير بيع' : 'Sales activity'));
       final scoreValueText = switch (metric) {
         'count' => count.toString(),
         'points' => score.toStringAsFixed(0),
@@ -2393,249 +2423,313 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       return StatefulBuilder(
         builder: (context, setHover) {
           return Padding(
-        padding: const EdgeInsetsDirectional.only(bottom: 8),
-        child: MouseRegion(
-          onEnter: (_) => setHover(() => hovered = true),
-          onExit: (_) => setHover(() => hovered = false),
-          child: AnimatedScale(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOutCubic,
-            scale: hovered ? 1.015 : 1.0,
-            child: AnimatedContainer(
-            duration: const Duration(milliseconds: 170),
-            curve: Curves.easeOutCubic,
-            transform: Matrix4.translationValues(0, hovered ? -2.0 : 0, 0),
-            decoration: BoxDecoration(
-              color: hovered
-                  ? (index == 0
-                      ? (isDark ? colorScheme.surfaceContainerHigh : const Color(0xFFFFFBF0))
-                      : (isDark ? colorScheme.surfaceContainerHigh : Colors.white))
-                  : (isDark
-                      ? colorScheme.surfaceContainerHigh
-                      : (index == 0 ? const Color(0xFFFFFDF5) : Colors.white)),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: hovered
-                    ? AppColors.primaryGold.withValues(alpha: 0.42)
-                    : (index == 0
-                        ? AppColors.primaryGold.withValues(alpha: 0.22)
-                        : index == 1
-                            ? const Color(0xFF98A2B3).withValues(alpha: 0.20)
-                            : index == 2
-                                ? const Color(0xFFB07A39).withValues(alpha: 0.18)
-                                : colorScheme.onSurface.withValues(alpha: 0.07)),
-                width: hovered ? 1.2 : (index == 0 ? 1.1 : 1.0),
-              ),
-              boxShadow: hovered
-                  ? [
-                      BoxShadow(
-                        color: AppColors.primaryGold.withValues(alpha: 0.11),
-                        blurRadius: 14,
-                        spreadRadius: 0,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.13 : 0.07),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : (index == 0
-                      ? [BoxShadow(color: AppColors.primaryGold.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3))]
-                      : null),
-            ),
-            child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Medal rank badge with crown for rank 1
-                _buildRankBadge(index, medalAccent),
-                const SizedBox(width: 8),
-                // Avatar
-                Container(
-                  width: 38,
-                  height: 38,
+            padding: const EdgeInsetsDirectional.only(bottom: 8),
+            child: MouseRegion(
+              onEnter: (_) => setHover(() => hovered = true),
+              onExit: (_) => setHover(() => hovered = false),
+              child: AnimatedScale(
+                duration: const Duration(milliseconds: 170),
+                curve: Curves.easeOutCubic,
+                scale: hovered ? 1.015 : 1.0,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 170),
+                  curve: Curves.easeOutCubic,
+                  transform: Matrix4.translationValues(
+                    0,
+                    hovered ? -2.0 : 0,
+                    0,
+                  ),
                   decoration: BoxDecoration(
-                    color: medalAccent.withValues(alpha: 0.10),
-                    shape: BoxShape.circle,
+                    color: hovered
+                        ? (index == 0
+                              ? (isDark
+                                    ? colorScheme.surfaceContainerHigh
+                                    : const Color(0xFFFFFBF0))
+                              : (isDark
+                                    ? colorScheme.surfaceContainerHigh
+                                    : Colors.white))
+                        : (isDark
+                              ? colorScheme.surfaceContainerHigh
+                              : (index == 0
+                                    ? const Color(0xFFFFFDF5)
+                                    : Colors.white)),
+                    borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: medalAccent.withValues(alpha: 0.18),
+                      color: hovered
+                          ? AppColors.primaryGold.withValues(alpha: 0.42)
+                          : (index == 0
+                                ? AppColors.primaryGold.withValues(alpha: 0.22)
+                                : index == 1
+                                ? const Color(
+                                    0xFF98A2B3,
+                                  ).withValues(alpha: 0.20)
+                                : index == 2
+                                ? const Color(
+                                    0xFFB07A39,
+                                  ).withValues(alpha: 0.18)
+                                : colorScheme.onSurface.withValues(
+                                    alpha: 0.07,
+                                  )),
+                      width: hovered ? 1.2 : (index == 0 ? 1.1 : 1.0),
                     ),
+                    boxShadow: hovered
+                        ? [
+                            BoxShadow(
+                              color: AppColors.primaryGold.withValues(
+                                alpha: 0.11,
+                              ),
+                              blurRadius: 14,
+                              spreadRadius: 0,
+                              offset: const Offset(0, 4),
+                            ),
+                            BoxShadow(
+                              color: Colors.black.withValues(
+                                alpha: isDark ? 0.13 : 0.07,
+                              ),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ]
+                        : (index == 0
+                              ? [
+                                  BoxShadow(
+                                    color: AppColors.primaryGold.withValues(
+                                      alpha: 0.08,
+                                    ),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ]
+                              : null),
                   ),
-                  child: Center(
-                    child: Text(
-                      avatarText,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        color: medalAccent,
-                      ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
                     ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // Employee info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Medal rank badge with crown for rank 1
+                        _buildRankBadge(index, medalAccent),
+                        const SizedBox(width: 8),
+                        // Avatar
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: medalAccent.withValues(alpha: 0.10),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: medalAccent.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          child: Center(
                             child: Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              avatarText,
                               style: TextStyle(
                                 fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 14,
-                                color: colorScheme.onSurface,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                                color: medalAccent,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 5),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: roleBadgeColor.withValues(alpha: 0.09),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              rankRoleLabel(index),
-                              style: TextStyle(
-                                fontFamily: 'Cairo',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 10,
-                                color: roleBadgeColor,
+                        ),
+                        const SizedBox(width: 10),
+                        // Employee info
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontFamily: 'Cairo',
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14,
+                                        color: colorScheme.onSurface,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: roleBadgeColor.withValues(
+                                        alpha: 0.09,
+                                      ),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      rankRoleLabel(index),
+                                      style: TextStyle(
+                                        fontFamily: 'Cairo',
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 10,
+                                        color: roleBadgeColor,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 5),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          _buildStatChip(
-                            icon: Icons.receipt_long_rounded,
-                            value: invoiceSummary,
-                            label: '',
-                            valueColor: colorScheme.onSurface.withValues(alpha: 0.55),
-                          ),
-                          _buildStatChip(
-                            dotColor: AppColors.success,
-                            value: numberFormat.format(salesAmount.round()),
-                            label: isAr ? 'مبيعات' : 'Sales',
-                            valueColor: AppColors.success,
-                          ),
-                          _buildStatChip(
-                            dotColor: const Color(0xFF5E35B1),
-                            value: numberFormat.format(purchaseAmount.round()),
-                            label: isAr ? 'مشتريات' : 'Purch',
-                            valueColor: const Color(0xFF5E35B1),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      // Progress bar
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: Container(
-                          height: 4,
-                          color: colorScheme.onSurface.withValues(alpha: 0.07),
-                          child: TweenAnimationBuilder<double>(
-                            tween: Tween<double>(
-                                begin: 0, end: share.clamp(0.0, 1.0)),
-                            duration:
-                                Duration(milliseconds: 600 + (index * 100)),
-                            curve: Curves.easeOutCubic,
-                            builder: (context, value, _) =>
-                                FractionallySizedBox(
-                              alignment: AlignmentDirectional.centerStart,
-                              widthFactor: value,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: AlignmentDirectional.centerStart,
-                                    end: AlignmentDirectional.centerEnd,
-                                    colors: [
-                                      progressColor.withValues(alpha: 0.65),
-                                      medalAccent,
-                                    ],
+                              const SizedBox(height: 5),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 4,
+                                children: [
+                                  _buildStatChip(
+                                    icon: Icons.receipt_long_rounded,
+                                    value: invoiceSummary,
+                                    label: '',
+                                    valueColor: colorScheme.onSurface
+                                        .withValues(alpha: 0.55),
+                                  ),
+                                  _buildStatChip(
+                                    dotColor: AppColors.success,
+                                    value: numberFormat.format(
+                                      salesAmount.round(),
+                                    ),
+                                    label: isAr ? 'مبيعات' : 'Sales',
+                                    valueColor: AppColors.success,
+                                  ),
+                                  _buildStatChip(
+                                    dotColor: const Color(0xFF5E35B1),
+                                    value: numberFormat.format(
+                                      purchaseAmount.round(),
+                                    ),
+                                    label: isAr ? 'مشتريات' : 'Purch',
+                                    valueColor: const Color(0xFF5E35B1),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              // Progress bar
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: Container(
+                                  height: 4,
+                                  color: colorScheme.onSurface.withValues(
+                                    alpha: 0.07,
+                                  ),
+                                  child: TweenAnimationBuilder<double>(
+                                    tween: Tween<double>(
+                                      begin: 0,
+                                      end: share.clamp(0.0, 1.0),
+                                    ),
+                                    duration: Duration(
+                                      milliseconds: 600 + (index * 100),
+                                    ),
+                                    curve: Curves.easeOutCubic,
+                                    builder: (context, value, _) =>
+                                        FractionallySizedBox(
+                                          alignment:
+                                              AlignmentDirectional.centerStart,
+                                          widthFactor: value,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: AlignmentDirectional
+                                                    .centerStart,
+                                                end: AlignmentDirectional
+                                                    .centerEnd,
+                                                colors: [
+                                                  progressColor.withValues(
+                                                    alpha: 0.65,
+                                                  ),
+                                                  medalAccent,
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                   ),
                                 ),
                               ),
-                            ),
+                            ],
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // Score box
-                Container(
-                  constraints: const BoxConstraints(minWidth: 52),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    gradient: index == 0
-                        ? LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppColors.primaryGold.withValues(alpha: 0.18),
-                              AppColors.primaryGold.withValues(alpha: 0.07),
+                        const SizedBox(width: 10),
+                        // Score box
+                        Container(
+                          constraints: const BoxConstraints(minWidth: 52),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: index == 0
+                                ? LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      AppColors.primaryGold.withValues(
+                                        alpha: 0.18,
+                                      ),
+                                      AppColors.primaryGold.withValues(
+                                        alpha: 0.07,
+                                      ),
+                                    ],
+                                  )
+                                : null,
+                            color: index != 0
+                                ? medalAccent.withValues(alpha: 0.07)
+                                : null,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: index == 0
+                                  ? AppColors.primaryGold.withValues(
+                                      alpha: 0.30,
+                                    )
+                                  : medalAccent.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(
+                                scoreValueText,
+                                style: TextStyle(
+                                  fontFamily: 'Cairo',
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: index == 0 ? 22 : 18,
+                                  color: index == 0
+                                      ? AppColors.darkGold
+                                      : medalAccent,
+                                  height: 1.1,
+                                ),
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                scoreUnitText,
+                                style: TextStyle(
+                                  fontFamily: 'Cairo',
+                                  fontSize: 9,
+                                  color: colorScheme.onSurface.withValues(
+                                    alpha: 0.44,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ],
-                          )
-                        : null,
-                    color: index != 0 ? medalAccent.withValues(alpha: 0.07) : null,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: index == 0
-                          ? AppColors.primaryGold.withValues(alpha: 0.30)
-                          : medalAccent.withValues(alpha: 0.18),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        scoreValueText,
-                        style: TextStyle(
-                          fontFamily: 'Cairo',
-                          fontWeight: FontWeight.w900,
-                          fontSize: index == 0 ? 22 : 18,
-                          color: index == 0 ? AppColors.darkGold : medalAccent,
-                          height: 1.1,
-                        ),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        scoreUnitText,
-                        style: TextStyle(
-                          fontFamily: 'Cairo',
-                          fontSize: 9,
-                          color: colorScheme.onSurface.withValues(alpha: 0.44),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
-              ],
+              ),
             ),
-          ),
-        ),
-        ),
-        ),
-        );
+          );
         },
       );
     }
@@ -2644,368 +2738,104 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsetsDirectional.fromSTEB(16, 16, 16, 14),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: AlignmentDirectional.topStart,
-                  end: AlignmentDirectional.bottomEnd,
-                  colors: [
-                    AppColors.primaryGold.withValues(alpha: 0.18),
-                    AppColors.lightGold.withValues(alpha: 0.10),
-                    isDark
-                        ? Colors.black.withValues(alpha: 0.15)
-                        : Colors.white.withValues(alpha: 0.60),
-                  ],
-                  stops: const [0.0, 0.5, 1.0],
-                ),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  topRight: Radius.circular(16),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppColors.primaryGold.withValues(alpha: 0.22),
-                              AppColors.darkGold.withValues(alpha: 0.10),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: AppColors.primaryGold.withValues(alpha: 0.18),
-                          ),
-                        ),
-                        child: Icon(
-                          Icons.emoji_events_rounded,
-                          color: AppColors.darkGold,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isAr
-                                  ? (_leaderboardPeriod == 'week'
-                                        ? 'سباق الأداء — الأسبوع'
-                                        : _leaderboardPeriod == 'month'
-                                            ? 'سباق الأداء — الشهر'
-                                            : 'سباق الأداء — اليوم')
-                                  : (_leaderboardPeriod == 'week'
-                                        ? 'Sales Race — Week'
-                                        : _leaderboardPeriod == 'month'
-                                            ? 'Sales Race — Month'
-                                            : 'Sales Race — Today'),  
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.deepGold,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            if (showChampion &&
-                                championName.isNotEmpty &&
-                                topRanking.isNotEmpty &&
-                                !isFallback) ...[
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.star_rounded,
-                                    size: 14,
-                                    color: AppColors.primaryGold,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Flexible(
-                                    child: Text(
-                                      isAr
-                                          ? 'المتصدر الآن: $championName'
-                                          : 'Current leader: $championName',
-                                      style: theme.textTheme.bodySmall?.copyWith(
-                                        color: AppColors.darkGold,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      SegmentedButton<String>(
-                        segments: <ButtonSegment<String>>[
-                          ButtonSegment<String>(
-                            value: 'today',
-                            label: Text(isAr ? 'اليوم' : 'Today'),
-                          ),
-                          ButtonSegment<String>(
-                            value: 'week',
-                            label: Text(isAr ? 'الأسبوع' : 'Week'),
-                          ),
-                          ButtonSegment<String>(
-                            value: 'month',
-                            label: Text(isAr ? 'الشهر' : 'Month'),
-                          ),
-                        ],
-                        selected: <String>{_leaderboardPeriod},
-                        onSelectionChanged: _leaderboardLoading
-                            ? null
-                            : (selection) {
-                                final next = selection.isNotEmpty
-                                    ? selection.first
-                                    : _leaderboardPeriod;
-                                if (next == _leaderboardPeriod) return;
-                                setState(() {
-                                  _leaderboardPeriod = next;
-                                  _showAllLeaderboardEmployees = false;
-                                });
-                                _loadLeaderboard(period: next);
-                              },
-                        showSelectedIcon: false,
-                        style: _leaderboardSegmentedButtonStyle(theme),
-                      ),
-                    ],
-                  ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 16, 16, 14),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: AlignmentDirectional.topStart,
+                end: AlignmentDirectional.bottomEnd,
+                colors: [
+                  AppColors.primaryGold.withValues(alpha: 0.18),
+                  AppColors.lightGold.withValues(alpha: 0.10),
+                  isDark
+                      ? Colors.black.withValues(alpha: 0.15)
+                      : Colors.white.withValues(alpha: 0.60),
                 ],
+                stops: const [0.0, 0.5, 1.0],
+              ),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16),
+                topRight: Radius.circular(16),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-            // ── إذا لم يكن هناك بيانات للفترة الحالية: اعرض البانر فقط ──
-            if (isFallback) ...[
-              _buildNewDayBanner(isAr, isMonth, isWeek),
-            ] else ...[
-            if (effectivePeriodLabel != null || updateLabel != null) ...[
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.lightGold.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: AppColors.primaryGold.withValues(alpha: 0.18),
-                      ),
-                    ),
-                    child: Text(
-                      metricPillText,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.deepGold,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  if (topRanking.isNotEmpty)
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
+                      width: 44,
+                      height: 44,
                       decoration: BoxDecoration(
-                        color: colorScheme.onSurface.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        _showAllLeaderboardEmployees
-                            ? (isAr ? 'عرض كامل الفريق' : 'Full team view')
-                            : (isAr
-                                  ? 'أفضل ${topRanking.length} موظفين'
-                                  : 'Top ${topRanking.length} staff'),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.72),
-                          fontWeight: FontWeight.w600,
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            AppColors.primaryGold.withValues(alpha: 0.22),
+                            AppColors.darkGold.withValues(alpha: 0.10),
+                          ],
                         ),
-                      ),
-                    ),
-                  if (effectivePeriodLabel != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colorScheme.onSurface.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        effectivePeriodLabel,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.72),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  if (updateLabel != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colorScheme.primary.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(999),
+                        borderRadius: BorderRadius.circular(14),
                         border: Border.all(
-                          color: colorScheme.primary.withValues(alpha: 0.16),
+                          color: AppColors.primaryGold.withValues(alpha: 0.18),
                         ),
                       ),
-                      child: Text(
-                        updateLabel,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: colorScheme.primary,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      child: Icon(
+                        Icons.emoji_events_rounded,
+                        color: AppColors.darkGold,
+                        size: 24,
                       ),
                     ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 10),
-            if (!raceEnabled)
-              Text(
-                isAr
-                    ? 'تم إيقاف سباق الأداء من الإعدادات.'
-                    : 'Sales race is disabled from settings.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurface.withValues(alpha: 0.7),
-                ),
-              )
-            else if (_leaderboardLoading)
-              LinearProgressIndicator(
-                minHeight: 6,
-                backgroundColor: colorScheme.onSurface.withValues(alpha: 0.08),
-                valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
-              )
-            else if (_leaderboardError != null)
-              Text(
-                isAr ? 'تعذر تحميل لوحة الصدارة' : 'Could not load leaderboard',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.error,
-                ),
-              )
-            else ...[
-              if ((isWeek || isMonth) &&
-                  ((metric == 'points' &&
-                          weeklyTargetPoints != null &&
-                          teamPoints != null) ||
-                      (metric != 'points' &&
-                          weeklyTarget != null &&
-                          teamWeight != null))) ...[
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: AlignmentDirectional.topStart,
-                      end: AlignmentDirectional.bottomEnd,
-                      colors: [
-                        isDark
-                            ? colorScheme.surfaceContainerHighest
-                            : Colors.white,
-                        goalColor.withValues(alpha: 0.06),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: goalColor.withValues(alpha: 0.14),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // ── عنوان + نسبة الإنجاز ──
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              isAr
-                                  ? (isMonth ? 'هدف الفريق الشهري' : 'هدف الفريق الأسبوعي')
-                                  : (isMonth ? 'Monthly Team Goal' : 'Weekly Team Goal'),
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: goalColor,
-                              ),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: goalColor.withValues(alpha: 0.10),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: goalColor.withValues(alpha: 0.18)),
-                            ),
-                            child: Text(
-                              goalPercentText,
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: goalColor,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // ── المحقق / الهدف / المتبقي في سطر واحد ──
-                      Row(
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            goalCurrentText,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              color: goalColor,
-                              fontWeight: FontWeight.w900,
+                            isAr
+                                ? (_leaderboardPeriod == 'week'
+                                      ? 'سباق الأداء — الأسبوع'
+                                      : _leaderboardPeriod == 'month'
+                                      ? 'سباق الأداء — الشهر'
+                                      : 'سباق الأداء — اليوم')
+                                : (_leaderboardPeriod == 'week'
+                                      ? 'Sales Race — Week'
+                                      : _leaderboardPeriod == 'month'
+                                      ? 'Sales Race — Month'
+                                      : 'Sales Race — Today'),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.deepGold,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          Text(
-                            '  /  ',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurface.withValues(alpha: 0.35),
-                            ),
-                          ),
-                          Text(
-                            goalTargetText,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: AppColors.primaryGold,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          if (!isGoalAchieved && goalRemainingText != null) ...[
-                            const Spacer(),
+                          const SizedBox(height: 4),
+                          if (showChampion &&
+                              championName.isNotEmpty &&
+                              topRanking.isNotEmpty &&
+                              !isFallback) ...[
                             Row(
-                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.timelapse_rounded, size: 13, color: AppColors.warning),
+                                Icon(
+                                  Icons.star_rounded,
+                                  size: 14,
+                                  color: AppColors.primaryGold,
+                                ),
                                 const SizedBox(width: 4),
-                                Text(
-                                  goalRemainingText,
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: AppColors.warning,
-                                    fontWeight: FontWeight.w700,
+                                Flexible(
+                                  child: Text(
+                                    isAr
+                                        ? 'المتصدر الآن: $championName'
+                                        : 'Current leader: $championName',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: AppColors.darkGold,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                               ],
@@ -3013,338 +2843,710 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           ],
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      // ── شريط التقدم ──
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(begin: 0, end: effectiveTargetProgress),
-                          duration: const Duration(milliseconds: 700),
-                          builder: (context, value, child) => LinearProgressIndicator(
-                            value: value,
-                            minHeight: 6,
-                            backgroundColor: colorScheme.onSurface.withValues(alpha: 0.08),
-                            valueColor: AlwaysStoppedAnimation<Color>(goalColor),
-                          ),
+                    ),
+                    const SizedBox(width: 12),
+                    SegmentedButton<String>(
+                      segments: <ButtonSegment<String>>[
+                        ButtonSegment<String>(
+                          value: 'today',
+                          label: Text(isAr ? 'اليوم' : 'Today'),
                         ),
-                      ),
-                    ],
-                  ),
+                        ButtonSegment<String>(
+                          value: 'week',
+                          label: Text(isAr ? 'الأسبوع' : 'Week'),
+                        ),
+                        ButtonSegment<String>(
+                          value: 'month',
+                          label: Text(isAr ? 'الشهر' : 'Month'),
+                        ),
+                      ],
+                      selected: <String>{_leaderboardPeriod},
+                      onSelectionChanged: _leaderboardLoading
+                          ? null
+                          : (selection) {
+                              final next = selection.isNotEmpty
+                                  ? selection.first
+                                  : _leaderboardPeriod;
+                              if (next == _leaderboardPeriod) return;
+                              setState(() {
+                                _leaderboardPeriod = next;
+                                _showAllLeaderboardEmployees = false;
+                              });
+                              _loadLeaderboard(period: next);
+                            },
+                      showSelectedIcon: false,
+                      style: _leaderboardSegmentedButtonStyle(theme),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
               ],
-              if (allRanking.isEmpty || (isFallback && !isWeek && !isMonth))
-                _buildNewDayBanner(isAr, isMonth, isWeek)
-              else ...[              
-                // ───────── Me card (only when user not in top 3) ─────────
-                if (meEmpId != null && !meIsInTop) ...[
-                  () {
-                    final meRow = allRanking.firstWhere(
-                      (r) => (r['id'] as num?)?.toInt() == meEmpId,
-                      orElse: () => const {},
-                    );
-                    final meScore = (meRow['score'] as num?)?.toDouble() ?? 0.0;
-                    final meScoreText = switch (metric) {
-                      'count' => (meRow['count'] as num?)?.toInt().toString() ?? '0',
-                      'points' => meScore.toStringAsFixed(0),
-                      _ => meScore.toStringAsFixed(1),
-                    };
-                    final meScoreUnit = switch (metric) {
-                      'count' => isAr ? 'فاتورة' : 'Invoice',
-                      'points' => isAr ? 'نقطة' : 'pts',
-                      _ => isAr ? 'جم' : 'g',
-                    };
-                    final auth = context.read<AuthProvider>();
-                    final meFullName = auth.fullName.trim();
-                    final meAvatarText = meFullName.isEmpty
-                        ? '?'
-                        : meFullName
-                              .split(RegExp(r'\s+'))
-                              .where((p) => p.isNotEmpty)
-                              .take(2)
-                              .map((p) => p.characters.first)
-                              .join();
-                    return Padding(
-                      padding: const EdgeInsetsDirectional.only(bottom: 8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF0D2A47)
-                              : const Color(0xFF1976D2).withValues(alpha: 0.05),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: const Color(0xFF1976D2).withValues(alpha: 0.28),
-                            strokeAlign: BorderSide.strokeAlignInside,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── إذا لم يكن هناك بيانات للفترة الحالية: اعرض البانر فقط ──
+                if (isFallback) ...[
+                  _buildNewDayBanner(isAr, isMonth, isWeek),
+                ] else ...[
+                  if (effectivePeriodLabel != null || updateLabel != null) ...[
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.lightGold.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: AppColors.primaryGold.withValues(
+                                alpha: 0.18,
+                              ),
+                            ),
+                          ),
+                          child: Text(
+                            metricPillText,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: AppColors.deepGold,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            // Avatar (RTL: shows on RIGHT)
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1976D2).withValues(alpha: 0.13),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFF1976D2).withValues(alpha: 0.28)),
+                        if (topRanking.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.05,
                               ),
-                              child: Center(
-                                child: Text(
-                                  meAvatarText,
-                                  style: const TextStyle(
-                                    fontFamily: 'Cairo',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 14,
-                                    color: Color(0xFF1976D2),
-                                  ),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              _showAllLeaderboardEmployees
+                                  ? (isAr
+                                        ? 'عرض كامل الفريق'
+                                        : 'Full team view')
+                                  : (isAr
+                                        ? 'أفضل ${topRanking.length} موظفين'
+                                        : 'Top ${topRanking.length} staff'),
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: colorScheme.onSurface.withValues(
+                                  alpha: 0.72,
+                                ),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        if (effectivePeriodLabel != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.05,
+                              ),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              effectivePeriodLabel,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: colorScheme.onSurface.withValues(
+                                  alpha: 0.72,
+                                ),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        if (updateLabel != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.primary.withValues(
+                                alpha: 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: colorScheme.primary.withValues(
+                                  alpha: 0.16,
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 10),
-                            // Info column (middle)
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    isAr ? 'أنت الآن' : 'Your Position',
-                                    style: const TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 11,
-                                      color: Color(0xFF1976D2),
-                                    ),
-                                  ),
-                                  Text(
-                                    meFullName.isEmpty ? (isAr ? 'مستخدم' : 'User') : meFullName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 14,
-                                      color: colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    meRankIndex >= 0
-                                        ? (isAr ? 'المركز: #${meRankIndex + 1}' : 'Rank: #${meRankIndex + 1}')
-                                        : (isAr ? 'خارج الترتيب • ابدأ بتسجيل أول فاتورة' : 'Outside ranking • Record first invoice'),
-                                    style: TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontSize: 10.5,
-                                      color: const Color(0xFF1976D2).withValues(alpha: 0.60),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
+                            child: Text(
+                              updateLabel,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: colorScheme.primary,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const SizedBox(width: 10),
-                            // Score box (RTL: shows on LEFT)
-                            Container(
-                              constraints: const BoxConstraints(minWidth: 48),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1976D2).withValues(alpha: 0.10),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: const Color(0xFF1976D2).withValues(alpha: 0.22)),
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    meScoreText,
-                                    style: const TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 20,
-                                      color: Color(0xFF1976D2),
-                                      height: 1.1,
+                          ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  if (!raceEnabled)
+                    Text(
+                      isAr
+                          ? 'تم إيقاف سباق الأداء من الإعدادات.'
+                          : 'Sales race is disabled from settings.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                    )
+                  else if (_leaderboardLoading)
+                    LinearProgressIndicator(
+                      minHeight: 6,
+                      backgroundColor: colorScheme.onSurface.withValues(
+                        alpha: 0.08,
+                      ),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        colorScheme.primary,
+                      ),
+                    )
+                  else if (_leaderboardError != null)
+                    Text(
+                      isAr
+                          ? 'تعذر تحميل لوحة الصدارة'
+                          : 'Could not load leaderboard',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.error,
+                      ),
+                    )
+                  else ...[
+                    if ((isWeek || isMonth) &&
+                        ((metric == 'points' &&
+                                weeklyTargetPoints != null &&
+                                teamPoints != null) ||
+                            (metric != 'points' &&
+                                weeklyTarget != null &&
+                                teamWeight != null))) ...[
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: AlignmentDirectional.topStart,
+                            end: AlignmentDirectional.bottomEnd,
+                            colors: [
+                              isDark
+                                  ? colorScheme.surfaceContainerHighest
+                                  : Colors.white,
+                              goalColor.withValues(alpha: 0.06),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: goalColor.withValues(alpha: 0.14),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // ── عنوان + نسبة الإنجاز ──
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    isAr
+                                        ? (isMonth
+                                              ? 'هدف الفريق الشهري'
+                                              : 'هدف الفريق الأسبوعي')
+                                        : (isMonth
+                                              ? 'Monthly Team Goal'
+                                              : 'Weekly Team Goal'),
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      color: goalColor,
                                     ),
                                   ),
-                                  Text(
-                                    meScoreUnit,
-                                    style: TextStyle(
-                                      fontFamily: 'Cairo',
-                                      fontSize: 9,
-                                      color: const Color(0xFF1976D2).withValues(alpha: 0.55),
-                                      fontWeight: FontWeight.w600,
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: goalColor.withValues(alpha: 0.10),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: goalColor.withValues(alpha: 0.18),
                                     ),
+                                  ),
+                                  child: Text(
+                                    goalPercentText,
+                                    style: theme.textTheme.labelMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w800,
+                                          color: goalColor,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            // ── المحقق / الهدف / المتبقي في سطر واحد ──
+                            Row(
+                              children: [
+                                Text(
+                                  goalCurrentText,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    color: goalColor,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                Text(
+                                  '  /  ',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurface.withValues(
+                                      alpha: 0.35,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  goalTargetText,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: AppColors.primaryGold,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                if (!isGoalAchieved &&
+                                    goalRemainingText != null) ...[
+                                  const Spacer(),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.timelapse_rounded,
+                                        size: 13,
+                                        color: AppColors.warning,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        goalRemainingText,
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                              color: AppColors.warning,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ],
                                   ),
                                 ],
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            // ── شريط التقدم ──
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(999),
+                              child: TweenAnimationBuilder<double>(
+                                tween: Tween<double>(
+                                  begin: 0,
+                                  end: effectiveTargetProgress,
+                                ),
+                                duration: const Duration(milliseconds: 700),
+                                builder: (context, value, child) =>
+                                    LinearProgressIndicator(
+                                      value: value,
+                                      minHeight: 6,
+                                      backgroundColor: colorScheme.onSurface
+                                          .withValues(alpha: 0.08),
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        goalColor,
+                                      ),
+                                    ),
                               ),
                             ),
                           ],
                         ),
                       ),
-                    );
-                  }(),
-                  const SizedBox(height: 4),
-                ],
-                for (int i = 0; i < topRanking.length; i++)
-                  buildRow(topRanking[i], i),
-                if (extraRanking.isNotEmpty)
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 320),
-                    curve: Curves.easeInOutCubic,
-                    alignment: AlignmentDirectional.topCenter,
-                    child: ClipRect(
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        opacity: _showAllLeaderboardEmployees ? 1 : 0,
-                        child: _showAllLeaderboardEmployees
-                            ? Column(
-                                children: [
-                                  const SizedBox(height: 4),
-                                  for (int i = 0; i < extraRanking.length; i++)
-                                    buildRow(extraRanking[i], i + topRanking.length),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ),
-                  ),
-                if (remainingEmployeesCount > 0 || _showAllLeaderboardEmployees)
-                  Padding(
-                    padding: const EdgeInsetsDirectional.only(top: 6, bottom: 2),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () {
-                        setState(() {
-                          _showAllLeaderboardEmployees =
-                              !_showAllLeaderboardEmployees;
-                        });
-                      },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryGold.withValues(
-                            alpha: _showAllLeaderboardEmployees ? 0.10 : 0.05,
-                          ),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: AppColors.primaryGold.withValues(alpha: 0.18),
-                          ),
-                        ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              AnimatedRotation(
-                                duration: const Duration(milliseconds: 220),
-                                turns: _showAllLeaderboardEmployees ? 0.5 : 0,
-                                child: Icon(
-                                  Icons.keyboard_arrow_down_rounded,
-                                  size: 18,
-                                  color: AppColors.darkGold,
+                      const SizedBox(height: 12),
+                    ],
+                    if (allRanking.isEmpty ||
+                        (isFallback && !isWeek && !isMonth))
+                      _buildNewDayBanner(isAr, isMonth, isWeek)
+                    else ...[
+                      // ───────── Me card (only when user not in top 3) ─────────
+                      if (meEmpId != null && !meIsInTop) ...[
+                        () {
+                          final meRow = allRanking.firstWhere(
+                            (r) => (r['id'] as num?)?.toInt() == meEmpId,
+                            orElse: () => const {},
+                          );
+                          final meScore =
+                              (meRow['score'] as num?)?.toDouble() ?? 0.0;
+                          final meScoreText = switch (metric) {
+                            'count' =>
+                              (meRow['count'] as num?)?.toInt().toString() ??
+                                  '0',
+                            'points' => meScore.toStringAsFixed(0),
+                            _ => meScore.toStringAsFixed(1),
+                          };
+                          final meScoreUnit = switch (metric) {
+                            'count' => isAr ? 'فاتورة' : 'Invoice',
+                            'points' => isAr ? 'نقطة' : 'pts',
+                            _ => isAr ? 'جم' : 'g',
+                          };
+                          final auth = context.read<AuthProvider>();
+                          final meFullName = auth.fullName.trim();
+                          final meAvatarText = meFullName.isEmpty
+                              ? '?'
+                              : meFullName
+                                    .split(RegExp(r'\s+'))
+                                    .where((p) => p.isNotEmpty)
+                                    .take(2)
+                                    .map((p) => p.characters.first)
+                                    .join();
+                          return Padding(
+                            padding: const EdgeInsetsDirectional.only(
+                              bottom: 8,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? const Color(0xFF0D2A47)
+                                    : const Color(
+                                        0xFF1976D2,
+                                      ).withValues(alpha: 0.05),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: const Color(
+                                    0xFF1976D2,
+                                  ).withValues(alpha: 0.28),
+                                  strokeAlign: BorderSide.strokeAlignInside,
                                 ),
                               ),
-                              const SizedBox(width: 6),
-                              AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 180),
-                                transitionBuilder: (child, animation) =>
-                                    FadeTransition(opacity: animation, child: child),
-                                child: Text(
-                                  _showAllLeaderboardEmployees
-                                      ? (isAr
-                                            ? 'إخفاء بقية الموظفين'
-                                            : 'Hide remaining staff')
-                                      : (isAr
-                                            ? 'عرض تقدم $remainingEmployeesCount موظفين آخرين'
-                                            : 'Show progress for $remainingEmployeesCount more staff'),
-                                  key: ValueKey<bool>(_showAllLeaderboardEmployees),
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: AppColors.darkGold,
-                                    fontWeight: FontWeight.w700,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  // Avatar (RTL: shows on RIGHT)
+                                  Container(
+                                    width: 42,
+                                    height: 42,
+                                    decoration: BoxDecoration(
+                                      color: const Color(
+                                        0xFF1976D2,
+                                      ).withValues(alpha: 0.13),
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: const Color(
+                                          0xFF1976D2,
+                                        ).withValues(alpha: 0.28),
+                                      ),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        meAvatarText,
+                                        style: const TextStyle(
+                                          fontFamily: 'Cairo',
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14,
+                                          color: Color(0xFF1976D2),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  // Info column (middle)
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          isAr ? 'أنت الآن' : 'Your Position',
+                                          style: const TextStyle(
+                                            fontFamily: 'Cairo',
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 11,
+                                            color: Color(0xFF1976D2),
+                                          ),
+                                        ),
+                                        Text(
+                                          meFullName.isEmpty
+                                              ? (isAr ? 'مستخدم' : 'User')
+                                              : meFullName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontFamily: 'Cairo',
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 14,
+                                            color: colorScheme.onSurface,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          meRankIndex >= 0
+                                              ? (isAr
+                                                    ? 'المركز: #${meRankIndex + 1}'
+                                                    : 'Rank: #${meRankIndex + 1}')
+                                              : (isAr
+                                                    ? 'خارج الترتيب • ابدأ بتسجيل أول فاتورة'
+                                                    : 'Outside ranking • Record first invoice'),
+                                          style: TextStyle(
+                                            fontFamily: 'Cairo',
+                                            fontSize: 10.5,
+                                            color: const Color(
+                                              0xFF1976D2,
+                                            ).withValues(alpha: 0.60),
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  // Score box (RTL: shows on LEFT)
+                                  Container(
+                                    constraints: const BoxConstraints(
+                                      minWidth: 48,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(
+                                        0xFF1976D2,
+                                      ).withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: const Color(
+                                          0xFF1976D2,
+                                        ).withValues(alpha: 0.22),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          meScoreText,
+                                          style: const TextStyle(
+                                            fontFamily: 'Cairo',
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 20,
+                                            color: Color(0xFF1976D2),
+                                            height: 1.1,
+                                          ),
+                                        ),
+                                        Text(
+                                          meScoreUnit,
+                                          style: TextStyle(
+                                            fontFamily: 'Cairo',
+                                            fontSize: 9,
+                                            color: const Color(
+                                              0xFF1976D2,
+                                            ).withValues(alpha: 0.55),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }(),
+                        const SizedBox(height: 4),
+                      ],
+                      for (int i = 0; i < topRanking.length; i++)
+                        buildRow(topRanking[i], i),
+                      if (extraRanking.isNotEmpty)
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 320),
+                          curve: Curves.easeInOutCubic,
+                          alignment: AlignmentDirectional.topCenter,
+                          child: ClipRect(
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                              opacity: _showAllLeaderboardEmployees ? 1 : 0,
+                              child: _showAllLeaderboardEmployees
+                                  ? Column(
+                                      children: [
+                                        const SizedBox(height: 4),
+                                        for (
+                                          int i = 0;
+                                          i < extraRanking.length;
+                                          i++
+                                        )
+                                          buildRow(
+                                            extraRanking[i],
+                                            i + topRanking.length,
+                                          ),
+                                      ],
+                                    )
+                                  : const SizedBox.shrink(),
+                            ),
+                          ),
+                        ),
+                      if (remainingEmployeesCount > 0 ||
+                          _showAllLeaderboardEmployees)
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(
+                            top: 6,
+                            bottom: 2,
+                          ),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () {
+                              setState(() {
+                                _showAllLeaderboardEmployees =
+                                    !_showAllLeaderboardEmployees;
+                              });
+                            },
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryGold.withValues(
+                                  alpha: _showAllLeaderboardEmployees
+                                      ? 0.10
+                                      : 0.05,
+                                ),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: AppColors.primaryGold.withValues(
+                                    alpha: 0.18,
                                   ),
                                 ),
                               ),
-                            ],
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  AnimatedRotation(
+                                    duration: const Duration(milliseconds: 220),
+                                    turns: _showAllLeaderboardEmployees
+                                        ? 0.5
+                                        : 0,
+                                    child: Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      size: 18,
+                                      color: AppColors.darkGold,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 180),
+                                    transitionBuilder: (child, animation) =>
+                                        FadeTransition(
+                                          opacity: animation,
+                                          child: child,
+                                        ),
+                                    child: Text(
+                                      _showAllLeaderboardEmployees
+                                          ? (isAr
+                                                ? 'إخفاء بقية الموظفين'
+                                                : 'Hide remaining staff')
+                                          : (isAr
+                                                ? 'عرض تقدم $remainingEmployeesCount موظفين آخرين'
+                                                : 'Show progress for $remainingEmployeesCount more staff'),
+                                      key: ValueKey<bool>(
+                                        _showAllLeaderboardEmployees,
+                                      ),
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(
+                                            color: AppColors.darkGold,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                      ),
-                    ),
-                  ),
-                ],
-            ],
-            if (raceEnabled &&
-                adminSummary != null &&
-                !(isFallback && !isWeek && !isMonth) &&
-                ((adminSummary['total_sales_amount'] != null) ||
-                    (adminSummary['total_purchase_amount'] != null) ||
-                    (adminSummary['total_points'] != null))) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  if (adminSummary['total_sales_amount'] != null) ...[
-                    Expanded(
-                      child: _buildSummaryTileWithBorder(
-                        theme: theme,
-                        colorScheme: colorScheme,
-                        icon: Icons.north_rounded,
-                        label: isAr ? 'مبلغ المبيعات' : 'Sales',
-                        value:
-                            '${adminSummary['currency'] ?? 'SAR'} '
-                            '${NumberFormat('#,##0', 'en').format(
-                              ((adminSummary['total_sales_amount'] as num?) ?? 0).round(),
-                            )}',
-                        accent: AppColors.success,
-                        borderBottomColor: AppColors.success,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
+                        ),
+                    ],
                   ],
-                  if (adminSummary['total_purchase_amount'] != null) ...[
-                    Expanded(
-                      child: _buildSummaryTileWithBorder(
-                        theme: theme,
-                        colorScheme: colorScheme,
-                        icon: Icons.south_rounded,
-                        label: isAr ? 'إجمالي المشتريات' : 'Purchases',
-                        value:
-                            '${adminSummary['currency'] ?? 'SAR'} '
-                            '${NumberFormat('#,##0', 'en').format(
-                              ((adminSummary['total_purchase_amount'] as num?) ?? 0).round(),
-                            )}',
-                        accent: const Color(0xFF5E35B1),
-                        borderBottomColor: const Color(0xFF5E35B1),
-                      ),
+                  if (raceEnabled &&
+                      adminSummary != null &&
+                      !(isFallback && !isWeek && !isMonth) &&
+                      ((adminSummary['total_sales_amount'] != null) ||
+                          (adminSummary['total_purchase_amount'] != null) ||
+                          (adminSummary['total_points'] != null))) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        if (adminSummary['total_sales_amount'] != null) ...[
+                          Expanded(
+                            child: _buildSummaryTileWithBorder(
+                              theme: theme,
+                              colorScheme: colorScheme,
+                              icon: Icons.north_rounded,
+                              label: isAr ? 'مبلغ المبيعات' : 'Sales',
+                              value:
+                                  '${cu.isNewSarSymbol(adminSummary['currency']?.toString()) ? '\u0631.\u0633' : (adminSummary['currency'] ?? currencySymbol)} '
+                                  '${NumberFormat('#,##0', 'en').format(((adminSummary['total_sales_amount'] as num?) ?? 0).round())}',
+                              accent: AppColors.success,
+                              borderBottomColor: AppColors.success,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        if (adminSummary['total_purchase_amount'] != null) ...[
+                          Expanded(
+                            child: _buildSummaryTileWithBorder(
+                              theme: theme,
+                              colorScheme: colorScheme,
+                              icon: Icons.south_rounded,
+                              label: isAr ? 'إجمالي المشتريات' : 'Purchases',
+                              value:
+                                  '${cu.isNewSarSymbol(adminSummary['currency']?.toString()) ? '\u0631.\u0633' : (adminSummary['currency'] ?? currencySymbol)} '
+                                  '${NumberFormat('#,##0', 'en').format(((adminSummary['total_purchase_amount'] as num?) ?? 0).round())}',
+                              accent: const Color(0xFF5E35B1),
+                              borderBottomColor: const Color(0xFF5E35B1),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        if (adminSummary['total_points'] != null)
+                          Expanded(
+                            child: _buildSummaryTileWithBorder(
+                              theme: theme,
+                              colorScheme: colorScheme,
+                              icon: Icons.grade_rounded,
+                              label: isAr ? 'إجمالي النقاط' : 'Points',
+                              value: isAr
+                                  ? '${adminSummary['total_points']} نقطة'
+                                  : '${adminSummary['total_points']} pts',
+                              accent: AppColors.deepGold,
+                              borderBottomColor: AppColors.primaryGold,
+                            ),
+                          ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
                   ],
-                  if (adminSummary['total_points'] != null)
-                    Expanded(
-                      child: _buildSummaryTileWithBorder(
-                        theme: theme,
-                        colorScheme: colorScheme,
-                        icon: Icons.grade_rounded,
-                        label: isAr ? 'إجمالي النقاط' : 'Points',
-                        value: isAr
-                            ? '${adminSummary['total_points']} نقطة'
-                            : '${adminSummary['total_points']} pts',
-                        accent: AppColors.deepGold,
-                        borderBottomColor: AppColors.primaryGold,
-                      ),
-                    ),
-                ],
-              ),
-            ],
-            ], // end else (not today-fallback)
-                ],
-              ),
+                ], // end else (not today-fallback)
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3386,7 +3588,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       isArabic: widget.isArabic,
       ouncePriceUsd: goldPrice,
       openingOuncePriceUsd: goldPriceOpening,
-      currencySymbol: settings.currencySymbol,
+      currencySymbol: settings.currencySymbolText,
+      isNewSar: settings.currencyIsNewSar,
       exchangeRate: exchangeRate,
       refreshInterval: settings.goldPriceTickerRefreshInterval,
     );
@@ -3424,19 +3627,27 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   Widget _buildNewDayBanner(bool isAr, bool isMonth, bool isWeek) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final title = isAr
-        ? (isMonth ? 'شهر جديد بدأ' : isWeek ? 'أسبوع جديد بدأ' : 'يوم جديد بدأ')
-        : (isMonth ? 'New Month Begins' : isWeek ? 'New Week Begins' : 'New Day Begins');
+        ? (isMonth
+              ? 'شهر جديد بدأ'
+              : isWeek
+              ? 'أسبوع جديد بدأ'
+              : 'يوم جديد بدأ')
+        : (isMonth
+              ? 'New Month Begins'
+              : isWeek
+              ? 'New Week Begins'
+              : 'New Day Begins');
     final description = isAr
         ? (isMonth
-            ? ' — ستظهر النتائج بمجرد تسجيل أول فاتورة هذا الشهر.'
-            : isWeek
-                ? ' — ستظهر النتائج بمجرد تسجيل أول فاتورة هذا الأسبوع.'
-                : ' — ستظهر النتائج بمجرد تسجيل أول فاتورة اليوم.')
+              ? ' — ستظهر النتائج بمجرد تسجيل أول فاتورة هذا الشهر.'
+              : isWeek
+              ? ' — ستظهر النتائج بمجرد تسجيل أول فاتورة هذا الأسبوع.'
+              : ' — ستظهر النتائج بمجرد تسجيل أول فاتورة اليوم.')
         : (isMonth
-            ? ' — Results appear after the first invoice this month.'
-            : isWeek
-                ? ' — Results appear after the first invoice this week.'
-                : ' — Results appear after recording the first invoice today.');
+              ? ' — Results appear after the first invoice this month.'
+              : isWeek
+              ? ' — Results appear after the first invoice this week.'
+              : ' — Results appear after recording the first invoice today.');
 
     return Container(
       width: double.infinity,
@@ -3463,10 +3674,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         children: [
           AnimatedBuilder(
             animation: _sunScale,
-            builder: (context, child) => Transform.scale(
-              scale: _sunScale.value,
-              child: child,
-            ),
+            builder: (context, child) =>
+                Transform.scale(scale: _sunScale.value, child: child),
             child: Container(
               width: 36,
               height: 36,
@@ -3485,7 +3694,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   ),
                 ],
               ),
-              child: const Icon(Icons.wb_sunny_rounded, color: Colors.white, size: 20),
+              child: const Icon(
+                Icons.wb_sunny_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -3496,14 +3709,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   fontSize: 12,
                   fontFamily: 'Cairo',
                   height: 1.5,
-                  color: isDark ? const Color(0xFFE0E0E0) : const Color(0xFF212121),
+                  color: isDark
+                      ? const Color(0xFFE0E0E0)
+                      : const Color(0xFF212121),
                 ),
                 children: [
                   TextSpan(
                     text: title,
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
-                      color: isDark ? AppColors.primaryGold : AppColors.darkGold,
+                      color: isDark
+                          ? AppColors.primaryGold
+                          : AppColors.darkGold,
                     ),
                   ),
                   TextSpan(text: description),
@@ -3522,7 +3739,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       0 => const [Color(0xFFFFE566), Color(0xFFBF8800)],
       1 => const [Color(0xFFEEEEEE), Color(0xFF888888)],
       2 => const [Color(0xFFE8A87C), Color(0xFF7A3F0E)],
-      _ => [medalAccent.withValues(alpha: 0.18), medalAccent.withValues(alpha: 0.08)],
+      _ => [
+        medalAccent.withValues(alpha: 0.18),
+        medalAccent.withValues(alpha: 0.08),
+      ],
     };
     final shadowColor = switch (index) {
       0 => const Color(0xFFDAA520),
@@ -3574,7 +3794,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               fontSize: 26,
               height: 1.0,
               shadows: const [
-                Shadow(color: Colors.black38, blurRadius: 5, offset: Offset(0, 3)),
+                Shadow(
+                  color: Colors.black38,
+                  blurRadius: 5,
+                  offset: Offset(0, 3),
+                ),
                 Shadow(color: Color(0xFFFFAA00), blurRadius: 20),
                 Shadow(color: Color(0xFFFFD700), blurRadius: 10),
               ],
@@ -3614,7 +3838,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             children: [
               TextSpan(
                 text: value,
-                style: TextStyle(fontWeight: FontWeight.w800, color: valueColor),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: valueColor,
+                ),
               ),
               if (label.isNotEmpty)
                 TextSpan(
@@ -3675,7 +3902,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 fontSize: 10.5,
                 fontFamily: 'Cairo',
                 fontWeight: FontWeight.w600,
-                color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF616161),
+                color: isDark
+                    ? const Color(0xFFBDBDBD)
+                    : const Color(0xFF616161),
               ),
               textAlign: TextAlign.center,
             ),
@@ -3788,8 +4017,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
+                    cu.SarAwareText(
                       value,
+                      isNewSar: context
+                          .read<SettingsProvider>()
+                          .currencyIsNewSar,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -3904,7 +4136,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                             fontFamily: 'Cairo',
                             fontWeight: FontWeight.w600,
                             fontSize: 12.5,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.60),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.60,
+                            ),
                           ),
                         ),
                       ),
@@ -3939,8 +4173,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       builder: (context, constraints) {
         const cols = 3;
         const spacing = 8.0;
-        final tileWidth =
-            (constraints.maxWidth - spacing * (cols - 1)) / cols;
+        final tileWidth = (constraints.maxWidth - spacing * (cols - 1)) / cols;
 
         // ارتفاع ثابت يكفي المحتوى: أيقونة 36 + مسافة 6 + نص سطرين 11*1.3*2 = ~71
         // نضيف هامشاً للـ padding الداخلي
@@ -4138,12 +4371,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 Icon(Icons.info_outline, color: AppColors.info, size: 40),
                 const SizedBox(height: 12),
                 Text(
-                  isAr ? 'لا توجد أزرار وصول سريع مفعّلة' : 'No quick actions enabled',
+                  isAr
+                      ? 'لا توجد أزرار وصول سريع مفعّلة'
+                      : 'No quick actions enabled',
                   style: theme.textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  isAr ? 'اذهب إلى الإعدادات لتخصيص الأزرار' : 'Go to settings to customize buttons',
+                  isAr
+                      ? 'اذهب إلى الإعدادات لتخصيص الأزرار'
+                      : 'Go to settings to customize buttons',
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -4158,7 +4395,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
         // Filter by group field (set in catalog — no hardcoded route lists needed).
         final salesActions = activeActions
-            .where((a) => a.id != 'sales_invoice' && a.group == QuickActionGroup.sales)
+            .where(
+              (a) =>
+                  a.id != 'sales_invoice' && a.group == QuickActionGroup.sales,
+            )
             .toList();
         final accountingActions = activeActions
             .where((a) => a.group == QuickActionGroup.accounting)
@@ -4170,16 +4410,20 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         final compact = MediaQuery.sizeOf(context).width < 640;
         final defaultVisible = compact ? 2 : 3;
 
-        final salesExpanded    = _expandedGroups.contains(QuickActionGroup.sales);
-        final accountingExpanded = _expandedGroups.contains(QuickActionGroup.accounting);
-        final adminExpanded    = _expandedGroups.contains(QuickActionGroup.admin);
+        final salesExpanded = _expandedGroups.contains(QuickActionGroup.sales);
+        final accountingExpanded = _expandedGroups.contains(
+          QuickActionGroup.accounting,
+        );
+        final adminExpanded = _expandedGroups.contains(QuickActionGroup.admin);
 
-        final shownSales       = salesActions.take(defaultVisible).toList();
-        final hiddenSales      = salesActions.skip(defaultVisible).toList();
-        final shownAccounting  = accountingActions.take(defaultVisible).toList();
-        final hiddenAccounting = accountingActions.skip(defaultVisible).toList();
-        final shownAdmin       = adminActions.take(defaultVisible).toList();
-        final hiddenAdmin      = adminActions.skip(defaultVisible).toList();
+        final shownSales = salesActions.take(defaultVisible).toList();
+        final hiddenSales = salesActions.skip(defaultVisible).toList();
+        final shownAccounting = accountingActions.take(defaultVisible).toList();
+        final hiddenAccounting = accountingActions
+            .skip(defaultVisible)
+            .toList();
+        final shownAdmin = adminActions.take(defaultVisible).toList();
+        final hiddenAdmin = adminActions.skip(defaultVisible).toList();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4198,7 +4442,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildPrimaryActionButton(action: primaryAction, theme: theme),
+                  _buildPrimaryActionButton(
+                    action: primaryAction,
+                    theme: theme,
+                  ),
                   if (shownSales.isNotEmpty) ...[
                     const SizedBox(height: 10),
                     _buildTwoColumnGrid(shownSales, theme),
@@ -4212,9 +4459,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     _buildQuickGroupFooter(
                       theme: theme,
                       expanded: salesExpanded,
-                      onTap: () => setState(() => salesExpanded
-                          ? _expandedGroups.remove(QuickActionGroup.sales)
-                          : _expandedGroups.add(QuickActionGroup.sales)),
+                      onTap: () => setState(
+                        () => salesExpanded
+                            ? _expandedGroups.remove(QuickActionGroup.sales)
+                            : _expandedGroups.add(QuickActionGroup.sales),
+                      ),
                     ),
                   ],
                 ],
@@ -4227,7 +4476,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 icon: Icons.menu_book_rounded,
                 iconColor: AppColors.info,
                 title: isAr ? 'المحاسبة والتقارير' : 'Accounting & Reports',
-                trailing: _buildCustomizeTrailing(theme, QuickActionGroup.accounting),
+                trailing: _buildCustomizeTrailing(
+                  theme,
+                  QuickActionGroup.accounting,
+                ),
                 child: Column(
                   children: [
                     _buildTwoColumnGrid(shownAccounting, theme),
@@ -4240,9 +4492,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       _buildQuickGroupFooter(
                         theme: theme,
                         expanded: accountingExpanded,
-                        onTap: () => setState(() => accountingExpanded
-                            ? _expandedGroups.remove(QuickActionGroup.accounting)
-                            : _expandedGroups.add(QuickActionGroup.accounting)),
+                        onTap: () => setState(
+                          () => accountingExpanded
+                              ? _expandedGroups.remove(
+                                  QuickActionGroup.accounting,
+                                )
+                              : _expandedGroups.add(
+                                  QuickActionGroup.accounting,
+                                ),
+                        ),
                       ),
                     ],
                   ],
@@ -4256,7 +4514,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 icon: Icons.settings_rounded,
                 iconColor: AppColors.darkGold,
                 title: isAr ? 'الإدارة' : 'Administration',
-                trailing: _buildCustomizeTrailing(theme, QuickActionGroup.admin),
+                trailing: _buildCustomizeTrailing(
+                  theme,
+                  QuickActionGroup.admin,
+                ),
                 child: Column(
                   children: [
                     _buildTwoColumnGrid(shownAdmin, theme),
@@ -4269,9 +4530,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       _buildQuickGroupFooter(
                         theme: theme,
                         expanded: adminExpanded,
-                        onTap: () => setState(() => adminExpanded
-                            ? _expandedGroups.remove(QuickActionGroup.admin)
-                            : _expandedGroups.add(QuickActionGroup.admin)),
+                        onTap: () => setState(
+                          () => adminExpanded
+                              ? _expandedGroups.remove(QuickActionGroup.admin)
+                              : _expandedGroups.add(QuickActionGroup.admin),
+                        ),
                       ),
                     ],
                   ],
@@ -4296,7 +4559,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       builder: (context, setState) => MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => hovered = true),
-        onExit:  (_) => setState(() => hovered = false),
+        onExit: (_) => setState(() => hovered = false),
         child: GestureDetector(
           onTap: () => _handleQuickActionTap(action.route),
           child: AnimatedScale(
@@ -4344,7 +4607,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       ],
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 16,
+                ),
                 child: Row(
                   children: [
                     // زر + في اليسار (RTL: يمين)
@@ -4354,10 +4620,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: hovered ? 0.30 : 0.20),
+                        color: Colors.white.withValues(
+                          alpha: hovered ? 0.30 : 0.20,
+                        ),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.add_rounded, color: Colors.white, size: 22),
+                      child: const Icon(
+                        Icons.add_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -4377,7 +4649,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            isAr ? 'السريع · الأكثر استخداماً' : 'Quick · Most used',
+                            isAr
+                                ? 'السريع · الأكثر استخداماً'
+                                : 'Quick · Most used',
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.80),
                               fontSize: 11,
@@ -4431,7 +4705,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       builder: (context, setState) => MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => hovered = true),
-        onExit:  (_) => setState(() => hovered = false),
+        onExit: (_) => setState(() => hovered = false),
         child: GestureDetector(
           onTap: () => _handleQuickActionTap(action.route),
           child: AnimatedScale(
@@ -4445,8 +4719,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 color: hovered
                     ? (isDark ? theme.colorScheme.surface : Colors.white)
                     : (isDark
-                        ? theme.colorScheme.surfaceContainerHigh
-                        : const Color(0xFFF4F4F5)),
+                          ? theme.colorScheme.surfaceContainerHigh
+                          : const Color(0xFFF4F4F5)),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
                   color: hovered
@@ -4462,14 +4736,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           offset: const Offset(0, 4),
                         ),
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: isDark ? 0.13 : 0.06),
+                          color: Colors.black.withValues(
+                            alpha: isDark ? 0.13 : 0.06,
+                          ),
                           blurRadius: 6,
                           offset: const Offset(0, 2),
                         ),
                       ]
                     : [
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: isDark ? 0.04 : 0.02),
+                          color: Colors.black.withValues(
+                            alpha: isDark ? 0.04 : 0.02,
+                          ),
                           blurRadius: 2,
                           offset: const Offset(0, 1),
                         ),
@@ -4527,7 +4805,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         style: TextStyle(
                           fontSize: 9,
                           fontFamily: 'Cairo',
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.45,
+                          ),
                           height: 1.2,
                         ),
                       ),
@@ -4541,7 +4821,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       ),
     );
   }
-
 
   // معالجة النقر على أزرار الوصول السريع
   Future<void> _handleQuickActionTap(String route) async {
@@ -4847,7 +5126,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => const PurchaseInvoiceScreen(supplierReturnMode: true),
+            builder: (_) =>
+                const PurchaseInvoiceScreen(supplierReturnMode: true),
           ),
         );
         break;
@@ -4881,19 +5161,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => GoldPositionReportScreen(
-              api: api,
-              isArabic: widget.isArabic,
-            ),
+            builder: (_) =>
+                GoldPositionReportScreen(api: api, isArabic: widget.isArabic),
           ),
         );
         break;
       case 'payroll_report':
         result = await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => PayrollReportScreen(api: api),
-          ),
+          MaterialPageRoute(builder: (_) => PayrollReportScreen(api: api)),
         );
         break;
       case 'safe_boxes':
@@ -4906,10 +5182,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => BonusManagementScreen(
-              api: api,
-              isArabic: widget.isArabic,
-            ),
+            builder: (_) =>
+                BonusManagementScreen(api: api, isArabic: widget.isArabic),
           ),
         );
         break;
@@ -4917,9 +5191,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         result = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => BranchesManagementScreen(
-              isArabic: widget.isArabic,
-            ),
+            builder: (_) => BranchesManagementScreen(isArabic: widget.isArabic),
           ),
         );
         break;
@@ -4933,26 +5205,20 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       case 'about':
         result = await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => const SettingsScreenEnhanced(),
-          ),
+          MaterialPageRoute(builder: (_) => const SettingsScreenEnhanced()),
         );
         break;
       case 'barcode_scan':
         {
           final scanned = await Navigator.push<String>(
             context,
-            MaterialPageRoute(
-              builder: (_) => const BarcodeScannerScreen(),
-            ),
+            MaterialPageRoute(builder: (_) => const BarcodeScannerScreen()),
           );
           if (scanned != null && scanned.isNotEmpty && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  widget.isArabic
-                      ? 'تم المسح: $scanned'
-                      : 'Scanned: $scanned',
+                  widget.isArabic ? 'تم المسح: $scanned' : 'Scanned: $scanned',
                 ),
                 duration: const Duration(seconds: 3),
               ),
@@ -5001,7 +5267,6 @@ class _DrawerSectionItem {
   });
 }
 
-
 class _AnimatedExpandSection extends StatefulWidget {
   final bool expanded;
   final Widget child;
@@ -5036,8 +5301,8 @@ class _AnimatedExpandSectionState extends State<_AnimatedExpandSection>
   }
 
   void _onStatus(AnimationStatus status) {
-    final running = status == AnimationStatus.forward ||
-        status == AnimationStatus.reverse;
+    final running =
+        status == AnimationStatus.forward || status == AnimationStatus.reverse;
     if (running != _animating) setState(() => _animating = running);
   }
 
@@ -5119,7 +5384,10 @@ class _RankBadgeNotchPainter extends CustomPainter {
     path.lineTo(size.width - r, 0);
     path.arcToPoint(Offset(size.width, r), radius: Radius.circular(r));
     path.lineTo(size.width, size.height - r);
-    path.arcToPoint(Offset(size.width - r, size.height), radius: Radius.circular(r));
+    path.arcToPoint(
+      Offset(size.width - r, size.height),
+      radius: Radius.circular(r),
+    );
     path.lineTo(r, size.height);
     path.arcToPoint(Offset(0, size.height - r), radius: Radius.circular(r));
     path.lineTo(0, r);
@@ -5141,6 +5409,5 @@ class _RankBadgeNotchPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _RankBadgeNotchPainter old) =>
-      old.gradientColors != gradientColors ||
-      old.notchRadius != notchRadius;
+      old.gradientColors != gradientColors || old.notchRadius != notchRadius;
 }

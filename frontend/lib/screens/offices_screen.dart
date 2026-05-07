@@ -612,6 +612,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
 
   void _showBalanceDialog(Map<String, dynamic> balance) {
     final isAr = widget.isArabic;
+    final currencySymbol = context.read<SettingsProvider>().currencySymbolText;
 
     final cashBalance = _asDouble(balance['balance_cash']);
     final goldMap = (balance['balance_gold'] is Map)
@@ -706,7 +707,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
                               ? 'متوسط تكلفة التسكير'
                               : 'Avg Closing Cost',
                           value:
-                              '${avgPrice.toStringAsFixed(2)} ${isAr ? "ر.س/جم" : "SAR/g"}',
+                              '${avgPrice.toStringAsFixed(2)} $currencySymbol/${isAr ? "جم" : "g"}',
                           icon: Icons.price_change,
                         ),
                       ),
@@ -725,8 +726,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
                 _formatSigned(
                   cashBalance,
                   isArabic: isAr,
-                  unitAr: 'ر.س',
-                  unitEn: 'SAR',
+                  unitAr: currencySymbol,
+                  unitEn: currencySymbol,
                   decimals: 2,
                 ),
               ),
@@ -762,7 +763,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
                 '${isAr ? "إجمالي الوزن المشترى" : "Total Weight"}: ${balance['statistics']['total_weight_purchased']} ${isAr ? "جم" : "g"}',
               ),
               Text(
-                '${isAr ? "إجمالي المبالغ المدفوعة" : "Total Paid"}: ${balance['statistics']['total_amount_paid']} ${isAr ? "ر.س" : "SAR"}',
+                '${isAr ? "إجمالي المبالغ المدفوعة" : "Total Paid"}: ${balance['statistics']['total_amount_paid']} $currencySymbol',
               ),
             ],
           ),
@@ -910,6 +911,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
 
   Widget _buildOfficeCard(Map<String, dynamic> office) {
     final isAr = widget.isArabic;
+    final currencySymbol = context.read<SettingsProvider>().currencySymbolText;
     final theme = Theme.of(context);
     final isActive = office['active'] ?? true;
 
@@ -1027,8 +1029,8 @@ class _OfficesScreenState extends State<OfficesScreen> {
                       _formatSigned(
                         cashBalance,
                         isArabic: isAr,
-                        unitAr: 'ر.س',
-                        unitEn: 'SAR',
+                        unitAr: currencySymbol,
+                        unitEn: currencySymbol,
                         decimals: 2,
                       ),
                       cashBalance < 0 ? AppColors.error : AppColors.success,

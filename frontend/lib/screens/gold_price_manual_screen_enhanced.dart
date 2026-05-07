@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../api_service.dart';
 import '../utils.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 /// شاشة تحديث سعر الذهب المحسّنة بتصميم احترافي
 class GoldPriceManualScreenEnhanced extends StatefulWidget {
@@ -105,7 +107,7 @@ class _GoldPriceManualScreenEnhancedState
     try {
       final oldPrice = _currentPrice;
 
-      // Backend stores gold price as USD/oz. Convert when user inputs SAR/gram.
+      // Backend stores gold price as USD/oz. Convert when user inputs ${context.read<SettingsProvider>().currencySymbolText}/gram.
       final double priceUsdPerOz = _useUsdInput
           ? usdValue!
           : _sarToUsdPerOz(sarValue!);
@@ -207,7 +209,7 @@ class _GoldPriceManualScreenEnhancedState
                               style: TextStyle(fontSize: 14),
                             ),
                             Text(
-                              '${_currentPrice!.toStringAsFixed(2)} ر.س/غ',
+                              '${_currentPrice!.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.grey.shade700,
@@ -222,7 +224,7 @@ class _GoldPriceManualScreenEnhancedState
                         children: [
                           Text('السعر الجديد:', style: TextStyle(fontSize: 14)),
                           Text(
-                            '${newPriceSarPerGram.toStringAsFixed(2)} ر.س/غ',
+                            '${newPriceSarPerGram.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: _goldColor,
@@ -239,7 +241,7 @@ class _GoldPriceManualScreenEnhancedState
                           children: [
                             Text('الفرق:', style: TextStyle(fontSize: 14)),
                             Text(
-                              '${(newPriceSarPerGram - _currentPrice!).toStringAsFixed(2)} ر.س/غ',
+                              '${(newPriceSarPerGram - _currentPrice!).toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: newPriceSarPerGram > _currentPrice!
@@ -427,7 +429,7 @@ class _GoldPriceManualScreenEnhancedState
                       SizedBox(height: 4),
                       Text(
                         _currentPrice != null
-                            ? '${_currentPrice!.toStringAsFixed(2)} ر.س'
+                            ? '${_currentPrice!.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}'
                             : 'غير متوفر',
                         style: TextStyle(
                           fontSize: 32,
@@ -594,7 +596,9 @@ class _GoldPriceManualScreenEnhancedState
                   ),
                   hintText: 'مثال: 250.50',
                   prefixIcon: Icon(Icons.monetization_on, color: _goldColor),
-                  suffixText: 'ر.س',
+                  suffixText: context
+                      .read<SettingsProvider>()
+                      .currencySymbolText,
                   suffixStyle: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
@@ -854,7 +858,7 @@ class _GoldPriceManualScreenEnhancedState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '${price.toStringAsFixed(2)} ر.س/غ',
+                            '${price.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 16,

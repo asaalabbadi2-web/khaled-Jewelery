@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../api_service.dart';
+import '../../providers/settings_provider.dart';
 import '../../theme/app_theme.dart';
 
 class EmployeeScrapLedgerReportScreen extends StatefulWidget {
@@ -35,7 +37,8 @@ class _EmployeeScrapLedgerReportScreenState
   bool _branchesLoading = false;
 
   late final NumberFormat _weightFormat;
-  late final NumberFormat _currencyFormat;
+  late NumberFormat _currencyFormat;
+  String _currencySymbol = '';
 
   @override
   void initState() {
@@ -43,11 +46,25 @@ class _EmployeeScrapLedgerReportScreenState
     _weightFormat = NumberFormat('#,##0.###');
     _currencyFormat = NumberFormat.currency(
       locale: widget.isArabic ? 'ar' : 'en',
-      symbol: 'ر.س',
+      symbol: _currencySymbol,
       decimalDigits: 2,
     );
     _loadBranches();
     _loadReport();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final symbol = context.watch<SettingsProvider>().currencySymbolText;
+    if (symbol != _currencySymbol) {
+      _currencySymbol = symbol;
+      _currencyFormat = NumberFormat.currency(
+        locale: widget.isArabic ? 'ar' : 'en',
+        symbol: _currencySymbol,
+        decimalDigits: 2,
+      );
+    }
   }
 
   Map<String, dynamic> get _totals =>
@@ -671,9 +688,7 @@ class _EmployeeScrapLedgerReportScreenState
               color: theme.colorScheme.surface,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
-                side: BorderSide(
-                  color: borderColor,
-                ),
+                side: BorderSide(color: borderColor),
               ),
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -716,9 +731,7 @@ class _EmployeeScrapLedgerReportScreenState
                               color: theme.colorScheme.onErrorContainer,
                             ),
                             backgroundColor: theme.colorScheme.errorContainer,
-                            label: Text(
-                              isArabic ? 'غير مُسند' : 'Unassigned',
-                            ),
+                            label: Text(isArabic ? 'غير مُسند' : 'Unassigned'),
                           ),
                         Chip(
                           label: Text(

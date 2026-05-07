@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as theme;
 import 'clearing_settlement_screen.dart';
 
@@ -304,7 +306,8 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
         Expanded(
           child: _summaryChip(
             label: 'إجمالي المستحق',
-            value: '${_formatAmount(totalDue)} ر.س',
+            value:
+                '${_formatAmount(totalDue)} ${context.read<SettingsProvider>().currencySymbolText}',
             icon: Icons.pending_actions,
             color: totalDue > 0
                 ? theme.AppColors.warning
@@ -481,7 +484,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                         Row(
                           children: [
                             _infoTag(
-                              'رصيد الخزينة: ${_formatAmount(liveBalance)} ر.س',
+                              'رصيد الخزينة: ${_formatAmount(liveBalance)} ${context.read<SettingsProvider>().currencySymbolText}',
                               theme.AppColors.info,
                             ),
                             const SizedBox(width: 6),
@@ -505,7 +508,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                           ),
                         ),
                         Text(
-                          'ر.س مستحق',
+                          '${context.read<SettingsProvider>().currencySymbolText} مستحق',
                           style: TextStyle(
                             fontSize: 10,
                             color: Colors.grey.shade500,
@@ -526,7 +529,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                           ),
                         ),
                         Text(
-                          'ر.س تسوية زائدة',
+                          '${context.read<SettingsProvider>().currencySymbolText} تسوية زائدة',
                           style: TextStyle(
                             fontSize: 10,
                             color: Colors.grey.shade500,
@@ -714,7 +717,7 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                                     ),
                                   ),
                                   Text(
-                                    '${_formatAmount(amt)} ر.س',
+                                    '${_formatAmount(amt)} ${context.read<SettingsProvider>().currencySymbolText}',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w700,
                                       color: theme.AppColors.warning,

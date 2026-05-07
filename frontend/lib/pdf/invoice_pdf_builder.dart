@@ -1,21 +1,19 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../pdf/pdf_sar_cache.dart';
 import '../pdf/pdf_text_utils.dart';
 import '../providers/settings_provider.dart';
 
 class InvoicePdfOptions {
   final bool isArabic;
 
-  const InvoicePdfOptions({
-    this.isArabic = true,
-  });
+  const InvoicePdfOptions({this.isArabic = true});
 }
 
 class InvoicePdfBuilder {
@@ -47,38 +45,88 @@ class InvoicePdfBuilder {
     required InvoicePdfOptions options,
     SettingsProvider? settings,
   }) async {
-    // Fonts
+    // ═══ Main thread: lazy-load assets into cache on first print ═══
+    await Future.wait([
+      PdfSarCache.ensureFontBytes(),
+      PdfSarCache.ensureDefaultLogo(),
+    ]);
+
+    final fontRegBytes = PdfSarCache.fontRegBytes!;
+    final fontBoldBytes = PdfSarCache.fontBoldBytes!;
+
+    const amberColor = PdfColor.fromInt(0xFF8B6914);
+    const darkColor = PdfColor.fromInt(0xFF1A1A1A);
+    final isNewSar = settings?.currencyIsNewSar == true;
+    if (isNewSar) {
+      await Future.wait([
+        PdfSarCache.tinted(amberColor),
+        PdfSarCache.tinted(darkColor),
+      ]);
+    }
+    final sarGoldBytes = isNewSar ? PdfSarCache.tintedBytes(amberColor) : null;
+    final sarTextBytes = isNewSar ? PdfSarCache.tintedBytes(darkColor) : null;
+
+    final showLogoFlag = settings?.showCompanyLogo ?? true;
+    Uint8List? logoBytes;
+    if (showLogoFlag) {
+      final logoB64 = (settings?.settings['company_logo_base64'] ?? '')
+          .toString()
+          .trim();
+      if (logoB64.isNotEmpty) {
+        try {
+          var p = logoB64;
+          final ci = p.indexOf(',');
+          if (p.startsWith('data:') && ci >= 0) p = p.substring(ci + 1);
+          final raw = base64Decode(p);
+          if (raw.isNotEmpty) {
+            logoBytes = PdfSarCache.resizePng(raw, 128) ?? raw;
+          }
+        } catch (_) {}
+      }
+      if (logoBytes == null) {
+        final raw =
+            PdfSarCache.defaultLogoBytes ??
+            (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+        logoBytes = PdfSarCache.resizePng(raw, 128) ?? raw;
+      }
+    }
+
+    final cashSym = settings?.currencySymbolText ?? 'ر.س';
+    final coName = (settings?.companyName.trim() ?? '').isNotEmpty
+        ? settings!.companyName.trim()
+        : (options.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry');
+    final coCr = settings?.companyCrNumber.trim() ?? '';
+    final coVat = settings?.companyTaxNumber.trim() ?? '';
+    final coPhone = settings?.companyPhone.trim() ?? '';
+    final coAddr = settings?.companyAddress.trim() ?? '';
+
+    await Future.delayed(Duration.zero);
+
+    // Build fonts from cached bytes.
     pw.Font fontReg;
     pw.Font fontBold;
     try {
-      final reg = (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-          .buffer
-          .asUint8List();
-      final bold = (await rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
-          .buffer
-          .asUint8List();
-      fontReg = pw.Font.ttf(reg.buffer.asByteData());
-      fontBold = pw.Font.ttf(bold.buffer.asByteData());
+      fontReg = pw.Font.ttf(fontRegBytes.buffer.asByteData());
+      fontBold = pw.Font.ttf(fontBoldBytes.buffer.asByteData());
     } catch (_) {
       fontReg = pw.Font.helvetica();
       fontBold = pw.Font.helveticaBold();
     }
-
-    Future<Uint8List?> resizeImageBytes(Uint8List bytes, int targetSize) async {
-      try {
-        final codec = await ui.instantiateImageCodec(
-          bytes,
-          targetWidth: targetSize,
-          targetHeight: targetSize,
-        );
-        final frame = await codec.getNextFrame();
-        final byteData =
-            await frame.image.toByteData(format: ui.ImageByteFormat.png);
-        frame.image.dispose();
-        if (byteData != null) return byteData.buffer.asUint8List();
-      } catch (_) {}
-      return null;
-    }
+    pw.MemoryImage? logoImage = logoBytes != null
+        ? pw.MemoryImage(logoBytes)
+        : null;
+    pw.ImageProvider? sarGold = sarGoldBytes != null
+        ? pw.MemoryImage(sarGoldBytes)
+        : null;
+    pw.ImageProvider? sarText = sarTextBytes != null
+        ? pw.MemoryImage(sarTextBytes)
+        : null;
+    final cashCurrencySymbol = cashSym;
+    final companyName = coName;
+    final companyCr = coCr;
+    final companyVat = coVat;
+    final companyPhone = coPhone;
+    final companyAddr = coAddr;
 
     double toDouble(dynamic v) {
       if (v is num) return v.toDouble();
@@ -95,8 +143,6 @@ class InvoicePdfBuilder {
       return DateFormat('yyyy-MM-dd', 'en').format(dt);
     }
 
-    String money(dynamic v) => toDouble(v).toStringAsFixed(2);
-
     String weight(dynamic v) => toDouble(v).toStringAsFixed(3);
 
     String safeStr(dynamic v) => (v ?? '').toString().trim();
@@ -105,8 +151,8 @@ class InvoicePdfBuilder {
     final invoiceNumber = (safeStr(invoice['invoice_type_id']).isNotEmpty)
         ? '#${safeStr(invoice['invoice_type_id'])}'
         : (safeStr(invoice['id']).isNotEmpty)
-            ? '#${safeStr(invoice['id'])}'
-            : '#—';
+        ? '#${safeStr(invoice['id'])}'
+        : '#—';
 
     final dateText = fmtDate(invoice['date']);
     final printDate = fmtDate(DateTime.now().toIso8601String());
@@ -128,11 +174,11 @@ class InvoicePdfBuilder {
     // Per-karat weights from items
     final itemsRaw = invoice['items'];
     final items = itemsRaw is List
-      ? itemsRaw
-        .whereType<Map>()
-        .map((m) => Map<String, dynamic>.from(m))
-        .toList()
-      : <Map<String, dynamic>>[];
+        ? itemsRaw
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList()
+        : <Map<String, dynamic>>[];
 
     final totalsByKarat = <String, double>{};
     double computedTotalWeight = 0.0;
@@ -144,7 +190,9 @@ class InvoicePdfBuilder {
       final totalW = toDouble(item['total_weight']);
       final perItemW = toDouble(item['weight']);
       final fallbackW = toDouble(item['weight'] ?? item['total_weight']);
-      final lineW = totalW > 0 ? totalW : (perItemW > 0 ? perItemW * qtySafe : fallbackW);
+      final lineW = totalW > 0
+          ? totalW
+          : (perItemW > 0 ? perItemW * qtySafe : fallbackW);
       if (lineW <= 0) continue;
 
       computedTotalWeight += lineW;
@@ -153,53 +201,53 @@ class InvoicePdfBuilder {
       }
     }
 
-    final effectiveTotalWeight = totalWeight > 0 ? totalWeight : computedTotalWeight;
+    final effectiveTotalWeight = totalWeight > 0
+        ? totalWeight
+        : computedTotalWeight;
 
-    // Branding
-    final settingsCompanyName = settings?.companyName.trim() ?? '';
-    final companyName = settingsCompanyName.isNotEmpty
-        ? settingsCompanyName
-        : (options.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry');
-    final companyCr = (settings?.companyCrNumber.trim() ?? '');
-    final companyVat = (settings?.companyTaxNumber.trim() ?? '');
-    final companyPhone = (settings?.companyPhone.trim() ?? '');
-    final companyAddr = (settings?.companyAddress.trim() ?? '');
-    final showLogo = settings?.showCompanyLogo ?? true;
-    final logoBase64 =
-        (settings?.settings['company_logo_base64'] ?? '').toString().trim();
+    // All assets captured from main thread — no rootBundle / dart:ui here.
 
-    pw.MemoryImage? logoImage;
-    if (showLogo && logoBase64.isNotEmpty) {
-      try {
-        var payload = logoBase64;
-        final commaIdx = payload.indexOf(',');
-        if (payload.startsWith('data:') && commaIdx >= 0) {
-          payload = payload.substring(commaIdx + 1);
-        }
-        final rawLogoBytes = base64Decode(payload);
-        if (rawLogoBytes.isNotEmpty) {
-          final resized = await resizeImageBytes(rawLogoBytes, 128);
-          logoImage = pw.MemoryImage(resized ?? rawLogoBytes);
-        }
-      } catch (_) {}
-    }
-    if (logoImage == null && showLogo) {
-      try {
-        final raw = (await rootBundle.load('assets/KHGL.png'))
-            .buffer
-            .asUint8List();
-        final resized = await resizeImageBytes(raw, 128);
-        logoImage = pw.MemoryImage(resized ?? raw);
-      } catch (_) {}
-    }
-
-    // Theme colors (match statement/voucher tone)
+    // Theme colors
     const gold = PdfColor.fromInt(0xFF8B6914);
     const goldMid = PdfColor.fromInt(0xFFA07820);
     const goldBg = PdfColor.fromInt(0xFFFBF7EE);
     const border = PdfColor.fromInt(0xFFE8D899);
     const text = PdfColor.fromInt(0xFF1A1A1A);
     const muted = PdfColor.fromInt(0xFF444444);
+
+    // Widget builder for a cash amount with optional SAR image inline.
+    pw.Widget buildAmountWidget(
+      double amount, {
+      double size = 11,
+      PdfColor color = text,
+    }) {
+      final numStr = NumberFormat(
+        '#,##0.00',
+        options.isArabic ? 'ar' : 'en',
+      ).format(amount);
+      final sarImg = (color == gold || color == goldMid) ? sarGold : sarText;
+      if (sarImg != null) {
+        final img = pw.Image(sarImg, width: size * 0.72, height: size);
+        final num = pw.Text(
+          options.isArabic ? pdfVisualArabic(numStr) : numStr,
+          textDirection: pw.TextDirection.ltr,
+          style: pw.TextStyle(fontSize: size, color: color),
+        );
+        return pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [num, pw.SizedBox(width: 2), img],
+        );
+      }
+      final sym = cashCurrencySymbol;
+      final full = options.isArabic
+          ? '${pdfVisualArabic(sym)} ${pdfVisualArabic(numStr)}'
+          : '$numStr $sym';
+      return pw.Text(
+        full,
+        textDirection: pw.TextDirection.ltr,
+        style: pw.TextStyle(fontSize: size, color: color),
+      );
+    }
 
     String ar(String s) => options.isArabic ? pdfVisualArabic(s) : s;
 
@@ -303,11 +351,17 @@ class InvoicePdfBuilder {
           if (companyCr.trim().isNotEmpty)
             headerInfoLine(options.isArabic ? 'سجل تجاري' : 'CR', companyCr),
           if (companyVat.trim().isNotEmpty)
-            headerInfoLine(options.isArabic ? 'الرقم الضريبي' : 'VAT No', companyVat),
+            headerInfoLine(
+              options.isArabic ? 'الرقم الضريبي' : 'VAT No',
+              companyVat,
+            ),
           if (companyPhone.trim().isNotEmpty)
             headerInfoLine(options.isArabic ? 'هاتف' : 'Phone', companyPhone),
           if (companyAddr.trim().isNotEmpty)
-            headerInfoLine(options.isArabic ? 'العنوان' : 'Address', companyAddr),
+            headerInfoLine(
+              options.isArabic ? 'العنوان' : 'Address',
+              companyAddr,
+            ),
         ],
       );
 
@@ -376,9 +430,15 @@ class InvoicePdfBuilder {
       final left = pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          metaLine(options.isArabic ? 'رقم الفاتورة' : 'Invoice No.', invoiceNumber),
+          metaLine(
+            options.isArabic ? 'رقم الفاتورة' : 'Invoice No.',
+            invoiceNumber,
+          ),
           pw.SizedBox(height: 6),
-          metaLine(options.isArabic ? 'التاريخ' : 'Date', dateText.isEmpty ? '—' : dateText),
+          metaLine(
+            options.isArabic ? 'التاريخ' : 'Date',
+            dateText.isEmpty ? '—' : dateText,
+          ),
           if (partyName.isNotEmpty) ...[
             pw.SizedBox(height: 6),
             metaLine(partyLabel, partyName),
@@ -416,14 +476,25 @@ class InvoicePdfBuilder {
                 // Ensure Stack has a concrete size; otherwise a Stack with only
                 // Positioned children may end up with zero size and fail layout.
                 pw.SizedBox(height: 120),
-                pw.Positioned(top: 0, right: 0, child: pw.SizedBox(width: 170, child: right)),
+                pw.Positioned(
+                  top: 0,
+                  right: 0,
+                  child: pw.SizedBox(width: 170, child: right),
+                ),
                 pw.Positioned(
                   top: 0,
                   left: 170,
                   right: 170,
-                  child: pw.Align(alignment: pw.Alignment.topCenter, child: center),
+                  child: pw.Align(
+                    alignment: pw.Alignment.topCenter,
+                    child: center,
+                  ),
                 ),
-                pw.Positioned(top: 0, left: 0, child: pw.SizedBox(width: 170, child: left)),
+                pw.Positioned(
+                  top: 0,
+                  left: 0,
+                  child: pw.SizedBox(width: 170, child: left),
+                ),
               ],
             ),
           ),
@@ -443,8 +514,9 @@ class InvoicePdfBuilder {
           crossAxisAlignment: pw.CrossAxisAlignment.stretch,
           children: [
             pw.Align(
-              alignment:
-                  options.isArabic ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+              alignment: options.isArabic
+                  ? pw.Alignment.centerRight
+                  : pw.Alignment.centerLeft,
               child: pw.Text(
                 t,
                 style: pw.TextStyle(
@@ -453,7 +525,9 @@ class InvoicePdfBuilder {
                   color: gold,
                 ),
                 textDirection: pw.TextDirection.ltr,
-                textAlign: options.isArabic ? pw.TextAlign.right : pw.TextAlign.left,
+                textAlign: options.isArabic
+                    ? pw.TextAlign.right
+                    : pw.TextAlign.left,
               ),
             ),
             pw.SizedBox(height: 6),
@@ -465,15 +539,8 @@ class InvoicePdfBuilder {
 
     pw.Widget buildHeroTotal() {
       final label = options.isArabic
-          ? ar('الإجمالي النهائي (ريال)')
-          : 'Grand Total (SAR)';
-
-      // NOTE: We render Arabic visually-ordered with LTR direction.
-      // To show "100.00 ريال" on paper, the source string must be
-      // "ريال 100.00" before applying `pdfVisualArabic`.
-      final heroAmountText = options.isArabic
-          ? '${ar('ريال')} ${money(total)}'
-          : '${money(total)} SAR';
+          ? ar('الإجمالي النهائي')
+          : 'Grand Total';
 
       return pw.Container(
         padding: const pw.EdgeInsets.symmetric(horizontal: 18, vertical: 12),
@@ -483,38 +550,32 @@ class InvoicePdfBuilder {
           borderRadius: pw.BorderRadius.circular(10),
         ),
         child: pw.Align(
-          alignment:
-              options.isArabic ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+          alignment: options.isArabic
+              ? pw.Alignment.centerRight
+              : pw.Alignment.centerLeft,
           child: pw.Padding(
             padding: options.isArabic
                 ? const pw.EdgeInsets.only(right: 6)
                 : const pw.EdgeInsets.only(left: 6),
             child: pw.Column(
-            crossAxisAlignment:
-                options.isArabic ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
-            mainAxisSize: pw.MainAxisSize.min,
-            children: [
-              pw.Text(
-                label,
-                style: pw.TextStyle(
-                  fontSize: 12,
-                  fontWeight: pw.FontWeight.bold,
-                  color: gold,
+              crossAxisAlignment: options.isArabic
+                  ? pw.CrossAxisAlignment.end
+                  : pw.CrossAxisAlignment.start,
+              mainAxisSize: pw.MainAxisSize.min,
+              children: [
+                pw.Text(
+                  label,
+                  style: pw.TextStyle(
+                    fontSize: 12,
+                    fontWeight: pw.FontWeight.bold,
+                    color: gold,
+                  ),
+                  textDirection: pw.TextDirection.ltr,
                 ),
-                textDirection: pw.TextDirection.ltr,
-              ),
-              pw.SizedBox(height: 4),
-              pw.Text(
-                options.isArabic ? ar(heroAmountText) : heroAmountText,
-                style: pw.TextStyle(
-                  fontSize: 28,
-                  fontWeight: pw.FontWeight.bold,
-                  color: gold,
-                ),
-                textDirection: pw.TextDirection.ltr,
-              ),
-            ],
-          ),
+                pw.SizedBox(height: 4),
+                buildAmountWidget(total, size: 28, color: gold),
+              ],
+            ),
           ),
         ),
       );
@@ -529,8 +590,8 @@ class InvoicePdfBuilder {
       final karatText = uniqueKarats.isEmpty
           ? '—'
           : (uniqueKarats.length == 1)
-              ? uniqueKarats.first
-              : (options.isArabic ? ar('متعدد') : 'Mixed');
+          ? uniqueKarats.first
+          : (options.isArabic ? ar('متعدد') : 'Mixed');
 
       pw.Widget line(String label, {String? value, pw.Widget? valueWidget}) {
         final l = options.isArabic ? ar(label) : label;
@@ -541,12 +602,14 @@ class InvoicePdfBuilder {
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: options.isArabic
                 ? [
-                    (valueWidget ?? pw.Text(v, textDirection: pw.TextDirection.ltr)),
+                    (valueWidget ??
+                        pw.Text(v, textDirection: pw.TextDirection.ltr)),
                     pw.Text(l, textDirection: pw.TextDirection.ltr),
                   ]
                 : [
                     pw.Text(l, textDirection: pw.TextDirection.ltr),
-                    (valueWidget ?? pw.Text(v, textDirection: pw.TextDirection.ltr)),
+                    (valueWidget ??
+                        pw.Text(v, textDirection: pw.TextDirection.ltr)),
                   ],
           ),
         );
@@ -559,10 +622,7 @@ class InvoicePdfBuilder {
                   ? [
                       // For RTL layout, place the unit first so the number
                       // sits on the far right visually: 61.320 جم
-                      pw.Text(
-                        ar('جم'),
-                        textDirection: pw.TextDirection.ltr,
-                      ),
+                      pw.Text(ar('جم'), textDirection: pw.TextDirection.ltr),
                       pw.SizedBox(width: 4),
                       pw.Text(
                         weight(effectiveTotalWeight),
@@ -589,44 +649,32 @@ class InvoicePdfBuilder {
               options.isArabic ? 'إجمالي الوزن' : 'Total Weight',
               valueWidget: weightValueWidget,
             ),
-            line(
-              options.isArabic ? 'العيار' : 'Karat',
-              value: karatText,
-            ),
+            line(options.isArabic ? 'العيار' : 'Karat', value: karatText),
           ],
         ),
       );
     }
 
     pw.Widget buildTotals() {
-      String moneyWithCurrency(double amount) {
-        if (options.isArabic) {
-          // See note in buildHeroTotal() re visual ordering.
-          return '${ar('ريال')} ${money(amount)}';
-        }
-        return '${money(amount)} SAR';
-      }
-
-      pw.Widget row(String label, String value, {bool strong = false}) {
+      pw.Widget rowW(
+        String label,
+        pw.Widget valueWidget, {
+        bool strong = false,
+      }) {
         final l = options.isArabic ? ar(label) : label;
-        final v = options.isArabic ? ar(value) : value;
         return pw.Padding(
           padding: const pw.EdgeInsets.only(top: 4),
           child: pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: options.isArabic
                 ? [
-                    pw.Text(
-                      v,
-                      style: pw.TextStyle(
-                        fontWeight: strong ? pw.FontWeight.bold : pw.FontWeight.normal,
-                      ),
-                      textDirection: pw.TextDirection.ltr,
-                    ),
+                    valueWidget,
                     pw.Text(
                       l,
                       style: pw.TextStyle(
-                        fontWeight: strong ? pw.FontWeight.bold : pw.FontWeight.normal,
+                        fontWeight: strong
+                            ? pw.FontWeight.bold
+                            : pw.FontWeight.normal,
                       ),
                       textDirection: pw.TextDirection.ltr,
                     ),
@@ -635,17 +683,13 @@ class InvoicePdfBuilder {
                     pw.Text(
                       l,
                       style: pw.TextStyle(
-                        fontWeight: strong ? pw.FontWeight.bold : pw.FontWeight.normal,
+                        fontWeight: strong
+                            ? pw.FontWeight.bold
+                            : pw.FontWeight.normal,
                       ),
                       textDirection: pw.TextDirection.ltr,
                     ),
-                    pw.Text(
-                      v,
-                      style: pw.TextStyle(
-                        fontWeight: strong ? pw.FontWeight.bold : pw.FontWeight.normal,
-                      ),
-                      textDirection: pw.TextDirection.ltr,
-                    ),
+                    valueWidget,
                   ],
           ),
         );
@@ -656,15 +700,22 @@ class InvoicePdfBuilder {
         child: pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch,
           children: [
-            row(options.isArabic ? 'المجموع الفرعي' : 'Subtotal', moneyWithCurrency(subtotal)),
-            row(options.isArabic ? 'الضريبة' : 'Tax', moneyWithCurrency(tax)),
+            rowW(
+              options.isArabic ? 'المجموع الفرعي' : 'Subtotal',
+              buildAmountWidget(subtotal),
+            ),
+            rowW(options.isArabic ? 'الضريبة' : 'Tax', buildAmountWidget(tax)),
             pw.SizedBox(height: 6),
             pw.Container(
               height: 0.9,
               color: const PdfColor.fromInt(0xFFDDDDDD),
               margin: const pw.EdgeInsets.only(top: 2, bottom: 6),
             ),
-            row(options.isArabic ? 'الإجمالي' : 'Total', moneyWithCurrency(total), strong: true),
+            rowW(
+              options.isArabic ? 'الإجمالي' : 'Total',
+              buildAmountWidget(total),
+              strong: true,
+            ),
           ],
         ),
       );
@@ -796,8 +847,12 @@ class InvoicePdfBuilder {
 
             final netValue = lineNet(item);
             final netText = netValue != 0 ? moneyValue(netValue) : '—';
-            final pricePerGram = (wValue > 0 && netValue != 0) ? (netValue / wValue) : 0.0;
-            final priceText = (wValue > 0 && netValue != 0) ? moneyValue(pricePerGram) : '—';
+            final pricePerGram = (wValue > 0 && netValue != 0)
+                ? (netValue / wValue)
+                : 0.0;
+            final priceText = (wValue > 0 && netValue != 0)
+                ? moneyValue(pricePerGram)
+                : '—';
 
             final cells = <pw.Widget>[
               cell('${idx + 1}'),
@@ -824,8 +879,12 @@ class InvoicePdfBuilder {
 
     pw.Widget buildSignatures() {
       final c = PdfColor.fromInt(0xFFDDDDDD);
-      final labelCustomer = options.isArabic ? ar('توقيع العميل') : 'Customer Signature';
-      final labelSeller = options.isArabic ? ar('توقيع البائع') : 'Seller Signature';
+      final labelCustomer = options.isArabic
+          ? ar('توقيع العميل')
+          : 'Customer Signature';
+      final labelSeller = options.isArabic
+          ? ar('توقيع البائع')
+          : 'Seller Signature';
 
       pw.Widget dottedLine() {
         return pw.Container(
@@ -889,19 +948,25 @@ class InvoicePdfBuilder {
           ? ar('تاريخ الطباعة: $printDate')
           : 'Printed: $printDate';
       final right = options.isArabic
-        ? ar('شكراً لتعاملكم مع $companyName')
-        : 'Thank you for choosing $companyName';
+          ? ar('شكراً لتعاملكم مع $companyName')
+          : 'Thank you for choosing $companyName';
 
       return pw.Container(
         margin: const pw.EdgeInsets.only(top: 16),
         padding: const pw.EdgeInsets.only(top: 10),
         decoration: const pw.BoxDecoration(
-          border: pw.Border(top: pw.BorderSide(color: PdfColor.fromInt(0xFFDDDDDD))),
+          border: pw.Border(
+            top: pw.BorderSide(color: PdfColor.fromInt(0xFFDDDDDD)),
+          ),
         ),
         child: pw.Row(
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: [
-            pw.Text(left, style: pw.TextStyle(fontSize: 7.5, color: muted), textDirection: pw.TextDirection.ltr),
+            pw.Text(
+              left,
+              style: pw.TextStyle(fontSize: 7.5, color: muted),
+              textDirection: pw.TextDirection.ltr,
+            ),
             pw.Text(
               right,
               style: pw.TextStyle(fontSize: 7.5, color: muted),
@@ -934,8 +999,9 @@ class InvoicePdfBuilder {
             buildHeroTotal(),
             pw.SizedBox(height: 14),
             pw.Align(
-              alignment:
-                  options.isArabic ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+              alignment: options.isArabic
+                  ? pw.Alignment.centerRight
+                  : pw.Alignment.centerLeft,
               child: pw.Text(
                 options.isArabic ? ar('الأصناف') : 'Items',
                 style: pw.TextStyle(
@@ -944,7 +1010,9 @@ class InvoicePdfBuilder {
                   color: gold,
                 ),
                 textDirection: pw.TextDirection.ltr,
-                textAlign: options.isArabic ? pw.TextAlign.right : pw.TextAlign.left,
+                textAlign: options.isArabic
+                    ? pw.TextAlign.right
+                    : pw.TextAlign.left,
               ),
             ),
             pw.SizedBox(height: 6),
@@ -962,11 +1030,7 @@ class InvoicePdfBuilder {
                         ),
                       ),
                       pw.SizedBox(width: 10),
-                      pw.Container(
-                        width: 1,
-                        height: 92,
-                        color: border,
-                      ),
+                      pw.Container(width: 1, height: 92, color: border),
                       pw.SizedBox(width: 10),
                       pw.Expanded(
                         child: pw.Align(
@@ -983,11 +1047,7 @@ class InvoicePdfBuilder {
                         ),
                       ),
                       pw.SizedBox(width: 10),
-                      pw.Container(
-                        width: 1,
-                        height: 92,
-                        color: border,
-                      ),
+                      pw.Container(width: 1, height: 92, color: border),
                       pw.SizedBox(width: 10),
                       pw.Expanded(
                         child: pw.Align(
@@ -1032,7 +1092,10 @@ class InvoicePdfBuilder {
                 pw.SizedBox(height: 10),
                 pw.Text(
                   e.toString(),
-                  style: pw.TextStyle(fontSize: 8, color: PdfColor.fromInt(0xFF555555)),
+                  style: pw.TextStyle(
+                    fontSize: 8,
+                    color: PdfColor.fromInt(0xFF555555),
+                  ),
                   textDirection: pw.TextDirection.ltr,
                   textAlign: pw.TextAlign.center,
                 ),

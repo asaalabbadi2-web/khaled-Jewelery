@@ -763,7 +763,7 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
                           labelText: isAr ? 'حد أدنى للمبيعات' : 'Min sales',
                           helperText: isAr
                               ? 'بالريال أو الوزن حسب الفاتورة'
-                              : 'In SAR/weight per invoice',
+                              : 'In currency/weight per invoice',
                           border: const OutlineInputBorder(),
                         ),
                         keyboardType: TextInputType.number,

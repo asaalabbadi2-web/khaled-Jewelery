@@ -105,16 +105,19 @@ class _WeightClosingSettingsScreenState
         isActive: true,
         includeAccount: true,
       );
-      final filtered = safes
-          .where(
-            (s) => (s.safeType == 'cash' || s.safeType == 'bank') && s.id != null,
-          )
-          .toList()
-        ..sort(
-          (a, b) => a.safeType == b.safeType
-              ? a.name.compareTo(b.name)
-              : a.safeType.compareTo(b.safeType),
-        );
+      final filtered =
+          safes
+              .where(
+                (s) =>
+                    (s.safeType == 'cash' || s.safeType == 'bank') &&
+                    s.id != null,
+              )
+              .toList()
+            ..sort(
+              (a, b) => a.safeType == b.safeType
+                  ? a.name.compareTo(b.name)
+                  : a.safeType.compareTo(b.safeType),
+            );
 
       if (!mounted) return;
       setState(() {
@@ -565,10 +568,11 @@ class _WeightClosingSettingsScreenState
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
-              decoration: const InputDecoration(
-                labelText: 'عجز نقدي أكبر من (ر.س)',
+              decoration: InputDecoration(
+                labelText:
+                    'عجز نقدي أكبر من (${context.read<SettingsProvider>().currencySymbolText})',
                 hintText: 'مثال: 50',
-                prefixIcon: Icon(Icons.payments_outlined),
+                prefixIcon: const Icon(Icons.payments_outlined),
               ),
               onChanged: (v) {
                 final parsed = double.tryParse(v.trim());

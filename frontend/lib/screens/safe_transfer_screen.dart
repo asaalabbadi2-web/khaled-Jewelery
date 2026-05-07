@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
@@ -196,7 +198,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     final content = _mode == 'cash'
         ? Text(
             isAr
-                ? 'الرصيد المتاح: ${_fmtCash(safe.cashBalance)} ر.س'
+                ? 'الرصيد المتاح: ${_fmtCash(safe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText}'
                 : 'Available: ${_fmtCash(safe.cashBalance)}',
             style: TextStyle(color: Colors.grey.shade800),
           )
@@ -314,7 +316,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     if (amount <= 0) return null;
     if (amount > fromSafe.cashBalance + _epsilon) {
       return widget.isArabic
-          ? 'المبلغ أكبر من الرصيد المتاح (${_fmtCash(fromSafe.cashBalance)} ر.س)'
+          ? 'المبلغ أكبر من الرصيد المتاح (${_fmtCash(fromSafe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText})'
           : 'Exceeds available (${_fmtCash(fromSafe.cashBalance)})';
     }
     return null;
@@ -532,7 +534,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       if (fromSafe != null && amount > fromSafe.cashBalance + 0.0001) {
         _showSnack(
           widget.isArabic
-              ? 'المبلغ أكبر من رصيد الخزينة المتاح (${_fmtCash(fromSafe.cashBalance)} ر.س)'
+              ? 'المبلغ أكبر من رصيد الخزينة المتاح (${_fmtCash(fromSafe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText})'
               : 'Amount exceeds available balance (${_fmtCash(fromSafe.cashBalance)})',
           isError: true,
         );
@@ -649,7 +651,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                   if (_mode == 'cash')
                     Text(
                       widget.isArabic
-                          ? 'المبلغ: ${transfer?['amount_cash'] ?? '-'} ر.س'
+                          ? 'المبلغ: ${transfer?['amount_cash'] ?? '-'} ${context.read<SettingsProvider>().currencySymbolText}'
                           : 'Amount: ${transfer?['amount_cash'] ?? '-'}',
                     ),
                   if (_mode == 'gold') ...[
@@ -1024,7 +1026,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                       TextField(
                         controller: _amountCashController,
                         decoration: InputDecoration(
-                          labelText: isAr ? 'المبلغ (ر.س)' : 'Amount',
+                          labelText: isAr
+                              ? 'المبلغ (${context.read<SettingsProvider>().currencySymbolText})'
+                              : 'Amount',
                           border: const OutlineInputBorder(),
                           prefixIcon: Icon(
                             Icons.payments,

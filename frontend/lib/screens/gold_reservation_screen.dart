@@ -6,6 +6,8 @@ import '../theme/app_theme.dart';
 import 'weight_closing_settings_screen.dart';
 import '../utils.dart';
 import '../widgets/safe_box_picker_dialog.dart';
+import '../providers/settings_provider.dart';
+import 'package:provider/provider.dart';
 
 /// شاشة التسكير - حجز ذهب خام من مكاتب بيع وشراء الذهب
 class GoldReservationScreen extends StatefulWidget {
@@ -57,6 +59,9 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
   double _currentGoldPrice = 0.0;
   int? _selectedSupplierId;
 
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
+
   @override
   void initState() {
     super.initState();
@@ -88,7 +93,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
         final pricePerOz = (goldPriceResponse['price_usd_per_oz'] as num)
             .toDouble();
         // تحويل من أونصة إلى جرام (1 أونصة = 31.1035 جرام)
-        // وتحويل من دولار إلى ريال (افترض سعر صرف 3.75)
+        // وتحويل من دولار إلى $_currencySymbol (افترض سعر صرف 3.75)
         setState(() {
           _currentGoldPrice = (pricePerOz / 31.1035) * 3.75;
           _priceController.text = _currentGoldPrice.toStringAsFixed(2);
@@ -163,8 +168,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
     final price = double.tryParse(_priceController.text) ?? 0.0;
     final total = weight * price;
     _updatingFields = true;
-    _totalAmountController.text =
-        total > 0 ? total.toStringAsFixed(2) : '';
+    _totalAmountController.text = total > 0 ? total.toStringAsFixed(2) : '';
     _updatingFields = false;
     setState(() {
       _weight = weight;
@@ -180,8 +184,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
     final price = double.tryParse(_priceController.text) ?? 0.0;
     final total = weight * price;
     _updatingFields = true;
-    _totalAmountController.text =
-        total > 0 ? total.toStringAsFixed(2) : '';
+    _totalAmountController.text = total > 0 ? total.toStringAsFixed(2) : '';
     _updatingFields = false;
     setState(() {
       _weight = weight;
@@ -327,10 +330,10 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                 ),
                 Text('${isAr ? "العيار" : "Karat"}: $_selectedKarat'),
                 Text(
-                  '${isAr ? "المبلغ الإجمالي" : "Total"}: ${_totalAmount.toStringAsFixed(2)} ر.س',
+                  '${isAr ? "المبلغ الإجمالي" : "Total"}: ${_totalAmount.toStringAsFixed(2)} $_currencySymbol',
                 ),
                 Text(
-                  '${isAr ? "المبلغ المدفوع" : "Paid"}: ${_paidAmount.toStringAsFixed(2)} ر.س',
+                  '${isAr ? "المبلغ المدفوع" : "Paid"}: ${_paidAmount.toStringAsFixed(2)} $_currencySymbol',
                 ),
                 if (_paidAmount > 0)
                   Text(
@@ -338,7 +341,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                   ),
                 if (_totalAmount - _paidAmount > 0)
                   Text(
-                    '${isAr ? "المتبقي" : "Remaining"}: ${(_totalAmount - _paidAmount).toStringAsFixed(2)} ر.س',
+                    '${isAr ? "المتبقي" : "Remaining"}: ${(_totalAmount - _paidAmount).toStringAsFixed(2)} $_currencySymbol',
                     style: const TextStyle(
                       color: AppColors.error,
                       fontWeight: FontWeight.bold,
@@ -431,7 +434,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                                   style: theme.textTheme.labelSmall,
                                 ),
                                 Text(
-                                  '${_currentGoldPrice.toStringAsFixed(2)} ${isAr ? "ر.س/جم" : "SAR/g"}',
+                                  '${_currentGoldPrice.toStringAsFixed(2)} ${isAr ? '$_currencySymbol/جم' : '$_currencySymbol/g'}',
                                   style: theme.textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                     color: AppColors.mediumGold,
@@ -642,11 +645,11 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                               controller: _priceController,
                               decoration: InputDecoration(
                                 labelText: isAr
-                                    ? 'السعر للجرام (ر.س)'
-                                    : 'Price per gram (SAR)',
+                                    ? 'السعر للجرام ($_currencySymbol)'
+                                    : 'Price per gram ($_currencySymbol)',
                                 border: const OutlineInputBorder(),
                                 prefixIcon: const Icon(Icons.attach_money),
-                                suffixText: isAr ? 'ر.س' : 'SAR',
+                                suffixText: _currencySymbol,
                               ),
                               keyboardType:
                                   const TextInputType.numberWithOptions(
@@ -691,11 +694,13 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                               controller: _totalAmountController,
                               decoration: InputDecoration(
                                 labelText: isAr
-                                    ? 'المبلغ الإجمالي (ر.س)'
-                                    : 'Total Amount (SAR)',
+                                    ? 'المبلغ الإجمالي ($_currencySymbol)'
+                                    : 'Total Amount ($_currencySymbol)',
                                 border: const OutlineInputBorder(),
-                                prefixIcon: const Icon(Icons.calculate_outlined),
-                                suffixText: isAr ? 'ر.س' : 'SAR',
+                                prefixIcon: const Icon(
+                                  Icons.calculate_outlined,
+                                ),
+                                suffixText: _currencySymbol,
                                 filled: true,
                                 fillColor: AppColors.lightGold.withValues(
                                   alpha: 0.25,
@@ -721,7 +726,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                                     : 'Paid Amount',
                                 border: const OutlineInputBorder(),
                                 prefixIcon: const Icon(Icons.payments),
-                                suffixText: isAr ? 'ر.س' : 'SAR',
+                                suffixText: _currencySymbol,
                               ),
                               keyboardType:
                                   const TextInputType.numberWithOptions(
@@ -787,8 +792,8 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                                       isAr ? 'المبلغ المتبقي' : 'Remaining',
                                       style: theme.textTheme.bodyLarge,
                                     ),
-                                    Text(
-                                      '${(_totalAmount - _paidAmount).toStringAsFixed(2)} ${isAr ? "ر.س" : "SAR"}',
+                                    context.read<SettingsProvider>().buildText(
+                                      '$_currencySymbol ${(_totalAmount - _paidAmount).toStringAsFixed(2)}',
                                       style: theme.textTheme.titleMedium
                                           ?.copyWith(
                                             fontWeight: FontWeight.bold,

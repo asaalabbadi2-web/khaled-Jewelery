@@ -1,4 +1,6 @@
 import 'dart:typed_data';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:barcode_widget/barcode_widget.dart';
@@ -114,7 +116,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
                           if (_showPrice && widget.price != null)
                             _buildInfoRow(
                               'السعر',
-                              '${widget.price!.toStringAsFixed(2)} ريال',
+                              '${widget.price!.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
                             ),
                         ],
                       ),
@@ -379,6 +381,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
   Future<Uint8List> _generatePDF() async {
     final pdf = pw.Document();
     final barcodeType = _getBarcodeType();
+    final currencySymbol = context.read<SettingsProvider>().currencySymbolText;
 
     // ملصق واحد 50x30 مم (حجم شائع لطابعات الباركود)
     const labelWidth = 50.0 * PdfPageFormat.mm;
@@ -455,7 +458,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
                               ),
                             if (_showPrice && widget.price != null)
                               pw.Text(
-                                '${widget.price!.toStringAsFixed(0)} ر.س',
+                                '${widget.price!.toStringAsFixed(0)} $currencySymbol',
                                 style: pw.TextStyle(
                                   fontSize: 6,
                                   fontWeight: pw.FontWeight.bold,

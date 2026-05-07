@@ -37,7 +37,7 @@ class _IncomeStatementReportScreenState
 
   late NumberFormat _currencyFormat;
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   String _currencyLocale = 'ar';
   bool _isCurrentLocaleArabic(BuildContext context) {
@@ -79,7 +79,7 @@ class _IncomeStatementReportScreenState
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
     final localeIsArabic = _isCurrentLocaleArabic(context);
     final newCurrencyLocale = localeIsArabic ? 'ar' : 'en';
@@ -127,7 +127,9 @@ class _IncomeStatementReportScreenState
 
       // تقرير ربح الجرام — يستخدم نفس الفترة
       try {
-        final start = _selectedRange?.start ?? DateTime.now().subtract(const Duration(days: 89));
+        final start =
+            _selectedRange?.start ??
+            DateTime.now().subtract(const Duration(days: 89));
         final end = _selectedRange?.end ?? DateTime.now();
         final gramResult = await widget.api.getGramProfitReport(
           startDate: start,
@@ -676,7 +678,9 @@ class _IncomeStatementReportScreenState
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Center(
                   child: Text(
-                    isArabic ? 'لا توجد بيانات لهذه الفترة' : 'No data for this period',
+                    isArabic
+                        ? 'لا توجد بيانات لهذه الفترة'
+                        : 'No data for this period',
                     style: TextStyle(color: Colors.grey.shade500),
                   ),
                 ),
@@ -690,25 +694,25 @@ class _IncomeStatementReportScreenState
       return 0.0;
     }
 
-    final weightSold      = val('weight_sold');
-    final weightBought    = val('weight_purchased');
-    final avgSell         = val('avg_sell_per_gram');
-    final avgBuy          = val('avg_buy_per_gram');
-    final marginPerGram   = val('margin_per_gram');
-    final tradingProfitCash   = val('trading_profit_cash');
+    final weightSold = val('weight_sold');
+    final weightBought = val('weight_purchased');
+    final avgSell = val('avg_sell_per_gram');
+    final avgBuy = val('avg_buy_per_gram');
+    final marginPerGram = val('margin_per_gram');
+    final tradingProfitCash = val('trading_profit_cash');
     final tradingProfitWeight = val('trading_profit_weight');
     final extraRevWDirect = val('extra_revenue_weight');
-    final extraRevCash    = val('extra_revenue_cash');
-    final extraRevCashW   = val('extra_revenue_cash_as_weight');
+    final extraRevCash = val('extra_revenue_cash');
+    final extraRevCashW = val('extra_revenue_cash_as_weight');
     final expWeightDirect = val('expense_weight_direct');
-    final expCashTotal    = val('expense_cash_total');
-    final expCashWeight   = val('expense_cash_as_weight');
-    final netProfit       = val('net_profit');
+    final expCashTotal = val('expense_cash_total');
+    final expCashWeight = val('expense_cash_as_weight');
+    final netProfit = val('net_profit');
     final netProfitWeight = val('net_profit_weight');
-    final netMarginPct    = val('net_margin_pct');
-    final totalSales      = val('total_sales_cash');
-    final mainKarat       = g['main_karat']?.toString() ?? '21';
-    final isProfit        = netProfitWeight >= 0;
+    final netMarginPct = val('net_margin_pct');
+    final totalSales = val('total_sales_cash');
+    final mainKarat = g['main_karat']?.toString() ?? '21';
+    final isProfit = netProfitWeight >= 0;
 
     final profitColor = isProfit ? Colors.green.shade600 : Colors.red.shade600;
     final profitBg = isProfit
@@ -746,11 +750,18 @@ class _IncomeStatementReportScreenState
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [goldColor.withOpacity(0.25), goldColor.withOpacity(0.10)],
+                      colors: [
+                        goldColor.withOpacity(0.25),
+                        goldColor.withOpacity(0.10),
+                      ],
                     ),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.auto_graph, color: goldColor, size: 22),
+                  child: const Icon(
+                    Icons.auto_graph,
+                    color: goldColor,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -769,7 +780,10 @@ class _IncomeStatementReportScreenState
                         isArabic
                             ? '(سعر بيع − سعر شراء) × الوزن − المصاريف'
                             : '(Sell − Buy) × Weight − Expenses',
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade500,
+                        ),
                       ),
                     ],
                   ),
@@ -811,13 +825,19 @@ class _IncomeStatementReportScreenState
                       const SizedBox(width: 6),
                       Text(
                         isArabic ? '(عيار $mainKarat)' : '(K$mainKarat)',
-                        style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey.shade600,
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: profitColor.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(20),
@@ -836,7 +856,10 @@ class _IncomeStatementReportScreenState
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: profitColor.withOpacity(0.08),
                           borderRadius: BorderRadius.circular(8),
@@ -862,14 +885,18 @@ class _IncomeStatementReportScreenState
             _GramStatRow(
               items: [
                 _GramStat(
-                  label: isArabic ? 'وزن مباع ($mainKarat)' : 'Sold ($mainKarat k)',
+                  label: isArabic
+                      ? 'وزن مباع ($mainKarat)'
+                      : 'Sold ($mainKarat k)',
                   value: '${weightSold.toStringAsFixed(3)} جم',
                   icon: Icons.trending_up,
                   color: Colors.blue,
                   isDark: isDark,
                 ),
                 _GramStat(
-                  label: isArabic ? 'وزن مشترى ($mainKarat)' : 'Bought ($mainKarat k)',
+                  label: isArabic
+                      ? 'وزن مشترى ($mainKarat)'
+                      : 'Bought ($mainKarat k)',
                   value: '${weightBought.toStringAsFixed(3)} جم',
                   icon: Icons.trending_down,
                   color: Colors.indigo,
@@ -922,7 +949,9 @@ class _IncomeStatementReportScreenState
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white.withOpacity(0.03) : Colors.white.withOpacity(0.7),
+                color: isDark
+                    ? Colors.white.withOpacity(0.03)
+                    : Colors.white.withOpacity(0.7),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: goldColor.withOpacity(0.12)),
               ),
@@ -933,36 +962,49 @@ class _IncomeStatementReportScreenState
                         ? '① ربح المتاجرة (فارق × وزن مباع)'
                         : '① Trading Profit (margin × sold)',
                     value: tradingProfitCash,
+                    currencySymbol: _currencySymbol,
                     weightEquiv: tradingProfitWeight,
                     isFirst: true,
                     isSubtract: false,
                     isDark: isDark,
                   ),
                   _ProfitStep(
-                    label: isArabic ? '② إيرادات وزنية مباشرة' : '② Weight Revenue (direct)',
+                    label: isArabic
+                        ? '② إيرادات وزنية مباشرة'
+                        : '② Weight Revenue (direct)',
                     value: extraRevWDirect * avgBuy,
+                    currencySymbol: _currencySymbol,
                     weightEquiv: extraRevWDirect,
                     isSubtract: false,
                     isDark: isDark,
                   ),
                   if (extraRevCash.abs() > 0.01)
                     _ProfitStep(
-                      label: isArabic ? '② إيرادات نقدية (محوّلة)' : '② Cash Revenue (converted)',
+                      label: isArabic
+                          ? '② إيرادات نقدية (محوّلة)'
+                          : '② Cash Revenue (converted)',
                       value: extraRevCash,
+                      currencySymbol: _currencySymbol,
                       weightEquiv: extraRevCashW,
                       isSubtract: false,
                       isDark: isDark,
                     ),
                   _ProfitStep(
-                    label: isArabic ? '③ مصاريف وزنية مباشرة' : '③ Weight Expenses (direct)',
+                    label: isArabic
+                        ? '③ مصاريف وزنية مباشرة'
+                        : '③ Weight Expenses (direct)',
                     value: expWeightDirect * avgBuy,
+                    currencySymbol: _currencySymbol,
                     weightEquiv: expWeightDirect,
                     isSubtract: true,
                     isDark: isDark,
                   ),
                   _ProfitStep(
-                    label: isArabic ? '④ مصاريف نقدية (محوّلة)' : '④ Cash Expenses (converted)',
+                    label: isArabic
+                        ? '④ مصاريف نقدية (محوّلة)'
+                        : '④ Cash Expenses (converted)',
                     value: expCashTotal,
+                    currencySymbol: _currencySymbol,
                     weightEquiv: expCashWeight,
                     isSubtract: true,
                     isDark: isDark,
@@ -971,6 +1013,7 @@ class _IncomeStatementReportScreenState
                   _ProfitStep(
                     label: isArabic ? 'صافي الربح الوزني' : 'Net Weight Profit',
                     value: netProfit,
+                    currencySymbol: _currencySymbol,
                     weightEquiv: netProfitWeight,
                     isSubtotalRow: true,
                     isSubtract: false,
@@ -985,21 +1028,30 @@ class _IncomeStatementReportScreenState
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white.withOpacity(0.04) : Colors.grey.shade50,
+                color: isDark
+                    ? Colors.white.withOpacity(0.04)
+                    : Colors.grey.shade50,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.grey.shade200),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.info_outline, size: 16, color: Colors.grey.shade500),
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: Colors.grey.shade500,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       isArabic
                           ? 'الربح الوزني = ربح المتاجرة + إيرادات إضافية − مصاريف وزنية − مصاريف نقدية. الحسابات المشاركة تُحدد من شجرة الحسابات (علم "يدخل في ربح الجرام").'
                           : 'Weight profit = Trading + Extra Revenue − Weight Expenses − Cash Expenses. Participating accounts are flagged in the Chart of Accounts.',
-                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey.shade600,
+                      ),
                     ),
                   ),
                 ],
@@ -1010,7 +1062,6 @@ class _IncomeStatementReportScreenState
       ),
     );
   }
-
 
   Widget _buildExpensesCard(bool isArabic) {
     final expenses = List<Map<String, dynamic>>.from(
@@ -1166,6 +1217,7 @@ class _GramStat {
 class _ProfitStep extends StatelessWidget {
   final String label;
   final double value;
+  final String currencySymbol;
   final double? weightEquiv;
   final bool isSubtract;
   final bool isFirst;
@@ -1175,6 +1227,7 @@ class _ProfitStep extends StatelessWidget {
   const _ProfitStep({
     required this.label,
     required this.value,
+    required this.currencySymbol,
     this.weightEquiv,
     this.isSubtract = false,
     this.isFirst = false,
@@ -1187,8 +1240,8 @@ class _ProfitStep extends StatelessWidget {
     final color = isSubtotalRow
         ? Colors.blueGrey
         : isSubtract
-            ? Colors.red.shade700
-            : Colors.teal.shade700;
+        ? Colors.red.shade700
+        : Colors.teal.shade700;
 
     final bgColor = isSubtotalRow
         ? (isDark ? Colors.blueGrey.withOpacity(0.15) : Colors.blueGrey.shade50)
@@ -1234,12 +1287,14 @@ class _ProfitStep extends StatelessWidget {
                     NumberFormat('#,##0.00').format(value),
                     style: TextStyle(
                       fontSize: isSubtotalRow ? 14 : 13,
-                      fontWeight: isSubtotalRow ? FontWeight.bold : FontWeight.w600,
+                      fontWeight: isSubtotalRow
+                          ? FontWeight.bold
+                          : FontWeight.w600,
                       color: color,
                     ),
                   ),
                   Text(
-                    ' ر.س',
+                    ' $currencySymbol',
                     style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                   ),
                 ],

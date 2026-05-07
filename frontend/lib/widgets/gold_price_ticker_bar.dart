@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/currency_utils.dart' as cu;
 
 /// Drives the ticker scroll via [FlowDelegate.paintChildren] only.
 /// Because [repaint] is the animation, each animation tick triggers a
@@ -86,6 +87,9 @@ class GoldPriceTickerBar extends StatefulWidget {
   /// Currency symbol shown alongside prices.
   final String currencySymbol;
 
+  /// True when the new 2020 SAR graphic symbol is selected.
+  final bool isNewSar;
+
   const GoldPriceTickerBar({
     super.key,
     required this.isArabic,
@@ -94,6 +98,7 @@ class GoldPriceTickerBar extends StatefulWidget {
     this.refreshInterval,
     this.exchangeRate,
     this.currencySymbol = 'ر.س',
+    this.isNewSar = false,
   });
 
   @override
@@ -413,8 +418,9 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
         isArabic: isArabic,
       ),
       const SizedBox(width: 8),
-      Text(
+      cu.SarAwareText(
         '${fmt(price)} ${widget.currencySymbol}',
+        isNewSar: widget.isNewSar,
         style: baseStyle.copyWith(fontWeight: FontWeight.w700),
         maxLines: 1,
       ),
@@ -428,8 +434,9 @@ class _GoldPriceTickerBarState extends State<GoldPriceTickerBar>
           : '•';
       children.add(const SizedBox(width: 8));
       children.add(
-        Text(
+        cu.SarAwareText(
           '($arrow ${fmtDelta(abs)} ${widget.currencySymbol} • ${fmtPct(pct)})',
+          isNewSar: widget.isNewSar,
           style: baseStyle.copyWith(
             color: changeColor,
             fontWeight: FontWeight.w800,

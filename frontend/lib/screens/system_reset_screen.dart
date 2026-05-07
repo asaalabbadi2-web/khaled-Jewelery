@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 import '../api_service.dart';
 import '../providers/auth_provider.dart';
@@ -159,7 +160,9 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
         if (processed != null) {
           buffer.write(' الفواتير المعاد احتسابها: $processed.');
         }
-        buffer.write(' المتوسط الحالي: ${avg.toStringAsFixed(2)} ر.س/جم');
+        buffer.write(
+          ' المتوسط الحالي: ${avg.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
+        );
         _showSuccessDialog(buffer.toString());
         await _loadSystemInfo();
       } else {
@@ -539,17 +542,17 @@ class _SystemResetScreenState extends State<SystemResetScreen> {
                 ),
                 _buildStatChip(
                   'متوسط إجمالي/جم',
-                  '${formatCost(avgTotal)} ر.س',
+                  '${formatCost(avgTotal)} ${context.read<SettingsProvider>().currencySymbolText}',
                   secondaryColor,
                 ),
                 _buildStatChip(
                   'مكون الذهب/جم',
-                  '${formatCost(avgGold)} ر.س',
+                  '${formatCost(avgGold)} ${context.read<SettingsProvider>().currencySymbolText}',
                   theme.colorScheme.secondary,
                 ),
                 _buildStatChip(
                   'مكون الأجرة/جم',
-                  '${formatCost(avgWage)} ر.س',
+                  '${formatCost(avgWage)} ${context.read<SettingsProvider>().currencySymbolText}',
                   theme.colorScheme.error,
                 ),
               ],

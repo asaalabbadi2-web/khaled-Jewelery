@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import '../pdf/voucher_pdf_builder.dart';
 import '../providers/auth_provider.dart';
+import '../providers/settings_provider.dart';
 import 'accounts_screen.dart';
 import 'barcode_print_screen.dart';
 import 'customers_screen.dart';
@@ -1408,8 +1409,9 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: theme.colorScheme.primary
-                                        .withValues(alpha: 0.12),
+                                    color: theme.colorScheme.primary.withValues(
+                                      alpha: 0.12,
+                                    ),
                                   ),
                                   child: Icon(
                                     icon,
@@ -2457,16 +2459,17 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                     (widget.isArabic ? 'غير محدد' : 'Not specified'))
                 .toString();
         final totalValue = _parseDouble(selectedInvoice['total']) ?? 0.0;
+        final cur = context.read<SettingsProvider>().currencySymbolText;
         final metaAr = <String, String>{
           'الجهة': partyName,
           'الإجمالي':
-              '${intl.NumberFormat('#,##0.00', 'ar').format(totalValue)} ر.س',
+              '${intl.NumberFormat('#,##0.00', 'ar').format(totalValue)} $cur',
           'التاريخ': selectedInvoice['date']?.toString() ?? '',
         };
         final metaEn = <String, String>{
           'Party': partyName,
           'Total':
-              '${intl.NumberFormat('#,##0.00', 'en').format(totalValue)} SAR',
+              '${intl.NumberFormat('#,##0.00', 'en').format(totalValue)} $cur',
           'Date': selectedInvoice['date']?.toString() ?? '',
         };
 
@@ -2660,6 +2663,12 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       );
 
       if (selectedVoucher != null && mounted) {
+        SettingsProvider? sp;
+        try {
+          sp = context.read<SettingsProvider>();
+          await sp.ensureLoadedForPrint();
+        } catch (_) {}
+
         final isReceipt = action == 'print_receipt_voucher';
         final option = _findPrintOptionByAction(action);
         final baseTitleAr =
@@ -2690,10 +2699,11 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           'Date': selectedVoucher['date']?.toString() ?? '',
         };
         if (cashAmount != 0) {
+          final vCur = context.read<SettingsProvider>().currencySymbolText;
           metaAr['المبلغ النقدي'] =
-              '${intl.NumberFormat('#,##0.00', 'ar').format(cashAmount)} ر.س';
+              '${intl.NumberFormat('#,##0.00', 'ar').format(cashAmount)} $vCur';
           metaEn['Cash amount'] =
-              '${intl.NumberFormat('#,##0.00', 'en').format(cashAmount)} SAR';
+              '${intl.NumberFormat('#,##0.00', 'en').format(cashAmount)} $vCur';
         }
         if (goldAmount != 0) {
           metaAr['وزن الذهب'] =
@@ -2722,17 +2732,23 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           orientation: 'portrait',
         );
 
+        // Yield one frame so the loading indicator renders before PDF work.
+        await Future.delayed(Duration.zero);
+
+        final pdfBytes = await VoucherPdfBuilder.buildBytes(
+          voucher: selectedVoucher,
+          format: pageFormat,
+          options: const VoucherPdfOptions(
+            isArabic: true,
+            includeAccountLines: false,
+          ),
+          settings: sp,
+        );
+
         await Printing.layoutPdf(
           name: 'voucher_$voucherId.pdf',
           format: pageFormat,
-          onLayout: (format) => VoucherPdfBuilder.buildBytes(
-            voucher: selectedVoucher,
-            format: format,
-            options: const VoucherPdfOptions(
-              isArabic: true,
-              includeAccountLines: false,
-            ),
-          ),
+          onLayout: (_) async => pdfBytes,
         );
 
         if (!mounted) return;
@@ -2793,8 +2809,9 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                   return ListTile(
                     leading: CircleAvatar(
                       backgroundColor:
-                          (isReceipt ? Colors.green : Colors.orange)
-                              .withValues(alpha: 0.15),
+                          (isReceipt ? Colors.green : Colors.orange).withValues(
+                            alpha: 0.15,
+                          ),
                       child: Icon(
                         isReceipt ? Icons.arrow_downward : Icons.arrow_upward,
                         color: isReceipt ? Colors.green : Colors.orange,
@@ -2804,9 +2821,9 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                       '${widget.isArabic ? 'سند' : 'Voucher'} #${voucher['id']} — '
                       '${voucher['account_name'] ?? voucher['description'] ?? ''}',
                     ),
-                    subtitle: Text(
+                    subtitle: context.read<SettingsProvider>().buildText(
                       '${voucher['date'] ?? ''} · '
-                      '${voucher['amount_cash'] ?? '0'} ${widget.isArabic ? 'ريال' : 'SAR'}',
+                      '${voucher['amount_cash'] ?? '0'} ${context.read<SettingsProvider>().currencySymbolText}',
                     ),
                     trailing: voucher['is_posted'] == true
                         ? Chip(
@@ -3026,10 +3043,11 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           'Code': barcode,
         };
         if (price != null) {
+          final pCur = context.read<SettingsProvider>().currencySymbolText;
           metaAr['السعر'] =
-              '${intl.NumberFormat('#,##0.00', 'ar').format(price)} ر.س';
+              '${intl.NumberFormat('#,##0.00', 'ar').format(price)} $pCur';
           metaEn['Price'] =
-              '${intl.NumberFormat('#,##0.00', 'en').format(price)} SAR';
+              '${intl.NumberFormat('#,##0.00', 'en').format(price)} $pCur';
         }
 
         final jobId = '#BAR-$itemId';
@@ -4083,8 +4101,8 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                         '${invoice['invoice_type']} - ${invoice['customer_name'] ?? invoice['supplier_name'] ?? 'N/A'}',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
-                      subtitle: Text(
-                        '${invoice['date']} | ${invoice['total']} ريال',
+                      subtitle: context.read<SettingsProvider>().buildText(
+                        '${invoice['date']} | ${invoice['total']} ${context.read<SettingsProvider>().currencySymbolText}',
                         style: const TextStyle(fontSize: 12),
                       ),
                       trailing: invoice['is_posted'] == true

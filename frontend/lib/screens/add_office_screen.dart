@@ -3,6 +3,8 @@ import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
 import '../utils.dart';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 import '../widgets/party_picker_dialog.dart';
 import '../widgets/safe_box_picker_dialog.dart';
@@ -116,7 +118,9 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
 
         final currentId = _selectedGoldSafe?.id;
         if (currentId != null) {
-          final match = _goldSafeBoxes.where((sb) => sb.id == currentId).toList();
+          final match = _goldSafeBoxes
+              .where((sb) => sb.id == currentId)
+              .toList();
           if (match.isNotEmpty) {
             _selectedGoldSafe = match.first;
           }
@@ -278,7 +282,9 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
 
     try {
       final openingCash = _parseDoubleOrZero(_openingCashController.text);
-      final openingGoldMain = _parseDoubleOrZero(_openingGoldMainController.text);
+      final openingGoldMain = _parseDoubleOrZero(
+        _openingGoldMainController.text,
+      );
 
       final officeData = {
         'name': _nameController.text.trim(),
@@ -409,7 +415,9 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                           _selectedGoldSafe = null;
                         });
                       },
-                      title: Text(isAr ? 'إنشاء مورد جديد' : 'Create new supplier'),
+                      title: Text(
+                        isAr ? 'إنشاء مورد جديد' : 'Create new supplier',
+                      ),
                       contentPadding: EdgeInsets.zero,
                     ),
                     RadioListTile<String>(
@@ -423,7 +431,9 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                           _selectedGoldSafe = null;
                         });
                       },
-                      title: Text(isAr ? 'ربط بمورد موجود' : 'Link existing supplier'),
+                      title: Text(
+                        isAr ? 'ربط بمورد موجود' : 'Link existing supplier',
+                      ),
                       contentPadding: EdgeInsets.zero,
                     ),
                     const SizedBox(height: 10),
@@ -431,10 +441,15 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                     if (_supplierLinkMode == 'existing') ...[
                       SearchablePickerField(
                         labelText: isAr ? 'المورد' : 'Supplier',
-                        valueText: (_selectedSupplier?['name'] ?? '').toString(),
-                        hintText: isAr ? 'اضغط لاختيار مورد' : 'Tap to pick supplier',
+                        valueText: (_selectedSupplier?['name'] ?? '')
+                            .toString(),
+                        hintText: isAr
+                            ? 'اضغط لاختيار مورد'
+                            : 'Tap to pick supplier',
                         helperText: _isLoadingSuppliers
-                            ? (isAr ? 'جارٍ تحميل الموردين...' : 'Loading suppliers...')
+                            ? (isAr
+                                  ? 'جارٍ تحميل الموردين...'
+                                  : 'Loading suppliers...')
                             : null,
                         prefixIcon: Icons.person_search,
                         onTap: () => _pickSupplier(isAr: isAr),
@@ -500,8 +515,8 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                         controller: _openingCashController,
                         decoration: InputDecoration(
                           labelText: isAr
-                              ? 'رصيد افتتاحي نقدي (ر.س)'
-                              : 'Opening cash balance (SAR)',
+                              ? 'رصيد افتتاحي نقدي (${context.read<SettingsProvider>().currencySymbolText})'
+                              : 'Opening cash balance (${context.read<SettingsProvider>().currencySymbolText})',
                           prefixIcon: const Icon(Icons.payments_outlined),
                           border: const OutlineInputBorder(),
                         ),

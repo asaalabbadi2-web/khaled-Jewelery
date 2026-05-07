@@ -26,7 +26,7 @@ class _BonusPayablesReportScreenState extends State<BonusPayablesReportScreen> {
   bool _isLoading = false;
   String? _error;
 
-  String _currencySymbol = 'ر.س';
+  String _currencySymbol = '';
   int _currencyDecimals = 2;
   late NumberFormat _currencyFormat;
 
@@ -45,7 +45,7 @@ class _BonusPayablesReportScreenState extends State<BonusPayablesReportScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
     final decimals = settings.decimalPlaces;
     if (symbol != _currencySymbol || decimals != _currencyDecimals) {
       setState(() {

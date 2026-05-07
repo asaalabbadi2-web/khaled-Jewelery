@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../providers/settings_provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -241,7 +242,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       final start = (currentPage - 2).clamp(2, totalPages - 1);
       final end = (currentPage + 2).clamp(2, totalPages - 1);
       if (start > 2) nums.add(-1);
-      for (int p = start; p <= end; p++) { nums.add(p); }
+      for (int p = start; p <= end; p++) {
+        nums.add(p);
+      }
       if (end < totalPages - 1) nums.add(-1);
       nums.add(totalPages);
       return nums;
@@ -257,12 +260,15 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           SizedBox(
-            width: 32, height: 32,
+            width: 32,
+            height: 32,
             child: IconButton(
               padding: EdgeInsets.zero,
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.chevron_left, size: 18),
-              onPressed: currentPage <= 1 ? null : () => onPageChanged(currentPage - 1),
+              onPressed: currentPage <= 1
+                  ? null
+                  : () => onPageChanged(currentPage - 1),
             ),
           ),
           const SizedBox(width: 2),
@@ -270,9 +276,12 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
             if (p == -1) {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: Text('…', style: tt.labelSmall?.copyWith(
-                  color: cs.onSurface.withValues(alpha: 0.4),
-                )),
+                child: Text(
+                  '…',
+                  style: tt.labelSmall?.copyWith(
+                    color: cs.onSurface.withValues(alpha: 0.4),
+                  ),
+                ),
               );
             }
             final isActive = p == currentPage;
@@ -281,36 +290,50 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 140),
                 margin: const EdgeInsets.symmetric(horizontal: 2),
-                width: 30, height: 28,
+                width: 30,
+                height: 28,
                 decoration: BoxDecoration(
                   color: isActive ? primary : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
-                  border: isActive ? null : Border.all(
-                    color: cs.outline.withValues(alpha: 0.35), width: 1,
-                  ),
+                  border: isActive
+                      ? null
+                      : Border.all(
+                          color: cs.outline.withValues(alpha: 0.35),
+                          width: 1,
+                        ),
                 ),
                 alignment: Alignment.center,
-                child: Text('$p', style: tt.labelSmall?.copyWith(
-                  fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                  color: isActive ? cs.onPrimary : cs.onSurface.withValues(alpha: 0.75),
-                )),
+                child: Text(
+                  '$p',
+                  style: tt.labelSmall?.copyWith(
+                    fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                    color: isActive
+                        ? cs.onPrimary
+                        : cs.onSurface.withValues(alpha: 0.75),
+                  ),
+                ),
               ),
             );
           }),
           const SizedBox(width: 2),
           SizedBox(
-            width: 32, height: 32,
+            width: 32,
+            height: 32,
             child: IconButton(
               padding: EdgeInsets.zero,
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.chevron_right, size: 18),
-              onPressed: currentPage >= totalPages ? null : () => onPageChanged(currentPage + 1),
+              onPressed: currentPage >= totalPages
+                  ? null
+                  : () => onPageChanged(currentPage + 1),
             ),
           ),
           const SizedBox(width: 8),
           Text(
             '$currentPage / $totalPages',
-            style: tt.labelSmall?.copyWith(color: cs.onSurface.withValues(alpha: 0.45)),
+            style: tt.labelSmall?.copyWith(
+              color: cs.onSurface.withValues(alpha: 0.45),
+            ),
           ),
         ],
       ),
@@ -331,7 +354,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
         setState(() {
           _autoPostInvoices = serverSettings['auto_post_invoices'] == true;
           _autoPostEntries = serverSettings['auto_post_entries'] == true;
-          _requireApproval = serverSettings['require_approval_before_post'] == true;
+          _requireApproval =
+              serverSettings['require_approval_before_post'] == true;
           _allowUnposting = serverSettings['allow_unposting'] == true;
         });
       } catch (e) {
@@ -579,8 +603,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName =
-        Provider.of<AuthProvider>(context, listen: false).username;
+    final userName = Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final selected = _unpostedInvoices
@@ -588,12 +611,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
           .where((inv) => _selectedInvoiceIds.contains(inv['id']))
           .toList();
 
-        final postableIds = selected.map((inv) => inv['id'] as int).toList();
+      final postableIds = selected.map((inv) => inv['id'] as int).toList();
 
-      final result = await _apiService.postInvoicesBatch(
-        postableIds,
-        userName,
-      );
+      final result = await _apiService.postInvoicesBatch(postableIds, userName);
 
       if (result['success'] == true) {
         _showSuccess('تم ترحيل ${result['posted_count']} فاتورة بنجاح');
@@ -622,8 +642,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     );
     if (!confirm) return;
 
-    final userName =
-        Provider.of<AuthProvider>(context, listen: false).username;
+    final userName = Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final ids = allFiltered.map((inv) => inv['id'] as int).toList();
@@ -648,8 +667,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName =
-        Provider.of<AuthProvider>(context, listen: false).username;
+    final userName = Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final result = await _apiService.postInvoice(invoiceId, userName);
@@ -705,8 +723,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName =
-        Provider.of<AuthProvider>(context, listen: false).username;
+    final userName = Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final result = await _apiService.postJournalEntriesBatch(
@@ -744,8 +761,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     );
     if (!confirm) return;
 
-    final userName =
-        Provider.of<AuthProvider>(context, listen: false).username;
+    final userName = Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final ids = allFiltered.map((e) => e['id'] as int).toList();
@@ -773,8 +789,7 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return;
     }
 
-    final userName =
-        Provider.of<AuthProvider>(context, listen: false).username;
+    final userName = Provider.of<AuthProvider>(context, listen: false).username;
 
     try {
       final result = await _apiService.postJournalEntry(entryId, userName);
@@ -1221,7 +1236,11 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
               const Text('إدارة الترحيل'),
               if (_enableScheduledPosting) ...[
                 const SizedBox(width: 8),
-                const Icon(Icons.schedule, size: 16, color: theme.AppColors.success),
+                const Icon(
+                  Icons.schedule,
+                  size: 16,
+                  color: theme.AppColors.success,
+                ),
                 const SizedBox(width: 4),
                 Text(
                   _formatTimeOfDay(_scheduledTime),
@@ -1544,9 +1563,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
             children: [
               Text(
                 '${allFiltered.length} فاتورة',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey[600],
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
               ),
               const Spacer(),
               TextButton.icon(
@@ -1582,7 +1601,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   backgroundColor: theme.AppColors.primaryGold,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 8),
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
                   textStyle: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
@@ -1632,10 +1653,14 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                 return _buildPaginationStrip(
                   currentPage: safePage,
                   totalItems: allFiltered.length,
-                  onPageChanged: (p) => setState(() => _unpostedInvoicesPage = p),
+                  onPageChanged: (p) =>
+                      setState(() => _unpostedInvoicesPage = p),
                 );
               }
-              return _buildInvoiceCard(filteredInvoices[index], isPosted: false);
+              return _buildInvoiceCard(
+                filteredInvoices[index],
+                isPosted: false,
+              );
             },
           ),
         ),
@@ -1652,7 +1677,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return const Center(child: Text('لا توجد فواتير مرحلة'));
     }
 
-    final totalPages = (_postedInvoices.length / _pageSize).ceil().clamp(1, 99999);
+    final totalPages = (_postedInvoices.length / _pageSize).ceil().clamp(
+      1,
+      99999,
+    );
     final safePage = _postedInvoicesPage.clamp(1, totalPages);
     final start = (safePage - 1) * _pageSize;
     final end = (start + _pageSize).clamp(0, _postedInvoices.length);
@@ -1686,7 +1714,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     final postedBy = invoice['posted_by'];
     final isSelected = _selectedInvoiceIds.contains(id);
 
-    final borderColor = isPosted ? theme.AppColors.success : theme.AppColors.warning;
+    final borderColor = isPosted
+        ? theme.AppColors.success
+        : theme.AppColors.warning;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       elevation: isSelected ? 6 : 2,
@@ -1741,23 +1771,38 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          Icon(Icons.attach_money, size: 14, color: Colors.grey[600]),
+                          Icon(
+                            Icons.attach_money,
+                            size: 14,
+                            color: Colors.grey[600],
+                          ),
                           const SizedBox(width: 4),
-                          Text('المبلغ: ${total.toStringAsFixed(2)} ر.س',
-                              style: const TextStyle(fontSize: 12)),
+                          Text(
+                            'المبلغ: ${total.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
                           const SizedBox(width: 16),
-                          Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
+                          Icon(
+                            Icons.calendar_today,
+                            size: 14,
+                            color: Colors.grey[600],
+                          ),
                           const SizedBox(width: 4),
-                          Text('التاريخ: ${_formatDate(date)}',
-                              style: const TextStyle(fontSize: 12)),
+                          Text(
+                            'التاريخ: ${_formatDate(date)}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
                         ],
                       ),
-                      if (isPosted && postedBy != null) ...[  
+                      if (isPosted && postedBy != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            Icon(Icons.verified_user, size: 14,
-                                color: theme.AppColors.success),
+                            Icon(
+                              Icons.verified_user,
+                              size: 14,
+                              color: theme.AppColors.success,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
@@ -1774,26 +1819,29 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   ),
                   trailing: isPosted
                       ? (_allowUnposting
-                          ? IconButton(
-                              icon: const Icon(
-                                Icons.cancel,
-                                color: theme.AppColors.error,
-                              ),
-                              onPressed: () => _unpostInvoice(id),
-                              tooltip: 'إلغاء الترحيل',
-                            )
-                          : const Tooltip(
-                              message: 'إلغاء الترحيل معطّل في الإعدادات',
-                              child: Icon(Icons.lock_outline, color: Colors.grey),
-                            ))
+                            ? IconButton(
+                                icon: const Icon(
+                                  Icons.cancel,
+                                  color: theme.AppColors.error,
+                                ),
+                                onPressed: () => _unpostInvoice(id),
+                                tooltip: 'إلغاء الترحيل',
+                              )
+                            : const Tooltip(
+                                message: 'إلغاء الترحيل معطّل في الإعدادات',
+                                child: Icon(
+                                  Icons.lock_outline,
+                                  color: Colors.grey,
+                                ),
+                              ))
                       : IconButton(
-                              icon: const Icon(
-                                Icons.check_circle,
-                                color: theme.AppColors.success,
-                              ),
-                              onPressed: () => _postInvoice(id),
-                              tooltip: 'ترحيل',
-                            ),
+                          icon: const Icon(
+                            Icons.check_circle,
+                            color: theme.AppColors.success,
+                          ),
+                          onPressed: () => _postInvoice(id),
+                          tooltip: 'ترحيل',
+                        ),
                 ),
               ),
             ],
@@ -1828,7 +1876,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       );
     }
 
-    final entTotalPages = (allFilteredEntries.length / _pageSize).ceil().clamp(1, 99999);
+    final entTotalPages = (allFilteredEntries.length / _pageSize).ceil().clamp(
+      1,
+      99999,
+    );
     final entSafePage = _unpostedEntriesPage.clamp(1, entTotalPages);
     final entStart = (entSafePage - 1) * _pageSize;
     final entEnd = (entStart + _pageSize).clamp(0, allFilteredEntries.length);
@@ -1844,9 +1895,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
             children: [
               Text(
                 '${allFilteredEntries.length} قيد',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey[600],
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
               ),
               const Spacer(),
               TextButton.icon(
@@ -1882,7 +1933,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   backgroundColor: theme.AppColors.primaryGold,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 8),
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
                   textStyle: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
@@ -1932,7 +1985,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                 return _buildPaginationStrip(
                   currentPage: entSafePage,
                   totalItems: allFilteredEntries.length,
-                  onPageChanged: (p) => setState(() => _unpostedEntriesPage = p),
+                  onPageChanged: (p) =>
+                      setState(() => _unpostedEntriesPage = p),
                 );
               }
               return _buildEntryCard(filteredEntries[index], isPosted: false);
@@ -1952,7 +2006,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
       return const Center(child: Text('لا توجد قيود مرحلة'));
     }
 
-    final totalPages = (_postedEntries.length / _pageSize).ceil().clamp(1, 99999);
+    final totalPages = (_postedEntries.length / _pageSize).ceil().clamp(
+      1,
+      99999,
+    );
     final safePage = _postedEntriesPage.clamp(1, totalPages);
     final start = (safePage - 1) * _pageSize;
     final end = (start + _pageSize).clamp(0, _postedEntries.length);
@@ -1988,33 +2045,35 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     final referenceId = entry['reference_id'];
 
     final summary = (entry['posting_summary'] is Map)
-      ? (entry['posting_summary'] as Map)
-      : const <String, dynamic>{};
+        ? (entry['posting_summary'] as Map)
+        : const <String, dynamic>{};
 
     final linesCount = (summary['lines_count'] is num)
-      ? (summary['lines_count'] as num).toInt()
-      : ((entry['lines'] is List) ? (entry['lines'] as List).length : 0);
+        ? (summary['lines_count'] as num).toInt()
+        : ((entry['lines'] is List) ? (entry['lines'] as List).length : 0);
 
     final cashDebitTotal = (summary['cash_debit_total'] is num)
-      ? (summary['cash_debit_total'] as num).toDouble()
-      : 0.0;
+        ? (summary['cash_debit_total'] as num).toDouble()
+        : 0.0;
     final cashCreditTotal = (summary['cash_credit_total'] is num)
-      ? (summary['cash_credit_total'] as num).toDouble()
-      : 0.0;
+        ? (summary['cash_credit_total'] as num).toDouble()
+        : 0.0;
 
     final mainKarat = (summary['main_karat'] is num)
-      ? (summary['main_karat'] as num).toInt()
-      : 21;
+        ? (summary['main_karat'] as num).toInt()
+        : 21;
     final goldDebitMain = (summary['gold_debit_main_karat'] is num)
-      ? (summary['gold_debit_main_karat'] as num).toDouble()
-      : 0.0;
+        ? (summary['gold_debit_main_karat'] as num).toDouble()
+        : 0.0;
     final goldCreditMain = (summary['gold_credit_main_karat'] is num)
-      ? (summary['gold_credit_main_karat'] as num).toDouble()
-      : 0.0;
+        ? (summary['gold_credit_main_karat'] as num).toDouble()
+        : 0.0;
 
     final isSelected = _selectedEntryIds.contains(id);
 
-    final borderColor = isPosted ? theme.AppColors.success : theme.AppColors.info;
+    final borderColor = isPosted
+        ? theme.AppColors.success
+        : theme.AppColors.info;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       elevation: isSelected ? 6 : 2,
@@ -2067,7 +2126,8 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 4),
-                      if (referenceNumber.isNotEmpty || referenceType.isNotEmpty)
+                      if (referenceNumber.isNotEmpty ||
+                          referenceType.isNotEmpty)
                         Row(
                           children: [
                             Icon(Icons.link, size: 14, color: Colors.grey[600]),
@@ -2085,31 +2145,58 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                       if (description.isNotEmpty)
                         Row(
                           children: [
-                            Icon(Icons.notes, size: 14, color: Colors.grey[600]),
+                            Icon(
+                              Icons.notes,
+                              size: 14,
+                              color: Colors.grey[600],
+                            ),
                             const SizedBox(width: 4),
-                            Flexible(child: Text(description, style: const TextStyle(fontSize: 12))),
+                            Flexible(
+                              child: Text(
+                                description,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
                           ],
                         ),
                       if (createdBy.isNotEmpty)
                         Row(
                           children: [
-                            Icon(Icons.person, size: 14, color: Colors.grey[600]),
+                            Icon(
+                              Icons.person,
+                              size: 14,
+                              color: Colors.grey[600],
+                            ),
                             const SizedBox(width: 4),
-                            Text('أنشأه: $createdBy', style: const TextStyle(fontSize: 12)),
+                            Text(
+                              'أنشأه: $createdBy',
+                              style: const TextStyle(fontSize: 12),
+                            ),
                           ],
                         ),
                       if (linesCount > 0)
                         Row(
                           children: [
-                            Icon(Icons.format_list_bulleted, size: 14, color: Colors.grey[600]),
+                            Icon(
+                              Icons.format_list_bulleted,
+                              size: 14,
+                              color: Colors.grey[600],
+                            ),
                             const SizedBox(width: 4),
-                            Text('عدد الأسطر: $linesCount', style: const TextStyle(fontSize: 12)),
+                            Text(
+                              'عدد الأسطر: $linesCount',
+                              style: const TextStyle(fontSize: 12),
+                            ),
                           ],
                         ),
                       if (cashDebitTotal != 0.0 || cashCreditTotal != 0.0)
                         Row(
                           children: [
-                            Icon(Icons.payments, size: 14, color: Colors.grey[600]),
+                            Icon(
+                              Icons.payments,
+                              size: 14,
+                              color: Colors.grey[600],
+                            ),
                             const SizedBox(width: 4),
                             Flexible(
                               child: Text(
@@ -2122,7 +2209,11 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                       if (goldDebitMain != 0.0 || goldCreditMain != 0.0)
                         Row(
                           children: [
-                            Icon(Icons.scale, size: 14, color: Colors.grey[600]),
+                            Icon(
+                              Icons.scale,
+                              size: 14,
+                              color: Colors.grey[600],
+                            ),
                             const SizedBox(width: 4),
                             Flexible(
                               child: Text(
@@ -2134,18 +2225,27 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                         ),
                       Row(
                         children: [
-                          Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
+                          Icon(
+                            Icons.calendar_today,
+                            size: 14,
+                            color: Colors.grey[600],
+                          ),
                           const SizedBox(width: 4),
-                          Text('التاريخ: ${_formatDate(date)}',
-                              style: const TextStyle(fontSize: 12)),
+                          Text(
+                            'التاريخ: ${_formatDate(date)}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
                         ],
                       ),
                       if (isPosted && postedBy != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            Icon(Icons.verified_user, size: 14,
-                                color: theme.AppColors.success),
+                            Icon(
+                              Icons.verified_user,
+                              size: 14,
+                              color: theme.AppColors.success,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               'رحّله: $postedBy في ${_formatDateTime(postedAt)}',
@@ -2162,18 +2262,21 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                   ),
                   trailing: isPosted
                       ? (_allowUnposting
-                          ? IconButton(
-                              icon: const Icon(
-                                Icons.cancel,
-                                color: theme.AppColors.error,
-                              ),
-                              onPressed: () => _unpostEntry(id),
-                              tooltip: 'إلغاء الترحيل',
-                            )
-                          : const Tooltip(
-                              message: 'إلغاء الترحيل معطّل في الإعدادات',
-                              child: Icon(Icons.lock_outline, color: Colors.grey),
-                            ))
+                            ? IconButton(
+                                icon: const Icon(
+                                  Icons.cancel,
+                                  color: theme.AppColors.error,
+                                ),
+                                onPressed: () => _unpostEntry(id),
+                                tooltip: 'إلغاء الترحيل',
+                              )
+                            : const Tooltip(
+                                message: 'إلغاء الترحيل معطّل في الإعدادات',
+                                child: Icon(
+                                  Icons.lock_outline,
+                                  color: Colors.grey,
+                                ),
+                              ))
                       : Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -2658,7 +2761,10 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                             color: theme.AppColors.info.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                                color: theme.AppColors.info.withValues(alpha: 0.3)),
+                              color: theme.AppColors.info.withValues(
+                                alpha: 0.3,
+                              ),
+                            ),
                           ),
                           child: Row(
                             children: [

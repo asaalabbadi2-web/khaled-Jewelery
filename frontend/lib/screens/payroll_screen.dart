@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:provider/provider.dart';
+import '../providers/settings_provider.dart';
 
 import 'package:flutter/material.dart';
 
@@ -124,8 +126,8 @@ class _PayrollScreenState extends State<PayrollScreen> {
         title: Text(isAr ? 'ترحيل استحقاق الرواتب' : 'Post Payroll Accrual'),
         content: Text(
           isAr
-            ? 'تم اعتماد سجل الراتب${employeeName.isNotEmpty ? " للموظف: $employeeName" : ""} ($month/$year).\nهل تريد ترحيل الاستحقاق الآن؟\n\nسيتم إنشاء قيد: \nمدين 5410 (مصروف الرواتب) = ${net.toStringAsFixed(2)}\nدائن 2400xxxx (رواتب مستحقة) = ${net.toStringAsFixed(2)}'
-            : 'This payroll entry has been approved${employeeName.isNotEmpty ? " for $employeeName" : ""} ($month/$year).\nPost the accrual now?\n\nJournal: \nDr 5410 (Salary Expense) = ${net.toStringAsFixed(2)}\nCr 2400xxxx (Salaries Payable) = ${net.toStringAsFixed(2)}',
+              ? 'تم اعتماد سجل الراتب${employeeName.isNotEmpty ? " للموظف: $employeeName" : ""} ($month/$year).\nهل تريد ترحيل الاستحقاق الآن؟\n\nسيتم إنشاء قيد: \nمدين 5410 (مصروف الرواتب) = ${net.toStringAsFixed(2)}\nدائن 2400xxxx (رواتب مستحقة) = ${net.toStringAsFixed(2)}'
+              : 'This payroll entry has been approved${employeeName.isNotEmpty ? " for $employeeName" : ""} ($month/$year).\nPost the accrual now?\n\nJournal: \nDr 5410 (Salary Expense) = ${net.toStringAsFixed(2)}\nCr 2400xxxx (Salaries Payable) = ${net.toStringAsFixed(2)}',
         ),
         actions: [
           TextButton(
@@ -236,16 +238,16 @@ class _PayrollScreenState extends State<PayrollScreen> {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   isAr
-                      ? 'الراتب الصافي: ${entry.netSalary.toStringAsFixed(2)} ريال'
-                      : 'Net Salary: ${entry.netSalary.toStringAsFixed(2)} SAR',
+                      ? 'الراتب الصافي: ${entry.netSalary.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}'
+                      : 'Net Salary: ${entry.netSalary.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
                 ),
                 const SizedBox(height: 8),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   isAr
-                      ? 'المدفوع فعلياً: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} ريال'
-                      : 'Cash Paid: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} SAR',
+                      ? 'المدفوع فعلياً: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}'
+                      : 'Cash Paid: ${(entry.netSalary - advanceDeductionAmount).clamp(0, entry.netSalary).toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 16),
@@ -403,13 +405,16 @@ class _PayrollScreenState extends State<PayrollScreen> {
           final backendErr = decoded['error'] as String?;
           if (backendMsg != null && backendMsg.isNotEmpty) {
             errorMsg = backendMsg;
-          } else if (backendErr == 'employee_missing_account_for_advance_deduction') {
+          } else if (backendErr ==
+              'employee_missing_account_for_advance_deduction') {
             errorMsg = isAr
                 ? 'لا يمكن خصم السلفة: الموظف ليس لديه حساب سلف.\nاترك حقل "خصم السلفة" بالقيمة صفر أو راجع إعدادات الموظف.'
                 : 'Cannot deduct advance: employee has no advance account.\nLeave the advance field at zero or check employee settings.';
           }
         }
-      } catch (_) {/* keep original */}
+      } catch (_) {
+        /* keep original */
+      }
       _showSnack(errorMsg, isError: true);
     }
   }
@@ -431,7 +436,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
     final isAr = widget.isArabic;
     final pending = _entries.where((e) => e.status == 'pending').toList();
     if (pending.isEmpty) {
-      _showSnack(isAr ? 'لا توجد سجلات معلقة' : 'No pending entries', isError: true);
+      _showSnack(
+        isAr ? 'لا توجد سجلات معلقة' : 'No pending entries',
+        isError: true,
+      );
       return;
     }
     final confirm = await showDialog<bool>(
@@ -444,8 +452,14 @@ class _PayrollScreenState extends State<PayrollScreen> {
               : 'Approve ${pending.length} pending entries and auto-post accruals. Continue?',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(isAr ? 'اعتماد الكل' : 'Approve All')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(isAr ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(isAr ? 'اعتماد الكل' : 'Approve All'),
+          ),
         ],
       ),
     );
@@ -457,7 +471,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
         ids: pending.map((e) => e.id!).toList(),
       );
       final approved = result['approved'] ?? 0;
-      final skipped  = result['skipped']  ?? 0;
+      final skipped = result['skipped'] ?? 0;
       await _loadPayroll();
       _showSnack(
         isAr
@@ -473,9 +487,14 @@ class _PayrollScreenState extends State<PayrollScreen> {
 
   Future<void> _bulkCancel() async {
     final isAr = widget.isArabic;
-    final cancellable = _entries.where((e) => e.status == 'pending' || e.status == 'approved').toList();
+    final cancellable = _entries
+        .where((e) => e.status == 'pending' || e.status == 'approved')
+        .toList();
     if (cancellable.isEmpty) {
-      _showSnack(isAr ? 'لا توجد سجلات قابلة للإلغاء' : 'No cancellable entries', isError: true);
+      _showSnack(
+        isAr ? 'لا توجد سجلات قابلة للإلغاء' : 'No cancellable entries',
+        isError: true,
+      );
       return;
     }
     final confirm = await showDialog<bool>(
@@ -488,7 +507,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
               : 'Cancel ${cancellable.length} entries (pending & approved). Paid entries will be skipped. Continue?',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(isAr ? 'إلغاء' : 'Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -505,7 +527,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
         ids: cancellable.map((e) => e.id!).toList(),
       );
       final cancelled = result['cancelled'] ?? 0;
-      final skipped   = result['skipped']   ?? 0;
+      final skipped = result['skipped'] ?? 0;
       await _loadPayroll();
       _showSnack(
         isAr
@@ -523,16 +545,19 @@ class _PayrollScreenState extends State<PayrollScreen> {
   Future<void> _bulkClone() async {
     final isAr = widget.isArabic;
     if (_entries.isEmpty) {
-      _showSnack(isAr ? 'لا توجد سجلات لاستنساخها' : 'No entries to clone', isError: true);
+      _showSnack(
+        isAr ? 'لا توجد سجلات لاستنساخها' : 'No entries to clone',
+        isError: true,
+      );
       return;
     }
 
     final now = DateTime.now();
     // تحديد الشهر الافتراضي = الشهر التالي للفلتر الحالي أو الشهر الحالي
     final srcMonth = _selectedMonth ?? now.month;
-    final srcYear  = _selectedYear  ?? now.year;
-    int targetMonth = srcMonth == 12 ? 1       : srcMonth + 1;
-    int targetYear  = srcMonth == 12 ? srcYear + 1 : srcYear;
+    final srcYear = _selectedYear ?? now.year;
+    int targetMonth = srcMonth == 12 ? 1 : srcMonth + 1;
+    int targetYear = srcMonth == 12 ? srcYear + 1 : srcYear;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -557,13 +582,35 @@ class _PayrollScreenState extends State<PayrollScreen> {
                       decoration: InputDecoration(
                         labelText: isAr ? 'الشهر' : 'Month',
                         border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                       ),
                       items: List.generate(12, (i) => i + 1).map((m) {
-                        const ar = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-                        return DropdownMenuItem(value: m, child: Text(isAr ? ar[m - 1] : m.toString().padLeft(2, '0')));
+                        const ar = [
+                          'يناير',
+                          'فبراير',
+                          'مارس',
+                          'أبريل',
+                          'مايو',
+                          'يونيو',
+                          'يوليو',
+                          'أغسطس',
+                          'سبتمبر',
+                          'أكتوبر',
+                          'نوفمبر',
+                          'ديسمبر',
+                        ];
+                        return DropdownMenuItem(
+                          value: m,
+                          child: Text(
+                            isAr ? ar[m - 1] : m.toString().padLeft(2, '0'),
+                          ),
+                        );
                       }).toList(),
-                      onChanged: (v) => setS(() => targetMonth = v ?? targetMonth),
+                      onChanged: (v) =>
+                          setS(() => targetMonth = v ?? targetMonth),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -573,12 +620,19 @@ class _PayrollScreenState extends State<PayrollScreen> {
                       decoration: InputDecoration(
                         labelText: isAr ? 'السنة' : 'Year',
                         border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                       ),
                       items: List.generate(5, (i) => now.year - 1 + i).map((y) {
-                        return DropdownMenuItem(value: y, child: Text(y.toString()));
+                        return DropdownMenuItem(
+                          value: y,
+                          child: Text(y.toString()),
+                        );
                       }).toList(),
-                      onChanged: (v) => setS(() => targetYear = v ?? targetYear),
+                      onChanged: (v) =>
+                          setS(() => targetYear = v ?? targetYear),
                     ),
                   ),
                 ],
@@ -586,7 +640,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(isAr ? 'إلغاء' : 'Cancel'),
+            ),
             FilledButton.icon(
               icon: const Icon(Icons.copy_all_outlined, size: 16),
               label: Text(isAr ? 'استنساخ الكل' : 'Clone All'),
@@ -603,7 +660,11 @@ class _PayrollScreenState extends State<PayrollScreen> {
     int skipped = 0;
     for (final entry in _entries) {
       try {
-        await widget.api.clonePayroll(entry.id ?? 0, month: targetMonth, year: targetYear);
+        await widget.api.clonePayroll(
+          entry.id ?? 0,
+          month: targetMonth,
+          year: targetYear,
+        );
         cloned++;
       } catch (_) {
         skipped++;
@@ -726,7 +787,9 @@ class _PayrollScreenState extends State<PayrollScreen> {
                 children: [
                   Text(
                     isAr ? 'عمليات جماعية:' : 'Bulk:',
-                    style: theme.textTheme.labelMedium?.copyWith(color: colorScheme.primary),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: colorScheme.primary,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
@@ -735,7 +798,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.blue,
                       side: const BorderSide(color: Colors.blue),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       textStyle: const TextStyle(fontSize: 12),
                     ),
                     onPressed: _bulkApprove,
@@ -747,7 +813,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
                       side: const BorderSide(color: Colors.red),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       textStyle: const TextStyle(fontSize: 12),
                     ),
                     onPressed: _bulkCancel,
@@ -757,7 +826,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
                     icon: const Icon(Icons.copy_all_outlined, size: 16),
                     label: Text(isAr ? 'استنساخ الكل' : 'Clone All'),
                     style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       textStyle: const TextStyle(fontSize: 12),
                     ),
                     onPressed: _bulkClone,
@@ -833,7 +905,11 @@ class _PayrollScreenState extends State<PayrollScreen> {
                                   children: [
                                     const Icon(Icons.copy_outlined, size: 18),
                                     const SizedBox(width: 8),
-                                    Text(isAr ? 'استنساخ لشهر آخر' : 'Clone to another month'),
+                                    Text(
+                                      isAr
+                                          ? 'استنساخ لشهر آخر'
+                                          : 'Clone to another month',
+                                    ),
                                   ],
                                 ),
                               ),
@@ -864,7 +940,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
 
     // الشهر الافتراضي = الشهر التالي للسجل المصدر
     int targetMonth = entry.month == 12 ? 1 : entry.month + 1;
-    int targetYear  = entry.month == 12 ? entry.year + 1 : entry.year;
+    int targetYear = entry.month == 12 ? entry.year + 1 : entry.year;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -889,13 +965,35 @@ class _PayrollScreenState extends State<PayrollScreen> {
                       decoration: InputDecoration(
                         labelText: isAr ? 'الشهر' : 'Month',
                         border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                       ),
                       items: List.generate(12, (i) => i + 1).map((m) {
-                        const arabic = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-                        return DropdownMenuItem(value: m, child: Text(isAr ? arabic[m - 1] : m.toString().padLeft(2, '0')));
+                        const arabic = [
+                          'يناير',
+                          'فبراير',
+                          'مارس',
+                          'أبريل',
+                          'مايو',
+                          'يونيو',
+                          'يوليو',
+                          'أغسطس',
+                          'سبتمبر',
+                          'أكتوبر',
+                          'نوفمبر',
+                          'ديسمبر',
+                        ];
+                        return DropdownMenuItem(
+                          value: m,
+                          child: Text(
+                            isAr ? arabic[m - 1] : m.toString().padLeft(2, '0'),
+                          ),
+                        );
                       }).toList(),
-                      onChanged: (v) => setS(() => targetMonth = v ?? targetMonth),
+                      onChanged: (v) =>
+                          setS(() => targetMonth = v ?? targetMonth),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -905,12 +1003,19 @@ class _PayrollScreenState extends State<PayrollScreen> {
                       decoration: InputDecoration(
                         labelText: isAr ? 'السنة' : 'Year',
                         border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                       ),
                       items: List.generate(5, (i) => now.year - 1 + i).map((y) {
-                        return DropdownMenuItem(value: y, child: Text(y.toString()));
+                        return DropdownMenuItem(
+                          value: y,
+                          child: Text(y.toString()),
+                        );
                       }).toList(),
-                      onChanged: (v) => setS(() => targetYear = v ?? targetYear),
+                      onChanged: (v) =>
+                          setS(() => targetYear = v ?? targetYear),
                     ),
                   ),
                 ],

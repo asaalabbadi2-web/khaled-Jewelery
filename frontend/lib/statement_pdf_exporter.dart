@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 
 import '../models/account_statement_model.dart';
+import '../pdf/pdf_sar_cache.dart';
 import '../providers/settings_provider.dart';
 
 class StatementPdfExporter {
@@ -113,26 +114,51 @@ class StatementPdfExporter {
         _buildSummaryRow(
           'الرصيد الافتتاحي',
           '${statement.openingBalanceGold.toStringAsFixed(3)} $goldUnitLabel',
-          '${statement.openingBalanceCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
+          '${statement.openingBalanceCash.toStringAsFixed(2)} ${settingsProvider.currencySymbolText}',
         ),
         _buildSummaryRow(
           'مجموع المدين',
           '${statement.totalDebitGold.toStringAsFixed(3)} $goldUnitLabel',
-          '${statement.totalDebitCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
+          '${statement.totalDebitCash.toStringAsFixed(2)} ${settingsProvider.currencySymbolText}',
         ),
         _buildSummaryRow(
           'مجموع الدائن',
           '${statement.totalCreditGold.toStringAsFixed(3)} $goldUnitLabel',
-          '${statement.totalCreditCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
+          '${statement.totalCreditCash.toStringAsFixed(2)} ${settingsProvider.currencySymbolText}',
         ),
         _buildSummaryRow(
           'الرصيد الختامي',
           '${statement.closingBalanceGoldNormalized.toStringAsFixed(3)} $goldUnitLabel',
-          '${statement.closingBalanceCash.toStringAsFixed(2)} ${settingsProvider.currencySymbol}',
+          '${statement.closingBalanceCash.toStringAsFixed(2)} ${settingsProvider.currencySymbolText}',
           isFooter: true,
         ),
       ],
     );
+  }
+
+  pw.Widget _buildCashCell(String cashStr, pw.TextStyle style) {
+    final isNewSar = settingsProvider.currencyIsNewSar;
+    final sarBytes = PdfSarCache.tintedBytes(const PdfColor.fromInt(0xFF1A1A1A));
+    if (isNewSar && sarBytes != null) {
+      // Extract the number part — cashStr is "800.00 ر.س"
+      final numPart = cashStr
+          .replaceAll(settingsProvider.currencySymbolText, '')
+          .trim();
+      final fontSize = style.fontSize ?? 10.0;
+      final font = style.font ?? _boldFont;
+      return pw.Row(
+        mainAxisSize: pw.MainAxisSize.min,
+        children: [
+          pw.Image(pw.MemoryImage(sarBytes),
+              width: fontSize * 0.72, height: fontSize),
+          pw.SizedBox(width: 2),
+          pw.Text(numPart,
+              textDirection: pw.TextDirection.ltr,
+              style: pw.TextStyle(font: font, fontSize: fontSize)),
+        ],
+      );
+    }
+    return pw.Text(cashStr, style: style, textDirection: pw.TextDirection.rtl);
   }
 
   pw.TableRow _buildSummaryRow(
@@ -153,11 +179,7 @@ class StatementPdfExporter {
       children: [
         pw.Padding(
           padding: pw.EdgeInsets.all(5),
-          child: pw.Text(
-            cash,
-            style: style,
-            textDirection: pw.TextDirection.rtl,
-          ),
+          child: _buildCashCell(cash, style),
         ),
         pw.Padding(
           padding: pw.EdgeInsets.all(5),

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import '../api_service.dart';
 import '../models/employee_bonus_model.dart';
 import '../models/safe_box_model.dart';
+import '../providers/settings_provider.dart';
 import 'calculate_bonuses_screen.dart';
 
 class BonusesScreen extends StatefulWidget {
@@ -313,8 +315,8 @@ class _BonusesScreenState extends State<BonusesScreen> {
               children: [
                 Text(
                   isAr
-                      ? 'دفع مكافأة ${bonus.amount.toStringAsFixed(2)} ريال للموظف ${bonus.employee?.fullName ?? ""}'
-                      : 'Pay bonus of ${bonus.amount.toStringAsFixed(2)} SAR to ${bonus.employee?.fullName ?? ""}',
+                      ? 'دفع مكافأة ${bonus.amount.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} للموظف ${bonus.employee?.fullName ?? ""}'
+                      : 'Pay bonus of ${bonus.amount.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} to ${bonus.employee?.fullName ?? ""}',
                   style: const TextStyle(fontSize: 14),
                 ),
                 const SizedBox(height: 16),

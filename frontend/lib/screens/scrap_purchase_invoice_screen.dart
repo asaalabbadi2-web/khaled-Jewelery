@@ -176,7 +176,7 @@ class _ScrapPurchaseInvoiceScreenState
       barrierDismissible: false,
       builder: (_) => _ScrapCategoryLineDialog(
         categories: _categories,
-        currencySymbol: _settingsProvider.currencySymbol,
+        currencySymbol: _settingsProvider.currencySymbolText,
         mainKarat: _settingsProvider.mainKarat,
       ),
     );
@@ -486,7 +486,7 @@ class _ScrapPurchaseInvoiceScreenState
 
     if (amount > remaining + 0.01) {
       _showError(
-        'المبلغ أكبر من المتبقي (${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbol})',
+        'المبلغ أكبر من المتبقي (${remaining.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText})',
       );
       return;
     }
@@ -549,7 +549,7 @@ class _ScrapPurchaseInvoiceScreenState
       _payments.fold<double>(0, (sum, p) => sum + p.netAmount);
   double get _remainingAmount {
     final remaining = _calculateGrandTotal() - _totalPayments;
-    // تجاهل الفروقات الصغيرة (أقل من 0.01 ريال)
+    // تجاهل الفروقات الصغيرة (أقل من 0.01 ${context.read<SettingsProvider>().currencySymbolText})
     return remaining.abs() < 0.01 ? 0.0 : remaining;
   }
 
@@ -643,7 +643,9 @@ class _ScrapPurchaseInvoiceScreenState
             }
           });
         }
-        debugPrint('💰 سعر الذهب المحدث: $_goldPrice24k ر.س/جم');
+        debugPrint(
+          '💰 سعر الذهب المحدث: $_goldPrice24k ${context.read<SettingsProvider>().currencySymbolText}/جم',
+        );
       } else {
         debugPrint(
           '⚠️ سعر الذهب غير صالح في الاستجابة: ${priceData['price_24k']}',
@@ -760,8 +762,8 @@ class _ScrapPurchaseInvoiceScreenState
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'الإجمالي الحالي: ${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+            _settingsProvider.buildText(
+              'الإجمالي الحالي: ${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
             ),
             const SizedBox(height: 16),
             TextField(
@@ -774,7 +776,7 @@ class _ScrapPurchaseInvoiceScreenState
               inputFormatters: [NormalizeNumberFormatter()],
               decoration: InputDecoration(
                 labelText: 'المبلغ المستهدف',
-                suffixText: _settingsProvider.currencySymbol,
+                suffixText: _settingsProvider.currencySymbolText,
                 border: const OutlineInputBorder(),
               ),
               onSubmitted: (_) {
@@ -855,8 +857,8 @@ class _ScrapPurchaseInvoiceScreenState
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbol} على ${adjustableItems.length} صنف\n'
+        content: _settingsProvider.buildText(
+          '✅ تم توزيع $targetTotal ${_settingsProvider.currencySymbolText} على ${adjustableItems.length} صنف\n'
           'التكاليف: ${totalCosts.toStringAsFixed(2)} • الربح الموزع: ${profitPool.toStringAsFixed(2)}',
         ),
         backgroundColor: AppColors.success,
@@ -1294,7 +1296,7 @@ class _ScrapPurchaseInvoiceScreenState
     required double remaining,
     required int imagesCount,
   }) async {
-    final currency = _settingsProvider.currencySymbol;
+    final currency = _settingsProvider.currencySymbolText;
     final weightBreakdown = _buildWeightBreakdownLines(
       _items.map((item) => item.toJson()),
     );
@@ -1311,84 +1313,86 @@ class _ScrapPurchaseInvoiceScreenState
     }
 
     return await showAdaptiveInvoiceSummaryDialog<bool>(
-      context: context,
-      title: 'مراجعة الفاتورة',
-      subtitle: 'راجع البيانات الأساسية سريعاً قبل تنفيذ الحفظ.',
-      icon: Icons.receipt_long_rounded,
-      accentColor: AppColors.primaryGold,
-      statusTitle: 'حالة السداد',
-      statusMessage: remaining > 0.01
-          ? 'متبقي ${remaining.toStringAsFixed(2)} $currency'
-          : 'تم الدفع بالكامل',
-      statusTone: remaining > 0.01
-          ? InvoiceSummaryStatusTone.due
-          : InvoiceSummaryStatusTone.success,
-      metrics: [
-        if (customerLabel.trim().isNotEmpty)
-          InvoiceSummaryMetric(
-            label: 'العميل',
-            value: customerLabel.trim(),
-            icon: Icons.person_outline_rounded,
-            accentColor: AppColors.info,
-          ),
-        InvoiceSummaryMetric(
-          label: 'عدد الأصناف',
-          value: itemsCount.toString(),
-          icon: Icons.inventory_2_outlined,
-          accentColor: AppColors.info,
-        ),
-        InvoiceSummaryMetric(
-          label: 'الإجمالي',
-          value: '${total.toStringAsFixed(2)} $currency',
-          icon: Icons.payments_outlined,
+          context: context,
+          title: 'مراجعة الفاتورة',
+          subtitle: 'راجع البيانات الأساسية سريعاً قبل تنفيذ الحفظ.',
+          icon: Icons.receipt_long_rounded,
           accentColor: AppColors.primaryGold,
-          emphasize: true,
-        ),
-        InvoiceSummaryMetric(
-          label: 'المدفوع',
-          value: '${paid.toStringAsFixed(2)} $currency',
-          icon: Icons.account_balance_wallet_outlined,
-          accentColor: AppColors.success,
-        ),
-        InvoiceSummaryMetric(
-          label: 'المتبقي',
-          value: '${remaining.toStringAsFixed(2)} $currency',
-          icon: Icons.pending_outlined,
-          accentColor: remaining > 0.01 ? AppColors.error : AppColors.success,
-        ),
-        if (totalWeight > 0)
-          InvoiceSummaryMetric(
-            label: 'إجمالي الوزن',
-            value: '${totalWeight.toStringAsFixed(3)} جم',
-            icon: Icons.scale_outlined,
-            accentColor: AppColors.info,
-            fullWidth: true,
-            details: weightBreakdown,
-          ),
-        if (imagesCount > 0)
-          InvoiceSummaryMetric(
-            label: 'الصور المرفقة',
-            value: imagesCount.toString(),
-            icon: Icons.image_outlined,
-            accentColor: AppColors.info,
-          ),
-      ],
-      notices: notices,
-      closeValue: false,
-      actions: const [
-        InvoiceSummaryAction.secondary(
-          label: 'رجوع',
-          icon: Icons.arrow_back_rounded,
-          value: false,
-        ),
-        InvoiceSummaryAction.primary(
-          label: 'حفظ الفاتورة',
-          icon: Icons.save_rounded,
-          value: true,
-        ),
-      ],
-    ) ??
-    false;
+          statusTitle: 'حالة السداد',
+          statusMessage: remaining > 0.01
+              ? 'متبقي ${remaining.toStringAsFixed(2)} $currency'
+              : 'تم الدفع بالكامل',
+          statusTone: remaining > 0.01
+              ? InvoiceSummaryStatusTone.due
+              : InvoiceSummaryStatusTone.success,
+          metrics: [
+            if (customerLabel.trim().isNotEmpty)
+              InvoiceSummaryMetric(
+                label: 'العميل',
+                value: customerLabel.trim(),
+                icon: Icons.person_outline_rounded,
+                accentColor: AppColors.info,
+              ),
+            InvoiceSummaryMetric(
+              label: 'عدد الأصناف',
+              value: itemsCount.toString(),
+              icon: Icons.inventory_2_outlined,
+              accentColor: AppColors.info,
+            ),
+            InvoiceSummaryMetric(
+              label: 'الإجمالي',
+              value: '${total.toStringAsFixed(2)} $currency',
+              icon: Icons.payments_outlined,
+              accentColor: AppColors.primaryGold,
+              emphasize: true,
+            ),
+            InvoiceSummaryMetric(
+              label: 'المدفوع',
+              value: '${paid.toStringAsFixed(2)} $currency',
+              icon: Icons.account_balance_wallet_outlined,
+              accentColor: AppColors.success,
+            ),
+            InvoiceSummaryMetric(
+              label: 'المتبقي',
+              value: '${remaining.toStringAsFixed(2)} $currency',
+              icon: Icons.pending_outlined,
+              accentColor: remaining > 0.01
+                  ? AppColors.error
+                  : AppColors.success,
+            ),
+            if (totalWeight > 0)
+              InvoiceSummaryMetric(
+                label: 'إجمالي الوزن',
+                value: '${totalWeight.toStringAsFixed(3)} جم',
+                icon: Icons.scale_outlined,
+                accentColor: AppColors.info,
+                fullWidth: true,
+                details: weightBreakdown,
+              ),
+            if (imagesCount > 0)
+              InvoiceSummaryMetric(
+                label: 'الصور المرفقة',
+                value: imagesCount.toString(),
+                icon: Icons.image_outlined,
+                accentColor: AppColors.info,
+              ),
+          ],
+          notices: notices,
+          closeValue: false,
+          actions: const [
+            InvoiceSummaryAction.secondary(
+              label: 'رجوع',
+              icon: Icons.arrow_back_rounded,
+              value: false,
+            ),
+            InvoiceSummaryAction.primary(
+              label: 'حفظ الفاتورة',
+              icon: Icons.save_rounded,
+              value: true,
+            ),
+          ],
+        ) ??
+        false;
   }
 
   // ==================== Calculations ====================
@@ -1534,89 +1538,95 @@ class _ScrapPurchaseInvoiceScreenState
         .toString()
         .trim();
 
-    final currency = _settingsProvider.currencySymbol;
+    final currency = _settingsProvider.currencySymbolText;
     final weightBreakdown = _buildWeightBreakdownLines(
-      invoice['items'] is List ? List<dynamic>.from(invoice['items']) : const [],
+      invoice['items'] is List
+          ? List<dynamic>.from(invoice['items'])
+          : const [],
     );
 
     return await showAdaptiveInvoiceSummaryDialog<String>(
-      context: context,
-      title: 'تم حفظ الفاتورة',
-      subtitle: 'تم حفظ فاتورة شراء الكسر بنجاح',
-      icon: Icons.check_circle,
-      accentColor: AppColors.success,
-      highlightMessage: 'فاتورة الشراء #${invoice['id'] ?? ''}',
-      statusTitle: 'حالة الفاتورة',
-      statusMessage: approvalRequired ? 'تحتاج اعتماد مدير' : 'جاهزة للطباعة والمشاركة',
-      statusTone: approvalRequired
-          ? InvoiceSummaryStatusTone.due
-          : InvoiceSummaryStatusTone.success,
-      metrics: [
-        if (invoiceId.isNotEmpty)
-          InvoiceSummaryMetric(
-            label: 'رقم الفاتورة',
-            value: '#$invoiceId',
-            icon: Icons.tag_rounded,
-            accentColor: AppColors.primaryGold,
-          ),
-        if (customerName.isNotEmpty)
-          InvoiceSummaryMetric(
-            label: 'العميل',
-            value: customerName,
-            icon: Icons.person_outline_rounded,
-            accentColor: AppColors.info,
-          ),
-        InvoiceSummaryMetric(
-          label: 'الإجمالي',
-          value: '${total.toStringAsFixed(2)} $currency',
-          icon: Icons.payments_outlined,
-          accentColor: AppColors.primaryGold,
-          emphasize: true,
-        ),
-        InvoiceSummaryMetric(
-          label: 'المدفوع',
-          value: '${paid.toStringAsFixed(2)} $currency',
-          icon: Icons.account_balance_wallet_outlined,
+          context: context,
+          title: 'تم حفظ الفاتورة',
+          subtitle: 'تم حفظ فاتورة شراء الكسر بنجاح',
+          icon: Icons.check_circle,
           accentColor: AppColors.success,
-        ),
-        InvoiceSummaryMetric(
-          label: 'المتبقي',
-          value: '${remaining.toStringAsFixed(2)} $currency',
-          icon: Icons.pending_outlined,
-          accentColor:
-              remaining > 0.01 ? AppColors.error : AppColors.success,
-        ),
-        if (totalWeight > 0)
-          InvoiceSummaryMetric(
-            label: 'إجمالي الوزن',
-            value: '${totalWeight.toStringAsFixed(3)} جم',
-            icon: Icons.scale_outlined,
-            accentColor: AppColors.info,
-            fullWidth: true,
-            details: weightBreakdown,
-          ),
-      ],
-      notices: approvalRequired && approvalWarning != null
-          ? [approvalWarning]
-          : [],
-      actions: [
-        InvoiceSummaryAction.secondary(
-          label: 'طباعة',
-          icon: Icons.print_rounded,
-          value: 'print',
-        ),
-        InvoiceSummaryAction.secondary(
-          label: 'مشاركة',
-          icon: Icons.share_rounded,
-          value: 'share',
-        ),
-        InvoiceSummaryAction.primary(
-          label: 'تم',
-          icon: Icons.check_rounded,
-          value: 'done',
-        ),
-      ],
-    ) ?? 'close';
+          highlightMessage: 'فاتورة الشراء #${invoice['id'] ?? ''}',
+          statusTitle: 'حالة الفاتورة',
+          statusMessage: approvalRequired
+              ? 'تحتاج اعتماد مدير'
+              : 'جاهزة للطباعة والمشاركة',
+          statusTone: approvalRequired
+              ? InvoiceSummaryStatusTone.due
+              : InvoiceSummaryStatusTone.success,
+          metrics: [
+            if (invoiceId.isNotEmpty)
+              InvoiceSummaryMetric(
+                label: 'رقم الفاتورة',
+                value: '#$invoiceId',
+                icon: Icons.tag_rounded,
+                accentColor: AppColors.primaryGold,
+              ),
+            if (customerName.isNotEmpty)
+              InvoiceSummaryMetric(
+                label: 'العميل',
+                value: customerName,
+                icon: Icons.person_outline_rounded,
+                accentColor: AppColors.info,
+              ),
+            InvoiceSummaryMetric(
+              label: 'الإجمالي',
+              value: '${total.toStringAsFixed(2)} $currency',
+              icon: Icons.payments_outlined,
+              accentColor: AppColors.primaryGold,
+              emphasize: true,
+            ),
+            InvoiceSummaryMetric(
+              label: 'المدفوع',
+              value: '${paid.toStringAsFixed(2)} $currency',
+              icon: Icons.account_balance_wallet_outlined,
+              accentColor: AppColors.success,
+            ),
+            InvoiceSummaryMetric(
+              label: 'المتبقي',
+              value: '${remaining.toStringAsFixed(2)} $currency',
+              icon: Icons.pending_outlined,
+              accentColor: remaining > 0.01
+                  ? AppColors.error
+                  : AppColors.success,
+            ),
+            if (totalWeight > 0)
+              InvoiceSummaryMetric(
+                label: 'إجمالي الوزن',
+                value: '${totalWeight.toStringAsFixed(3)} جم',
+                icon: Icons.scale_outlined,
+                accentColor: AppColors.info,
+                fullWidth: true,
+                details: weightBreakdown,
+              ),
+          ],
+          notices: approvalRequired && approvalWarning != null
+              ? [approvalWarning]
+              : [],
+          actions: [
+            InvoiceSummaryAction.secondary(
+              label: 'طباعة',
+              icon: Icons.print_rounded,
+              value: 'print',
+            ),
+            InvoiceSummaryAction.secondary(
+              label: 'مشاركة',
+              icon: Icons.share_rounded,
+              value: 'share',
+            ),
+            InvoiceSummaryAction.primary(
+              label: 'تم',
+              icon: Icons.check_rounded,
+              value: 'done',
+            ),
+          ],
+        ) ??
+        'close';
   }
 
   List<InvoiceSummaryMetricDetail> _buildWeightBreakdownLines(
@@ -1646,7 +1656,11 @@ class _ScrapPurchaseInvoiceScreenState
     }
 
     final entries = byKarat.entries.toList()
-      ..sort((a, b) => (double.tryParse(b.key) ?? 0).compareTo(double.tryParse(a.key) ?? 0));
+      ..sort(
+        (a, b) => (double.tryParse(b.key) ?? 0).compareTo(
+          double.tryParse(a.key) ?? 0,
+        ),
+      );
 
     return entries
         .map(
@@ -1980,35 +1994,65 @@ class _ScrapPurchaseInvoiceScreenState
               preferredSize: const Size.fromHeight(26.0),
               child: Container(
                 color: Colors.black.withValues(alpha: 0.20),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 child: Directionality(
                   textDirection: TextDirection.ltr,
                   child: _goldPrice24k > 0
-                      ? Row(children: [
-                          const Icon(Icons.monetization_on_outlined, size: 12, color: Colors.amber),
-                          const SizedBox(width: 4),
-                          Text(
-                            'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
-                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
-                          ),
-                          const Padding(padding: EdgeInsets.symmetric(horizontal: 5), child: Text('|', style: TextStyle(color: Colors.white38, fontSize: 10))),
-                          ...([24, 22, 21, 18].map((k) {
-                            final gp = _goldPrice24k * k / 24;
-                            final isMain = k == _settingsProvider.mainKarat;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 10),
+                      ? Row(
+                          children: [
+                            const Icon(
+                              Icons.monetization_on_outlined,
+                              size: 12,
+                              color: Colors.amber,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'أونصة: \$${(_goldPrice24k * 31.1035 / 3.75).toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 5),
                               child: Text(
-                                '${k}k: ${gp.toStringAsFixed(2)}',
+                                '|',
                                 style: TextStyle(
-                                  color: isMain ? Colors.amber : Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: isMain ? FontWeight.w800 : FontWeight.w500,
+                                  color: Colors.white38,
+                                  fontSize: 10,
                                 ),
                               ),
-                            );
-                          }).toList()),
-                          const Text('ر.س/جم', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                        ])
+                            ),
+                            ...([24, 22, 21, 18].map((k) {
+                              final gp = _goldPrice24k * k / 24;
+                              final isMain = k == _settingsProvider.mainKarat;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 10),
+                                child: Text(
+                                  '${k}k: ${gp.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    color: isMain ? Colors.amber : Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: isMain
+                                        ? FontWeight.w800
+                                        : FontWeight.w500,
+                                  ),
+                                ),
+                              );
+                            }).toList()),
+                            const Text(
+                              '/جم',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        )
                       : const Text(
                           'جاري تحميل سعر الذهب...',
                           style: TextStyle(color: Colors.white54, fontSize: 11),
@@ -2019,18 +2063,38 @@ class _ScrapPurchaseInvoiceScreenState
             actions: [
               Consumer<AuthProvider>(
                 builder: (context, auth, _) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.person_outline, size: 14, color: Colors.white),
-                      const SizedBox(width: 4),
-                      Text(auth.fullName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                    ]),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.person_outline,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          auth.fullName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -2860,8 +2924,8 @@ class _ScrapPurchaseInvoiceScreenState
                         color: AppColors.karat24.withValues(alpha: 0.3),
                       ),
                     ),
-                    child: Text(
-                      '${item.totalWithTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                    child: _settingsProvider.buildText(
+                      '${item.totalWithTax.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                       style: cellStyle,
                     ),
                   ),
@@ -3088,8 +3152,8 @@ class _ScrapPurchaseInvoiceScreenState
                     ),
                   ],
                 ),
-                Text(
-                  '${grandTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                _settingsProvider.buildText(
+                  '${grandTotal.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                   style: theme.textTheme.headlineMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: isDark ? Colors.white : Colors.black87,
@@ -3297,20 +3361,21 @@ class _ScrapPurchaseInvoiceScreenState
 
   Widget _buildSaveButton(ThemeData theme, ColorScheme colorScheme) {
     return FilledButton.icon(
-      onPressed:
-          _items.isEmpty || _payments.isEmpty || _remainingAmount > 0.01
+      onPressed: _items.isEmpty || _payments.isEmpty || _remainingAmount > 0.01
           ? null
           : _submitInvoice,
       icon: const Icon(Icons.check_circle_outline, size: 24),
-      label: Text(
+      label: _settingsProvider.buildText(
         _remainingAmount > 0.01
-            ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol} متبقية)'
+            ? 'أكمل الدفع (${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText} متبقية)'
             : 'حفظ الفاتورة',
       ),
       style: FilledButton.styleFrom(
         minimumSize: const Size(double.infinity, 56),
         padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 24),
-        textStyle: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+        textStyle: theme.textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.bold,
+        ),
         backgroundColor: colorScheme.primary,
         foregroundColor: colorScheme.onPrimary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -3364,8 +3429,8 @@ class _ScrapPurchaseInvoiceScreenState
                       color: AppColors.success.withValues(alpha: 0.4),
                     ),
                   ),
-                  child: Text(
-                    'الإجمالي: ${totalAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                  child: _settingsProvider.buildText(
+                    'الإجمالي: ${totalAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
@@ -3572,8 +3637,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
-                                '${payment.amount.toStringAsFixed(2)} ر.س',
+                              child: _settingsProvider.buildText(
+                                '${payment.amount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.success,
@@ -3583,9 +3648,9 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
+                              child: _settingsProvider.buildText(
                                 payment.commissionAmount > 0
-                                    ? '${payment.commissionAmount.toStringAsFixed(2)} ر.س'
+                                    ? '${payment.commissionAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}'
                                     : '-',
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color: payment.commissionAmount > 0
@@ -3598,8 +3663,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                             Expanded(
                               flex: 2,
-                              child: Text(
-                                '${payment.netAmount.toStringAsFixed(2)} ر.س',
+                              child: _settingsProvider.buildText(
+                                '${payment.netAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.info,
@@ -3858,7 +3923,9 @@ class _ScrapPurchaseInvoiceScreenState
                                       horizontal: 12,
                                       vertical: 12,
                                     ),
-                                    suffixText: 'ر.س',
+                                    suffixText: context
+                                        .read<SettingsProvider>()
+                                        .currencySymbolText,
                                     suffixStyle: theme.textTheme.bodySmall
                                         ?.copyWith(fontWeight: FontWeight.w500),
                                   ),
@@ -3957,8 +4024,8 @@ class _ScrapPurchaseInvoiceScreenState
                           color: AppColors.warning,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          'المتبقي: ${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          'المتبقي: ${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontSize: 14,
                             color: AppColors.warning,
@@ -4038,8 +4105,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                           ],
                         ),
-                        Text(
-                          '${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_calculateGrandTotal().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -4064,8 +4131,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                           ],
                         ),
-                        Text(
-                          '${_calculateTotalVAT().toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_calculateTotalVAT().toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: AppColors.info,
@@ -4094,8 +4161,8 @@ class _ScrapPurchaseInvoiceScreenState
                           ),
                         ],
                       ),
-                      Text(
-                        '${_totalPayments.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                      _settingsProvider.buildText(
+                        '${_totalPayments.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                         style: theme.textTheme.bodyLarge?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -4121,8 +4188,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalCommission.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalCommission.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.warning,
@@ -4148,8 +4215,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalCommissionVAT.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalCommissionVAT.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: AppColors.info,
@@ -4177,8 +4244,8 @@ class _ScrapPurchaseInvoiceScreenState
                             ),
                           ],
                         ),
-                        Text(
-                          '${_totalNet.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                        _settingsProvider.buildText(
+                          '${_totalNet.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.success,
@@ -4226,8 +4293,8 @@ class _ScrapPurchaseInvoiceScreenState
                             color: colorScheme.error,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text(
-                            '${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbol}',
+                          child: _settingsProvider.buildText(
+                            '${_remainingAmount.toStringAsFixed(2)} ${_settingsProvider.currencySymbolText}',
                             style: theme.textTheme.bodyLarge?.copyWith(
                               fontWeight: FontWeight.bold,
                               color: colorScheme.onError,
@@ -4306,7 +4373,12 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
   void initState() {
     super.initState();
     _selectedKarat = widget.mainKarat;
-    for (final c in [_weightController, _stonesWeightController, _wageController, _countController]) {
+    for (final c in [
+      _weightController,
+      _stonesWeightController,
+      _wageController,
+      _countController,
+    ]) {
       c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
     }
   }
@@ -4645,7 +4717,9 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                           return null;
                         },
                         onFieldSubmitted: (_) => _focusAndSelect(
-                            _stonesWeightFocusNode, _stonesWeightController),
+                          _stonesWeightFocusNode,
+                          _stonesWeightController,
+                        ),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
@@ -4667,9 +4741,13 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         validator: (v) {
                           final sw = _tryParseDouble(v ?? '');
-                          if (sw < 0) return 'وزن الأحجار لا يمكن أن يكون سالباً';
+                          if (sw < 0) {
+                            return 'وزن الأحجار لا يمكن أن يكون سالباً';
+                          }
                           final w = _tryParseDouble(_weightController.text);
-                          if (sw > w && w > 0) return 'وزن الأحجار أكبر من الوزن';
+                          if (sw > w && w > 0) {
+                            return 'وزن الأحجار أكبر من الوزن';
+                          }
                           return null;
                         },
                         onFieldSubmitted: (_) =>
@@ -4684,10 +4762,8 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
-                        onTap: () => _focusAndSelect(
-                          _wageFocusNode,
-                          _wageController,
-                        ),
+                        onTap: () =>
+                            _focusAndSelect(_wageFocusNode, _wageController),
                         decoration: const InputDecoration(
                           labelText: 'المصنعية/جم',
                           border: OutlineInputBorder(),
@@ -4710,10 +4786,8 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                         ),
                         textInputAction: TextInputAction.next,
                         inputFormatters: [NormalizeNumberFormatter()],
-                        onTap: () => _focusAndSelect(
-                          _countFocusNode,
-                          _countController,
-                        ),
+                        onTap: () =>
+                            _focusAndSelect(_countFocusNode, _countController),
                         decoration: const InputDecoration(
                           labelText: 'العدد',
                           border: OutlineInputBorder(),

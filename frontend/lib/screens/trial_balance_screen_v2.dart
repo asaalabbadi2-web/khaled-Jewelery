@@ -28,9 +28,11 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
   String? _errorMessage;
 
   // Settings
-  String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -43,7 +45,7 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
 
-    final newSymbol = settings.currencySymbol;
+    final newSymbol = settings.currencySymbolText;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
@@ -51,7 +53,6 @@ class _TrialBalanceScreenV2State extends State<TrialBalanceScreenV2> {
         newDecimals != _currencyDecimalPlaces ||
         newMainKarat != _mainKarat) {
       setState(() {
-        _currencySymbol = newSymbol;
         _currencyDecimalPlaces = newDecimals;
         _mainKarat = newMainKarat;
       });

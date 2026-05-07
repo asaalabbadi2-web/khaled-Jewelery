@@ -17,6 +17,7 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../models/account_statement_model.dart';
 import '../pdf/account_statement_pdf_builder.dart';
+import '../pdf/pdf_sar_cache.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as app_theme;
 
@@ -118,7 +119,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       companyCr: companyCr,
       showCompanyLogo: showCompanyLogo,
       companyLogoBase64: companyLogoBase64,
-      currencySymbol: settingsProvider?.currencySymbol ?? 'ر.س',
+      currencySymbol: settingsProvider?.currencySymbolText ?? '',
+      isNewSar: settingsProvider?.currencyIsNewSar ?? false,
     );
   }
 
@@ -344,7 +346,6 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   void _onContentScroll() {
     // No-op: collapse animation removed; CustomScrollView handles scroll natively.
   }
-
 
   Future<void> _fetchAccountStatement() async {
     setState(() => _isLoading = true);
@@ -1170,6 +1171,14 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         ? DateTimeRange(start: rangeStart, end: rangeEnd!)
         : null;
 
+    // Pre-warm SAR tints so the isolate receives ready bytes.
+    if (branding.isNewSar) {
+      await Future.wait([
+        PdfSarCache.tinted(const pdf.PdfColor.fromInt(0xFF8B6914)),
+        PdfSarCache.tinted(const pdf.PdfColor.fromInt(0xFF1A1A1A)),
+      ]);
+    }
+
     Future<Uint8List> buildPdf() => AccountStatementPdfBuilder.build(
       fmt,
       statement: statement,
@@ -1186,6 +1195,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       preloadedBoldFont: boldFontBytes,
       preloadedFallbackLogo: fallbackLogoBytes,
       preloadedLogo: preloadedLogo,
+      sarGoldBytes: PdfSarCache.tintedBytes(const pdf.PdfColor.fromInt(0xFF8B6914)),
+      sarDarkBytes: PdfSarCache.tintedBytes(const pdf.PdfColor.fromInt(0xFF1A1A1A)),
     );
 
     // dart:isolate is not supported on Flutter Web — run directly there.
@@ -1379,7 +1390,6 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     if (maxWidth < 600) return 280;
     return 240;
   }
-
 
   Widget _buildEmptyLinesState() {
     final theme = Theme.of(context);
@@ -2977,7 +2987,8 @@ class _SummaryCard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: _SummaryMetric(
-                    label: 'نقد (ر.س)',
+                    label:
+                        'نقد (${context.read<SettingsProvider>().currencySymbolText})',
                     value: cashValue.toStringAsFixed(2),
                     color: cashColor,
                     icon: Icons.payments,
@@ -3096,7 +3107,8 @@ class _ValuationCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: _SummaryMetric(
-                    label: 'سعر الجرام (ر.س)',
+                    label:
+                        'سعر الجرام (${context.read<SettingsProvider>().currencySymbolText})',
                     value: priceText,
                     subtitle: 'مكافئ عيار $mainKarat',
                     color: goldColor,
@@ -3106,7 +3118,8 @@ class _ValuationCard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: _SummaryMetric(
-                    label: 'قيمة تقديرية (ر.س)',
+                    label:
+                        'قيمة تقديرية (${context.read<SettingsProvider>().currencySymbolText})',
                     value: totalText,
                     subtitle: goldValueText == null
                         ? null
@@ -3205,10 +3218,7 @@ class _SummaryMetric extends StatelessWidget {
 // Sliver delegate that pins a widget at the top of a CustomScrollView
 // ─────────────────────────────────────────────────────────────────────────────
 class _PinnedWidgetDelegate extends SliverPersistentHeaderDelegate {
-  const _PinnedWidgetDelegate({
-    required this.child,
-    required this.height,
-  });
+  const _PinnedWidgetDelegate({required this.child, required this.height});
 
   final Widget child;
   final double height;
