@@ -17,6 +17,7 @@ import 'gold_price_history_report_screen.dart';
 import 'safe_box_hero_details_screen.dart';
 import 'system_alerts_screen.dart';
 import 'widgets/dashboard_summary_tabs_card.dart';
+import '../../utils/currency_utils.dart' as cu;
 
 enum _TimeRange { today, month, year }
 
@@ -1714,10 +1715,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text(
+                      cu.SarAwareText(
                         _formatCurrency(
                           periodProfit,
                         ).replaceAll(_currencySymbol, '').trim(),
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
                           color: profitColor,

@@ -324,10 +324,11 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   }
 
   String _formatCash(dynamic raw) {
-    return NumberFormat.currency(
-      symbol: _currencySymbol,
-      decimalDigits: _currencyDecimalPlaces,
+    final formatted = NumberFormat(
+      '#,##0.${'0' * _currencyDecimalPlaces}',
+      widget.isArabic ? 'ar' : 'en',
     ).format(_asDouble(raw));
+    return '$formatted $_currencySymbol';
   }
 
   String _formatGold(dynamic raw) {
@@ -947,7 +948,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
+                  context.read<SettingsProvider>().buildText(
                     value,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
@@ -1764,15 +1765,15 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             Icon(icon, size: 15, color: color),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(
+              child: context.read<SettingsProvider>().buildText(
                 value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
                   color: emphasize ? color.withValues(alpha: 0.98) : null,
                 ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
               ),
             ),
           ],
@@ -2391,13 +2392,13 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label, style: theme.textTheme.bodySmall),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   value,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
                     color: emphasize ? resolvedAccent : null,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),

@@ -12,6 +12,7 @@ import 'barcode_print_screen.dart';
 import 'category_opening_balance_screen.dart';
 import 'quick_add_items_screen.dart';
 import '../utils.dart';
+import '../utils/currency_utils.dart' as cu;
 
 /// شاشة قائمة الأصناف المحسّنة
 ///
@@ -714,8 +715,9 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                Text(
+                                cu.SarAwareText(
                                   '${item['stones_value']?.toStringAsFixed(2) ?? '0'} ${context.read<SettingsProvider>().currencySymbolText}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                                   style: textTheme.bodySmall?.copyWith(
                                     color: Colors.purple.shade400,
                                   ),
@@ -1089,8 +1091,9 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
               const SizedBox(height: 16),
 
               // مدى المصنعية
-              Text(
+              cu.SarAwareText(
                 'مدى المصنعية (${context.read<SettingsProvider>().currencySymbolText})',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
@@ -1125,8 +1128,9 @@ class _ItemsScreenEnhancedState extends State<ItemsScreenEnhanced> {
               const SizedBox(height: 16),
 
               // مدى السعر
-              Text(
+              cu.SarAwareText(
                 'مدى السعر (${context.read<SettingsProvider>().currencySymbolText})',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),

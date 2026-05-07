@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../api_service.dart';
 import '../../providers/settings_provider.dart';
+import '../../utils/currency_utils.dart' as cu;
 
 class AnalyticsDashboardScreen extends StatefulWidget {
   final ApiService api;
@@ -586,8 +587,9 @@ class _AnalyticsDashboardScreenState extends State<AnalyticsDashboardScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
-                Text(
+                cu.SarAwareText(
                   value,
+                  isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,

@@ -7,6 +7,7 @@ import '../models/employee_bonus_model.dart';
 import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
 import 'calculate_bonuses_screen.dart';
+import '../utils/currency_utils.dart' as cu;
 
 class BonusesScreen extends StatefulWidget {
   final ApiService api;
@@ -313,10 +314,11 @@ class _BonusesScreenState extends State<BonusesScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                cu.SarAwareText(
                   isAr
                       ? 'دفع مكافأة ${bonus.amount.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} للموظف ${bonus.employee?.fullName ?? ""}'
                       : 'Pay bonus of ${bonus.amount.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} to ${bonus.employee?.fullName ?? ""}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                   style: const TextStyle(fontSize: 14),
                 ),
                 const SizedBox(height: 16),

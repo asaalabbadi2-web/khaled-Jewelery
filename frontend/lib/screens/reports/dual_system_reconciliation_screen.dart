@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../../api_service.dart';
 import 'package:provider/provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../utils/currency_utils.dart' as cu;
 
 class DualSystemReconciliationScreen extends StatefulWidget {
   const DualSystemReconciliationScreen({super.key});
@@ -248,8 +249,9 @@ class _DualSystemReconciliationScreenState
           ),
         ),
         const SizedBox(height: 4),
-        Text(
+        cu.SarAwareText(
           '$value ${context.read<SettingsProvider>().currencySymbolText}/جم',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
           style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,

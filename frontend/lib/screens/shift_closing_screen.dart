@@ -220,7 +220,7 @@ class _ShiftClosingScreenState extends State<ShiftClosingScreen> {
                             children: [
                               SizedBox(
                                 width: 80,
-                                child: Text(
+                                child: context.read<SettingsProvider>().buildText(
                                   widget.isArabic ? '$d $_currencySymbol' : '$d _currencySymbol',
                                 ),
                               ),

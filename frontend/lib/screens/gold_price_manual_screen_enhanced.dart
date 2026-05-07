@@ -4,6 +4,7 @@ import '../api_service.dart';
 import '../utils.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/currency_utils.dart' as cu;
 
 /// شاشة تحديث سعر الذهب المحسّنة بتصميم احترافي
 class GoldPriceManualScreenEnhanced extends StatefulWidget {
@@ -208,8 +209,9 @@ class _GoldPriceManualScreenEnhancedState
                               'السعر الحالي:',
                               style: TextStyle(fontSize: 14),
                             ),
-                            Text(
+                            cu.SarAwareText(
                               '${_currentPrice!.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.grey.shade700,
@@ -223,8 +225,9 @@ class _GoldPriceManualScreenEnhancedState
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('السعر الجديد:', style: TextStyle(fontSize: 14)),
-                          Text(
+                          cu.SarAwareText(
                             '${newPriceSarPerGram.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: _goldColor,
@@ -240,8 +243,9 @@ class _GoldPriceManualScreenEnhancedState
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text('الفرق:', style: TextStyle(fontSize: 14)),
-                            Text(
+                            cu.SarAwareText(
                               '${(newPriceSarPerGram - _currentPrice!).toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: newPriceSarPerGram > _currentPrice!
@@ -429,10 +433,11 @@ class _GoldPriceManualScreenEnhancedState
                         ),
                       ),
                       SizedBox(height: 4),
-                      Text(
+                      cu.SarAwareText(
                         _currentPrice != null
                             ? '${_currentPrice!.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}'
                             : 'غير متوفر',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                         style: TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
@@ -859,8 +864,9 @@ class _GoldPriceManualScreenEnhancedState
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
+                          cu.SarAwareText(
                             '${price.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/غ',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 16,

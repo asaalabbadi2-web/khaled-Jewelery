@@ -3573,7 +3573,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      context.read<SettingsProvider>().buildText(
                         bal != null
                             ? 'الرصيد الفعلي الحالي: ${bal.toStringAsFixed(2)} $_currencySymbol'
                             : (isLoadingFallback

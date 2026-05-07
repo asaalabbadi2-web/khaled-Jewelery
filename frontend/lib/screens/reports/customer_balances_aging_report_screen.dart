@@ -625,7 +625,7 @@ class _CustomerBalancesAgingReportScreenState
     final columns = [
       DataColumn(label: Text(isArabic ? 'العميل' : 'Customer')),
       DataColumn(
-        label: Text(
+        label: context.read<SettingsProvider>().buildText(
           isArabic ? 'الرصيد ($_currencySymbol)' : 'Outstanding (cash)',
         ),
       ),

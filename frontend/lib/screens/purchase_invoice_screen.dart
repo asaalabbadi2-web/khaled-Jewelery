@@ -2986,9 +2986,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                                 ),
                               );
                             }).toList()),
-                            Text(
+                            context.read<SettingsProvider>().buildText(
                               '${context.read<SettingsProvider>().currencySymbolText}/جم',
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: Colors.white54,
                                 fontSize: 10,
                               ),
@@ -3736,7 +3736,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     Widget valueCell(String text, {Color? color, FontWeight? fontWeight}) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-        child: Text(
+        child: context.read<SettingsProvider>().buildText(
           text,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: color,
@@ -4047,7 +4047,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final price = _toDouble(value);
     final display = price > 0 ? price.toStringAsFixed(2) : '-';
     return Chip(
-      label: Text(
+      label: context.read<SettingsProvider>().buildText(
         isMain
             ? '$label (الرئيسي): $display ${context.read<SettingsProvider>().currencySymbolText}'
             : '$label: $display ${context.read<SettingsProvider>().currencySymbolText}',
@@ -4399,7 +4399,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   value,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w800,
@@ -4432,7 +4432,7 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               color: isDark ? Colors.white : Colors.black87,
             ),
           ),
-          Text(
+          context.read<SettingsProvider>().buildText(
             value,
             style: TextStyle(
               fontWeight: highlight ? FontWeight.bold : FontWeight.normal,

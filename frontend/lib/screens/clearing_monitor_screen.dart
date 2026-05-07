@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart' as theme;
 import 'clearing_settlement_screen.dart';
+import '../utils/currency_utils.dart' as cu;
 
 /// شاشة مراقبة تسوية المقاصة
 /// تعرض لكل خزينة clearing: الرصيد المعلّق، دفعات الفواتير غير المُسوّاة،
@@ -365,8 +366,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
         children: [
           Icon(icon, size: 22, color: color),
           const SizedBox(height: 6),
-          Text(
+          cu.SarAwareText(
             value,
+            isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
             style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 15,
@@ -509,8 +511,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                             color: theme.AppColors.warning,
                           ),
                         ),
-                        Text(
+                        cu.SarAwareText(
                           '${context.read<SettingsProvider>().currencySymbolText} مستحق',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                           style: TextStyle(
                             fontSize: 10,
                             color: Colors.grey.shade500,
@@ -530,8 +533,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                             color: theme.AppColors.error,
                           ),
                         ),
-                        Text(
+                        cu.SarAwareText(
                           '${context.read<SettingsProvider>().currencySymbolText} تسوية زائدة',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                           style: TextStyle(
                             fontSize: 10,
                             color: Colors.grey.shade500,
@@ -718,8 +722,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                                       ],
                                     ),
                                   ),
-                                  Text(
+                                  cu.SarAwareText(
                                     '${_formatAmount(amt)} ${context.read<SettingsProvider>().currencySymbolText}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                                     style: TextStyle(
                                       fontWeight: FontWeight.w700,
                                       color: theme.AppColors.warning,
@@ -878,8 +883,9 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(
+      child: cu.SarAwareText(
         text,
+        isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
         style: TextStyle(
           fontSize: 11,
           color: color,

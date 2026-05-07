@@ -8,6 +8,7 @@ import 'add_voucher_screen.dart';
 import 'clearing_settlement_screen.dart';
 import 'safe_transfer_screen.dart';
 import '../providers/settings_provider.dart';
+import '../utils/currency_utils.dart' as cu;
 import 'package:provider/provider.dart';
 
 enum _SafeCardMenuAction { statement, edit, settlement, delete }
@@ -977,8 +978,9 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: AlignmentDirectional.centerStart,
-                  child: Text(
+                  child: cu.SarAwareText(
                     value,
+                    isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

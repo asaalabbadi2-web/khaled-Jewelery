@@ -329,10 +329,10 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                   '${isAr ? "الوزن" : "Weight"}: ${_weight.toStringAsFixed(3)} ${isAr ? "جرام" : "grams"}',
                 ),
                 Text('${isAr ? "العيار" : "Karat"}: $_selectedKarat'),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   '${isAr ? "المبلغ الإجمالي" : "Total"}: ${_totalAmount.toStringAsFixed(2)} $_currencySymbol',
                 ),
-                Text(
+                context.read<SettingsProvider>().buildText(
                   '${isAr ? "المبلغ المدفوع" : "Paid"}: ${_paidAmount.toStringAsFixed(2)} $_currencySymbol',
                 ),
                 if (_paidAmount > 0)
@@ -340,7 +340,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                     '${isAr ? "خزينة الدفع" : "Payment Safe"}: ${_safeNameById(_paymentSafeBoxId)}',
                   ),
                 if (_totalAmount - _paidAmount > 0)
-                  Text(
+                  context.read<SettingsProvider>().buildText(
                     '${isAr ? "المتبقي" : "Remaining"}: ${(_totalAmount - _paidAmount).toStringAsFixed(2)} $_currencySymbol',
                     style: const TextStyle(
                       color: AppColors.error,
@@ -435,7 +435,7 @@ class _GoldReservationScreenState extends State<GoldReservationScreen> {
                                       : 'Current Gold Price',
                                   style: theme.textTheme.labelSmall,
                                 ),
-                                Text(
+                                context.read<SettingsProvider>().buildText(
                                   '${_currentGoldPrice.toStringAsFixed(2)} ${isAr ? '$_currencySymbol/جم' : '$_currencySymbol/g'}',
                                   style: theme.textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,

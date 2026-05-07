@@ -18,6 +18,7 @@ import '../widgets/searchable_picker_field.dart';
 import 'settings_screen_enhanced.dart';
 import '../utils/arabic_number_formatter.dart';
 import '../utils/invoice_direct_print.dart';
+import '../utils/currency_utils.dart' as cu;
 
 /// شاشة فاتورة البيع - النسخة الهجينة المحسّنة
 /// تجمع بين Smart Input (Progressive) و DataTable (Professional)
@@ -3607,8 +3608,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                                 ),
                               );
                             }).toList()),
-                            Text(
+                            cu.SarAwareText(
                               '${context.read<SettingsProvider>().currencySymbolText}/جم',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                               style: TextStyle(
                                 color: Colors.white54,
                                 fontSize: 10,

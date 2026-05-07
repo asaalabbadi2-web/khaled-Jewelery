@@ -7,6 +7,7 @@ import '../api_service.dart';
 import '../theme/app_theme.dart' as theme;
 import 'audit_log_screen.dart';
 import '../providers/auth_provider.dart';
+import '../utils/currency_utils.dart' as cu;
 
 /// شاشة إدارة الترحيل (Posting Management)
 /// تسمح بترحيل الفواتير والقيود، ومراجعتها قبل التأثير على الحسابات
@@ -1779,8 +1780,9 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
                             color: Colors.grey[600],
                           ),
                           const SizedBox(width: 4),
-                          Text(
+                          cu.SarAwareText(
                             'المبلغ: ${total.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                             style: const TextStyle(fontSize: 12),
                           ),
                           const SizedBox(width: 16),

@@ -19,6 +19,7 @@ import '../theme/app_theme.dart' as theme;
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import 'package:provider/provider.dart';
+import '../utils/currency_utils.dart' as cu;
 
 class VouchersListScreen extends StatefulWidget {
   const VouchersListScreen({super.key});
@@ -2463,8 +2464,9 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           if (cashAmount != null)
-                            Text(
+                            cu.SarAwareText(
                               'نقداً: $cashAmount ${context.read<SettingsProvider>().currencySymbolText}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                               style: themeData.textTheme.titleSmall?.copyWith(
                                 fontWeight: FontWeight.w800,
                                 color: const Color(0xFF2F80ED),

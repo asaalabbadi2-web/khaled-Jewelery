@@ -5,6 +5,7 @@ import '../providers/settings_provider.dart';
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
+import '../utils/currency_utils.dart' as cu;
 
 class SafeTransferScreen extends StatefulWidget {
   final ApiService api;
@@ -196,10 +197,11 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     final isAr = widget.isArabic;
 
     final content = _mode == 'cash'
-        ? Text(
+        ? cu.SarAwareText(
             isAr
                 ? 'الرصيد المتاح: ${_fmtCash(safe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText}'
                 : 'Available: ${_fmtCash(safe.cashBalance)}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
             style: TextStyle(color: Colors.grey.shade800),
           )
         : Column(
@@ -649,10 +651,11 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                   ),
                   const SizedBox(height: 8),
                   if (_mode == 'cash')
-                    Text(
+                    cu.SarAwareText(
                       widget.isArabic
                           ? 'المبلغ: ${transfer?['amount_cash'] ?? '-'} ${context.read<SettingsProvider>().currencySymbolText}'
                           : 'Amount: ${transfer?['amount_cash'] ?? '-'}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                     ),
                   if (_mode == 'gold') ...[
                     Text(widget.isArabic ? 'الأوزان:' : 'Weights:'),

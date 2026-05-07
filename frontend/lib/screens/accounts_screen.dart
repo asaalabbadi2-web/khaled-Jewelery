@@ -7,6 +7,7 @@ import '../providers/settings_provider.dart';
 import '../api_service.dart';
 import 'account_ledger_screen.dart';
 import 'account_statement_screen.dart';
+import '../utils/currency_utils.dart' as cu;
 
 enum _AccountsViewMode { cards, compact }
 
@@ -909,8 +910,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
               ),
               Expanded(
                 flex: 2,
-                child: Text(
+                child: cu.SarAwareText(
                   '${_cashFormat.format(cashBalance)} ${context.read<SettingsProvider>().currencySymbolText}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                   textAlign: TextAlign.end,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w700,

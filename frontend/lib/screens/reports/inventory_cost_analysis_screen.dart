@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../providers/settings_provider.dart';
 
 import '../../api_service.dart';
+import '../../utils/currency_utils.dart' as cu;
 
 class InventoryCostAnalysisScreen extends StatefulWidget {
   const InventoryCostAnalysisScreen({super.key});
@@ -485,12 +486,14 @@ class _InventoryCostAnalysisScreenState
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text(
+                        cu.SarAwareText(
                           '${value.toStringAsFixed(0)} ${context.read<SettingsProvider>().currencySymbolText}',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                           style: const TextStyle(fontFamily: 'Cairo'),
                         ),
-                        Text(
+                        cu.SarAwareText(
                           '${weight.toStringAsFixed(2)} جم | ${avg.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText}/جم',
+              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                           style: const TextStyle(
                             fontFamily: 'Cairo',
                             color: Colors.grey,
