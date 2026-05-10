@@ -149,6 +149,7 @@ class BonusRuleModel {
     'performance', // تقييم الأداء
     'fixed', // مكافأة ثابتة
     'profit_based', // مكافأة على أساس الربح
+    'points_based', // مكافأة على أساس نقاط السباق
     'custom', // مخصصة
   ];
 
@@ -158,6 +159,14 @@ class BonusRuleModel {
     'fixed', // مبلغ ثابت
     'sales_percentage', // نسبة من المبيعات
     'profit_percentage', // نسبة من الربح
+    'points_per_unit', // مبلغ لكل نقطة مكتسبة
+  ];
+
+  /// فترات سباق النقاط
+  static const List<String> pointsPeriods = [
+    'today', // اليوم
+    'week', // الأسبوع
+    'month', // الشهر
   ];
 
   /// أسماء الأنواع بالعربية
@@ -173,6 +182,8 @@ class BonusRuleModel {
         return 'ثابتة';
       case 'profit_based':
         return 'على أساس الربح';
+      case 'points_based':
+        return 'على أساس النقاط';
       case 'custom':
         return 'مخصصة';
       default:
@@ -190,8 +201,25 @@ class BonusRuleModel {
         return 'نسبة من المبيعات';
       case 'profit_percentage':
         return 'نسبة من الربح';
+      case 'points_per_unit':
+        return 'مبلغ لكل نقطة';
       default:
         return bonusType;
     }
   }
+
+  static String getPointsPeriodNameAr(String period) {
+    switch (period) {
+      case 'today':
+        return 'اليوم';
+      case 'week':
+        return 'الأسبوع';
+      case 'month':
+        return 'الشهر';
+      default:
+        return period;
+    }
+  }
+
+  bool get isPointsBased => ruleType == 'points_based';
 }

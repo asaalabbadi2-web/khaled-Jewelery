@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../providers/auth_provider.dart';
 import '../providers/sales_race_refresh_provider.dart';
+import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 
 /// نظام إدارة سباق المبيعات المتكامل.
@@ -214,6 +215,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   Widget build(BuildContext context) {
     final isAr = widget.isArabic;
     final auth = context.read<AuthProvider>();
+    context.watch<SettingsProvider>();
     final canManage = auth.hasPermission('system.settings');
 
     return DefaultTabController(
@@ -491,7 +493,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     final totalPurchaseAmount =
         (summary['total_purchase_amount'] as num?)?.toDouble();
     final totalPoints = (summary['total_points'] as num?)?.toInt();
-    final currency = (summary['currency'] ?? 'SAR').toString();
+    final currency = context.read<SettingsProvider>().currencySymbolText;
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -825,11 +827,9 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     final ranking = (data['ranking'] as List?) ?? const [];
     final config = data['config'] as Map?;
     final metric = (data['metric'] ?? 'weight_g').toString();
-    final adminSummary = data['admin_summary'] as Map?;
     final champion = data['champion'] as Map?;
     final championName = (champion?['name'] ?? '').toString().trim();
-    final currency = (adminSummary?['currency'] ?? (isAr ? 'ر.س' : 'SAR'))
-        .toString();
+    final currency = context.read<SettingsProvider>().currencySymbolText;
     final showInvoiceCount = config?['show_invoice_count'] != false;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;

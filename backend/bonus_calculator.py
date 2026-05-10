@@ -277,6 +277,93 @@ class BonusCalculator:
         return amount, calculation_data
 
     @staticmethod
+    def calculate_points_bonus(employee, rule, period_start, period_end):
+        """حساب مكافأة النقاط (points_based) — تعتمد على نقاط سباق المبيعات."""
+        conditions = rule.conditions or {}
+        points_period = conditions.get("points_period", "month")
+        min_points = float(conditions.get("min_points", 0))
+
+        # تحديد حدود الفترة بناءً على إعداد القاعدة (وليس فترة الحساب الممررة)
+        now = datetime.now()
+        if points_period == "today":
+            from datetime import date as _date
+            start_dt = datetime.combine(_date.today(), datetime.min.time())
+            end_dt = datetime.combine(_date.today(), datetime.max.time())
+        elif points_period == "week":
+            week_start = now.date() - timedelta(days=now.date().weekday())
+            start_dt = datetime.combine(week_start, datetime.min.time())
+            end_dt = datetime.combine(week_start + timedelta(days=6), datetime.max.time())
+        else:  # month
+            month_start = now.date().replace(day=1)
+            start_dt = datetime.combine(month_start, datetime.min.time())
+            end_dt = now
+
+        # جلب معدل النقاط للجرام
+        try:
+            points_per_gram = get_race_points_per_gram()
+        except Exception:
+            points_per_gram = 10.0
+
+        # نفس منطق اللوحة: بيع + شراء من عميل، profit_gold فقط
+        RACE_TYPES = {"بيع", "شراء من عميل"}
+
+        # ربط الموظف بالفواتير عبر employee_id أو user_account.username
+        username = None
+        if hasattr(employee, "user_account") and employee.user_account:
+            username = employee.user_account.username
+
+        invoice_filter = and_(
+            Invoice.is_posted.is_(True),
+            Invoice.invoice_type.in_(list(RACE_TYPES)),
+            Invoice.date >= start_dt,
+            Invoice.date <= end_dt,
+        )
+
+        # ابحث بـ employee_id أولاً ثم posted_by
+        invoices = Invoice.query.filter(
+            and_(invoice_filter, Invoice.employee_id == employee.id)
+        ).all()
+
+        if not invoices and username:
+            invoices = Invoice.query.filter(
+                and_(invoice_filter, Invoice.posted_by == username)
+            ).all()
+
+        total_profit_gold = sum(float(inv.profit_gold or 0.0) for inv in invoices if float(inv.profit_gold or 0.0) > 0)
+        employee_points = int(round(total_profit_gold * points_per_gram))
+
+        if employee_points < min_points:
+            return None
+
+        amount = 0.0
+        if rule.bonus_type == "points_per_unit":
+            amount = employee_points * rule.bonus_value
+        elif rule.bonus_type == "fixed":
+            amount = rule.bonus_value
+        elif rule.bonus_type == "percentage":
+            amount = employee.salary * (rule.bonus_value / 100)
+
+        if rule.min_bonus:
+            amount = max(amount, rule.min_bonus)
+        if rule.max_bonus:
+            amount = min(amount, rule.max_bonus)
+
+        if amount <= 0:
+            return None
+
+        calculation_data = {
+            "points_period": points_period,
+            "points_per_gram": points_per_gram,
+            "total_profit_gold_g": total_profit_gold,
+            "employee_points": employee_points,
+            "min_points": min_points,
+            "bonus_type": rule.bonus_type,
+            "invoice_count": len(invoices),
+            "base_salary": employee.salary,
+        }
+        return amount, calculation_data
+
+    @staticmethod
     def calculate_bonus(employee, rule, period_start, period_end):
         """حساب المكافأة بناءً على نوع القاعدة."""
         if not rule.is_active or not rule.is_valid_for_employee(employee):
@@ -293,6 +380,8 @@ class BonusCalculator:
             result = BonusCalculator.calculate_fixed_bonus(employee, rule, period_start, period_end)
         elif rule.rule_type == "profit_based":
             result = BonusCalculator.calculate_profit_bonus(employee, rule, period_start, period_end)
+        elif rule.rule_type == "points_based":
+            result = BonusCalculator.calculate_points_bonus(employee, rule, period_start, period_end)
 
         if not result:
             return None

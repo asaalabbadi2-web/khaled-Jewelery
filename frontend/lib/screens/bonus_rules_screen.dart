@@ -274,6 +274,19 @@ class _BonusRulesScreenState extends State<BonusRulesScreen> {
                     isAr ? 'الوظائف:' : 'Positions:',
                     rule.targetPositions!.join(', '),
                   ),
+                if (rule.isPointsBased) ...[
+                  _buildInfoRow(
+                    isAr ? 'فترة النقاط:' : 'Points period:',
+                    BonusRuleModel.getPointsPeriodNameAr(
+                      (rule.conditions?['points_period'] as String?) ?? 'month',
+                    ),
+                  ),
+                  if (rule.conditions?['min_points'] != null)
+                    _buildInfoRow(
+                      isAr ? 'حد أدنى نقاط:' : 'Min points:',
+                      '${rule.conditions!['min_points']}',
+                    ),
+                ],
                 if (rule.targetEmployeeIds != null &&
                     rule.targetEmployeeIds!.isNotEmpty)
                   _buildInfoRow(
@@ -398,9 +411,11 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
   late TextEditingController _minProfitController;
   late TextEditingController _minAttendanceController;
   late TextEditingController _profitPercentInvoiceController;
+  late TextEditingController _minPointsController;
 
   String _selectedRuleType = 'sales_target';
   String _selectedBonusType = 'percentage';
+  String _selectedPointsPeriod = 'month';
   bool _isActive = true;
   DateTime? _validFrom;
   DateTime? _validTo;
@@ -452,8 +467,17 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
           ? rule.conditions!['min_profit_percent_of_invoice'].toString()
           : '',
     );
+    _minPointsController = TextEditingController(
+      text:
+          rule?.conditions != null &&
+              rule!.conditions!['min_points'] != null
+          ? rule.conditions!['min_points'].toString()
+          : '',
+    );
     _selectedRuleType = rule?.ruleType ?? 'sales_target';
     _selectedBonusType = rule?.bonusType ?? 'percentage';
+    _selectedPointsPeriod =
+        (rule?.conditions?['points_period'] as String?) ?? 'month';
     _isActive = rule?.isActive ?? true;
     _validFrom = rule?.validFrom;
     _validTo = rule?.validTo;
@@ -552,6 +576,7 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
     _minProfitController.dispose();
     _minAttendanceController.dispose();
     _profitPercentInvoiceController.dispose();
+    _minPointsController.dispose();
     super.dispose();
   }
 
@@ -602,6 +627,11 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
       }
       if (minProfitPercentInvoice != null) {
         conditions['min_profit_percent_of_invoice'] = minProfitPercentInvoice;
+      }
+      if (_selectedRuleType == 'points_based') {
+        final minPts = tryParse(_minPointsController.text);
+        if (minPts != null) conditions['min_points'] = minPts;
+        conditions['points_period'] = _selectedPointsPeriod;
       }
       if (conditions.isNotEmpty) {
         payload['conditions'] = conditions;
@@ -672,7 +702,7 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  initialValue: _selectedRuleType,
+                  value: _selectedRuleType,
                   decoration: InputDecoration(
                     labelText: isAr ? 'نوع القاعدة' : 'Rule Type',
                     border: const OutlineInputBorder(),
@@ -685,11 +715,19 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
                         ),
                       )
                       .toList(),
-                  onChanged: (v) => setState(() => _selectedRuleType = v!),
+                  onChanged: (v) => setState(() {
+                    _selectedRuleType = v!;
+                    // عند اختيار النقاط، القيمة الافتراضية لنوع المكافأة هي مبلغ لكل نقطة
+                    if (_selectedRuleType == 'points_based' &&
+                        _selectedBonusType != 'points_per_unit' &&
+                        _selectedBonusType != 'fixed') {
+                      _selectedBonusType = 'points_per_unit';
+                    }
+                  }),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  initialValue: _selectedBonusType,
+                  value: _selectedBonusType,
                   decoration: InputDecoration(
                     labelText: isAr ? 'نوع المكافأة' : 'Bonus Type',
                     border: const OutlineInputBorder(),
@@ -708,7 +746,16 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
                 TextFormField(
                   controller: _valueController,
                   decoration: InputDecoration(
-                    labelText: isAr ? 'القيمة' : 'Value',
+                    labelText: _selectedRuleType == 'points_based' &&
+                            _selectedBonusType == 'points_per_unit'
+                        ? (isAr ? 'المبلغ لكل نقطة' : 'Amount per point')
+                        : (isAr ? 'القيمة' : 'Value'),
+                    helperText: _selectedRuleType == 'points_based' &&
+                            _selectedBonusType == 'points_per_unit'
+                        ? (isAr
+                            ? 'مثال: 0.5 يعني 0.5 دينار لكل نقطة'
+                            : 'e.g. 0.5 = 0.5 IQD per point')
+                        : null,
                     border: const OutlineInputBorder(),
                   ),
                   keyboardType: TextInputType.number,
@@ -743,77 +790,162 @@ class _BonusRuleDialogState extends State<_BonusRuleDialog> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // الشروط الاختيارية
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    isAr
-                        ? 'شروط الاستحقاق (اختياري)'
-                        : 'Eligibility (optional)',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+
+                // قسم إعدادات النقاط — يظهر فقط لنوع points_based
+                if (_selectedRuleType == 'points_based') ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.08),
+                      border: Border.all(
+                        color: const Color(0xFFD4AF37).withValues(alpha: 0.5),
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.stars_rounded,
+                              color: Color(0xFFD4AF37),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              isAr
+                                  ? 'إعدادات سباق النقاط'
+                                  : 'Points Race Settings',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF8B6914),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          value: _selectedPointsPeriod,
+                          decoration: InputDecoration(
+                            labelText:
+                                isAr ? 'فترة احتساب النقاط' : 'Points Period',
+                            helperText: isAr
+                                ? 'الفترة التي تُحسب منها نقاط الموظف'
+                                : 'Period from which employee points are counted',
+                            border: const OutlineInputBorder(),
+                          ),
+                          items: BonusRuleModel.pointsPeriods
+                              .map(
+                                (p) => DropdownMenuItem(
+                                  value: p,
+                                  child: Text(
+                                    BonusRuleModel.getPointsPeriodNameAr(p),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) =>
+                              setState(() => _selectedPointsPeriod = v!),
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _minPointsController,
+                          decoration: InputDecoration(
+                            labelText: isAr
+                                ? 'حد أدنى للنقاط (اختياري)'
+                                : 'Min points (optional)',
+                            helperText: isAr
+                                ? 'لا تُمنح المكافأة إلا إذا تجاوز الموظف هذا العدد'
+                                : 'Bonus only granted if employee exceeds this threshold',
+                            border: const OutlineInputBorder(),
+                            prefixIcon: const Icon(Icons.star_border),
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _minSalesController,
-                        decoration: InputDecoration(
-                          labelText: isAr ? 'حد أدنى للمبيعات' : 'Min sales',
-                          helperText: isAr
-                              ? 'بالريال أو الوزن حسب الفاتورة'
-                              : 'In currency/weight per invoice',
-                          border: const OutlineInputBorder(),
-                        ),
-                        keyboardType: TextInputType.number,
-                      ),
+                  const SizedBox(height: 12),
+                ],
+
+                // الشروط الاختيارية — مخفية لـ points_based
+                if (_selectedRuleType != 'points_based') ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      isAr
+                          ? 'شروط الاستحقاق (اختياري)'
+                          : 'Eligibility (optional)',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _minProfitController,
-                        decoration: InputDecoration(
-                          labelText: isAr ? 'حد أدنى للربح' : 'Min profit',
-                          helperText: isAr ? 'قيمة ثابتة' : 'Fixed value',
-                          border: const OutlineInputBorder(),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _minSalesController,
+                          decoration: InputDecoration(
+                            labelText:
+                                isAr ? 'حد أدنى للمبيعات' : 'Min sales',
+                            helperText: isAr
+                                ? 'بالريال أو الوزن حسب الفاتورة'
+                                : 'In currency/weight per invoice',
+                            border: const OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
                         ),
-                        keyboardType: TextInputType.number,
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _profitPercentInvoiceController,
-                        decoration: InputDecoration(
-                          labelText: isAr
-                              ? 'ربح % من الفاتورة'
-                              : 'Profit % of invoice',
-                          helperText: isAr
-                              ? 'مثال: 5 يعني ربح ≥5% من إجمالي الفاتورة'
-                              : 'e.g. 5 means profit ≥5% of invoice total',
-                          border: const OutlineInputBorder(),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _minProfitController,
+                          decoration: InputDecoration(
+                            labelText:
+                                isAr ? 'حد أدنى للربح' : 'Min profit',
+                            helperText:
+                                isAr ? 'قيمة ثابتة' : 'Fixed value',
+                            border: const OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
                         ),
-                        keyboardType: TextInputType.number,
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _minAttendanceController,
-                        decoration: InputDecoration(
-                          labelText: isAr ? 'نسبة حضور %' : 'Attendance %',
-                          border: const OutlineInputBorder(),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _profitPercentInvoiceController,
+                          decoration: InputDecoration(
+                            labelText: isAr
+                                ? 'ربح % من الفاتورة'
+                                : 'Profit % of invoice',
+                            helperText: isAr
+                                ? 'مثال: 5 يعني ربح ≥5% من إجمالي الفاتورة'
+                                : 'e.g. 5 means profit ≥5% of invoice total',
+                            border: const OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
                         ),
-                        keyboardType: TextInputType.number,
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _minAttendanceController,
+                          decoration: InputDecoration(
+                            labelText:
+                                isAr ? 'نسبة حضور %' : 'Attendance %',
+                            border: const OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Row(
                   children: [

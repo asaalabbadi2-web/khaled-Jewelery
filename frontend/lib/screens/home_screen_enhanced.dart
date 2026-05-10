@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/currency_utils.dart' as cu;
 import '../providers/quick_actions_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
@@ -3294,10 +3295,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         icon: Icons.north_rounded,
                         label: isAr ? 'مبلغ المبيعات' : 'Sales',
                         value:
-                            '${adminSummary['currency'] ?? 'SAR'} '
                             '${NumberFormat('#,##0', 'en').format(
                               ((adminSummary['total_sales_amount'] as num?) ?? 0).round(),
-                            )}',
+                            )} ${context.read<SettingsProvider>().currencySymbolText}',
                         accent: AppColors.success,
                         borderBottomColor: AppColors.success,
                       ),
@@ -3312,10 +3312,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         icon: Icons.south_rounded,
                         label: isAr ? 'إجمالي المشتريات' : 'Purchases',
                         value:
-                            '${adminSummary['currency'] ?? 'SAR'} '
                             '${NumberFormat('#,##0', 'en').format(
                               ((adminSummary['total_purchase_amount'] as num?) ?? 0).round(),
-                            )}',
+                            )} ${context.read<SettingsProvider>().currencySymbolText}',
                         accent: const Color(0xFF5E35B1),
                         borderBottomColor: const Color(0xFF5E35B1),
                       ),
@@ -3788,8 +3787,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
+                    cu.SarAwareText(
                       value,
+                      isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

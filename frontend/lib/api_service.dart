@@ -6751,6 +6751,21 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> createBonus(Map<String, dynamic> data) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/bonuses'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(data),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      final error = json.decode(utf8.decode(response.bodyBytes));
+      throw Exception(error['error'] ?? error['message'] ?? 'فشل في إنشاء المكافأة');
+    }
+  }
+
   Future<Map<String, dynamic>> calculateBonuses({
     String? dateFrom,
     String? dateTo,

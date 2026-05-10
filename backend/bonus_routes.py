@@ -397,6 +397,83 @@ def get_bonuses():
         }), 500
 
 
+@bonus_bp.route('/bonuses', methods=['POST'])
+@require_auth
+@require_any_permission('bonus.calculate', 'bonus.approve')
+def create_bonus():
+    """إنشاء مكافأة يدوية مباشرة (تُستخدم عند منح مكافأة الفائزين في السباق)"""
+    try:
+        data = request.get_json() or {}
+
+        employee_id = data.get('employee_id')
+        if not employee_id:
+            return jsonify({'success': False, 'error': 'employee_id مطلوب'}), 400
+
+        employee = Employee.query.get(employee_id)
+        if not employee:
+            return jsonify({'success': False, 'error': 'الموظف غير موجود'}), 404
+
+        amount = data.get('amount')
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'قيمة المبلغ غير صالحة'}), 400
+
+        if amount <= 0:
+            return jsonify({'success': False, 'error': 'يجب أن يكون المبلغ أكبر من صفر'}), 400
+
+        bonus_type = data.get('bonus_type', 'fixed')
+        status = data.get('status', 'pending')
+        if status not in ('pending', 'approved'):
+            status = 'pending'
+
+        try:
+            period_start = datetime.strptime(data['period_start'], '%Y-%m-%d').date()
+            period_end = datetime.strptime(data['period_end'], '%Y-%m-%d').date()
+        except (KeyError, ValueError):
+            return jsonify({'success': False, 'error': 'period_start و period_end مطلوبان بصيغة YYYY-MM-DD'}), 400
+
+        if period_end < period_start:
+            return jsonify({'success': False, 'error': 'تاريخ النهاية يجب أن يكون بعد تاريخ البداية'}), 400
+
+        bonus_rule_id = data.get('bonus_rule_id')
+        if bonus_rule_id:
+            rule = BonusRule.query.get(bonus_rule_id)
+            if not rule:
+                bonus_rule_id = None
+
+        bonus = EmployeeBonus(
+            employee_id=employee_id,
+            bonus_rule_id=bonus_rule_id,
+            bonus_type=bonus_type,
+            amount=round(amount, 2),
+            period_start=period_start,
+            period_end=period_end,
+            calculation_data=data.get('calculation_data'),
+            status=status,
+            notes=data.get('notes'),
+            created_at=datetime.now(),
+            created_by=getattr(g, 'username', None),
+        )
+
+        if status == 'approved':
+            bonus.approved_by = getattr(g, 'username', 'system')
+            bonus.approved_at = datetime.now()
+
+        db.session.add(bonus)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'تم إنشاء المكافأة بنجاح',
+            'bonus': bonus.to_dict(include_employee=True, include_rule=True),
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @bonus_bp.route('/bonuses/<int:bonus_id>', methods=['GET'])
 @require_auth
 def get_bonus(bonus_id):

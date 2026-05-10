@@ -6,23 +6,36 @@ import '../api_service.dart';
 import '../models/employee_bonus_model.dart';
 import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
+import '../theme/app_theme.dart';
+import 'bonus_management_screen.dart';
 import 'calculate_bonuses_screen.dart';
-import '../utils/currency_utils.dart' as cu;
 
 class BonusesScreen extends StatefulWidget {
   final ApiService api;
   final bool isArabic;
+  final bool embedded;
 
-  const BonusesScreen({super.key, required this.api, this.isArabic = true});
+  const BonusesScreen({
+    super.key,
+    required this.api,
+    this.isArabic = true,
+    this.embedded = false,
+  });
 
   @override
   State<BonusesScreen> createState() => _BonusesScreenState();
 }
 
-class _BonusesScreenState extends State<BonusesScreen> {
+class _BonusesScreenState extends State<BonusesScreen>
+    with SingleTickerProviderStateMixin {
   List<EmployeeBonusModel> _bonuses = [];
   bool _loading = false;
+  bool _bulkLoading = false;
+
+  // فلتر الحالة — الفلتر الأكثر استخداماً
   String? _statusFilter;
+
+  // فلاتر متقدمة
   String? _ruleTypeFilter;
   String? _bonusTypeFilter;
   String? _departmentFilter;
@@ -30,12 +43,14 @@ class _BonusesScreenState extends State<BonusesScreen> {
   double? _maxAmount;
   DateTime? _periodStart;
   DateTime? _periodEnd;
-  final TextEditingController _searchController = TextEditingController();
+
   String _searchQuery = '';
   String _sortOption = 'newest';
-  bool _onlyActionable = false;
-  String? _periodPreset;
-  bool _bulkLoading = false;
+
+  final _searchController = TextEditingController();
+
+  static const _gold = Color(0xFFD4AF37);
+  static const _goldDark = Color(0xFF8B6914);
 
   @override
   void initState() {
@@ -49,6 +64,8 @@ class _BonusesScreenState extends State<BonusesScreen> {
     super.dispose();
   }
 
+  // ─────────────────────────────── Data ───────────────────────────────
+
   Future<void> _loadBonuses() async {
     setState(() => _loading = true);
     try {
@@ -57,55 +74,40 @@ class _BonusesScreenState extends State<BonusesScreen> {
         dateFrom: _periodStart?.toIso8601String().split('T').first,
         dateTo: _periodEnd?.toIso8601String().split('T').first,
       );
-      final bonuses = data
-          .map(
-            (json) => EmployeeBonusModel.fromJson(json as Map<String, dynamic>),
-          )
-          .toList();
-      setState(() => _bonuses = bonuses);
+      setState(() {
+        _bonuses = data
+            .map((j) => EmployeeBonusModel.fromJson(j as Map<String, dynamic>))
+            .toList();
+      });
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
+      _snack(e.toString(), error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  List<EmployeeBonusModel> _filteredBonuses() {
+  List<EmployeeBonusModel> get _filtered {
     Iterable<EmployeeBonusModel> list = _bonuses;
 
-    if (_onlyActionable) {
-      list = list.where((b) => b.canApprove() || b.canReject() || b.canPay());
-    }
-
-    if (_ruleTypeFilter != null && _ruleTypeFilter!.isNotEmpty) {
+    if (_ruleTypeFilter != null) {
       list = list.where((b) => b.bonusRule?.ruleType == _ruleTypeFilter);
     }
-
-    if (_bonusTypeFilter != null && _bonusTypeFilter!.isNotEmpty) {
+    if (_bonusTypeFilter != null) {
       list = list.where((b) => b.bonusType == _bonusTypeFilter);
     }
-
-    if (_departmentFilter != null && _departmentFilter!.isNotEmpty) {
-      final dept = _departmentFilter!.toLowerCase();
-      list = list.where(
-        (b) =>
-            b.employee?.department != null &&
-            b.employee!.department!.toLowerCase() == dept,
-      );
+    if (_departmentFilter != null) {
+      final d = _departmentFilter!.toLowerCase();
+      list = list.where((b) =>
+          b.employee?.department != null &&
+          b.employee!.department!.toLowerCase() == d);
     }
-
-    if (_minAmount != null) {
-      list = list.where((b) => b.amount >= _minAmount!);
-    }
-
-    if (_maxAmount != null) {
-      list = list.where((b) => b.amount <= _maxAmount!);
-    }
+    if (_minAmount != null) list = list.where((b) => b.amount >= _minAmount!);
+    if (_maxAmount != null) list = list.where((b) => b.amount <= _maxAmount!);
 
     if (_searchQuery.isNotEmpty) {
       final q = _searchQuery.toLowerCase();
       list = list.where((b) {
-        final fields = [
+        return [
           b.employee?.fullName,
           b.employee?.employeeCode,
           b.employee?.department,
@@ -113,8 +115,7 @@ class _BonusesScreenState extends State<BonusesScreen> {
           b.bonusRule?.name,
           b.bonusType,
           b.notes,
-        ];
-        return fields.any((f) => f != null && f.toLowerCase().contains(q));
+        ].any((f) => f != null && f.toLowerCase().contains(q));
       });
     }
 
@@ -122,1259 +123,293 @@ class _BonusesScreenState extends State<BonusesScreen> {
     switch (_sortOption) {
       case 'amount_desc':
         sorted.sort((a, b) => b.amount.compareTo(a.amount));
-        break;
       case 'amount_asc':
         sorted.sort((a, b) => a.amount.compareTo(b.amount));
-        break;
       case 'oldest':
         sorted.sort((a, b) => a.periodStart.compareTo(b.periodStart));
-        break;
       case 'status':
         sorted.sort((a, b) => a.status.compareTo(b.status));
-        break;
       default:
         sorted.sort((a, b) => b.periodStart.compareTo(a.periodStart));
-        break;
     }
-
     return sorted;
   }
 
-  void _applyPeriodPreset(String preset) {
-    final now = DateTime.now();
-    DateTime start = now;
-    DateTime end = now;
+  bool get _hasActiveFilters =>
+      _ruleTypeFilter != null ||
+      _bonusTypeFilter != null ||
+      _departmentFilter != null ||
+      _minAmount != null ||
+      _maxAmount != null ||
+      _periodStart != null ||
+      _periodEnd != null;
 
-    switch (preset) {
-      case 'this_month':
-        start = DateTime(now.year, now.month, 1);
-        end = DateTime(now.year, now.month + 1, 0);
-        break;
-      case 'last_month':
-        start = DateTime(now.year, now.month - 1, 1);
-        end = DateTime(now.year, now.month, 0);
-        break;
-      case 'quarter':
-        final quarter = ((now.month - 1) ~/ 3) + 1;
-        final firstMonth = (quarter - 1) * 3 + 1;
-        start = DateTime(now.year, firstMonth, 1);
-        end = DateTime(now.year, firstMonth + 3, 0);
-        break;
-      default:
-        start = now.subtract(const Duration(days: 30));
-        end = now;
-    }
-
+  void _clearFilters() {
     setState(() {
-      _periodStart = start;
-      _periodEnd = end;
-      _periodPreset = preset;
+      _ruleTypeFilter = null;
+      _bonusTypeFilter = null;
+      _departmentFilter = null;
+      _minAmount = null;
+      _maxAmount = null;
+      _periodStart = null;
+      _periodEnd = null;
     });
     _loadBonuses();
   }
 
-  void _showSnack(String message, {bool isError = false}) {
-    final isAr = widget.isArabic;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError
-            ? Colors.red
-            : Theme.of(context).colorScheme.primary,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-        action: SnackBarAction(
-          label: isAr ? 'إغلاق' : 'Close',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
+  // ─────────────────────────────── Actions ───────────────────────────────
+
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? Colors.red.shade700 : _goldDark,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      duration: const Duration(seconds: 3),
+    ));
   }
 
-  Future<void> _approveBonus(EmployeeBonusModel bonus) async {
-    final isAr = widget.isArabic;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isAr ? 'اعتماد المكافأة' : 'Approve Bonus'),
-        content: Text(
-          isAr
-              ? 'هل تريد اعتماد مكافأة ${bonus.amount} للموظف ${bonus.employee?.fullName ?? ""}؟'
-              : 'Approve bonus of ${bonus.amount} for ${bonus.employee?.fullName ?? ""}?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(isAr ? 'إلغاء' : 'Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isAr ? 'اعتماد' : 'Approve'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true && bonus.id != null) {
-      try {
-        await widget.api.approveBonus(bonus.id!);
-        _showSnack(isAr ? 'تم الاعتماد بنجاح' : 'Approved successfully');
-        _loadBonuses();
-      } catch (e) {
-        _showSnack(e.toString(), isError: true);
-      }
+  Future<void> _approve(EmployeeBonusModel b) async {
+    if (b.id == null) return;
+    try {
+      await widget.api.approveBonus(b.id!);
+      _snack(widget.isArabic ? 'تم الاعتماد' : 'Approved');
+      _loadBonuses();
+    } catch (e) {
+      _snack(e.toString(), error: true);
     }
   }
 
-  Future<void> _rejectBonus(EmployeeBonusModel bonus) async {
-    final isAr = widget.isArabic;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isAr ? 'رفض المكافأة' : 'Reject Bonus'),
-        content: Text(
-          isAr
-              ? 'هل تريد رفض مكافأة ${bonus.amount} للموظف ${bonus.employee?.fullName ?? ""}؟'
-              : 'Reject bonus of ${bonus.amount} for ${bonus.employee?.fullName ?? ""}?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(isAr ? 'إلغاء' : 'Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isAr ? 'رفض' : 'Reject'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true && bonus.id != null) {
-      try {
-        await widget.api.rejectBonus(bonus.id!);
-        _showSnack(isAr ? 'تم الرفض' : 'Rejected');
-        _loadBonuses();
-      } catch (e) {
-        _showSnack(e.toString(), isError: true);
-      }
+  Future<void> _reject(EmployeeBonusModel b) async {
+    if (b.id == null) return;
+    try {
+      await widget.api.rejectBonus(b.id!);
+      _snack(widget.isArabic ? 'تم الرفض' : 'Rejected');
+      _loadBonuses();
+    } catch (e) {
+      _snack(e.toString(), error: true);
     }
   }
 
-  Future<void> _payBonus(EmployeeBonusModel bonus) async {
+  Future<void> _pay(EmployeeBonusModel bonus) async {
     final isAr = widget.isArabic;
-
-    // Load SafeBoxes (cash/bank) first
     List<SafeBoxModel> safeBoxes = [];
     try {
       final all = await widget.api.getSafeBoxes(
-        isActive: true,
-        includeBalance: true,
-        includeAccount: false,
-      );
+          isActive: true, includeBalance: true, includeAccount: false);
       safeBoxes = all
-          .where(
-            (sb) =>
-                sb.safeType == 'cash' ||
-                sb.safeType == 'bank' ||
-                sb.safeType == 'clearing',
-          )
+          .where((s) =>
+              s.safeType == 'cash' ||
+              s.safeType == 'bank' ||
+              s.safeType == 'clearing')
           .toList();
     } catch (e) {
-      _showSnack(
-        isAr
-            ? 'فشل تحميل الخزائن: ${e.toString()}'
-            : 'Failed to load safe boxes: ${e.toString()}',
-        isError: true,
-      );
+      _snack('${isAr ? 'فشل تحميل الخزائن' : 'Failed to load safes'}: $e',
+          error: true);
       return;
     }
 
     if (safeBoxes.isEmpty) {
-      _showSnack(
-        isAr
-            ? 'لا توجد خزائن نقدية/بنكية متاحة'
-            : 'No cash/bank safe boxes available',
-        isError: true,
-      );
+      _snack(isAr ? 'لا توجد خزائن متاحة' : 'No safe boxes available',
+          error: true);
       return;
     }
 
-    // Show SafeBox selection dialog
-    final selectedSafeBox = await showDialog<SafeBoxModel>(
+    final selected = await showDialog<SafeBoxModel>(
       context: context,
       builder: (ctx) {
-        SafeBoxModel? selected = safeBoxes.first;
+        SafeBoxModel? choice = safeBoxes.first;
         return StatefulBuilder(
-          builder: (ctx, setState) => AlertDialog(
-            title: Text(isAr ? 'دفع المكافأة' : 'Pay Bonus'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                cu.SarAwareText(
-                  isAr
-                      ? 'دفع مكافأة ${bonus.amount.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} للموظف ${bonus.employee?.fullName ?? ""}'
-                      : 'Pay bonus of ${bonus.amount.toStringAsFixed(2)} ${context.read<SettingsProvider>().currencySymbolText} to ${bonus.employee?.fullName ?? ""}',
-              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
-                  style: const TextStyle(fontSize: 14),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  isAr ? 'اختر الخزينة:' : 'Select Safe Box:',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<SafeBoxModel>(
-                  initialValue: selected,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: safeBoxes.map((sb) {
-                    final balance = sb.balance?.cash ?? 0.0;
-                    final hasEnough = balance >= bonus.amount;
-                    final typeLabel = sb.safeType == 'cash'
-                        ? (isAr ? 'نقدي' : 'Cash')
-                        : (isAr ? 'بنكي' : 'Bank');
-                    return DropdownMenuItem<SafeBoxModel>(
-                      value: sb,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${sb.name} ($typeLabel)',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Text(
-                            '(${balance.toStringAsFixed(2)})',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: hasEnough ? Colors.green : Colors.red,
-                            ),
-                          ),
-                        ],
+          builder: (ctx, ss) => AlertDialog(
+            title: Text(isAr ? 'اختر خزينة الدفع' : 'Select Payment Safe'),
+            content: DropdownButtonFormField<SafeBoxModel>(
+              value: choice,
+              isExpanded: true,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              items: safeBoxes.map((sb) {
+                final bal = sb.balance?.cash ?? 0.0;
+                final ok = bal >= bonus.amount;
+                return DropdownMenuItem(
+                  value: sb,
+                  child: Row(
+                    children: [
+                      Expanded(
+                          child: Text(sb.name, overflow: TextOverflow.ellipsis)),
+                      Text(
+                        bal.toStringAsFixed(0),
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: ok ? Colors.green : Colors.red),
                       ),
-                    );
-                  }).toList(),
-                  onChanged: (val) {
-                    setState(() => selected = val);
-                  },
-                ),
-              ],
+                    ],
+                  ),
+                );
+              }).toList(),
+              onChanged: (v) => ss(() => choice = v),
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text(isAr ? 'إلغاء' : 'Cancel'),
-              ),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(isAr ? 'إلغاء' : 'Cancel')),
               ElevatedButton(
-                onPressed: () => Navigator.pop(ctx, selected),
-                child: Text(isAr ? 'دفع' : 'Pay'),
-              ),
+                  onPressed: () => Navigator.pop(ctx, choice),
+                  child: Text(isAr ? 'دفع' : 'Pay')),
             ],
           ),
         );
       },
     );
 
-    if (selectedSafeBox?.id != null && bonus.id != null) {
+    if (selected?.id != null && bonus.id != null) {
       try {
-        final method = selectedSafeBox!.safeType == 'bank'
-            ? 'transfer'
-            : 'cash';
         await widget.api.payBonus(
           bonus.id!,
-          safeBoxId: selectedSafeBox.id!,
-          paymentMethod: method,
+          safeBoxId: selected!.id!,
+          paymentMethod: selected.safeType == 'bank' ? 'transfer' : 'cash',
         );
-        _showSnack(
-          isAr ? 'تم تسجيل الدفع بنجاح' : 'Payment recorded successfully',
-        );
+        _snack(isAr ? 'تم تسجيل الدفع' : 'Payment recorded');
         _loadBonuses();
       } catch (e) {
-        _showSnack(e.toString(), isError: true);
+        _snack(e.toString(), error: true);
       }
     }
   }
 
-  Future<void> _editBonus(EmployeeBonusModel bonus) async {
+  Future<void> _edit(EmployeeBonusModel bonus) async {
     final isAr = widget.isArabic;
     if (bonus.status != 'pending') {
-      _showSnack(
-        isAr
-            ? 'لا يمكن تعديل مكافأة غير معلقة'
-            : 'Only pending bonuses can be edited',
-        isError: true,
-      );
+      _snack(isAr ? 'يمكن تعديل المعلقة فقط' : 'Only pending can be edited',
+          error: true);
       return;
     }
-
-    final amountController = TextEditingController(
-      text: bonus.amount.toString(),
-    );
-    final notesController = TextEditingController(text: bonus.notes ?? '');
+    final amtCtrl = TextEditingController(text: bonus.amount.toStringAsFixed(2));
+    final noteCtrl = TextEditingController(text: bonus.notes ?? '');
     DateTime start = bonus.periodStart;
     DateTime end = bonus.periodEnd;
+    final fmt = DateFormat('yyyy-MM-dd');
 
-    final dateFormat = DateFormat('yyyy-MM-dd');
-
-    final result = await showDialog<bool>(
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(isAr ? 'تعديل مكافأة' : 'Edit bonus'),
+        builder: (ctx, ss) => AlertDialog(
+          title: Text(isAr ? 'تعديل المكافأة' : 'Edit Bonus'),
           content: SizedBox(
-            width: 420,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: amountController,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'المبلغ' : 'Amount',
-                    prefixIcon: const Icon(Icons.attach_money),
-                    border: const OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.number,
+            width: 380,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: amtCtrl,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'المبلغ' : 'Amount',
+                  prefixIcon: const Icon(Icons.attach_money),
+                  border: const OutlineInputBorder(),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: notesController,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'ملاحظات' : 'Notes',
-                    prefixIcon: const Icon(Icons.notes),
-                    border: const OutlineInputBorder(),
-                  ),
-                  maxLines: 2,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: noteCtrl,
+                maxLines: 2,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'ملاحظات' : 'Notes',
+                  prefixIcon: const Icon(Icons.notes),
+                  border: const OutlineInputBorder(),
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showDatePicker(
-                            context: ctx,
-                            initialDate: start,
-                            firstDate: DateTime(2020),
-                            lastDate: DateTime(2100),
-                          );
-                          if (picked != null) {
-                            setDialogState(() => start = picked);
-                          }
-                        },
-                        child: InputDecorator(
-                          decoration: InputDecoration(
-                            labelText: isAr ? 'من تاريخ' : 'From',
-                            border: const OutlineInputBorder(),
-                          ),
-                          child: Text(dateFormat.format(start)),
-                        ),
-                      ),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () async {
+                      final p = await showDatePicker(
+                          context: ctx,
+                          initialDate: start,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100));
+                      if (p != null) ss(() => start = p);
+                    },
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                          labelText: isAr ? 'من' : 'From',
+                          border: const OutlineInputBorder()),
+                      child: Text(fmt.format(start)),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showDatePicker(
-                            context: ctx,
-                            initialDate: end,
-                            firstDate: DateTime(2020),
-                            lastDate: DateTime(2100),
-                          );
-                          if (picked != null) {
-                            setDialogState(() => end = picked);
-                          }
-                        },
-                        child: InputDecorator(
-                          decoration: InputDecoration(
-                            labelText: isAr ? 'إلى تاريخ' : 'To',
-                            border: const OutlineInputBorder(),
-                          ),
-                          child: Text(dateFormat.format(end)),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ],
-            ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: InkWell(
+                    onTap: () async {
+                      final p = await showDatePicker(
+                          context: ctx,
+                          initialDate: end,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100));
+                      if (p != null) ss(() => end = p);
+                    },
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                          labelText: isAr ? 'إلى' : 'To',
+                          border: const OutlineInputBorder()),
+                      child: Text(fmt.format(end)),
+                    ),
+                  ),
+                ),
+              ]),
+            ]),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(isAr ? 'إلغاء' : 'Cancel'),
-            ),
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(isAr ? 'إلغاء' : 'Cancel')),
             ElevatedButton.icon(
-              onPressed: () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.save),
-              label: Text(isAr ? 'حفظ' : 'Save'),
-            ),
+                onPressed: () => Navigator.pop(ctx, true),
+                icon: const Icon(Icons.save, size: 18),
+                label: Text(isAr ? 'حفظ' : 'Save')),
           ],
         ),
       ),
     );
 
-    if (result == true) {
+    if (ok == true && bonus.id != null) {
+      final amount = double.tryParse(amtCtrl.text.trim());
+      if (amount == null) {
+        _snack(isAr ? 'مبلغ غير صحيح' : 'Invalid amount', error: true);
+        return;
+      }
       try {
-        final amount = double.tryParse(amountController.text.trim());
-        if (amount == null) {
-          _showSnack(
-            isAr ? 'الرجاء إدخال مبلغ صحيح' : 'Enter valid amount',
-            isError: true,
-          );
-          return;
-        }
-
         await widget.api.updateBonus(bonus.id!, {
           'amount': amount,
-          'notes': notesController.text.trim().isEmpty
-              ? null
-              : notesController.text.trim(),
-          'period_start': dateFormat.format(start),
-          'period_end': dateFormat.format(end),
+          'notes':
+              noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+          'period_start': fmt.format(start),
+          'period_end': fmt.format(end),
         });
-        _showSnack(isAr ? 'تم التحديث' : 'Updated');
+        _snack(isAr ? 'تم التحديث' : 'Updated');
         _loadBonuses();
       } catch (e) {
-        _showSnack(e.toString(), isError: true);
+        _snack(e.toString(), error: true);
       }
     }
-  }
-
-  void _showFilterDialog() {
-    final isAr = widget.isArabic;
-    final dateFormat = DateFormat('yyyy-MM-dd');
-    final ruleTypes =
-        _bonuses
-            .map((b) => b.bonusRule?.ruleType)
-            .whereType<String>()
-            .toSet()
-            .toList()
-          ..sort();
-    final bonusTypes = _bonuses.map((b) => b.bonusType).toSet().toList()
-      ..sort();
-    final departments =
-        _bonuses
-            .map((b) => b.employee?.department)
-            .whereType<String>()
-            .toSet()
-            .toList()
-          ..sort();
-
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        String? tempStatus = _statusFilter;
-        String? tempRuleType = _ruleTypeFilter;
-        String? tempBonusType = _bonusTypeFilter;
-        String? tempDept = _departmentFilter;
-        String tempMinAmount = _minAmount?.toString() ?? '';
-        String tempMaxAmount = _maxAmount?.toString() ?? '';
-        DateTime? tempStart = _periodStart;
-        DateTime? tempEnd = _periodEnd;
-
-        return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(isAr ? 'تصفية المكافآت' : 'Filter Bonuses'),
-            content: SizedBox(
-              width: 440,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<String?>(
-                    initialValue: tempStatus,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'الحالة' : 'Status',
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: null,
-                        child: Text(isAr ? 'الكل' : 'All'),
-                      ),
-                      ...EmployeeBonusModel.statuses.map(
-                        (s) => DropdownMenuItem(
-                          value: s,
-                          child: Text(EmployeeBonusModel.getStatusNameAr(s)),
-                        ),
-                      ),
-                    ],
-                    onChanged: (v) => setDialogState(() => tempStatus = v),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String?>(
-                    initialValue: tempRuleType,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'نوع القاعدة' : 'Rule type',
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: null,
-                        child: Text(isAr ? 'الكل' : 'All'),
-                      ),
-                      ...ruleTypes.map(
-                        (r) => DropdownMenuItem(value: r, child: Text(r)),
-                      ),
-                    ],
-                    onChanged: (v) => setDialogState(() => tempRuleType = v),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String?>(
-                    initialValue: tempBonusType,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'نوع المكافأة' : 'Bonus type',
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: null,
-                        child: Text(isAr ? 'الكل' : 'All'),
-                      ),
-                      ...bonusTypes.map(
-                        (t) => DropdownMenuItem(value: t, child: Text(t)),
-                      ),
-                    ],
-                    onChanged: (v) => setDialogState(() => tempBonusType = v),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String?>(
-                    initialValue: tempDept,
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'القسم' : 'Department',
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      DropdownMenuItem(
-                        value: null,
-                        child: Text(isAr ? 'الكل' : 'All'),
-                      ),
-                      ...departments.map(
-                        (d) => DropdownMenuItem(value: d, child: Text(d)),
-                      ),
-                    ],
-                    onChanged: (v) => setDialogState(() => tempDept = v),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          initialValue: tempMinAmount,
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            labelText: isAr ? 'أدنى مبلغ' : 'Min amount',
-                            border: const OutlineInputBorder(),
-                          ),
-                          onChanged: (v) =>
-                              setDialogState(() => tempMinAmount = v),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          initialValue: tempMaxAmount,
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            labelText: isAr ? 'أقصى مبلغ' : 'Max amount',
-                            border: const OutlineInputBorder(),
-                          ),
-                          onChanged: (v) =>
-                              setDialogState(() => tempMaxAmount = v),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: InkWell(
-                          onTap: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: tempStart ?? DateTime.now(),
-                              firstDate: DateTime(2020),
-                              lastDate: DateTime(2100),
-                            );
-                            if (picked != null) {
-                              setDialogState(() => tempStart = picked);
-                            }
-                          },
-                          child: InputDecorator(
-                            decoration: InputDecoration(
-                              labelText: isAr ? 'من تاريخ' : 'From Date',
-                              border: const OutlineInputBorder(),
-                            ),
-                            child: Text(
-                              tempStart != null
-                                  ? dateFormat.format(tempStart!)
-                                  : (isAr ? 'اختر تاريخ' : 'Select Date'),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: InkWell(
-                          onTap: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: tempEnd ?? DateTime.now(),
-                              firstDate: DateTime(2020),
-                              lastDate: DateTime(2100),
-                            );
-                            if (picked != null) {
-                              setDialogState(() => tempEnd = picked);
-                            }
-                          },
-                          child: InputDecorator(
-                            decoration: InputDecoration(
-                              labelText: isAr ? 'إلى تاريخ' : 'To Date',
-                              border: const OutlineInputBorder(),
-                            ),
-                            child: Text(
-                              tempEnd != null
-                                  ? dateFormat.format(tempEnd!)
-                                  : (isAr ? 'اختر تاريخ' : 'Select Date'),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    _statusFilter = null;
-                    _ruleTypeFilter = null;
-                    _bonusTypeFilter = null;
-                    _departmentFilter = null;
-                    _minAmount = null;
-                    _maxAmount = null;
-                    _periodStart = null;
-                    _periodEnd = null;
-                  });
-                  Navigator.pop(ctx);
-                  _loadBonuses();
-                },
-                child: Text(isAr ? 'إعادة تعيين' : 'Reset'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _statusFilter = tempStatus;
-                    _ruleTypeFilter = tempRuleType;
-                    _bonusTypeFilter = tempBonusType;
-                    _departmentFilter = tempDept;
-                    _minAmount = tempMinAmount.trim().isEmpty
-                        ? null
-                        : double.tryParse(tempMinAmount.trim());
-                    _maxAmount = tempMaxAmount.trim().isEmpty
-                        ? null
-                        : double.tryParse(tempMaxAmount.trim());
-                    _periodStart = tempStart;
-                    _periodEnd = tempEnd;
-                  });
-                  Navigator.pop(ctx);
-                  _loadBonuses();
-                },
-                child: Text(isAr ? 'تطبيق' : 'Apply'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
-    final isAr = widget.isArabic;
-    final filtered = _filteredBonuses();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(isAr ? 'المكافآت' : 'Bonuses'),
-        centerTitle: true,
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadBonuses),
-          IconButton(
-            icon: const Icon(Icons.filter_list),
-            onPressed: _showFilterDialog,
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (ctx) => CalculateBonusesScreen(
-                api: widget.api,
-                isArabic: widget.isArabic,
-              ),
-            ),
-          ).then((_) => _loadBonuses());
-        },
-        icon: const Icon(Icons.calculate),
-        label: Text(isAr ? 'احتساب مكافآت' : 'Calculate Bonuses'),
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadBonuses,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  _buildSummaryRow(isAr),
-                  const SizedBox(height: 12),
-                  _buildToolbar(isAr),
-                  const SizedBox(height: 12),
-                  _buildStatusChips(isAr),
-                  const SizedBox(height: 12),
-                  _buildBulkActions(isAr, filtered),
-                  const SizedBox(height: 12),
-                  if (filtered.isEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 32),
-                        child: Text(
-                          isAr ? 'لا توجد مكافآت' : 'No bonuses',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    ...filtered.map(_buildBonusCard),
-                ],
-              ),
-            ),
-    );
-  }
-
-  Widget _buildSummaryRow(bool isAr) {
-    final totalAmount = _bonuses.fold<double>(0, (sum, b) => sum + b.amount);
-    final pendingCount = _bonuses.where((b) => b.status == 'pending').length;
-    final approvedCount = _bonuses.where((b) => b.status == 'approved').length;
-    final paidCount = _bonuses.where((b) => b.status == 'paid').length;
-    final actionableCount = _bonuses
-        .where((b) => b.canApprove() || b.canPay())
-        .length;
-
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        _SummaryCard(
-          label: isAr ? 'إجمالي المبالغ' : 'Total Amount',
-          value: '${totalAmount.toStringAsFixed(2)} IQD',
-          color: Colors.blue.shade50,
-          icon: Icons.summarize,
-        ),
-        _SummaryCard(
-          label: isAr ? 'معلقة' : 'Pending',
-          value: '$pendingCount',
-          color: Colors.orange.shade50,
-          icon: Icons.hourglass_empty,
-        ),
-        _SummaryCard(
-          label: isAr ? 'معتمدة' : 'Approved',
-          value: '$approvedCount',
-          color: Colors.green.shade50,
-          icon: Icons.verified,
-        ),
-        _SummaryCard(
-          label: isAr ? 'مدفوعة' : 'Paid',
-          value: '$paidCount',
-          color: Colors.lightBlue.shade50,
-          icon: Icons.payments,
-        ),
-        _SummaryCard(
-          label: isAr ? 'جاهزة للإجراء' : 'Actionable',
-          value: '$actionableCount',
-          color: Colors.purple.shade50,
-          icon: Icons.bolt,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildToolbar(bool isAr) {
-    return Column(
-      children: [
-        TextField(
-          controller: _searchController,
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search),
-            suffixIcon: _searchQuery.isNotEmpty
-                ? IconButton(
-                    icon: const Icon(Icons.clear),
-                    onPressed: () {
-                      _searchController.clear();
-                      setState(() => _searchQuery = '');
-                    },
-                  )
-                : null,
-            hintText: isAr
-                ? 'بحث بالاسم، الكود، القسم، القاعدة'
-                : 'Search by name, code, dept, rule',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-          onChanged: (v) => setState(() => _searchQuery = v.trim()),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilterChip(
-                    label: Text(isAr ? 'إجراءات فقط' : 'Actionable only'),
-                    selected: _onlyActionable,
-                    onSelected: (v) => setState(() => _onlyActionable = v),
-                    avatar: const Icon(Icons.flash_on, size: 18),
-                  ),
-                  ChoiceChip(
-                    label: Text(isAr ? 'هذا الشهر' : 'This month'),
-                    selected: _periodPreset == 'this_month',
-                    onSelected: (_) => _applyPeriodPreset('this_month'),
-                  ),
-                  ChoiceChip(
-                    label: Text(isAr ? 'الشهر الماضي' : 'Last month'),
-                    selected: _periodPreset == 'last_month',
-                    onSelected: (_) => _applyPeriodPreset('last_month'),
-                  ),
-                  ChoiceChip(
-                    label: Text(isAr ? 'الربع الحالي' : 'This quarter'),
-                    selected: _periodPreset == 'quarter',
-                    onSelected: (_) => _applyPeriodPreset('quarter'),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 170,
-              child: DropdownButtonFormField<String>(
-                initialValue: _sortOption,
-                decoration: InputDecoration(
-                  labelText: isAr ? 'ترتيب' : 'Sort',
-                  border: const OutlineInputBorder(),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                ),
-                items: [
-                  DropdownMenuItem(
-                    value: 'newest',
-                    child: Text(isAr ? 'الأحدث' : 'Newest first'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'oldest',
-                    child: Text(isAr ? 'الأقدم' : 'Oldest first'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'amount_desc',
-                    child: Text(isAr ? 'الأعلى مبلغ' : 'Amount desc'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'amount_asc',
-                    child: Text(isAr ? 'الأقل مبلغ' : 'Amount asc'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'status',
-                    child: Text(isAr ? 'حسب الحالة' : 'By status'),
-                  ),
-                ],
-                onChanged: (v) => setState(() => _sortOption = v ?? 'newest'),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStatusChips(bool isAr) {
-    final statuses = [null, ...EmployeeBonusModel.statuses];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: statuses
-            .map(
-              (s) => Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  label: Text(
-                    s == null
-                        ? (isAr ? 'الكل' : 'All')
-                        : EmployeeBonusModel.getStatusNameAr(s),
-                  ),
-                  selected: _statusFilter == s,
-                  onSelected: (_) {
-                    setState(() => _statusFilter = s);
-                    _loadBonuses();
-                  },
-                ),
-              ),
-            )
-            .toList(),
-      ),
-    );
-  }
-
-  Widget _buildBonusCard(EmployeeBonusModel bonus) {
-    final isAr = widget.isArabic;
-    final dateFormat = DateFormat('yyyy-MM-dd');
-    final statusColor = Color(EmployeeBonusModel.getStatusColor(bonus.status));
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        bonus.employee?.fullName ?? 'موظف غير محدد',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      if (bonus.employee?.department != null)
-                        Text(
-                          bonus.employee!.department!,
-                          style: const TextStyle(color: Colors.grey),
-                        ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: statusColor),
-                  ),
-                  child: Text(
-                    EmployeeBonusModel.getStatusNameAr(bonus.status),
-                    style: TextStyle(
-                      color: statusColor,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildInfoItem(
-                    isAr ? 'المبلغ' : 'Amount',
-                    '${bonus.amount.toStringAsFixed(2)} IQD',
-                    Icons.attach_money,
-                  ),
-                ),
-                Expanded(
-                  child: _buildInfoItem(
-                    isAr ? 'النوع' : 'Type',
-                    bonus.bonusType,
-                    Icons.category,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildInfoItem(
-                    isAr ? 'من' : 'From',
-                    dateFormat.format(bonus.periodStart),
-                    Icons.calendar_today,
-                  ),
-                ),
-                Expanded(
-                  child: _buildInfoItem(
-                    isAr ? 'إلى' : 'To',
-                    dateFormat.format(bonus.periodEnd),
-                    Icons.calendar_today,
-                  ),
-                ),
-              ],
-            ),
-            if (bonus.bonusRule != null) ...[
-              const SizedBox(height: 12),
-              _buildInfoItem(
-                isAr ? 'القاعدة' : 'Rule',
-                bonus.bonusRule!.name,
-                Icons.rule,
-              ),
-            ],
-            if (bonus.paymentReference != null &&
-                bonus.paymentReference!.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              _buildInfoItem(
-                isAr ? 'مرجع الدفع' : 'Payment Ref',
-                bonus.paymentReference!,
-                Icons.receipt_long,
-              ),
-            ],
-            if (bonus.approvedAt != null || bonus.paidAt != null) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  if (bonus.approvedAt != null)
-                    Expanded(
-                      child: _buildInfoItem(
-                        isAr ? 'تاريخ الاعتماد' : 'Approved at',
-                        dateFormat.format(bonus.approvedAt!),
-                        Icons.check_circle_outline,
-                      ),
-                    ),
-                  if (bonus.paidAt != null)
-                    Expanded(
-                      child: _buildInfoItem(
-                        isAr ? 'تاريخ الدفع' : 'Paid at',
-                        dateFormat.format(bonus.paidAt!),
-                        Icons.payments_outlined,
-                      ),
-                    ),
-                ],
-              ),
-            ],
-            if (bonus.notes != null && bonus.notes!.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                isAr ? 'ملاحظات:' : 'Notes:',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(bonus.notes!, style: const TextStyle(fontSize: 12)),
-            ],
-            if (bonus.calculationData != null &&
-                bonus.calculationData!.isNotEmpty) ...[
-              const Divider(height: 24),
-              Text(
-                isAr ? 'تفاصيل الاحتساب' : 'Calculation details',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: bonus.calculationData!.entries
-                    .map(
-                      (e) => Chip(
-                        label: Text('${e.key}: ${e.value}'),
-                        backgroundColor: Colors.grey.shade200,
-                      ),
-                    )
-                    .toList(),
-              ),
-            ],
-            if (bonus.canApprove() || bonus.canReject() || bonus.canPay()) ...[
-              const Divider(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (bonus.status == 'pending') ...[
-                    ElevatedButton.icon(
-                      onPressed: () => _editBonus(bonus),
-                      icon: const Icon(Icons.edit, size: 18),
-                      label: Text(isAr ? 'تعديل' : 'Edit'),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  if (bonus.canApprove())
-                    ElevatedButton.icon(
-                      onPressed: () => _approveBonus(bonus),
-                      icon: const Icon(Icons.check, size: 18),
-                      label: Text(isAr ? 'اعتماد' : 'Approve'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                      ),
-                    ),
-                  if (bonus.canReject()) ...[
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: () => _rejectBonus(bonus),
-                      icon: const Icon(Icons.close, size: 18),
-                      label: Text(isAr ? 'رفض' : 'Reject'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                      ),
-                    ),
-                  ],
-                  if (bonus.canPay()) ...[
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: () => _payBonus(bonus),
-                      icon: const Icon(Icons.payment, size: 18),
-                      label: Text(isAr ? 'دفع' : 'Pay'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInfoItem(String label, String value, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.grey),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBulkActions(bool isAr, List<EmployeeBonusModel> filtered) {
-    final pendingIds = filtered
-        .where((b) => b.status == 'pending' && b.id != null)
-        .map((b) => b.id!)
-        .toList();
-
-    return Row(
-      children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: _bulkLoading ? null : () => _bulkApprove(pendingIds),
-            icon: _bulkLoading
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.check_circle),
-            label: Text(isAr ? 'اعتماد الكل (معلق)' : 'Approve all pending'),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: _bulkLoading ? null : () => _bulkReject(pendingIds),
-            icon: const Icon(Icons.close),
-            label: Text(isAr ? 'رفض الكل (معلق)' : 'Reject all pending'),
-          ),
-        ),
-      ],
-    );
   }
 
   Future<void> _bulkApprove(List<int> ids) async {
     final isAr = widget.isArabic;
     if (ids.isEmpty) {
-      _showSnack(
-        isAr ? 'لا توجد مكافآت معلقة' : 'No pending bonuses',
-        isError: true,
-      );
+      _snack(isAr ? 'لا توجد مكافآت معلقة' : 'No pending bonuses', error: true);
       return;
     }
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(isAr ? 'اعتماد جميع المعلّقة' : 'Approve all pending'),
-        content: Text(
-          isAr
-              ? 'سيتم اعتماد ${ids.length} مكافأة معلقة.'
-              : 'This will approve ${ids.length} pending bonuses.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(isAr ? 'إلغاء' : 'Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(isAr ? 'اعتماد' : 'Approve'),
-          ),
-        ],
-      ),
+    final ok = await _confirm(
+      isAr ? 'اعتماد ${ids.length} مكافأة معلقة؟' : 'Approve ${ids.length} pending bonuses?',
     );
-
-    if (confirm != true) return;
-
+    if (!ok) return;
     setState(() => _bulkLoading = true);
     try {
       final res = await widget.api.bulkApproveBonuses(ids);
-      final count = res['count'] ?? 0;
-      _showSnack(isAr ? 'تم اعتماد $count' : 'Approved $count');
+      _snack(isAr ? 'تم اعتماد ${res['count'] ?? 0}' : 'Approved ${res['count'] ?? 0}');
       _loadBonuses();
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
+      _snack(e.toString(), error: true);
     } finally {
       if (mounted) setState(() => _bulkLoading = false);
     }
@@ -1383,49 +418,32 @@ class _BonusesScreenState extends State<BonusesScreen> {
   Future<void> _bulkReject(List<int> ids) async {
     final isAr = widget.isArabic;
     if (ids.isEmpty) {
-      _showSnack(
-        isAr ? 'لا توجد مكافآت معلقة' : 'No pending bonuses',
-        isError: true,
-      );
+      _snack(isAr ? 'لا توجد مكافآت معلقة' : 'No pending bonuses', error: true);
       return;
     }
-
     String? reason;
-    final confirm = await showDialog<bool>(
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) {
-        final controller = TextEditingController();
+        final ctrl = TextEditingController();
         return AlertDialog(
-          title: Text(isAr ? 'رفض جميع المعلّقة' : 'Reject all pending'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                isAr
-                    ? 'سيتم رفض ${ids.length} مكافأة معلقة.'
-                    : 'This will reject ${ids.length} pending bonuses.',
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: InputDecoration(
-                  labelText: isAr ? 'سبب الرفض (اختياري)' : 'Reason (optional)',
-                  border: const OutlineInputBorder(),
-                ),
-                maxLines: 2,
-              ),
-            ],
+          title: Text(isAr ? 'رفض ${ids.length} مكافأة' : 'Reject ${ids.length} bonuses'),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 2,
+            decoration: InputDecoration(
+              labelText: isAr ? 'سبب الرفض (اختياري)' : 'Reason (optional)',
+              border: const OutlineInputBorder(),
+            ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(isAr ? 'إلغاء' : 'Cancel'),
-            ),
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(isAr ? 'إلغاء' : 'Cancel')),
             ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () {
-                reason = controller.text.trim().isEmpty
-                    ? null
-                    : controller.text.trim();
+                reason = ctrl.text.trim().isEmpty ? null : ctrl.text.trim();
                 Navigator.pop(ctx, true);
               },
               child: Text(isAr ? 'رفض' : 'Reject'),
@@ -1434,74 +452,1250 @@ class _BonusesScreenState extends State<BonusesScreen> {
         );
       },
     );
-
-    if (confirm != true) return;
-
+    if (ok != true) return;
     setState(() => _bulkLoading = true);
     try {
       final res = await widget.api.bulkRejectBonuses(ids, reason: reason);
-      final count = res['count'] ?? 0;
-      _showSnack(isAr ? 'تم رفض $count' : 'Rejected $count');
+      _snack(isAr ? 'تم رفض ${res['count'] ?? 0}' : 'Rejected ${res['count'] ?? 0}');
       _loadBonuses();
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
+      _snack(e.toString(), error: true);
     } finally {
       if (mounted) setState(() => _bulkLoading = false);
     }
   }
+
+  Future<bool> _confirm(String message) async {
+    final isAr = widget.isArabic;
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            content: Text(message),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(isAr ? 'إلغاء' : 'Cancel')),
+              ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(isAr ? 'تأكيد' : 'Confirm')),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  // ─────────────────────────────── Bottom Sheet: تفاصيل المكافأة ───────────────────────────────
+
+  void _showDetails(EmployeeBonusModel b) {
+    final isAr = widget.isArabic;
+    final fmt = DateFormat('yyyy-MM-dd');
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        builder: (_, scrollCtrl) => Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              // Handle
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+
+              // Header
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    _Avatar(name: b.employee?.fullName ?? '?', size: 48),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            b.employee?.fullName ?? (isAr ? 'غير محدد' : 'Unknown'),
+                            style: const TextStyle(
+                                fontSize: 17, fontWeight: FontWeight.bold),
+                          ),
+                          if (b.employee?.position != null)
+                            Text(b.employee!.position!,
+                                style: TextStyle(
+                                    color: Colors.grey.shade600, fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                    _StatusBadge(status: b.status),
+                  ],
+                ),
+              ),
+              const Divider(height: 28, indent: 20, endIndent: 20),
+
+              // Details list
+              Expanded(
+                child: ListView(
+                  controller: scrollCtrl,
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  children: [
+                    // Amount — بارز
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _gold.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: _gold.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.monetization_on_rounded,
+                              color: _gold, size: 28),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(isAr ? 'المبلغ' : 'Amount',
+                                  style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 12)),
+                              Text(
+                                '${b.amount.toStringAsFixed(2)} IQD',
+                                style: const TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: _goldDark),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Info grid
+                    _DetailRow(
+                        label: isAr ? 'القاعدة' : 'Rule',
+                        value: b.bonusRule?.name ?? '—',
+                        icon: Icons.rule_rounded),
+                    _DetailRow(
+                        label: isAr ? 'نوع المكافأة' : 'Bonus type',
+                        value: b.bonusType,
+                        icon: Icons.category_outlined),
+                    _DetailRow(
+                        label: isAr ? 'الفترة' : 'Period',
+                        value:
+                            '${fmt.format(b.periodStart)}  →  ${fmt.format(b.periodEnd)}',
+                        icon: Icons.date_range_rounded),
+                    if (b.approvedAt != null)
+                      _DetailRow(
+                          label: isAr ? 'تاريخ الاعتماد' : 'Approved',
+                          value: fmt.format(b.approvedAt!),
+                          icon: Icons.check_circle_outline),
+                    if (b.approvedBy != null)
+                      _DetailRow(
+                          label: isAr ? 'اعتمد بواسطة' : 'Approved by',
+                          value: b.approvedBy!,
+                          icon: Icons.person_outline),
+                    if (b.paidAt != null)
+                      _DetailRow(
+                          label: isAr ? 'تاريخ الدفع' : 'Paid',
+                          value: fmt.format(b.paidAt!),
+                          icon: Icons.payments_outlined),
+                    if (b.paymentReference != null &&
+                        b.paymentReference!.isNotEmpty)
+                      _DetailRow(
+                          label: isAr ? 'مرجع الدفع' : 'Payment ref',
+                          value: b.paymentReference!,
+                          icon: Icons.receipt_long_outlined),
+                    if (b.notes != null && b.notes!.isNotEmpty)
+                      _DetailRow(
+                          label: isAr ? 'ملاحظات' : 'Notes',
+                          value: b.notes!,
+                          icon: Icons.notes_rounded),
+
+                    // Calculation data
+                    if (b.calculationData != null &&
+                        b.calculationData!.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(isAr ? 'تفاصيل الاحتساب' : 'Calculation details',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade500,
+                              fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      ...b.calculationData!.entries
+                          .where((e) => e.value != null)
+                          .map((e) => Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 3),
+                                child: Row(children: [
+                                  Text('${e.key}:',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade600)),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                      child: Text('${e.value}',
+                                          style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500))),
+                                ]),
+                              )),
+                    ],
+
+                    // Actions
+                    if (b.canApprove() || b.canReject() || b.canPay()) ...[
+                      const SizedBox(height: 24),
+                      if (b.status == 'pending')
+                        _ActionButton(
+                          label: isAr ? 'تعديل' : 'Edit',
+                          icon: Icons.edit_outlined,
+                          color: Colors.blueGrey,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _edit(b);
+                          },
+                        ),
+                      if (b.canApprove()) ...[
+                        const SizedBox(height: 8),
+                        _ActionButton(
+                          label: isAr ? 'اعتماد' : 'Approve',
+                          icon: Icons.check_circle_outline,
+                          color: Colors.green,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _approve(b);
+                          },
+                        ),
+                      ],
+                      if (b.canReject()) ...[
+                        const SizedBox(height: 8),
+                        _ActionButton(
+                          label: isAr ? 'رفض' : 'Reject',
+                          icon: Icons.cancel_outlined,
+                          color: Colors.red,
+                          outlined: true,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _reject(b);
+                          },
+                        ),
+                      ],
+                      if (b.canPay()) ...[
+                        const SizedBox(height: 8),
+                        _ActionButton(
+                          label: isAr ? 'دفع' : 'Pay',
+                          icon: Icons.payments_outlined,
+                          color: Colors.blue,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _pay(b);
+                          },
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────── Filter Bottom Sheet ───────────────────────────────
+
+  void _showFilters() {
+    final isAr = widget.isArabic;
+    final fmt = DateFormat('yyyy-MM-dd');
+
+    final ruleTypes = _bonuses
+        .map((b) => b.bonusRule?.ruleType)
+        .whereType<String>()
+        .toSet()
+        .toList()
+      ..sort();
+    final departments = _bonuses
+        .map((b) => b.employee?.department)
+        .whereType<String>()
+        .toSet()
+        .toList()
+      ..sort();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        String? tStatus = _statusFilter;
+        String? tRule = _ruleTypeFilter;
+        String? tBonus = _bonusTypeFilter;
+        String? tDept = _departmentFilter;
+        String tMin = _minAmount?.toString() ?? '';
+        String tMax = _maxAmount?.toString() ?? '';
+        DateTime? tStart = _periodStart;
+        DateTime? tEnd = _periodEnd;
+
+        return StatefulBuilder(
+          builder: (ctx, ss) => DraggableScrollableSheet(
+            initialChildSize: 0.75,
+            minChildSize: 0.5,
+            maxChildSize: 0.92,
+            builder: (_, sc) => Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  // Handle + title
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: Row(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8, left: 8),
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade300,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            isAr ? 'تصفية متقدمة' : 'Advanced Filters',
+                            style: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _clearFilters();
+                          },
+                          child: Text(isAr ? 'مسح' : 'Clear',
+                              style: const TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(),
+                  Expanded(
+                    child: ListView(
+                      controller: sc,
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                      children: [
+                        _FilterSection(
+                          label: isAr ? 'الحالة' : 'Status',
+                          child: DropdownButtonFormField<String?>(
+                            value: tStatus,
+                            decoration: const InputDecoration(
+                                border: OutlineInputBorder(), isDense: true),
+                            items: [
+                              DropdownMenuItem(
+                                  value: null,
+                                  child: Text(isAr ? 'الكل' : 'All')),
+                              ...EmployeeBonusModel.statuses.map((s) =>
+                                  DropdownMenuItem(
+                                      value: s,
+                                      child: Text(
+                                          EmployeeBonusModel.getStatusNameAr(
+                                              s)))),
+                            ],
+                            onChanged: (v) => ss(() => tStatus = v),
+                          ),
+                        ),
+                        if (ruleTypes.isNotEmpty)
+                          _FilterSection(
+                            label: isAr ? 'نوع القاعدة' : 'Rule type',
+                            child: DropdownButtonFormField<String?>(
+                              value: tRule,
+                              decoration: const InputDecoration(
+                                  border: OutlineInputBorder(), isDense: true),
+                              items: [
+                                DropdownMenuItem(
+                                    value: null,
+                                    child: Text(isAr ? 'الكل' : 'All')),
+                                ...ruleTypes.map((r) => DropdownMenuItem(
+                                    value: r, child: Text(r))),
+                              ],
+                              onChanged: (v) => ss(() => tRule = v),
+                            ),
+                          ),
+                        if (departments.isNotEmpty)
+                          _FilterSection(
+                            label: isAr ? 'القسم' : 'Department',
+                            child: DropdownButtonFormField<String?>(
+                              value: tDept,
+                              decoration: const InputDecoration(
+                                  border: OutlineInputBorder(), isDense: true),
+                              items: [
+                                DropdownMenuItem(
+                                    value: null,
+                                    child: Text(isAr ? 'الكل' : 'All')),
+                                ...departments.map((d) => DropdownMenuItem(
+                                    value: d, child: Text(d))),
+                              ],
+                              onChanged: (v) => ss(() => tDept = v),
+                            ),
+                          ),
+                        _FilterSection(
+                          label: isAr ? 'نطاق المبلغ' : 'Amount range',
+                          child: Row(children: [
+                            Expanded(
+                              child: TextFormField(
+                                initialValue: tMin,
+                                keyboardType: TextInputType.number,
+                                decoration: InputDecoration(
+                                    labelText: isAr ? 'من' : 'Min',
+                                    border: const OutlineInputBorder(),
+                                    isDense: true),
+                                onChanged: (v) => tMin = v,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextFormField(
+                                initialValue: tMax,
+                                keyboardType: TextInputType.number,
+                                decoration: InputDecoration(
+                                    labelText: isAr ? 'إلى' : 'Max',
+                                    border: const OutlineInputBorder(),
+                                    isDense: true),
+                                onChanged: (v) => tMax = v,
+                              ),
+                            ),
+                          ]),
+                        ),
+                        _FilterSection(
+                          label: isAr ? 'الفترة الزمنية' : 'Period',
+                          child: Column(children: [
+                            // Period presets
+                            Wrap(spacing: 8, runSpacing: 8, children: [
+                              _PeriodChip(
+                                  label: isAr ? 'هذا الشهر' : 'This month',
+                                  selected: tStart != null &&
+                                      tStart!.day == 1 &&
+                                      tStart!.month == DateTime.now().month,
+                                  onTap: () {
+                                    final n = DateTime.now();
+                                    ss(() {
+                                      tStart = DateTime(n.year, n.month, 1);
+                                      tEnd = DateTime(n.year, n.month + 1, 0);
+                                    });
+                                  }),
+                              _PeriodChip(
+                                  label: isAr ? 'الشهر الماضي' : 'Last month',
+                                  selected: false,
+                                  onTap: () {
+                                    final n = DateTime.now();
+                                    ss(() {
+                                      tStart = DateTime(n.year, n.month - 1, 1);
+                                      tEnd = DateTime(n.year, n.month, 0);
+                                    });
+                                  }),
+                              _PeriodChip(
+                                  label: isAr ? 'الربع الحالي' : 'Quarter',
+                                  selected: false,
+                                  onTap: () {
+                                    final n = DateTime.now();
+                                    final q = ((n.month - 1) ~/ 3) * 3 + 1;
+                                    ss(() {
+                                      tStart = DateTime(n.year, q, 1);
+                                      tEnd = DateTime(n.year, q + 3, 0);
+                                    });
+                                  }),
+                            ]),
+                            const SizedBox(height: 12),
+                            Row(children: [
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () async {
+                                    final p = await showDatePicker(
+                                        context: context,
+                                        initialDate: tStart ?? DateTime.now(),
+                                        firstDate: DateTime(2020),
+                                        lastDate: DateTime(2100));
+                                    if (p != null) ss(() => tStart = p);
+                                  },
+                                  child: InputDecorator(
+                                    decoration: InputDecoration(
+                                        labelText: isAr ? 'من تاريخ' : 'From',
+                                        border: const OutlineInputBorder(),
+                                        isDense: true),
+                                    child: Text(tStart != null
+                                        ? fmt.format(tStart!)
+                                        : '—'),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () async {
+                                    final p = await showDatePicker(
+                                        context: context,
+                                        initialDate: tEnd ?? DateTime.now(),
+                                        firstDate: DateTime(2020),
+                                        lastDate: DateTime(2100));
+                                    if (p != null) ss(() => tEnd = p);
+                                  },
+                                  child: InputDecorator(
+                                    decoration: InputDecoration(
+                                        labelText: isAr ? 'إلى تاريخ' : 'To',
+                                        border: const OutlineInputBorder(),
+                                        isDense: true),
+                                    child: Text(
+                                        tEnd != null ? fmt.format(tEnd!) : '—'),
+                                  ),
+                                ),
+                              ),
+                            ]),
+                          ]),
+                        ),
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _gold,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _statusFilter = tStatus;
+                                _ruleTypeFilter = tRule;
+                                _bonusTypeFilter = tBonus;
+                                _departmentFilter = tDept;
+                                _minAmount = tMin.trim().isEmpty
+                                    ? null
+                                    : double.tryParse(tMin.trim());
+                                _maxAmount = tMax.trim().isEmpty
+                                    ? null
+                                    : double.tryParse(tMax.trim());
+                                _periodStart = tStart;
+                                _periodEnd = tEnd;
+                              });
+                              Navigator.pop(ctx);
+                              _loadBonuses();
+                            },
+                            child: Text(isAr ? 'تطبيق الفلاتر' : 'Apply Filters',
+                                style: const TextStyle(fontSize: 15)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ─────────────────────────────── Build ───────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    context.watch<SettingsProvider>();
+    final isAr = widget.isArabic;
+    final filtered = _filtered;
+    final pendingIds = filtered
+        .where((b) => b.status == 'pending' && b.id != null)
+        .map((b) => b.id!)
+        .toList();
+
+    // ── المحتوى المشترك بين المضمّن والمستقل ──
+    Widget body = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : RefreshIndicator(
+            onRefresh: _loadBonuses,
+            color: _gold,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(child: _buildSummary(isAr)),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: _searchQuery.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() => _searchQuery = '');
+                                })
+                            : null,
+                        hintText: isAr
+                            ? 'ابحث باسم الموظف، القاعدة، الملاحظات'
+                            : 'Search by name, rule, notes',
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme
+                            .surfaceContainerHighest
+                            .withValues(alpha: 0.45),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(
+                            color: Theme.of(context)
+                                .dividerColor
+                                .withValues(alpha: 0.3),
+                          ),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(
+                            color: Theme.of(context)
+                                .dividerColor
+                                .withValues(alpha: 0.3),
+                          ),
+                        ),
+                      ),
+                      onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(child: _buildStatusTabs(isAr)),
+                if (pendingIds.isNotEmpty)
+                  SliverToBoxAdapter(child: _buildBulkBar(isAr, pendingIds)),
+                if (filtered.isEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 32),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.inbox_rounded, size: 48,
+                              color: Theme.of(context).hintColor.withValues(alpha: 0.35)),
+                          const SizedBox(height: 12),
+                          Text(
+                            isAr ? 'لا توجد مكافآت' : 'No bonuses',
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            isAr
+                                ? 'ابدأ بـ "احتساب" لإنشاء أول مجموعة'
+                                : 'Start with "Calculate" to create your first batch',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).hintColor),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            onPressed: () {
+                              final mgmt = context
+                                  .findAncestorStateOfType<BonusManagementScreenState>();
+                              mgmt?.switchTab(2);
+                            },
+                            icon: const Icon(Icons.calculate_rounded, size: 16),
+                            label: Text(isAr ? 'احتساب الآن' : 'Calculate now'),
+                            style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.primaryGold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, widget.embedded ? 16 : 100),
+                    sliver: SliverList.separated(
+                      itemCount: filtered.length,
+                      separatorBuilder: (context, index) => const SizedBox(height: 8),
+                      itemBuilder: (_, i) =>
+                          _BonusTile(bonus: filtered[i], onTap: () => _showDetails(filtered[i])),
+                    ),
+                  ),
+              ],
+            ),
+          );
+
+    // ── وضع التضمين: بدون Scaffold ──
+    if (widget.embedded) {
+      return Column(children: [
+        // شريط أدوات مضغوط
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 4, 0),
+          child: Row(children: [
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, size: 20),
+              onPressed: _loading ? null : _loadBonuses,
+              tooltip: isAr ? 'تحديث' : 'Refresh',
+            ),
+            Stack(alignment: Alignment.center, children: [
+              IconButton(
+                icon: const Icon(Icons.tune_rounded, size: 20),
+                onPressed: _showFilters,
+                tooltip: isAr ? 'فلاتر' : 'Filters',
+              ),
+              if (_hasActiveFilters)
+                Positioned(
+                  top: 8, right: 8,
+                  child: Container(
+                    width: 7, height: 7,
+                    decoration: const BoxDecoration(color: _gold, shape: BoxShape.circle),
+                  ),
+                ),
+            ]),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.sort_rounded, size: 20),
+              onSelected: (v) => setState(() => _sortOption = v),
+              itemBuilder: (_) => [
+                PopupMenuItem(value: 'newest', child: Text(isAr ? 'الأحدث' : 'Newest')),
+                PopupMenuItem(value: 'oldest', child: Text(isAr ? 'الأقدم' : 'Oldest')),
+                PopupMenuItem(value: 'amount_desc', child: Text(isAr ? 'الأعلى مبلغاً' : 'Highest')),
+                PopupMenuItem(value: 'amount_asc', child: Text(isAr ? 'الأقل مبلغاً' : 'Lowest')),
+                PopupMenuItem(value: 'status', child: Text(isAr ? 'حسب الحالة' : 'By status')),
+              ],
+            ),
+          ]),
+        ),
+        Expanded(child: body),
+      ]);
+    }
+
+    // ── وضع مستقل: Scaffold كامل ──
+    return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
+      appBar: AppBar(
+        title: Text(isAr ? 'المكافآت' : 'Bonuses'),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: _loading ? null : _loadBonuses,
+          ),
+          Stack(alignment: Alignment.center, children: [
+            IconButton(icon: const Icon(Icons.tune_rounded), onPressed: _showFilters),
+            if (_hasActiveFilters)
+              Positioned(
+                top: 8, right: 8,
+                child: Container(
+                  width: 8, height: 8,
+                  decoration: const BoxDecoration(color: _gold, shape: BoxShape.circle),
+                ),
+              ),
+          ]),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.sort_rounded),
+            onSelected: (v) => setState(() => _sortOption = v),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'newest', child: Text(isAr ? 'الأحدث' : 'Newest')),
+              PopupMenuItem(value: 'oldest', child: Text(isAr ? 'الأقدم' : 'Oldest')),
+              PopupMenuItem(value: 'amount_desc', child: Text(isAr ? 'الأعلى مبلغاً' : 'Highest')),
+              PopupMenuItem(value: 'amount_asc', child: Text(isAr ? 'الأقل مبلغاً' : 'Lowest')),
+              PopupMenuItem(value: 'status', child: Text(isAr ? 'حسب الحالة' : 'By status')),
+            ],
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CalculateBonusesScreen(api: widget.api, isArabic: widget.isArabic),
+          ),
+        ).then((_) => _loadBonuses()),
+        backgroundColor: _gold,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.calculate_rounded),
+        label: Text(isAr ? 'احتساب' : 'Calculate'),
+      ),
+      body: body,
+    );
+  }
+
+  Widget _buildSummary(bool isAr) {
+    final total = _bonuses.fold<double>(0, (s, b) => s + b.amount);
+    final pending = _bonuses.where((b) => b.status == 'pending').length;
+    final approved = _bonuses.where((b) => b.status == 'approved').length;
+    final paid = _bonuses.where((b) => b.status == 'paid').length;
+
+    // trend: مقارنة آخر 30 يوم بالفترة السابقة
+    final now = DateTime.now();
+    final prevEnd = now.subtract(const Duration(days: 30));
+    final prevStart = now.subtract(const Duration(days: 60));
+    final thisTotal = _bonuses
+        .where((b) => b.periodStart.isAfter(prevEnd))
+        .fold<double>(0, (s, b) => s + b.amount);
+    final lastTotal = _bonuses
+        .where((b) => b.periodStart.isAfter(prevStart) && b.periodStart.isBefore(prevEnd))
+        .fold<double>(0, (s, b) => s + b.amount);
+    final pctChange = lastTotal > 0 ? ((thisTotal - lastTotal) / lastTotal * 100) : null;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+      child: Row(children: [
+        Expanded(child: _SmartMetricTile(
+          label: isAr ? 'الإجمالي' : 'Total',
+          value: '${total.toStringAsFixed(0)} IQD',
+          color: AppColors.info,
+          icon: Icons.payments_outlined,
+          trend: pctChange,
+          trendLabel: isAr ? 'عن الفترة السابقة' : 'vs last period',
+        )),
+        const SizedBox(width: 8),
+        Expanded(child: _SmartMetricTile(
+          label: isAr ? 'معلّقة' : 'Pending',
+          value: '$pending',
+          color: AppColors.warning,
+          icon: Icons.pending_actions_outlined,
+          subtitle: pending > 0 ? (isAr ? 'يحتاج اعتماد' : 'needs review') : (isAr ? 'لا شيء معلق' : 'all clear'),
+        )),
+        const SizedBox(width: 8),
+        Expanded(child: _SmartMetricTile(
+          label: isAr ? 'معتمدة' : 'Approved',
+          value: '$approved',
+          color: AppColors.success,
+          icon: Icons.check_circle_outline,
+          subtitle: isAr ? 'جاهزة للدفع' : 'ready to pay',
+        )),
+        const SizedBox(width: 8),
+        Expanded(child: _SmartMetricTile(
+          label: isAr ? 'مدفوعة' : 'Paid',
+          value: '$paid',
+          color: AppColors.primaryGold,
+          icon: Icons.task_alt_rounded,
+          subtitle: isAr ? 'هذا الشهر' : 'this month',
+        )),
+      ]),
+    );
+  }
+
+  Widget _buildStatusTabs(bool isAr) {
+    final statuses = [null, ...EmployeeBonusModel.statuses];
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: statuses.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final s = statuses[i];
+          final selected = _statusFilter == s;
+          final label = s == null
+              ? (isAr ? 'الكل' : 'All')
+              : EmployeeBonusModel.getStatusNameAr(s);
+          return ChoiceChip(
+            label: Text(label, style: const TextStyle(fontSize: 11.5)),
+            selected: selected,
+            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
+            checkmarkColor: AppColors.darkGold,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+            labelStyle: TextStyle(
+              color: selected ? AppColors.darkGold : null,
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            ),
+            onSelected: (_) {
+              setState(() => _statusFilter = s);
+              _loadBonuses();
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBulkBar(bool isAr, List<int> pendingIds) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(children: [
+        Icon(Icons.pending_actions_rounded,
+            color: Colors.orange.shade700, size: 20),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '${pendingIds.length} ${isAr ? 'معلّقة' : 'pending'}',
+            style: TextStyle(
+                color: Colors.orange.shade800, fontWeight: FontWeight.w600),
+          ),
+        ),
+        TextButton.icon(
+          onPressed: _bulkLoading ? null : () => _bulkApprove(pendingIds),
+          icon: _bulkLoading
+              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.check_circle_outline, size: 16),
+          label: Text(isAr ? 'اعتماد الكل' : 'Approve all'),
+          style: TextButton.styleFrom(foregroundColor: Colors.green.shade700),
+        ),
+        TextButton.icon(
+          onPressed: _bulkLoading ? null : () => _bulkReject(pendingIds),
+          icon: const Icon(Icons.cancel_outlined, size: 16),
+          label: Text(isAr ? 'رفض الكل' : 'Reject all'),
+          style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+        ),
+      ]),
+    );
+  }
 }
 
-class _SummaryCard extends StatelessWidget {
+// ─────────────────────────────── Sub-widgets ───────────────────────────────
+
+class _BonusTile extends StatelessWidget {
+  final EmployeeBonusModel bonus;
+  final VoidCallback onTap;
+
+  const _BonusTile({required this.bonus, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = DateFormat('d MMM yyyy', 'ar');
+
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(children: [
+            _Avatar(name: bonus.employee?.fullName ?? '?', size: 42),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    bonus.employee?.fullName ?? '—',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    bonus.bonusRule?.name ?? bonus.bonusType,
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.grey.shade500),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${fmt.format(bonus.periodStart)} → ${fmt.format(bonus.periodEnd)}',
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${bonus.amount.toStringAsFixed(0)} IQD',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: Color(0xFF8B6914)),
+                ),
+                const SizedBox(height: 4),
+                _StatusBadge(status: bonus.status),
+              ],
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _Avatar extends StatelessWidget {
+  final String name;
+  final double size;
+
+  const _Avatar({required this.name, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final initials = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .take(2)
+        .map((p) => p.characters.first)
+        .join();
+
+    return CircleAvatar(
+      radius: size / 2,
+      backgroundColor: const Color(0xFFD4AF37).withValues(alpha: 0.15),
+      child: Text(
+        initials.toUpperCase(),
+        style: TextStyle(
+          color: const Color(0xFF8B6914),
+          fontWeight: FontWeight.bold,
+          fontSize: size * 0.35,
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  final String status;
+  const _StatusBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Color(EmployeeBonusModel.getStatusColor(status));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        EmployeeBonusModel.getStatusNameAr(status),
+        style: TextStyle(
+            fontSize: 11, color: color, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+class _SmartMetricTile extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
   final IconData icon;
+  final double? trend;
+  final String? trendLabel;
+  final String? subtitle;
 
-  const _SummaryCard({
+  const _SmartMetricTile({
     required this.label,
     required this.value,
     required this.color,
     required this.icon,
+    this.trend,
+    this.trendLabel,
+    this.subtitle,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
-      width: 170,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: Colors.white,
-            child: Icon(icon, color: Colors.black87, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 12, color: Colors.black54),
-                ),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
+          Row(children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(label,
+                  style: TextStyle(fontSize: 10.5, color: theme.hintColor, fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis),
             ),
+          ]),
+          const SizedBox(height: 5),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(value,
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color, letterSpacing: -0.3)),
           ),
+          const SizedBox(height: 2),
+          if (trend != null) ...[
+            Row(children: [
+              Icon(
+                trend! >= 0 ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+                size: 11,
+                color: trend! >= 0 ? AppColors.success : AppColors.error,
+              ),
+              const SizedBox(width: 2),
+              Flexible(
+                child: Text(
+                  '${trend!.abs().toStringAsFixed(1)}% ${trendLabel ?? ""}',
+                  style: TextStyle(fontSize: 9.5,
+                      color: trend! >= 0 ? AppColors.success : AppColors.error,
+                      fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ]),
+          ] else if (subtitle != null)
+            Text(subtitle!,
+                style: TextStyle(fontSize: 9.5, color: theme.hintColor),
+                overflow: TextOverflow.ellipsis),
         ],
       ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _DetailRow(
+      {required this.label, required this.value, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 16, color: Colors.grey.shade400),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 100,
+          child: Text(label,
+              style:
+                  TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        ),
+        Expanded(
+          child: Text(value,
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w500)),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final bool outlined;
+
+  const _ActionButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.outlined = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (outlined) {
+      return SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: onTap,
+          icon: Icon(icon, size: 18),
+          label: Text(label),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: color,
+            side: BorderSide(color: color),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+      );
+    }
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      ),
+    );
+  }
+}
+
+class _FilterSection extends StatelessWidget {
+  final String label;
+  final Widget child;
+
+  const _FilterSection({required this.label, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey)),
+        const SizedBox(height: 6),
+        child,
+      ]),
+    );
+  }
+}
+
+class _PeriodChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PeriodChip(
+      {required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      selectedColor: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+      checkmarkColor: const Color(0xFF8B6914),
+      onSelected: (_) => onTap(),
     );
   }
 }
