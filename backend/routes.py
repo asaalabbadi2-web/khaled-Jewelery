@@ -12315,6 +12315,42 @@ def add_invoice():
                 return pick_default('clearing') or pick_default('bank')
             return pick_default('bank') or pick_default('clearing')
 
+        def _coerce_cash_payment_safe_box_id(candidate_safe_box_id):
+            """Ensure cash payments never route into a gold safe box.
+
+            Scrap-sale invoices may carry a gold safe at invoice level for weight movement,
+            but cash settlement vouchers must always hit a cash safe account.
+            """
+            if candidate_safe_box_id in (None, '', 0, '0', False):
+                return candidate_safe_box_id
+
+            try:
+                sb = SafeBox.query.get(int(candidate_safe_box_id))
+            except Exception:
+                sb = None
+
+            if sb and str(getattr(sb, 'safe_type', '') or '').strip().lower() == 'gold':
+                try:
+                    _settings_cash = Settings.query.first()
+                except Exception:
+                    _settings_cash = None
+
+                main_cash = getattr(_settings_cash, 'main_cash_safe_box_id', None) if _settings_cash else None
+                if main_cash not in (None, '', 0, '0', False):
+                    try:
+                        return int(main_cash)
+                    except Exception:
+                        pass
+
+                fallback_cash = _fallback_cash_safe_box_id()
+                if fallback_cash not in (None, '', 0, '0', False):
+                    try:
+                        return int(fallback_cash)
+                    except Exception:
+                        return fallback_cash
+
+            return candidate_safe_box_id
+
         if payments_data and isinstance(payments_data, list) and len(payments_data) > 0:
             # إنشاء سجل لكل وسيلة دفع
             for payment in payments_data:
@@ -12365,6 +12401,10 @@ def add_invoice():
                     # method rather than failing the entire invoice.
                     if resolved_safe_box_id is None:
                         resolved_safe_box_id = _fallback_cash_safe_box_id()
+
+                    # For cash methods, never allow routing to a gold safe.
+                    if _is_cash_payment_method(pm_obj):
+                        resolved_safe_box_id = _coerce_cash_payment_safe_box_id(resolved_safe_box_id)
 
                     # Enforce employee cash safe toggle: when disabled, do not route
                     # payments into the employee cash safe (fallback to main cash safe).
@@ -12634,6 +12674,10 @@ def add_invoice():
                 # Ultimate fallback: use cash safe as last resort.
                 if resolved_safe_box_id is None:
                     resolved_safe_box_id = _fallback_cash_safe_box_id()
+
+                # For cash methods, never allow routing to a gold safe.
+                if _is_cash_payment_method(pm_obj):
+                    resolved_safe_box_id = _coerce_cash_payment_safe_box_id(resolved_safe_box_id)
 
                 # شراء من عميل / مرتجع شراء: safe_box_id قد يكون خزينة ذهبية (لتتبع الوزن).
                 # سند الصرف النقدي يجب أن يستخدم دائماً خزينة نقدية.
