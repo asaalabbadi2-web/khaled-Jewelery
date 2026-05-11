@@ -33589,6 +33589,49 @@ def get_gold_income_statement():
         return jsonify({'error': f'فشل إنشاء قائمة الدخل الوزنية: {str(e)}'}), 500
 
 
+@api.route('/dashboard/summary-debug', methods=['GET'])
+@require_permission('admin')
+def get_dashboard_summary_debug():
+    """Debug endpoint: run _build_inv_summary for month and return raw result + any errors."""
+    import traceback as _tb
+    from datetime import datetime as _dt, timedelta as _td
+    now = _dt.now()
+    today_start = _dt.combine(now.date(), _dt.min.time())
+    tomorrow_start = today_start + _td(days=1)
+    month_start = _dt(now.year, now.month, 1)
+    year_start = _dt(now.year, 1, 1)
+
+    sale_types = {'بيع': 1, 'sell': 1, 'sale': 1, 'مرتجع بيع': -1}
+    purchase_types = {'شراء': 1, 'شراء من عميل': 1, 'مرتجع شراء': -1, 'مرتجع شراء (مورد)': -1}
+
+    def _try_summary(inv_types_dict, start, end):
+        try:
+            inv_types = [str(t).strip() for t in inv_types_dict.keys() if str(t).strip()]
+            q = (
+                Invoice.query
+                .filter(Invoice.invoice_type.in_(inv_types))
+                .filter(Invoice.is_posted.is_(True))
+                .filter(Invoice.date >= start)
+                .filter(Invoice.date < end)
+            )
+            rows = q.all()
+            return {'docs': len(rows), 'total': sum(float(i.total or 0) for i in rows), 'error': None}
+        except Exception as e:
+            return {'docs': None, 'total': None, 'error': str(e), 'trace': _tb.format_exc()}
+
+    return jsonify({
+        'now': now.isoformat(),
+        'month_start': month_start.isoformat(),
+        'today_start': today_start.isoformat(),
+        'tomorrow_start': tomorrow_start.isoformat(),
+        'year_start': year_start.isoformat(),
+        'today_sales': _try_summary(sale_types, today_start, tomorrow_start),
+        'month_sales': _try_summary(sale_types, month_start, tomorrow_start),
+        'year_sales': _try_summary(sale_types, year_start, tomorrow_start),
+        'month_purchases': _try_summary(purchase_types, month_start, tomorrow_start),
+    })
+
+
 @api.route('/dashboard/admin', methods=['GET'])
 @require_permission('reports.financial')
 def get_admin_dashboard():
