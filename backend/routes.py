@@ -10098,6 +10098,59 @@ def get_safe_boxes_stones_balance():
     return jsonify({'safes': results})
 
 
+@api.route('/safe-boxes/purge-duplicate-gold-movement-sbts', methods=['POST'])
+@require_permission('admin')
+def purge_duplicate_gold_movement_sbts():
+    """Delete orphan invoice_sale_gold_movement SBTs that belong to scrap invoices.
+
+    For scrap sale invoices the correct SBT is invoice_scrap_sale.
+    Before the guard (inv_gold_type != 'scrap') was in place both SBTs were
+    created, doubling the weight-out and causing a GL reconciliation gap.
+
+    Query params:
+      - dry_run: true/false (default true)
+    """
+    dry_run = (request.args.get('dry_run') or 'true').strip().lower() in ('1', 'true', 'yes')
+
+    try:
+        rows = (
+            db.session.query(SafeBoxTransaction)
+            .join(Invoice, Invoice.id == SafeBoxTransaction.invoice_id)
+            .filter(
+                SafeBoxTransaction.ref_type == 'invoice_sale_gold_movement',
+                func.lower(func.coalesce(Invoice.gold_type, 'new')) == 'scrap',
+            )
+            .all()
+        )
+
+        result = []
+        for sbt in rows:
+            result.append({
+                'sbt_id': sbt.id,
+                'invoice_id': sbt.invoice_id,
+                'safe_box_id': sbt.safe_box_id,
+                'direction': sbt.direction,
+                'weight_21k': float(sbt.weight_21k or 0),
+                'weight_18k': float(sbt.weight_18k or 0),
+                'created_at': str(sbt.created_at),
+                'action': 'would_delete' if dry_run else 'deleted',
+            })
+            if not dry_run:
+                db.session.delete(sbt)
+
+        if not dry_run:
+            db.session.commit()
+
+        return jsonify({
+            'dry_run': dry_run,
+            'count': len(result),
+            'records': result,
+        })
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 500
+
+
 @api.route('/safe-boxes/repair-transactions', methods=['POST'])
 @require_permission('admin')
 def repair_safe_box_transactions():
@@ -13600,7 +13653,9 @@ def add_invoice():
             inv_type_for_gold = ''
             inv_gold_type = 'new'
 
-        if (not approval_required) and inv_type_for_gold in ('بيع', 'مرتجع بيع'):
+        # Scrap gold type is handled separately below (invoice_scrap_sale SBT).
+        # Avoid creating a duplicate invoice_sale_gold_movement SBT for scrap invoices.
+        if (not approval_required) and inv_type_for_gold in ('بيع', 'مرتجع بيع') and inv_gold_type != 'scrap':
             try:
                 settings_row = Settings.query.first()
             except Exception:
@@ -13608,10 +13663,7 @@ def add_invoice():
 
             target_gold_safe_id = None
             try:
-                if inv_gold_type == 'scrap':
-                    target_gold_safe_id = getattr(settings_row, 'main_scrap_gold_safe_box_id', None) if settings_row else None
-                else:
-                    target_gold_safe_id = getattr(settings_row, 'sale_gold_safe_box_id', None) if settings_row else None
+                target_gold_safe_id = getattr(settings_row, 'sale_gold_safe_box_id', None) if settings_row else None
             except Exception:
                 target_gold_safe_id = None
 
