@@ -34095,18 +34095,105 @@ def get_admin_dashboard():
                         import traceback
                         print(f'[dashboard] gold_type filter error: {_col_err}')
                         traceback.print_exc()
-                invs = q.all()
+                invs = q.options(joinedload(Invoice.employee)).all()
                 total_value = 0.0
                 total_weight = 0.0
                 by_user: dict = {}
                 by_karat: dict = {}
+
+                # Build fast employee-name cache from employee_id first (true owner),
+                # then use posted_by only as fallback.
+                employee_name_by_id: dict[int, str] = {}
+                missing_employee_ids: set[int] = set()
+                for inv in invs:
+                    raw_emp_id = getattr(inv, 'employee_id', None)
+                    try:
+                        emp_id = int(raw_emp_id) if raw_emp_id not in (None, '', 0, '0', False) else None
+                    except Exception:
+                        emp_id = None
+                    if not emp_id:
+                        continue
+
+                    emp_obj = getattr(inv, 'employee', None)
+                    emp_name = (getattr(emp_obj, 'name', None) or '').strip() if emp_obj else ''
+                    if emp_name:
+                        employee_name_by_id[int(emp_id)] = emp_name
+                    else:
+                        missing_employee_ids.add(int(emp_id))
+
+                if missing_employee_ids:
+                    for emp in Employee.query.filter(Employee.id.in_(list(missing_employee_ids))).all():
+                        name = (getattr(emp, 'name', None) or '').strip()
+                        if name:
+                            employee_name_by_id[int(emp.id)] = name
+
+                posted_by_to_employee_name: dict[str, str] = {}
+                try:
+                    from models import AppUser
+
+                    posted_keys = {
+                        str(getattr(inv, 'posted_by', '') or '').strip().lower()
+                        for inv in invs
+                        if str(getattr(inv, 'posted_by', '') or '').strip()
+                    }
+                    if posted_keys:
+                        users_by_username = (
+                            AppUser.query
+                            .filter(func.lower(func.trim(AppUser.username)).in_(list(posted_keys)))
+                            .all()
+                        )
+                        for app_user in users_by_username:
+                            key = str(getattr(app_user, 'username', '') or '').strip().lower()
+                            emp = getattr(app_user, 'employee', None)
+                            emp_name = (getattr(emp, 'name', None) or '').strip() if emp else ''
+                            if key and emp_name:
+                                posted_by_to_employee_name[key] = emp_name
+
+                        users_by_full_name = (
+                            AppUser.query
+                            .filter(
+                                func.lower(
+                                    func.trim(func.coalesce(AppUser.full_name, ''))
+                                ).in_(list(posted_keys))
+                            )
+                            .all()
+                        )
+                        for app_user in users_by_full_name:
+                            key = str(getattr(app_user, 'full_name', '') or '').strip().lower()
+                            emp = getattr(app_user, 'employee', None)
+                            emp_name = (getattr(emp, 'name', None) or '').strip() if emp else ''
+                            if key and emp_name and key not in posted_by_to_employee_name:
+                                posted_by_to_employee_name[key] = emp_name
+                except Exception:
+                    posted_by_to_employee_name = {}
+
+                def _resolve_invoice_user(inv: Invoice) -> str:
+                    raw_emp_id = getattr(inv, 'employee_id', None)
+                    try:
+                        emp_id = int(raw_emp_id) if raw_emp_id not in (None, '', 0, '0', False) else None
+                    except Exception:
+                        emp_id = None
+
+                    if emp_id and emp_id in employee_name_by_id:
+                        return employee_name_by_id[emp_id]
+
+                    posted_raw = str(getattr(inv, 'posted_by', '') or '').strip()
+                    posted_key = posted_raw.lower()
+                    if posted_key and posted_key in posted_by_to_employee_name:
+                        return posted_by_to_employee_name[posted_key]
+
+                    if posted_raw:
+                        return posted_raw
+
+                    return 'غير معروف'
+
                 for inv in invs:
                     sign = inv_types_dict.get(inv.invoice_type, 1)
                     v = float(inv.total or 0) * sign
                     w = float(inv.total_weight or 0) * sign
                     total_value += v
                     total_weight += w
-                    user = ((inv.posted_by or '').strip()) or 'غير معروف'
+                    user = _resolve_invoice_user(inv)
                     if user not in by_user:
                         by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
                     by_user[user]['value'] += v

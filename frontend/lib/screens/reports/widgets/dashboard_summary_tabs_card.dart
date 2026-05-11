@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../../theme/app_theme.dart';
+import '../../../utils/currency_utils.dart' as cu;
 
 enum _SummaryTab { sales, purchases, scrap, expenses }
 
@@ -21,6 +22,8 @@ class DashboardSummaryTabsCard extends StatefulWidget {
   final Map<String, dynamic> prevData;
   final bool isArabic;
   final NumberFormat currencyFormat;
+  final String currencySymbol;
+  final bool currencyIsNewSar;
   final NumberFormat weightFormat;
   final double Function(double) scale;
 
@@ -30,6 +33,8 @@ class DashboardSummaryTabsCard extends StatefulWidget {
     this.prevData = const {},
     required this.isArabic,
     required this.currencyFormat,
+    this.currencySymbol = 'ر.س',
+    this.currencyIsNewSar = false,
     required this.weightFormat,
     required this.scale,
   });
@@ -45,7 +50,25 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
   double _asDouble(dynamic v) => v is num ? v.toDouble() : 0.0;
   double _s(double v) => widget.scale(v);
 
-  String _formatCurrency(num v) => widget.currencyFormat.format(v);
+  String _formatCurrency(num v) {
+    final formatted = widget.currencyFormat.format(v);
+    if (formatted.contains(widget.currencySymbol)) return formatted;
+    return '$formatted ${widget.currencySymbol}';
+  }
+
+  Widget _currencyAwareText(
+    String text, {
+    TextStyle? style,
+    TextOverflow? overflow,
+  }) {
+    return cu.SarAwareText(
+      text,
+      isNewSar: widget.currencyIsNewSar,
+      style: style,
+      overflow: overflow,
+    );
+  }
+
   String _formatWeight(num v) =>
       '${widget.weightFormat.format(v)} ${widget.isArabic ? "جم" : "g"}';
 
@@ -386,7 +409,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
               ],
             ),
             SizedBox(height: _s(5)),
-            Text(
+            _currencyAwareText(
               value,
               style: TextStyle(
                 fontSize: _s(13),
@@ -396,7 +419,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
             ),
             if (sub != null && sub.isNotEmpty) ...[
               SizedBox(height: _s(1)),
-              Text(
+              _currencyAwareText(
                 sub,
                 style: TextStyle(
                   fontSize: _s(9.5),
@@ -546,7 +569,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
                   ),
                 ),
               ),
-              Text(
+              _currencyAwareText(
                 _formatCurrency(value),
                 style: TextStyle(
                   fontSize: _s(12),
@@ -683,7 +706,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text(
+                      _currencyAwareText(
                         _formatCurrency(value),
                         style: TextStyle(
                           fontSize: _s(12),
@@ -745,7 +768,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              Text(
+              _currencyAwareText(
                 _formatCurrency(value),
                 style: TextStyle(
                   fontSize: _s(12),

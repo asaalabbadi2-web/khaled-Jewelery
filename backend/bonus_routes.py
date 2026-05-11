@@ -654,7 +654,7 @@ def approve_bonus(bonus_id):
     اعتماد مكافأة مع إنشاء قيد محاسبي لإثبات المصروف والالتزام
     
     القيد المحاسبي:
-    من ح/ مصروف مكافآت (5160)    مدين
+    من ح/ مصروف مكافآت (5450)    مدين
       إلى ح/ مكافآت مستحقة (2310)  دائن
     """
     try:
@@ -669,12 +669,12 @@ def approve_bonus(bonus_id):
         
         approved_by = data.get('approved_by', 'system')
         
-        # البحث عن حساب مصروف المكافآت (5160)
-        bonus_expense_account = Account.query.filter_by(account_number='5160').first()
+        # البحث عن حساب مصروف المكافآت (5450)
+        bonus_expense_account = Account.query.filter_by(account_number='5450').first()
         if not bonus_expense_account:
             return jsonify({
                 'success': False,
-                'message': 'حساب مصروف المكافآت غير موجود (5160)'
+                'message': 'حساب مصروف المكافآت غير موجود (5450)'
             }), 400
         
         # البحث عن حساب مكافآت مستحقة (2310)

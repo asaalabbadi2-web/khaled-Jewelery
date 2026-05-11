@@ -263,7 +263,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
     final settings = Provider.of<SettingsProvider>(context);
 
-    final newSymbol = settings.currencySymbol;
+    final newSymbol = settings.currencySymbolText;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
@@ -3385,7 +3385,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       isArabic: widget.isArabic,
       ouncePriceUsd: goldPrice,
       openingOuncePriceUsd: goldPriceOpening,
-      currencySymbol: settings.currencySymbol,
+      currencySymbol: settings.currencySymbolText,
       exchangeRate: exchangeRate,
       refreshInterval: settings.goldPriceTickerRefreshInterval,
     );

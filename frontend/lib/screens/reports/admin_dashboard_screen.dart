@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_service.dart';
 import '../../providers/settings_provider.dart';
+import '../../utils/currency_utils.dart' as cu;
 import '../../theme/app_theme.dart';
 import '../audit_log_screen.dart';
 import '../safe_boxes_screen.dart';
@@ -88,6 +89,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   double _s(double value) => value * _uiScale(context);
 
   String _currencySymbol = 'ر.س';
+  bool _currencyIsNewSar = false;
   int _currencyDecimals = 2;
 
   late NumberFormat _currencyFormat;
@@ -96,10 +98,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _currencyFormat = NumberFormat.currency(
-      locale: widget.isArabic ? 'ar' : 'en',
-      symbol: _currencySymbol,
-      decimalDigits: _currencyDecimals,
+    _currencyFormat = NumberFormat(
+      '#,##0${'.'}${'0' * _currencyDecimals}',
+      widget.isArabic ? 'ar' : 'en',
     );
     _weightFormat = NumberFormat('#,##0.000');
     _loadVaultOrder();
@@ -178,17 +179,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
-    final symbol = settings.currencySymbol;
+    final symbol = settings.currencySymbolText;
+    final isNewSar = settings.currencyIsNewSar;
     final decimals = settings.decimalPlaces;
 
-    if (symbol != _currencySymbol || decimals != _currencyDecimals) {
+    if (symbol != _currencySymbol ||
+        isNewSar != _currencyIsNewSar ||
+        decimals != _currencyDecimals) {
       setState(() {
         _currencySymbol = symbol;
+        _currencyIsNewSar = isNewSar;
         _currencyDecimals = decimals;
-        _currencyFormat = NumberFormat.currency(
-          locale: widget.isArabic ? 'ar' : 'en',
-          symbol: _currencySymbol,
-          decimalDigits: _currencyDecimals,
+        _currencyFormat = NumberFormat(
+          '#,##0${'.'}${'0' * decimals}',
+          widget.isArabic ? 'ar' : 'en',
         );
       });
     }
@@ -283,8 +287,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _asInt(dynamic value) =>
       value is int ? value : (value is num ? value.toInt() : 0);
 
-  String _formatCurrency(num value) => _currencyFormat.format(value);
+  String _formatCurrency(num value) => '${_currencyFormat.format(value)} $_currencySymbol';
   String _formatWeight(num value) => '${_weightFormat.format(value)} جم';
+
+  Widget _currencyAwareText(
+    String text, {
+    TextStyle? style,
+    TextAlign textAlign = TextAlign.start,
+    int? maxLines,
+    TextOverflow? overflow,
+  }) {
+    return cu.SarAwareText(
+      text,
+      isNewSar: _currencyIsNewSar,
+      style: style,
+      textAlign: textAlign,
+      maxLines: maxLines,
+      overflow: overflow,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -435,6 +456,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         {},
                     isArabic: widget.isArabic,
                     currencyFormat: _currencyFormat,
+                    currencySymbol: _currencySymbol,
+                    currencyIsNewSar: _currencyIsNewSar,
                     weightFormat: _weightFormat,
                     scale: _s,
                   ),
@@ -734,7 +757,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: AlignmentDirectional.centerStart,
-                      child: Text(
+                      child: _currencyAwareText(
                         _formatCurrency(netPosition),
                         style: theme.textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.bold,
@@ -815,7 +838,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ],
         ),
         SizedBox(height: _s(4)),
-        Text(
+        _currencyAwareText(
           value,
           style: TextStyle(
             fontSize: _s(14),
@@ -921,7 +944,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ],
             ),
             SizedBox(height: _s(6)),
-            Text(
+            _currencyAwareText(
               goldPrice > 0
                   ? '${goldPrice.toStringAsFixed(0)} $_currencySymbol'
                   : '-',
@@ -1121,7 +1144,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 11),
-                child: Text(
+                child: _currencyAwareText(
                   alert.text,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: isDark
@@ -1429,7 +1452,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(label, style: TextStyle(fontSize: _s(11))),
-            Text(
+            _currencyAwareText(
               _formatCurrency(value),
               style: TextStyle(fontSize: _s(11), fontWeight: FontWeight.bold),
             ),
@@ -1538,7 +1561,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     fontSize: _s(12), color: theme.hintColor),
               ),
             ),
-            Text('0 $_currencySymbol',
+            _currencyAwareText('0 $_currencySymbol',
                 style: TextStyle(
                     fontSize: _s(14),
                     fontWeight: FontWeight.w800,
@@ -1682,7 +1705,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       SizedBox(width: _s(4)),
                       Padding(
                         padding: EdgeInsets.only(bottom: _s(3)),
-                        child: Text(
+                        child: _currencyAwareText(
                           _currencySymbol,
                           style: TextStyle(
                             color: profitColor.withValues(alpha: 0.7),
@@ -1819,7 +1842,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   style: TextStyle(fontSize: _s(9), color: theme.hintColor),
                   overflow: TextOverflow.ellipsis,
                 ),
-                Text(
+                _currencyAwareText(
                   value,
                   style: TextStyle(
                     fontSize: _s(10),
@@ -2006,7 +2029,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     color: theme.hintColor,
                   ),
                 ),
-                Text(
+                _currencyAwareText(
                   '0 $_currencySymbol',
                   style: TextStyle(
                     fontSize: _s(15),
@@ -2146,7 +2169,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   color: profitColor.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
+                child: _currencyAwareText(
                   '≈ ${_formatCurrency(netProfit)}',
                   style: TextStyle(
                     fontSize: _s(10),
@@ -2266,7 +2289,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ],
           ),
           SizedBox(height: _s(12)),
-          Text(
+          _currencyAwareText(
             _formatCurrency(todayProfit),
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.bold,
@@ -2630,7 +2653,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           borderRadius: BorderRadius.circular(_s(10)),
           border: Border.all(color: c.withValues(alpha: 0.28)),
         ),
-        child: Text(
+        child: _currencyAwareText(
           '$label: $value',
           style: theme.textTheme.bodySmall?.copyWith(
             fontSize: _s(11),
@@ -2857,6 +2880,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                           _AnimatedValueText(
                             value: primaryValue,
                             formatter: primaryFormatter,
+                            isNewSar: _currencyIsNewSar,
                             style: theme.textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.bold,
                               color: color,
@@ -3124,11 +3148,13 @@ class _AlertItem {
 class _AnimatedValueText extends StatefulWidget {
   final double value;
   final String Function(double) formatter;
+  final bool isNewSar;
   final TextStyle? style;
 
   const _AnimatedValueText({
     required this.value,
     required this.formatter,
+    this.isNewSar = false,
     this.style,
   });
 
@@ -3163,7 +3189,11 @@ class _AnimatedValueTextState extends State<_AnimatedValueText> {
       duration: const Duration(milliseconds: 650),
       curve: Curves.easeOutCubic,
       builder: (context, v, _) {
-        return Text(widget.formatter(v), style: widget.style);
+        return cu.SarAwareText(
+          widget.formatter(v),
+          isNewSar: widget.isNewSar,
+          style: widget.style,
+        );
       },
       onEnd: () {
         _from = _to;

@@ -9,7 +9,22 @@ import 'package:intl/intl.dart';
 const String kSarNewSymbol = '__SAR_NEW__';
 
 /// Returns true when [symbol] refers to the new SAR graphic symbol.
-bool isNewSarSymbol(String? symbol) => symbol == kSarNewSymbol;
+bool isNewSarSymbol(String? symbol) {
+  if (symbol == null) return false;
+
+  final normalized = symbol
+    .replaceAll('"', '')
+    .replaceAll("'", '')
+    .trim()
+    .toUpperCase();
+
+  // Keep backward compatibility with legacy/variant placeholders.
+  return normalized == kSarNewSymbol ||
+    normalized == '__SAR_NEW' ||
+    normalized == 'SAR_NEW' ||
+    normalized == '_SAR_NEW_' ||
+    normalized == 'SAR_NEW__';
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Currency options shown in Settings
