@@ -34094,7 +34094,14 @@ def get_admin_dashboard():
                         import traceback
                         print(f'[dashboard] gold_type filter error: {_col_err}')
                         traceback.print_exc()
-                invs = q.options(joinedload(Invoice.employee)).all()
+                # Be resilient to relationship/schema drift on legacy environments.
+                try:
+                    invs = q.options(joinedload(Invoice.employee), joinedload(Invoice.items)).all()
+                except Exception as _load_err:
+                    import traceback
+                    print(f'[dashboard] joinedload fallback in _build_inv_summary: {_load_err}')
+                    traceback.print_exc()
+                    invs = q.all()
                 total_value = 0.0
                 total_weight = 0.0
                 by_user: dict = {}
@@ -34121,10 +34128,15 @@ def get_admin_dashboard():
                         missing_employee_ids.add(int(emp_id))
 
                 if missing_employee_ids:
-                    for emp in Employee.query.filter(Employee.id.in_(list(missing_employee_ids))).all():
-                        name = (getattr(emp, 'name', None) or '').strip()
-                        if name:
-                            employee_name_by_id[int(emp.id)] = name
+                    try:
+                        for emp in Employee.query.filter(Employee.id.in_(list(missing_employee_ids))).all():
+                            name = (getattr(emp, 'name', None) or '').strip()
+                            if name:
+                                employee_name_by_id[int(emp.id)] = name
+                    except Exception as _emp_err:
+                        import traceback
+                        print(f'[dashboard] employee lookup fallback in _build_inv_summary: {_emp_err}')
+                        traceback.print_exc()
 
                 posted_by_to_employee_name: dict[str, str] = {}
                 try:
@@ -34187,28 +34199,44 @@ def get_admin_dashboard():
                     return 'غير معروف'
 
                 for inv in invs:
-                    sign = inv_types_dict.get(inv.invoice_type, 1)
-                    v = float(inv.total or 0) * sign
-                    w = float(inv.total_weight or 0) * sign
-                    total_value += v
-                    total_weight += w
-                    user = _resolve_invoice_user(inv)
-                    if user not in by_user:
-                        by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
-                    by_user[user]['value'] += v
-                    by_user[user]['weight'] += w
-                    by_user[user]['docs'] += 1
-                    for ii in (inv.items or []):
-                        try:
-                            k = f"{int(float(ii.karat))}k" if ii.karat else '?'
-                        except Exception:
-                            k = '?'
-                        wt = float(ii.weight or 0) * sign
-                        vl = float(ii.net or 0) * sign
-                        if k not in by_karat:
-                            by_karat[k] = {'weight': 0.0, 'value': 0.0}
-                        by_karat[k]['weight'] += wt
-                        by_karat[k]['value'] += vl
+                    try:
+                        sign = inv_types_dict.get(inv.invoice_type, 1)
+                        v = float(inv.total or 0) * sign
+                        w = float(inv.total_weight or 0) * sign
+                        total_value += v
+                        total_weight += w
+                        user = _resolve_invoice_user(inv)
+                        if user not in by_user:
+                            by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
+                        by_user[user]['value'] += v
+                        by_user[user]['weight'] += w
+                        by_user[user]['docs'] += 1
+
+                        item_rows = getattr(inv, 'items', None) or []
+                        for ii in item_rows:
+                            try:
+                                try:
+                                    k = f"{int(float(ii.karat))}k" if ii.karat else '?'
+                                except Exception:
+                                    k = '?'
+
+                                wt = float(getattr(ii, 'weight', 0) or 0) * sign
+                                try:
+                                    vl = float(getattr(ii, 'net', 0) or 0) * sign
+                                except Exception:
+                                    vl = 0.0
+
+                                if k not in by_karat:
+                                    by_karat[k] = {'weight': 0.0, 'value': 0.0}
+                                by_karat[k]['weight'] += wt
+                                by_karat[k]['value'] += vl
+                            except Exception:
+                                continue
+                    except Exception as _inv_loop_err:
+                        import traceback
+                        print(f'[dashboard] invoice row skipped in _build_inv_summary: {_inv_loop_err}')
+                        traceback.print_exc()
+                        continue
                 return {
                     'total_value': round(total_value, 2),
                     'total_weight': round(total_weight, 3),
