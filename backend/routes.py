@@ -15933,17 +15933,19 @@ def add_invoice():
         print(f"Error adding invoice: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': 'Failed to create invoice', 'detail': str(e)}), 400
+        _err_detail = str(e)
+        # Expose first 600 chars of detail to help diagnose production-only failures
+        return jsonify({'error': 'Failed to create invoice', 'detail': _err_detail, 'detail_short': _err_detail[:600]}), 400
     except Exception as e:
         db.session.rollback()
         print(f"An unexpected error occurred: {str(e)}")
         import traceback
         traceback.print_exc()
-        # In local/dev this helps diagnose the root cause from the client UI.
-        # Keep the main error stable, but attach details for troubleshooting.
+        _err_detail2 = str(e)
         return jsonify({
             'error': 'An unexpected server error occurred.',
-            'detail': str(e),
+            'detail': _err_detail2,
+            'detail_short': _err_detail2[:600],
             'error_type': type(e).__name__,
         }), 500
 
