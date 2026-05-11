@@ -34078,169 +34078,237 @@ def get_admin_dashboard():
 
         def _build_inv_summary(inv_types_dict, start, end, exclude_gold_type=None):
             try:
+                inv_types = [str(t).strip() for t in list(inv_types_dict.keys()) if str(t).strip()]
+                if not inv_types:
+                    return dict(_EMPTY_INV_SUMMARY)
+
                 q = (
-                    Invoice.query
-                    .filter(Invoice.invoice_type.in_(list(inv_types_dict.keys())))
+                    db.session.query(
+                        Invoice.id.label('id'),
+                        Invoice.invoice_type.label('invoice_type'),
+                        Invoice.total.label('total'),
+                        Invoice.total_weight.label('total_weight'),
+                        Invoice.employee_id.label('employee_id'),
+                        Invoice.posted_by.label('posted_by'),
+                    )
+                    .filter(Invoice.invoice_type.in_(inv_types))
                     .filter(Invoice.is_posted.is_(True))
                     .filter(Invoice.date >= start)
                     .filter(Invoice.date < end)
                 )
+
                 if exclude_gold_type:
                     try:
-                        q = q.filter(
-                            (Invoice.gold_type == None) | (Invoice.gold_type != exclude_gold_type)
-                        )
+                        if _db_has_column('invoice', 'gold_type'):
+                            q = q.filter(
+                                or_(Invoice.gold_type.is_(None), Invoice.gold_type != exclude_gold_type)
+                            )
                     except Exception as _col_err:
                         import traceback
                         print(f'[dashboard] gold_type filter error: {_col_err}')
                         traceback.print_exc()
-                # Be resilient to relationship/schema drift on legacy environments.
-                try:
-                    invs = q.options(joinedload(Invoice.employee), joinedload(Invoice.items)).all()
-                except Exception as _load_err:
-                    import traceback
-                    print(f'[dashboard] joinedload fallback in _build_inv_summary: {_load_err}')
-                    traceback.print_exc()
-                    invs = q.all()
+
+                rows = q.all()
+                if not rows:
+                    return dict(_EMPTY_INV_SUMMARY)
+
                 total_value = 0.0
                 total_weight = 0.0
-                by_user: dict = {}
-                by_karat: dict = {}
+                by_user = {}
+                by_karat = {}
 
-                # Build fast employee-name cache from employee_id first (true owner),
-                # then use posted_by only as fallback.
-                employee_name_by_id: dict[int, str] = {}
-                missing_employee_ids: set[int] = set()
-                for inv in invs:
-                    raw_emp_id = getattr(inv, 'employee_id', None)
+                sign_by_invoice_id = {}
+                employee_ids = set()
+                posted_keys = set()
+
+                for row in rows:
+                    try:
+                        inv_id = int(getattr(row, 'id'))
+                    except Exception:
+                        continue
+
+                    raw_type = str(getattr(row, 'invoice_type', '') or '').strip()
+                    sign = inv_types_dict.get(raw_type)
+                    if sign is None:
+                        sign = inv_types_dict.get(getattr(row, 'invoice_type', None), 1)
+                    try:
+                        sign = float(sign)
+                    except Exception:
+                        sign = 1.0
+                    sign_by_invoice_id[inv_id] = sign
+
+                    total_value += float(getattr(row, 'total', 0) or 0.0) * sign
+                    total_weight += float(getattr(row, 'total_weight', 0) or 0.0) * sign
+
+                    raw_emp_id = getattr(row, 'employee_id', None)
                     try:
                         emp_id = int(raw_emp_id) if raw_emp_id not in (None, '', 0, '0', False) else None
                     except Exception:
                         emp_id = None
-                    if not emp_id:
-                        continue
+                    if emp_id:
+                        employee_ids.add(emp_id)
 
-                    emp_obj = getattr(inv, 'employee', None)
-                    emp_name = (getattr(emp_obj, 'name', None) or '').strip() if emp_obj else ''
-                    if emp_name:
-                        employee_name_by_id[int(emp_id)] = emp_name
-                    else:
-                        missing_employee_ids.add(int(emp_id))
+                    posted_raw = str(getattr(row, 'posted_by', '') or '').strip().lower()
+                    if posted_raw:
+                        posted_keys.add(posted_raw)
 
-                if missing_employee_ids:
+                employee_name_by_id = {}
+                if employee_ids:
                     try:
-                        for emp in Employee.query.filter(Employee.id.in_(list(missing_employee_ids))).all():
-                            name = (getattr(emp, 'name', None) or '').strip()
-                            if name:
-                                employee_name_by_id[int(emp.id)] = name
+                        emp_rows = (
+                            Employee.query
+                            .with_entities(Employee.id, Employee.name)
+                            .filter(Employee.id.in_(list(employee_ids)))
+                            .all()
+                        )
+                        for emp_row in emp_rows:
+                            try:
+                                emp_id = int(getattr(emp_row, 'id'))
+                            except Exception:
+                                continue
+                            emp_name = str(getattr(emp_row, 'name', '') or '').strip()
+                            if emp_name:
+                                employee_name_by_id[emp_id] = emp_name
                     except Exception as _emp_err:
                         import traceback
                         print(f'[dashboard] employee lookup fallback in _build_inv_summary: {_emp_err}')
                         traceback.print_exc()
 
-                posted_by_to_employee_name: dict[str, str] = {}
-                try:
-                    from models import AppUser
+                posted_by_to_employee_name = {}
+                if posted_keys:
+                    try:
+                        from models import AppUser
 
-                    posted_keys = {
-                        str(getattr(inv, 'posted_by', '') or '').strip().lower()
-                        for inv in invs
-                        if str(getattr(inv, 'posted_by', '') or '').strip()
-                    }
-                    if posted_keys:
-                        users_by_username = (
+                        app_users = (
                             AppUser.query
-                            .filter(func.lower(func.trim(AppUser.username)).in_(list(posted_keys)))
-                            .all()
-                        )
-                        for app_user in users_by_username:
-                            key = str(getattr(app_user, 'username', '') or '').strip().lower()
-                            emp = getattr(app_user, 'employee', None)
-                            emp_name = (getattr(emp, 'name', None) or '').strip() if emp else ''
-                            if key and emp_name:
-                                posted_by_to_employee_name[key] = emp_name
-
-                        users_by_full_name = (
-                            AppUser.query
+                            .with_entities(AppUser.username, AppUser.full_name, AppUser.employee_id)
                             .filter(
-                                func.lower(
-                                    func.trim(func.coalesce(AppUser.full_name, ''))
-                                ).in_(list(posted_keys))
+                                or_(
+                                    func.lower(func.trim(AppUser.username)).in_(list(posted_keys)),
+                                    func.lower(func.trim(func.coalesce(AppUser.full_name, ''))).in_(list(posted_keys)),
+                                )
                             )
                             .all()
                         )
-                        for app_user in users_by_full_name:
-                            key = str(getattr(app_user, 'full_name', '') or '').strip().lower()
-                            emp = getattr(app_user, 'employee', None)
-                            emp_name = (getattr(emp, 'name', None) or '').strip() if emp else ''
-                            if key and emp_name and key not in posted_by_to_employee_name:
-                                posted_by_to_employee_name[key] = emp_name
-                except Exception:
-                    posted_by_to_employee_name = {}
 
-                def _resolve_invoice_user(inv: Invoice) -> str:
-                    raw_emp_id = getattr(inv, 'employee_id', None)
+                        app_user_employee_ids = {
+                            int(getattr(u, 'employee_id'))
+                            for u in app_users
+                            if getattr(u, 'employee_id', None) not in (None, '', 0, '0', False)
+                        }
+                        if app_user_employee_ids:
+                            extra_emp_rows = (
+                                Employee.query
+                                .with_entities(Employee.id, Employee.name)
+                                .filter(Employee.id.in_(list(app_user_employee_ids)))
+                                .all()
+                            )
+                            for emp_row in extra_emp_rows:
+                                try:
+                                    emp_id = int(getattr(emp_row, 'id'))
+                                except Exception:
+                                    continue
+                                emp_name = str(getattr(emp_row, 'name', '') or '').strip()
+                                if emp_name and emp_id not in employee_name_by_id:
+                                    employee_name_by_id[emp_id] = emp_name
+
+                        for app_user in app_users:
+                            raw_emp_id = getattr(app_user, 'employee_id', None)
+                            try:
+                                emp_id = int(raw_emp_id) if raw_emp_id not in (None, '', 0, '0', False) else None
+                            except Exception:
+                                emp_id = None
+                            emp_name = employee_name_by_id.get(emp_id, '') if emp_id else ''
+                            if not emp_name:
+                                continue
+
+                            username_key = str(getattr(app_user, 'username', '') or '').strip().lower()
+                            full_name_key = str(getattr(app_user, 'full_name', '') or '').strip().lower()
+                            if username_key:
+                                posted_by_to_employee_name[username_key] = emp_name
+                            if full_name_key and full_name_key not in posted_by_to_employee_name:
+                                posted_by_to_employee_name[full_name_key] = emp_name
+                    except Exception:
+                        posted_by_to_employee_name = {}
+
+                for row in rows:
+                    try:
+                        inv_id = int(getattr(row, 'id'))
+                    except Exception:
+                        continue
+
+                    sign = float(sign_by_invoice_id.get(inv_id, 1.0) or 1.0)
+                    v = float(getattr(row, 'total', 0) or 0.0) * sign
+                    w = float(getattr(row, 'total_weight', 0) or 0.0) * sign
+
+                    raw_emp_id = getattr(row, 'employee_id', None)
                     try:
                         emp_id = int(raw_emp_id) if raw_emp_id not in (None, '', 0, '0', False) else None
                     except Exception:
                         emp_id = None
 
                     if emp_id and emp_id in employee_name_by_id:
-                        return employee_name_by_id[emp_id]
+                        user = employee_name_by_id[emp_id]
+                    else:
+                        posted_raw = str(getattr(row, 'posted_by', '') or '').strip()
+                        posted_key = posted_raw.lower()
+                        if posted_key and posted_key in posted_by_to_employee_name:
+                            user = posted_by_to_employee_name[posted_key]
+                        elif posted_raw:
+                            user = posted_raw
+                        else:
+                            user = 'غير معروف'
 
-                    posted_raw = str(getattr(inv, 'posted_by', '') or '').strip()
-                    posted_key = posted_raw.lower()
-                    if posted_key and posted_key in posted_by_to_employee_name:
-                        return posted_by_to_employee_name[posted_key]
+                    if user not in by_user:
+                        by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
+                    by_user[user]['value'] += v
+                    by_user[user]['weight'] += w
+                    by_user[user]['docs'] += 1
 
-                    if posted_raw:
-                        return posted_raw
-
-                    return 'غير معروف'
-
-                for inv in invs:
+                inv_ids = list(sign_by_invoice_id.keys())
+                if inv_ids:
                     try:
-                        sign = inv_types_dict.get(inv.invoice_type, 1)
-                        v = float(inv.total or 0) * sign
-                        w = float(inv.total_weight or 0) * sign
-                        total_value += v
-                        total_weight += w
-                        user = _resolve_invoice_user(inv)
-                        if user not in by_user:
-                            by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
-                        by_user[user]['value'] += v
-                        by_user[user]['weight'] += w
-                        by_user[user]['docs'] += 1
+                        item_rows = (
+                            db.session.query(
+                                InvoiceItem.invoice_id.label('invoice_id'),
+                                InvoiceItem.karat.label('karat'),
+                                func.coalesce(func.sum(InvoiceItem.weight), 0.0).label('sum_weight'),
+                                func.coalesce(func.sum(InvoiceItem.net), 0.0).label('sum_value'),
+                            )
+                            .filter(InvoiceItem.invoice_id.in_(inv_ids))
+                            .group_by(InvoiceItem.invoice_id, InvoiceItem.karat)
+                            .all()
+                        )
 
-                        item_rows = getattr(inv, 'items', None) or []
-                        for ii in item_rows:
+                        for item_row in item_rows:
                             try:
-                                try:
-                                    k = f"{int(float(ii.karat))}k" if ii.karat else '?'
-                                except Exception:
-                                    k = '?'
-
-                                wt = float(getattr(ii, 'weight', 0) or 0) * sign
-                                try:
-                                    vl = float(getattr(ii, 'net', 0) or 0) * sign
-                                except Exception:
-                                    vl = 0.0
-
-                                if k not in by_karat:
-                                    by_karat[k] = {'weight': 0.0, 'value': 0.0}
-                                by_karat[k]['weight'] += wt
-                                by_karat[k]['value'] += vl
+                                iid = int(getattr(item_row, 'invoice_id'))
                             except Exception:
                                 continue
-                    except Exception as _inv_loop_err:
+                            sign = float(sign_by_invoice_id.get(iid, 1.0) or 1.0)
+
+                            karat_raw = getattr(item_row, 'karat', None)
+                            try:
+                                k = f"{int(float(karat_raw))}k" if karat_raw not in (None, '') else '?'
+                            except Exception:
+                                k = '?'
+
+                            wt = float(getattr(item_row, 'sum_weight', 0) or 0.0) * sign
+                            vl = float(getattr(item_row, 'sum_value', 0) or 0.0) * sign
+
+                            if k not in by_karat:
+                                by_karat[k] = {'weight': 0.0, 'value': 0.0}
+                            by_karat[k]['weight'] += wt
+                            by_karat[k]['value'] += vl
+                    except Exception as _items_err:
                         import traceback
-                        print(f'[dashboard] invoice row skipped in _build_inv_summary: {_inv_loop_err}')
+                        print(f'[dashboard] invoice-items aggregation fallback in _build_inv_summary: {_items_err}')
                         traceback.print_exc()
-                        continue
+
                 return {
                     'total_value': round(total_value, 2),
                     'total_weight': round(total_weight, 3),
-                    'docs': len(invs),
+                    'docs': len(rows),
                     'by_user': sorted(
                         [{'user': u, 'value': round(d['value'], 2), 'weight': round(d['weight'], 3), 'docs': d['docs']} for u, d in by_user.items()],
                         key=lambda x: -x['value']

@@ -106,3 +106,11 @@ def test_admin_dashboard_groups_sales_and_purchases_by_invoice_employee(auth_hea
     assert purchases_by_user['موظف لوحة 2']['value'] == 400.0
     assert purchases_by_user['موظف لوحة 1']['docs'] == 1
     assert purchases_by_user['موظف لوحة 2']['docs'] == 1
+
+    # Regression: month and year periods must never be empty when invoices exist.
+    month_summary = (payload.get('sales_purchases_summary') or {}).get('month') or {}
+    year_summary = (payload.get('sales_purchases_summary') or {}).get('year') or {}
+    assert (month_summary.get('sales') or {}).get('docs', 0) >= 2, 'month sales must count posted invoices'
+    assert (month_summary.get('purchases') or {}).get('docs', 0) >= 2, 'month purchases must count posted invoices'
+    assert (year_summary.get('sales') or {}).get('docs', 0) >= 2, 'year sales must count posted invoices'
+    assert (year_summary.get('purchases') or {}).get('docs', 0) >= 2, 'year purchases must count posted invoices'
