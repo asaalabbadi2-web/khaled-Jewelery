@@ -28369,19 +28369,18 @@ def create_safe_box_transfer_voucher():
         if amount_cash < 0:
             return jsonify({'error': 'negative_amount_not_allowed'}), 400
 
-        # Compute current source cash balance from ledger and enforce sufficiency.
-        q = SafeBoxTransaction.query.filter_by(safe_box_id=from_safe_box_id)
-        cash_in = float(
-            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-            .filter(SafeBoxTransaction.direction == 'in')
-            .scalar() or 0.0
-        )
-        cash_out = float(
-            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-            .filter(SafeBoxTransaction.direction == 'out')
-            .scalar() or 0.0
-        )
-        cash_bal = cash_in - cash_out
+        # Use live GL balance (same source used by safe-box balances UI)
+        # to avoid false "insufficient" when historical SBT rows are incomplete.
+        cash_bal = 0.0
+        try:
+            live = (
+                live_balances_by_account_ids([int(from_safe.account_id)])
+                .get(int(from_safe.account_id), {})
+            )
+            cash_bal = float((live or {}).get('cash') or 0.0)
+        except Exception:
+            cash_bal = 0.0
+
         eps = 1e-6
         if (amount_cash - cash_bal) > eps:
             return jsonify({'error': 'insufficient_cash_balance', 'available': round(float(cash_bal), 2)}), 400

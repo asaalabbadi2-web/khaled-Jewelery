@@ -1,3 +1,5 @@
+import 'dart:convert' as json;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
@@ -292,6 +294,53 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  Map<String, dynamic>? _parseErrorPayload(Object error) {
+    final raw = error.toString();
+    final start = raw.indexOf('{');
+    final end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+
+    final jsonPart = raw.substring(start, end + 1);
+    try {
+      final decoded = json.jsonDecode(jsonPart);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  String _friendlyTransferError(Object error) {
+    final payload = _parseErrorPayload(error);
+    if (payload == null) {
+      return widget.isArabic
+          ? 'فشل إنشاء سند التحويل: $error'
+          : 'Failed to create transfer: $error';
+    }
+
+    final code = (payload['error'] ?? '').toString().trim();
+    final message = (payload['message'] ?? '').toString().trim();
+
+    if (code == 'insufficient_cash_balance') {
+      final available = (payload['available'] as num?)?.toDouble() ?? 0.0;
+      return widget.isArabic
+          ? 'الرصيد المتاح للتحويل غير كافٍ. المتاح حالياً: ${_fmtCash(available)} ${context.read<SettingsProvider>().currencySymbolText}'
+          : 'Insufficient available balance. Available now: ${_fmtCash(available)}';
+    }
+
+    if (message.isNotEmpty) {
+      return widget.isArabic
+          ? 'فشل إنشاء سند التحويل: $message'
+          : 'Failed to create transfer: $message';
+    }
+
+    return widget.isArabic
+        ? 'فشل إنشاء سند التحويل: ${json.jsonEncode(payload)}'
+        : 'Failed to create transfer: ${json.jsonEncode(payload)}';
   }
 
   double _parseDouble(String value) {
@@ -691,12 +740,8 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      _showSnack(
-        widget.isArabic
-            ? 'فشل إنشاء سند التحويل: $e'
-            : 'Failed to create transfer: $e',
-        isError: true,
-      );
+      _showSnack(_friendlyTransferError(e), isError: true);
+      await _loadSafes();
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
