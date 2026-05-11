@@ -1630,21 +1630,30 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     try {
       final apiService = ApiService();
 
-      // إذا لم يتم اختيار عميل، استخدم عميل "نقدي" (ID = 1)
-      int customerId = _selectedCustomerId ?? 1;
+      int? customerId = _selectedCustomerId;
+      if (customerId != null && customerId <= 0) {
+        customerId = null;
+      }
 
-      // تحقق من وجود عميل "نقدي" في القائمة، إذا لم يكن موجوداً استخدم أول عميل
-      final cashCustomer = widget.customers.firstWhere(
-        (c) => c['name']?.toString().toLowerCase() == 'نقدي' || c['id'] == 1,
-        orElse: () =>
-            widget.customers.isNotEmpty ? widget.customers.first : {'id': 1},
-      );
+      final cashCustomer = _findCashCustomer();
+      if (customerId == null && cashCustomer != null) {
+        final resolvedCashId = _parseInt(cashCustomer['id']);
+        if (resolvedCashId != null && resolvedCashId > 0) {
+          customerId = resolvedCashId;
+          if (mounted) {
+            setState(() {
+              _selectedCustomerId = customerId;
+            });
+          }
+          debugPrint(
+            '💵 لم يتم اختيار عميل - تم استخدام عميل نقدي تلقائياً (ID: $customerId)',
+          );
+        }
+      }
 
-      if (_selectedCustomerId == null) {
-        customerId = cashCustomer['id'] ?? 1;
-        debugPrint(
-          '💵 لم يتم اختيار عميل - تقييد للعميل النقدي (ID: $customerId)',
-        );
+      if (customerId != null && customerId <= 0) {
+        _showError('تعذر تحديد عميل صالح للفاتورة');
+        return;
       }
 
       // حساب الإجماليات
@@ -1813,6 +1822,33 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: AppColors.error),
     );
+  }
+
+  Map<String, dynamic>? _findCashCustomer() {
+    for (final customer in widget.customers) {
+      final rawId = customer['id'];
+      final id = rawId is int ? rawId : int.tryParse(rawId.toString());
+      if (id == null || id <= 0) continue;
+
+      if (_isCashCustomerEntry(customer)) {
+        return {...customer, 'id': id};
+      }
+    }
+    return null;
+  }
+
+  bool _isCashCustomerEntry(Map<String, dynamic>? customer) {
+    if (customer == null) return false;
+    final name = customer['name']?.toString().toLowerCase() ?? '';
+    final code = customer['customer_code']?.toString().toLowerCase() ?? '';
+    return _containsCashKeyword(name) || _containsCashKeyword(code);
+  }
+
+  bool _containsCashKeyword(String value) {
+    if (value.isEmpty) return false;
+    return value.contains('نقد') ||
+        value.contains('كاش') ||
+        value.contains('cash');
   }
 
   // 🆕 Helper methods لأيقونات وألوان طرق الدفع
@@ -2465,12 +2501,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
                       final id = rawId is int
                           ? rawId
                           : int.tryParse(rawId.toString());
-                      if (id == null) return null;
+                    if (id == null || id <= 0) return null;
                       final name = (customer['name'] ?? 'عميل').toString();
                       final phone =
                           (customer['phone'] ?? customer['phone_number'] ?? '')
                               .toString();
-                      final isCashCustomer = name.trim() == 'نقدي';
+                    final isCashCustomer = _isCashCustomerEntry(customer);
                       final accentColor = isCashCustomer
                           ? AppColors.success
                           : colorScheme.primary;

@@ -10830,6 +10830,95 @@ def add_invoice():
     
     if not invoice_type:
         return jsonify({'error': 'invoice_type or transaction_type is required'}), 400
+
+    def _to_positive_int(raw_value):
+        try:
+            if raw_value in (None, '', False):
+                return None
+            parsed = int(raw_value)
+            return parsed if parsed > 0 else None
+        except Exception:
+            return None
+
+    def _normalize_text(raw_value):
+        try:
+            return ' '.join(str(raw_value or '').strip().split()).lower()
+        except Exception:
+            return str(raw_value or '').strip().lower()
+
+    def _contains_cash_keyword(raw_value):
+        value = _normalize_text(raw_value)
+        if not value:
+            return False
+        return ('نقد' in value) or ('كاش' in value) or ('cash' in value)
+
+    def _resolve_default_cash_customer_id():
+        """Resolve a stable default cash customer id without creating new rows."""
+        try:
+            candidates = Customer.query.order_by(Customer.active.desc(), Customer.id.asc()).all()
+        except Exception:
+            candidates = []
+
+        aliases = {
+            'عميل نقدي',
+            'نقدي',
+            'عميل كاش',
+            'cash customer',
+            'cash',
+        }
+
+        for customer in candidates:
+            try:
+                cid = int(getattr(customer, 'id', 0) or 0)
+            except Exception:
+                cid = 0
+            if cid <= 0:
+                continue
+            name_norm = _normalize_text(getattr(customer, 'name', ''))
+            if name_norm in aliases:
+                return cid
+
+        for customer in candidates:
+            try:
+                cid = int(getattr(customer, 'id', 0) or 0)
+            except Exception:
+                cid = 0
+            if cid <= 0:
+                continue
+
+            if _contains_cash_keyword(getattr(customer, 'name', '')) or _contains_cash_keyword(
+                getattr(customer, 'customer_code', '')
+            ):
+                return cid
+
+        return None
+
+    # Normalize customer_id early to prevent FK errors from sentinel values (e.g. -1).
+    _raw_customer_id = data.get('customer_id')
+    _normalized_customer_id = _to_positive_int(_raw_customer_id)
+    if _normalized_customer_id is not None:
+        try:
+            _customer_exists = Customer.query.get(int(_normalized_customer_id)) is not None
+        except Exception:
+            _customer_exists = False
+        if not _customer_exists:
+            _normalized_customer_id = None
+
+    # Sales and customer-scrap purchases can safely fallback to a configured cash customer.
+    if _normalized_customer_id is None and invoice_type in ('بيع', 'شراء من عميل'):
+        _fallback_cash_customer_id = _resolve_default_cash_customer_id()
+        if _fallback_cash_customer_id is None:
+            return jsonify({
+                'error': 'customer_required',
+                'message': 'تعذر تحديد عميل صالح للفاتورة. يرجى اختيار عميل موجود أو إنشاء "عميل نقدي".',
+            }), 400
+        _normalized_customer_id = int(_fallback_cash_customer_id)
+
+    if _normalized_customer_id is not None:
+        data['customer_id'] = int(_normalized_customer_id)
+    elif _raw_customer_id not in (None, '', False):
+        # Clear invalid/unusable customer ids so we never hit DB-level FK failures later.
+        data['customer_id'] = None
     
     # 🆕 Validation للمرتجعات
     return_types = ['مرتجع بيع', 'مرتجع شراء', 'مرتجع شراء (مورد)']
