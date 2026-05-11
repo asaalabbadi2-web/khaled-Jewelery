@@ -11988,7 +11988,15 @@ def add_invoice():
                 else:
                     # Fallback to moving-average estimate when cost is not provided.
                     weight_main = _estimate_weight_main_from_payload()
-                    snapshot = GoldCostingService.snapshot()
+                    snapshot = None
+                    # Isolate snapshot failures so they do not poison the outer transaction.
+                    if weight_main > 0:
+                        try:
+                            with db.session.no_autoflush:
+                                with db.session.begin_nested():
+                                    snapshot = GoldCostingService.snapshot()
+                        except Exception:
+                            snapshot = None
                     avg_total = _safe_float(getattr(snapshot, 'avg_total', 0.0), 0.0)
                     if weight_main > 0 and avg_total > 0:
                         cost_cash = round(avg_total * weight_main, 2)

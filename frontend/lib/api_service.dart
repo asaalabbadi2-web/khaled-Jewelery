@@ -406,10 +406,28 @@ class ApiService {
     try {
       final decoded = json.decode(utf8.decode(response.bodyBytes));
       if (decoded is Map<String, dynamic>) {
+        final detailShort = decoded['detail_short']?.toString();
+        final detail = decoded['detail']?.toString();
         final msg = decoded['message']?.toString();
-        if (msg != null && msg.isNotEmpty) return msg;
+        if (msg != null && msg.isNotEmpty) {
+          final hasDetail = (detailShort != null && detailShort.isNotEmpty) ||
+              (detail != null && detail.isNotEmpty);
+          if (hasDetail) {
+            return '$msg\n${detailShort ?? detail}';
+          }
+          return msg;
+        }
         final err = decoded['error']?.toString();
-        if (err != null && err.isNotEmpty) return err;
+        if (err != null && err.isNotEmpty) {
+          final hasDetail = (detailShort != null && detailShort.isNotEmpty) ||
+              (detail != null && detail.isNotEmpty);
+          if (hasDetail) {
+            return '$err\n${detailShort ?? detail}';
+          }
+          return err;
+        }
+        if (detailShort != null && detailShort.isNotEmpty) return detailShort;
+        if (detail != null && detail.isNotEmpty) return detail;
       }
     } catch (_) {
       // ignore
