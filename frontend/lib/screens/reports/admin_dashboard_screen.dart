@@ -207,6 +207,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     try {
       final result = await widget.api.getAdminDashboard();
       if (!mounted) return;
+
+      // Fallback: for any period where backend returns zeros, compute locally.
+      final sps = (result['sales_purchases_summary'] as Map<String, dynamic>?) ?? {};
+      final periodsNeedingFallback = ['today', 'month', 'year'].where((p) {
+        final pd = (sps[p] as Map<String, dynamic>?) ?? {};
+        return (_asDoubleSafe(pd['sales']?['total_value']) == 0.0) &&
+               (_asDoubleSafe(pd['purchases']?['total_value']) == 0.0) &&
+               ((pd['sales']?['docs'] ?? 0) == 0);
+      }).toList();
+
+      if (periodsNeedingFallback.isNotEmpty) {
+        final computed = await _computeSummaryLocally(periodsNeedingFallback);
+        if (computed != null) {
+          final mergedSps = Map<String, dynamic>.from(sps);
+          for (final p in periodsNeedingFallback) {
+            if (computed[p] != null) mergedSps[p] = computed[p];
+          }
+          result['sales_purchases_summary'] = mergedSps;
+        }
+      }
+
       setState(() => _response = result);
       _loadGramProfit();
     } catch (e) {
@@ -219,6 +240,110 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           if (mounted) _updateToastOverlay();
         });
       }
+    }
+  }
+
+  static double _asDoubleSafe(dynamic v) => v is num ? v.toDouble() : 0.0;
+
+  /// Computes sales_purchases_summary for the given periods by querying /api/invoices directly.
+  Future<Map<String, dynamic>?> _computeSummaryLocally(List<String> periods) async {
+    try {
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final tomorrowStart = todayStart.add(const Duration(days: 1));
+      final monthStart = DateTime(now.year, now.month, 1);
+      final yearStart = DateTime(now.year, 1, 1);
+
+      final periodBounds = {
+        'today': (start: todayStart, end: tomorrowStart),
+        'month': (start: monthStart, end: tomorrowStart),
+        'year':  (start: yearStart,  end: tomorrowStart),
+      };
+
+      final saleTypes = {'بيع': 1, 'sell': 1, 'sale': 1, 'مرتجع بيع': -1};
+      final purchaseTypes = {
+        'شراء': 1, 'شراء من عميل': 1,
+        'مرتجع شراء': -1, 'مرتجع شراء (مورد)': -1,
+      };
+      const scrapTypes = {'شراء': 1, 'شراء من عميل': 1, 'مرتجع شراء': -1};
+
+      Map<String, dynamic> _empty() => {
+        'total_value': 0.0, 'total_weight': 0.0,
+        'docs': 0, 'by_user': [], 'by_karat': [],
+      };
+
+      Future<Map<String, dynamic>> _fetchSummary(
+        Map<String, int> types, DateTime from, DateTime to, {String? goldType}) async {
+        try {
+          final resp = await widget.api.getInvoices(
+            perPage: 1000,
+            invoiceTypes: types.keys.toList(),
+            dateFrom: from,
+            dateTo: to,
+            goldType: goldType,
+          );
+          final items = (resp['invoices'] ?? resp['items'] ?? resp) as List? ?? [];
+          double totalValue = 0, totalWeight = 0;
+          int docCount = 0;
+          final Map<String, Map<String, double>> byUser = {};
+          for (final inv in items) {
+            if (inv['is_posted'] != true) continue;
+            if (goldType != null && inv['gold_type'] != goldType) continue;
+            final type = inv['invoice_type'] as String? ?? '';
+            final sign = (types[type] ?? 1).toDouble();
+            final val = _asDoubleSafe(inv['total']) * sign;
+            final wt = _asDoubleSafe(inv['total_weight']) * sign;
+            totalValue += val;
+            totalWeight += wt;
+            docCount++;
+            final user = (inv['posted_by'] as String? ?? 'غير معروف').trim();
+            byUser[user] ??= {'value': 0, 'weight': 0, 'docs': 0};
+            byUser[user]!['value'] = (byUser[user]!['value']! + val);
+            byUser[user]!['weight'] = (byUser[user]!['weight']! + wt);
+            byUser[user]!['docs'] = (byUser[user]!['docs']! + 1);
+          }
+          final byUserList = byUser.entries
+              .map((e) => {'user': e.key, 'value': e.value['value'], 'weight': e.value['weight'], 'docs': e.value['docs']?.toInt()})
+              .toList()
+            ..sort((a, b) => (_asDoubleSafe(b['value']) - _asDoubleSafe(a['value'])).sign.toInt());
+          return {
+            'total_value': double.parse(totalValue.toStringAsFixed(2)),
+            'total_weight': double.parse(totalWeight.toStringAsFixed(3)),
+            'docs': docCount,
+            'by_user': byUserList,
+            'by_karat': [],
+          };
+        } catch (_) {
+          return _empty();
+        }
+      }
+
+      Map<String, dynamic> _buildPeriod(Map<String, dynamic> sales,
+          Map<String, dynamic> purchases, Map<String, dynamic> scrap) => {
+        'sales': sales,
+        'purchases': purchases,
+        'expenses': {'total_value': 0.0, 'by_account': []},
+        'scrap_purchases': {...scrap, 'avg_rate': 0.0, 'avg_gold': 0.0, 'cumulative_weight': 0.0},
+      };
+
+      // Only fetch for the periods that need it (avoid unnecessary API calls).
+      final futures = <Future<Map<String, dynamic>>>[];
+      for (final p in periods) {
+        final bounds = periodBounds[p]!;
+        futures.add(_fetchSummary(saleTypes, bounds.start, bounds.end));
+        futures.add(_fetchSummary(purchaseTypes, bounds.start, bounds.end));
+        futures.add(_fetchSummary(scrapTypes, bounds.start, bounds.end, goldType: 'scrap'));
+      }
+      final results = await Future.wait(futures);
+
+      final output = <String, dynamic>{};
+      for (int i = 0; i < periods.length; i++) {
+        output[periods[i]] = _buildPeriod(results[i * 3], results[i * 3 + 1], results[i * 3 + 2]);
+      }
+      return output;
+    } catch (e) {
+      debugPrint('⚠️ _computeSummaryLocally failed: $e');
+      return null;
     }
   }
 

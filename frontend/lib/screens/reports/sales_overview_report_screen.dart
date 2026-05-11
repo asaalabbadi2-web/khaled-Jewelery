@@ -32,6 +32,7 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
 
   DateTimeRange? _selectedRange;
   String _groupBy = 'day';
+  String? _quickPeriod; // 'today' | 'month' | 'year' | null
   bool _includeUnposted = false;
   _ChartType _chartType = _ChartType.curvedLine;
 
@@ -117,6 +118,35 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
     }
   }
 
+  void _selectQuickPeriod(String period) {
+    final now = DateTime.now();
+    final todayDate = DateTime(now.year, now.month, now.day);
+    late DateTimeRange range;
+    late String groupBy;
+    switch (period) {
+      case 'today':
+        range = DateTimeRange(start: todayDate, end: todayDate);
+        groupBy = 'day';
+        break;
+      case 'month':
+        range = DateTimeRange(start: DateTime(now.year, now.month, 1), end: todayDate);
+        groupBy = 'day';
+        break;
+      case 'year':
+        range = DateTimeRange(start: DateTime(now.year, 1, 1), end: todayDate);
+        groupBy = 'month';
+        break;
+      default:
+        return;
+    }
+    setState(() {
+      _selectedRange = range;
+      _groupBy = groupBy;
+      _quickPeriod = period;
+    });
+    _loadReport();
+  }
+
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
     final initialRange =
@@ -142,6 +172,7 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
   void _clearDateRange() {
     setState(() {
       _selectedRange = null;
+      _quickPeriod = null;
     });
     _loadReport();
   }
@@ -264,7 +295,30 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
               isArabic ? 'خيارات التقرير' : 'Report Options',
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            // Quick period presets
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  label: Text(isArabic ? 'اليوم' : 'Today'),
+                  selected: _quickPeriod == 'today',
+                  onSelected: (_) => _selectQuickPeriod('today'),
+                ),
+                ChoiceChip(
+                  label: Text(isArabic ? 'هذا الشهر' : 'This Month'),
+                  selected: _quickPeriod == 'month',
+                  onSelected: (_) => _selectQuickPeriod('month'),
+                ),
+                ChoiceChip(
+                  label: Text(isArabic ? 'هذه السنة' : 'This Year'),
+                  selected: _quickPeriod == 'year',
+                  onSelected: (_) => _selectQuickPeriod('year'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -290,7 +344,10 @@ class _SalesOverviewReportScreenState extends State<SalesOverviewReportScreen> {
                       selected: selected,
                       onSelected: (value) {
                         if (!value || _groupBy == entry.key) return;
-                        setState(() => _groupBy = entry.key);
+                        setState(() {
+                          _groupBy = entry.key;
+                          _quickPeriod = null;
+                        });
                         _loadReport();
                       },
                     );
