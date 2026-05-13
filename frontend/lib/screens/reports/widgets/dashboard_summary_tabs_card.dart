@@ -146,13 +146,11 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
       case _SummaryTab.expenses:
         final d =
             (widget.periodData['expenses'] as Map<String, dynamic>?) ?? {};
-        final byAccount = (d['by_account'] as List?) ?? const [];
-        final docs = (d['docs'] as int?) ?? byAccount.length;
         return (
           label: isAr ? 'المصروفات' : 'Expenses',
-          count: docs,
+          count: (d['docs'] as int?) ?? 0,
           value: _asDouble(d['total_value']),
-          weight: _asDouble(d['total_weight']),
+          weight: 0,
           color: _tabColor(tab, theme),
           icon: Icons.receipt_long_rounded,
           data: d,

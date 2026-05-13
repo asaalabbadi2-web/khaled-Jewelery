@@ -2326,8 +2326,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     // Backend enforces strict weight integrity in some contexts (scrap/barter/settlement).
     // To avoid double-counting and payload conflicts, we keep `karat_lines` sourced ONLY
     // from explicit karat lines (and keep `items` sourced ONLY from inline items).
-    final _buyerEmployeeId =
-        context.read<AuthProvider>().currentUser?.employeeId;
     final linePayloads = _karatLines.map((line) {
       final snapshot = _snapshotFor(line);
       return {
@@ -2375,7 +2373,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final payload = <String, dynamic>{
       'branch_id': _selectedBranchId,
       'supplier_id': _selectedSupplierId,
-      if (_buyerEmployeeId != null) 'employee_id': _buyerEmployeeId,
       'invoice_type': _isSupplierReturnMode ? 'مرتجع شراء (مورد)' : 'شراء',
       'date': DateTime.now().toIso8601String(),
       'total': _round(_grandTotal, 2),

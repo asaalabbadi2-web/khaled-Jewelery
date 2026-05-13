@@ -26267,20 +26267,6 @@ def create_voucher():
         return jsonify({'error': 'account_lines is required and cannot be empty'}), 400
     
     try:
-        created_by_value = (data.get('created_by') or '').strip() if isinstance(data.get('created_by'), str) else data.get('created_by')
-        if not created_by_value:
-            try:
-                cu = getattr(g, 'current_user', None)
-                created_by_value = (
-                    (getattr(cu, 'full_name', None) or '').strip()
-                    or (getattr(cu, 'username', None) or '').strip()
-                    or (getattr(g, 'user', None) or '').strip()
-                    or (request.headers.get('X-User-Name', '') or '').strip()
-                    or 'system'
-                )
-            except Exception:
-                created_by_value = 'system'
-
         # Parse date
         voucher_date = datetime.fromisoformat(data.get('date', datetime.now().isoformat()))
 
@@ -26304,7 +26290,7 @@ def create_voucher():
             reference_id=None,
             reference_number=None,
             notes=None,
-            created_by=created_by_value,
+            created_by=data.get('created_by', 'system'),
             status='pending'
         )
         
@@ -29564,22 +29550,55 @@ def _create_clearing_settlement_voucher(
 
     # --- Per-transaction settlement lines ---
     # If the caller provided specific invoice_payment_ids, link them to this
-    # voucher.  Commission is split proportionally across the selected IPs.
+    # voucher.  Only create SettlementLine entries for IPs that are actually
+    # covered by gross_amount (FIFO from oldest to newest).  This prevents
+    # "phantom settlement" where an IP is marked settled but the voucher amount
+    # did not actually include its value — which causes due_amount > 0 while
+    # pending_count = 0 on subsequent queries.
     if invoice_payment_ids:
-        ip_rows = InvoicePayment.query.filter(
-            InvoicePayment.id.in_(invoice_payment_ids)
-        ).all()
+        ip_rows = sorted(
+            InvoicePayment.query.filter(
+                InvoicePayment.id.in_(invoice_payment_ids)
+            ).all(),
+            key=lambda x: x.created_at or datetime.min,
+        )
+        # Look up already-settled amounts so partial settlements are handled correctly.
+        _all_ids = [ip.id for ip in ip_rows]
+        _prev_settled: dict = {}
+        if _all_ids:
+            _sl_rows = (
+                db.session.query(
+                    SettlementLine.invoice_payment_id,
+                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+                )
+                .filter(SettlementLine.invoice_payment_id.in_(_all_ids))
+                .group_by(SettlementLine.invoice_payment_id)
+                .all()
+            )
+            _prev_settled = {r[0]: round(float(r[1]), 2) for r in _sl_rows}
         ip_total = sum(float(ip.amount or 0) for ip in ip_rows) or 1.0
+        remaining_gross = round(float(gross_amount), 2)
         for ip in ip_rows:
-            ip_amt = float(ip.amount or 0)
+            if remaining_gross <= 0.005:
+                # gross_amount exhausted: stop — do NOT create SettlementLine
+                # for remaining IPs so they stay visible as pending next cycle.
+                break
+            ip_amt = round(float(ip.amount or 0), 2)
+            already_settled = _prev_settled.get(ip.id, 0.0)
+            # Use the true remaining balance, not the full IP amount.
+            ip_remaining = round(ip_amt - already_settled, 2)
+            if ip_remaining <= 0.005:
+                continue
+            amount_to_settle = round(min(ip_remaining, remaining_gross), 2)
             ratio = ip_amt / ip_total
             db.session.add(SettlementLine(
                 voucher_id=voucher.id,
                 invoice_payment_id=ip.id,
-                amount_settled=round(ip_amt, 2),
+                amount_settled=amount_to_settle,
                 commission=round(fee_amount * ratio, 2),
                 commission_vat=round(fee_vat * ratio, 2),
             ))
+            remaining_gross = round(remaining_gross - amount_to_settle, 2)
 
     return {
         'success': True,
@@ -30139,6 +30158,26 @@ def get_pending_settlement_transactions():
 
         # Unaccounted outflow = net settlement-outs that consumed IPs without SettlementLine
         transfer_out_unaccounted = max(0.0, round(net_voucher_out - sl_covered - legacy_covered, 2))
+
+        # ── FIFO cap ─────────────────────────────────────────────────────────
+        # transfer_out_unaccounted can be inflated by "ghost credits" — voucher
+        # outs that settled non-IP items (e.g. direct invoice JEs from before
+        # the PaymentMethod routing system was in place).  If we use the raw
+        # figure, FIFO consumes genuinely-pending IPs, making them invisible.
+        #
+        # Correct cap:  FIFO may only consume up to:
+        #   non_sl_ip_total − due_amount
+        # where non_sl_ip_total = sum of remaining IP balances with no SL record.
+        # That equals the IPs truly settled historically without SL,
+        # leaving due_amount worth of IPs visible as pending.
+        non_sl_ip_total = round(sum(
+            max(0.0, round(float(ip.amount or 0), 2) - round(settled_by_ip.get(ip.id, 0.0), 2))
+            for ip in all_ips
+            if ip.id not in legacy_settled_ip_ids
+        ), 2)
+        fifo_cap = max(0.0, round(non_sl_ip_total - max(0.0, due_amount), 2))
+        transfer_out_unaccounted = min(transfer_out_unaccounted, fifo_cap)
+        # ─────────────────────────────────────────────────────────────────────
     except Exception:
         transfer_out_unaccounted = 0.0
 
@@ -34460,9 +34499,7 @@ def get_admin_dashboard():
         def _build_expenses_summary(start, end):
             try:
                 exp_total = 0.0
-                exp_weight_main = 0.0
                 exp_by_account: dict = {}
-                exp_doc_ids = set()
                 exp_rows = (
                     db.session.query(JELine, AccModel)
                     .join(AccModel, JELine.account_id == AccModel.id)
@@ -34474,48 +34511,19 @@ def get_admin_dashboard():
                     .all()
                 )
                 for line, acc in exp_rows:
-                    cash_amt = float(line.cash_debit or 0.0)
-                    gold_main_amt = (
-                        float(convert_to_main_karat(float(line.debit_18k or 0.0), 18))
-                        + float(convert_to_main_karat(float(line.debit_21k or 0.0), 21))
-                        + float(convert_to_main_karat(float(line.debit_22k or 0.0), 22))
-                        + float(convert_to_main_karat(float(line.debit_24k or 0.0), 24))
-                    )
-
-                    # Expense accounts are debit-natured: collect debit legs only.
-                    if cash_amt <= 0 and gold_main_amt <= 0:
-                        continue
-
-                    exp_total += cash_amt
-                    exp_weight_main += gold_main_amt
-                    if getattr(line, 'journal_entry_id', None):
-                        exp_doc_ids.add(int(line.journal_entry_id))
-
+                    amt = float(line.cash_debit or 0)
+                    exp_total += amt
                     name = (acc.name or acc.account_number or '?').strip()
-                    if name not in exp_by_account:
-                        exp_by_account[name] = {'value': 0.0, 'weight': 0.0}
-                    exp_by_account[name]['value'] += cash_amt
-                    exp_by_account[name]['weight'] += gold_main_amt
-
+                    exp_by_account[name] = exp_by_account.get(name, 0.0) + amt
                 return {
                     'total_value': round(exp_total, 2),
-                    'total_weight': round(exp_weight_main, 3),
-                    'docs': len(exp_doc_ids),
                     'by_account': sorted(
-                        [
-                            {
-                                'account': a,
-                                'value': round(v['value'], 2),
-                                'weight': round(v['weight'], 3),
-                            }
-                            for a, v in exp_by_account.items()
-                            if (v['value'] > 0 or v['weight'] > 0)
-                        ],
-                        key=lambda x: -((x['value'] or 0.0) + (x['weight'] or 0.0))
+                        [{'account': a, 'value': round(v, 2)} for a, v in exp_by_account.items() if v > 0],
+                        key=lambda x: -x['value']
                     ),
                 }
             except Exception:
-                return {'total_value': 0.0, 'total_weight': 0.0, 'docs': 0, 'by_account': []}
+                return {'total_value': 0.0, 'by_account': []}
 
         def _build_scrap_summary(start, end):
             """مشتريات الكسر والتسكير فقط (gold_type='scrap')."""
