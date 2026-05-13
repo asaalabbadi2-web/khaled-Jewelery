@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import '../models/employee_model.dart';
 import '../models/safe_box_model.dart';
+import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 import 'voucher_preview_screen.dart';
@@ -3301,11 +3302,18 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         });
       }
 
+      final auth = context.read<AuthProvider>();
+      final createdBy = (auth.fullName.isNotEmpty
+              ? auth.fullName
+              : auth.username)
+          .trim();
+
       // Prepare voucher data
       final Map<String, dynamic> voucherData = {
         'voucher_type': widget.voucherType,
         'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
         'party_type': _partyType,
+        if (createdBy.isNotEmpty) 'created_by': createdBy,
         'description': _descriptionController.text,
         'notes': _notesController.text.isNotEmpty
             ? _notesController.text

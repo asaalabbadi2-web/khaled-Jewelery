@@ -878,6 +878,9 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
 
     final returnItems = selectedItems.map((item) => item.toPayload()).toList();
 
+    final _returnerEmployeeId =
+        context.read<AuthProvider>().currentUser?.employeeId;
+
     final payload = {
       'customer_id': widget.returnType != 'مرتجع شراء (مورد)'
           ? selectedOriginalInvoice!['customer_id']
@@ -886,6 +889,7 @@ class _AddReturnInvoiceScreenState extends State<AddReturnInvoiceScreen> {
           ? selectedOriginalInvoice!['supplier_id']
           : null,
       'branch_id': originalBranchId,
+      if (_returnerEmployeeId != null) 'employee_id': _returnerEmployeeId,
       'date': DateTime.now().toIso8601String(),
       'invoice_type': widget.returnType,
       'original_invoice_id': selectedOriginalInvoice!['id'],

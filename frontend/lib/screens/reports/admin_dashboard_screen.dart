@@ -12,11 +12,11 @@ import '../../api_service.dart';
 import '../../providers/settings_provider.dart';
 import '../../utils/currency_utils.dart' as cu;
 import '../../theme/app_theme.dart';
+import '../../widgets/alerts_dialog.dart';
 import '../audit_log_screen.dart';
 import '../safe_boxes_screen.dart';
 import 'gold_price_history_report_screen.dart';
 import 'safe_box_hero_details_screen.dart';
-import 'system_alerts_screen.dart';
 import 'widgets/dashboard_summary_tabs_card.dart';
 
 enum _TimeRange { today, month, year }
@@ -49,11 +49,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _gramProfitData;
   bool _gramProfitLoading = false;
 
-  // ── Overlay alert state ──────────────────────────────────────────────────
-  /// Alerts that the user has manually dismissed (by id/text key).
-  final Set<String> _dismissedAlertKeys = {};
-  /// Live OverlayEntry for the floating toast stack (null = not shown).
-  OverlayEntry? _toastOverlayEntry;
+  // ── Alert badge state ────────────────────────────────────────────────────
+  /// Count of active alerts shown as badge on the notifications button.
+  int _alertsBadgeCount = 0;
 
   // ── Vault ordering ────────────────────────────────────────────────────────
   /// Local ordered list of safe-box ids (persisted in SharedPreferences).
@@ -169,8 +167,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   void dispose() {
-    _toastOverlayEntry?.remove();
-    _toastOverlayEntry = null;
     _vaultScrollController.dispose();
     super.dispose();
   }
@@ -236,9 +232,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _updateToastOverlay();
-        });
+        _refreshAlertsBadge();
       }
     }
   }
@@ -375,33 +369,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
-  void _updateToastOverlay() {
-    _toastOverlayEntry?.remove();
-    _toastOverlayEntry = null;
+  /// Recomputes the badge count from the latest response and updates state.
+  void _refreshAlertsBadge() {
     if (!mounted) return;
-    final alerts = _getAllAlerts();
-    if (alerts.isEmpty) return;
-    final entry = OverlayEntry(
-      builder: (ctx) => Positioned(
-        bottom: 24,
-        left: 16,
-        child: Material(
-          color: Colors.transparent,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: alerts
-                .map((a) => _buildToastCard(a, onDismiss: () {
-                      setState(() => _dismissedAlertKeys.add(a.text));
-                      _updateToastOverlay();
-                    }))
-                .toList(),
-          ),
-        ),
-      ),
-    );
-    _toastOverlayEntry = entry;
-    Overlay.of(context, rootOverlay: true).insert(entry);
+    final alerts = (_response?['alerts'] as Map<String, dynamic>?) ?? {};
+    final criticalBar = (alerts['critical_bar'] as List?) ?? [];
+    final criticalCount = alerts['critical_unreviewed_count'];
+    final unpostedCount = alerts['unposted_invoices_count'];
+    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
+    final cashDiff = lastShift?['cash_difference'];
+    final goldDiff = lastShift?['gold_pure_24k_difference'];
+
+    int count = criticalBar.length;
+    if ((criticalCount is num ? criticalCount.toInt() : 0) > 0) count++;
+    if ((cashDiff is num ? cashDiff.toDouble() : 0.0).abs() > 0.01) count++;
+    if ((goldDiff is num ? goldDiff.toDouble() : 0.0).abs() > 0.001) count++;
+    if ((unpostedCount is num ? unpostedCount.toInt() : 0) > 0) count++;
+
+    setState(() => _alertsBadgeCount = count);
   }
 
   double _asDouble(dynamic value) => value is num ? value.toDouble() : 0.0;
@@ -677,19 +662,48 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
               ),
               const Spacer(),
-              IconButton(
-                icon: Icon(Icons.notifications_outlined, size: _s(22)),
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => SystemAlertsScreen(
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.notifications_outlined, size: _s(22)),
+                    onPressed: () async {
+                      await AlertsDialog.show(
+                        context: context,
                         api: widget.api,
                         isArabic: widget.isArabic,
+                        onCountChanged: _refreshAlertsBadge,
+                      );
+                      _loadData();
+                    },
+                  ),
+                  if (_alertsBadgeCount > 0)
+                    PositionedDirectional(
+                      top: 6,
+                      end: 6,
+                      child: IgnorePointer(
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: const BoxDecoration(
+                            color: AppColors.error,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              _alertsBadgeCount > 9 ? '9+' : '$_alertsBadgeCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800,
+                                fontFamily: 'Cairo',
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  );
-                  _loadData();
-                },
+                ],
               ),
               IconButton(
                 icon: Icon(Icons.refresh, size: _s(22)),
@@ -1115,183 +1129,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.hintColor,
                 fontSize: _s(11),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── macOS-style floating notification toasts ──────────────────────────────
-  /// Collects all current alerts from response data, filters dismissed ones.
-  List<_AlertItem> _getAllAlerts() {
-    if (_response == null) return [];
-    final isArabic = widget.isArabic;
-    final alerts = (_response!['alerts'] as Map<String, dynamic>?) ?? {};
-    final items = <_AlertItem>[];
-
-    // Critical bar alerts
-    final rawItems = (alerts['critical_bar'] as List?) ?? [];
-    for (final raw in rawItems) {
-      final item = raw is Map ? raw : <String, dynamic>{};
-      final severity = (item['severity']?.toString().toLowerCase() ?? 'warning');
-      final isCrit = severity == 'critical';
-      final msg = (isArabic
-              ? item['message_ar']?.toString()
-              : item['message_en']?.toString()) ??
-          item['message']?.toString() ??
-          '';
-      if (msg.isNotEmpty) {
-        items.add(_AlertItem(
-          icon: isCrit ? Icons.error_outline : Icons.warning_amber_rounded,
-          color: isCrit ? AppColors.error : AppColors.warning,
-          text: msg,
-        ));
-      }
-    }
-
-    // Audit zone alerts
-    final criticalCount = alerts['critical_unreviewed_count'];
-    final unpostedCount = alerts['unposted_invoices_count'];
-    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
-    final cashDiff = lastShift?['cash_difference'];
-    final goldDiff = lastShift?['gold_pure_24k_difference'];
-
-    final cCount = criticalCount is num ? criticalCount.toInt() : 0;
-    final uCount = unpostedCount is num ? unpostedCount.toInt() : 0;
-    final cDiff = cashDiff is num ? cashDiff.toDouble() : 0.0;
-    final gDiff = goldDiff is num ? goldDiff.toDouble() : 0.0;
-
-    if (cCount > 0) {
-      final isManyAlerts = cCount > 5;
-      items.add(_AlertItem(
-        icon: isManyAlerts
-            ? Icons.error_outline
-            : Icons.warning_amber_rounded,
-        color: AppColors.error,
-        text: isArabic
-            ? '$cCount تنبيهات حرجة بانتظار المراجعة'
-            : '$cCount critical alerts pending',
-      ));
-    }
-    if (cDiff.abs() > 0.01) {
-      items.add(_AlertItem(
-        icon: Icons.account_balance_wallet,
-        color: AppColors.warning,
-        text: isArabic
-            ? 'فرق نقدي (${_formatCurrency(cDiff)}) في آخر إغلاق'
-            : 'Cash difference (${_formatCurrency(cDiff)}) in last closing',
-      ));
-    }
-    if (gDiff.abs() > 0.001) {
-      items.add(_AlertItem(
-        icon: Icons.auto_awesome,
-        color: AppColors.warning,
-        text: isArabic
-            ? 'فرق ذهب (${_formatWeight(gDiff)}) في آخر إغلاق'
-            : 'Gold difference (${_formatWeight(gDiff)}) in last closing',
-      ));
-    }
-    if (uCount > 0) {
-      items.add(_AlertItem(
-        icon: Icons.pending_actions,
-        color: AppColors.info,
-        text: isArabic
-            ? '$uCount فاتورة بانتظار الترحيل'
-            : '$uCount invoices pending posting',
-      ));
-    }
-
-    return items.where((a) => !_dismissedAlertKeys.contains(a.text)).toList();
-  }
-
-  Widget _buildToastCard(_AlertItem alert, {required VoidCallback onDismiss}) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    // Accent color band: slightly tinted background based on alert color
-    final bgColor = isDark
-        ? Color.lerp(const Color(0xFF2C2C2E), alert.color, 0.06)!
-        : Color.lerp(Colors.white, alert.color, 0.05)!;
-
-    return TweenAnimationBuilder<double>(
-      key: Key('toast_${alert.text.hashCode}'),
-      tween: Tween(begin: 0.0, end: 1.0),
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeOutCubic,
-      builder: (context, t, child) => Transform.translate(
-        offset: Offset(-40 * (1 - t), 0),
-        child: Opacity(opacity: t, child: child),
-      ),
-      child: Container(
-        width: 300,
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border(
-            left: BorderSide(color: alert.color, width: 4),
-            top: BorderSide(
-              color: alert.color.withValues(alpha: 0.22),
-              width: 0.8,
-            ),
-            right: BorderSide(
-              color: alert.color.withValues(alpha: 0.22),
-              width: 0.8,
-            ),
-            bottom: BorderSide(
-              color: alert.color.withValues(alpha: 0.22),
-              width: 0.8,
-            ),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.18),
-              blurRadius: 20,
-              spreadRadius: 0,
-              offset: const Offset(0, 6),
-            ),
-            BoxShadow(
-              color: alert.color.withValues(alpha: 0.12),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
-              child: Icon(alert.icon, color: alert.color, size: 18),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 11),
-                child: _currencyAwareText(
-                  alert.text,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.92)
-                        : const Color(0xFF1C1C1E),
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-            ),
-            GestureDetector(
-              onTap: onDismiss,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Icon(
-                  Icons.close,
-                  size: 14,
-                  color: (isDark ? Colors.white : Colors.black)
-                      .withValues(alpha: 0.40),
-                ),
               ),
             ),
           ],
@@ -3260,14 +3097,6 @@ class _StickyRangeSelectorDelegate extends SliverPersistentHeaderDelegate {
         oldDelegate.horizontalPadding != horizontalPadding ||
         oldDelegate.verticalPadding != verticalPadding;
   }
-}
-
-class _AlertItem {
-  final IconData icon;
-  final Color color;
-  final String text;
-
-  _AlertItem({required this.icon, required this.color, required this.text});
 }
 
 class _AnimatedValueText extends StatefulWidget {

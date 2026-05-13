@@ -1668,9 +1668,13 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
       );
       final totalTax = _items.fold<double>(0.0, (sum, item) => sum + item.tax);
 
+      final _sellerEmployeeId =
+          context.read<AuthProvider>().currentUser?.employeeId;
+
       final invoiceData = {
         'customer_id': customerId,
         'branch_id': _selectedBranchId,
+        if (_sellerEmployeeId != null) 'employee_id': _sellerEmployeeId,
         'invoice_type': 'بيع',
         'transaction_type': 'sell',
         'gold_type': 'scrap',

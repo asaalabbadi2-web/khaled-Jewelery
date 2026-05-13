@@ -26267,6 +26267,20 @@ def create_voucher():
         return jsonify({'error': 'account_lines is required and cannot be empty'}), 400
     
     try:
+        created_by_value = (data.get('created_by') or '').strip() if isinstance(data.get('created_by'), str) else data.get('created_by')
+        if not created_by_value:
+            try:
+                cu = getattr(g, 'current_user', None)
+                created_by_value = (
+                    (getattr(cu, 'full_name', None) or '').strip()
+                    or (getattr(cu, 'username', None) or '').strip()
+                    or (getattr(g, 'user', None) or '').strip()
+                    or (request.headers.get('X-User-Name', '') or '').strip()
+                    or 'system'
+                )
+            except Exception:
+                created_by_value = 'system'
+
         # Parse date
         voucher_date = datetime.fromisoformat(data.get('date', datetime.now().isoformat()))
 
@@ -26290,7 +26304,7 @@ def create_voucher():
             reference_id=None,
             reference_number=None,
             notes=None,
-            created_by=data.get('created_by', 'system'),
+            created_by=created_by_value,
             status='pending'
         )
         
@@ -34446,7 +34460,9 @@ def get_admin_dashboard():
         def _build_expenses_summary(start, end):
             try:
                 exp_total = 0.0
+                exp_weight_main = 0.0
                 exp_by_account: dict = {}
+                exp_doc_ids = set()
                 exp_rows = (
                     db.session.query(JELine, AccModel)
                     .join(AccModel, JELine.account_id == AccModel.id)
@@ -34458,19 +34474,48 @@ def get_admin_dashboard():
                     .all()
                 )
                 for line, acc in exp_rows:
-                    amt = float(line.cash_debit or 0)
-                    exp_total += amt
+                    cash_amt = float(line.cash_debit or 0.0)
+                    gold_main_amt = (
+                        float(convert_to_main_karat(float(line.debit_18k or 0.0), 18))
+                        + float(convert_to_main_karat(float(line.debit_21k or 0.0), 21))
+                        + float(convert_to_main_karat(float(line.debit_22k or 0.0), 22))
+                        + float(convert_to_main_karat(float(line.debit_24k or 0.0), 24))
+                    )
+
+                    # Expense accounts are debit-natured: collect debit legs only.
+                    if cash_amt <= 0 and gold_main_amt <= 0:
+                        continue
+
+                    exp_total += cash_amt
+                    exp_weight_main += gold_main_amt
+                    if getattr(line, 'journal_entry_id', None):
+                        exp_doc_ids.add(int(line.journal_entry_id))
+
                     name = (acc.name or acc.account_number or '?').strip()
-                    exp_by_account[name] = exp_by_account.get(name, 0.0) + amt
+                    if name not in exp_by_account:
+                        exp_by_account[name] = {'value': 0.0, 'weight': 0.0}
+                    exp_by_account[name]['value'] += cash_amt
+                    exp_by_account[name]['weight'] += gold_main_amt
+
                 return {
                     'total_value': round(exp_total, 2),
+                    'total_weight': round(exp_weight_main, 3),
+                    'docs': len(exp_doc_ids),
                     'by_account': sorted(
-                        [{'account': a, 'value': round(v, 2)} for a, v in exp_by_account.items() if v > 0],
-                        key=lambda x: -x['value']
+                        [
+                            {
+                                'account': a,
+                                'value': round(v['value'], 2),
+                                'weight': round(v['weight'], 3),
+                            }
+                            for a, v in exp_by_account.items()
+                            if (v['value'] > 0 or v['weight'] > 0)
+                        ],
+                        key=lambda x: -((x['value'] or 0.0) + (x['weight'] or 0.0))
                     ),
                 }
             except Exception:
-                return {'total_value': 0.0, 'by_account': []}
+                return {'total_value': 0.0, 'total_weight': 0.0, 'docs': 0, 'by_account': []}
 
         def _build_scrap_summary(start, end):
             """مشتريات الكسر والتسكير فقط (gold_type='scrap')."""
