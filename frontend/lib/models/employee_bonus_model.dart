@@ -189,24 +189,25 @@ class EmployeeSummary {
   final String fullName;
   final String? position;
   final String? department;
+  final String? photo;
 
   const EmployeeSummary({
     required this.employeeCode,
     required this.fullName,
     this.position,
     this.department,
+    this.photo,
   });
 
   factory EmployeeSummary.fromJson(Map<String, dynamic> json) {
-    // بعض الواجهات الخلفية تُرجع name بدلاً من full_name، أو قد تكون الحقول فارغة
-    final code =
-        (json['employee_code'] ?? json['employeeCode'] ?? '') as String;
+    final code = (json['employee_code'] ?? json['employeeCode'] ?? '') as String;
     final name = (json['full_name'] ?? json['name'] ?? '') as String;
     return EmployeeSummary(
       employeeCode: code,
       fullName: name,
       position: json['position'] as String?,
       department: json['department'] as String?,
+      photo: json['photo'] as String?,
     );
   }
 
@@ -216,6 +217,7 @@ class EmployeeSummary {
       'full_name': fullName,
       'position': position,
       'department': department,
+      'photo': photo,
     };
   }
 }

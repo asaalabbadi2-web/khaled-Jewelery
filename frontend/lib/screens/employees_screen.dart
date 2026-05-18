@@ -7,6 +7,7 @@ import '../models/employee_model.dart';
 import '../models/safe_box_model.dart';
 import '../providers/auth_provider.dart';
 import '../utils.dart';
+import '../widgets/user_avatar_widget.dart';
 import 'account_statement_screen.dart';
 
 class EmployeesScreen extends StatefulWidget {
@@ -1050,12 +1051,16 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                           ),
                           child: ListTile(
                             onTap: () => _showEmployeeDetails(employee),
-                            leading: CircleAvatar(
-                              backgroundColor: colorScheme.primary,
-                              child: Icon(
-                                Icons.person_outline,
-                                color: colorScheme.onPrimary,
-                              ),
+                            leading: UserAvatarWidget(
+                              displayName: employee.name,
+                              photoBase64: employee.photo,
+                              radius: 20,
+                              editable: true,
+                              onUpload: (base64) async {
+                                if (employee.id == null) return;
+                                await widget.api.updateEmployeePhoto(employee.id!, base64);
+                                _loadEmployees();
+                              },
                             ),
                             title: Text(
                               employee.name,

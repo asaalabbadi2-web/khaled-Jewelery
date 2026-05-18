@@ -8570,6 +8570,141 @@ def update_invoice_status(invoice_id: int):
     return jsonify(invoice.to_dict()), 200
 
 
+@api.route('/invoices/<int:invoice_id>/reassign-employee', methods=['PATCH'])
+@require_permission('manager')
+def reassign_invoice_employee(invoice_id: int):
+    """تغيير موظف الفاتورة — للمدير فقط، وللفواتير غير المرحّلة حصراً."""
+    invoice = Invoice.query.get_or_404(invoice_id)
+
+    if invoice.is_posted:
+        return jsonify({'error': 'لا يمكن تغيير منشئ فاتورة مرحّلة'}), 400
+
+    data = request.get_json(silent=True) or {}
+    new_emp_id = data.get('employee_id')
+    if new_emp_id is None:
+        return jsonify({'error': 'employee_id مطلوب'}), 400
+    try:
+        new_emp_id = int(new_emp_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'employee_id غير صالح'}), 400
+
+    new_emp = Employee.query.get(new_emp_id)
+    if not new_emp:
+        return jsonify({'error': 'الموظف غير موجود'}), 404
+
+    old_name   = invoice.posted_by or str(invoice.employee_id)
+    old_emp_id = invoice.employee_id
+    new_name   = new_emp.name
+
+    # ── تحديث الفاتورة ──────────────────────────────────────────
+    invoice.employee_id = new_emp_id
+    invoice.posted_by   = new_name
+    # scrap_holder_employee_id يُحدَّث دائماً لأن _resolve_employee_for_invoice يقرأه أولاً
+    invoice_type_for_scrap = (getattr(invoice, 'invoice_type', '') or '').strip()
+    gold_type_for_scrap    = (str(getattr(invoice, 'gold_type', '') or '')).strip().lower()
+    _is_scrap_invoice = (
+        invoice_type_for_scrap in ('شراء من عميل', 'مرتجع شراء')
+        and gold_type_for_scrap == 'scrap'
+    )
+    if _is_scrap_invoice:
+        invoice.scrap_holder_employee_id = new_emp_id
+
+    # ── نقل حركات الخزينة المؤقتة (invoice_scrap_receipt) للموظف الجديد ──
+    # هذه الحركات تُنشأ عند حفظ فاتورة الشراء من عميل قبل الترحيل
+    try:
+        invoice_type = (getattr(invoice, 'invoice_type', '') or '').strip()
+        gold_type    = (str(getattr(invoice, 'gold_type', '') or '')).strip().lower()
+        is_scrap_purchase = (invoice_type in ('شراء من عميل', 'مرتجع شراء') and gold_type == 'scrap')
+
+        if is_scrap_purchase:
+            # خزينة الموظف الجديد
+            new_gold_safe = None
+            try:
+                new_emp_fresh = Employee.query.get(new_emp_id)
+                new_gold_safe_id = getattr(new_emp_fresh, 'gold_safe_box_id', None) if new_emp_fresh else None
+                if new_gold_safe_id:
+                    new_gold_safe = SafeBox.query.get(new_gold_safe_id)
+                    if new_gold_safe and (new_gold_safe.safe_type or '').lower() != 'gold':
+                        new_gold_safe = None
+            except Exception:
+                pass
+
+            if new_gold_safe:
+                # 1) نقل SBTs المؤقتة (قبل الترحيل)
+                provisional_sbts = SafeBoxTransaction.query.filter(
+                    SafeBoxTransaction.ref_id == invoice_id,
+                    SafeBoxTransaction.ref_type.in_(['invoice_scrap_receipt', 'invoice_scrap_return']),
+                ).all()
+                for sbt in provisional_sbts:
+                    sbt.safe_box_id = new_gold_safe.id
+
+                # 2) نقل SBTs الذهب الحقيقية (invoice_gold + invoice_gold_reversal) إلى الخزينة الجديدة
+                # يضمن أن تاريخ الخزينة مترابط: الذهب الذي عُكس من الخزينة القديمة
+                # يُنقَل معه سجلاته الأصلية حتى يبقى الرصيد صفراً في الخزينة القديمة
+                for _ref_type in ('invoice_gold', 'invoice_gold_reversal'):
+                    for sbt in SafeBoxTransaction.query.filter_by(
+                        ref_id=invoice_id, ref_type=_ref_type
+                    ).all():
+                        sbt.safe_box_id = new_gold_safe.id
+    except Exception:
+        pass
+
+    # ── تحديث القيود المرتبطة مباشرةً بالفاتورة ──────────────────
+    try:
+        for je in JournalEntry.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all():
+            if getattr(je, 'created_by', None) is not None:
+                je.created_by = new_name
+            if getattr(je, 'posted_by', None) is not None:
+                je.posted_by = new_name
+    except Exception:
+        pass
+
+    # ── تحديث السندات وقيودها المرتبطة بالفاتورة ─────────────────
+    try:
+        for v in Voucher.query.filter_by(
+            reference_type='invoice', reference_id=invoice_id
+        ).all():
+            if getattr(v, 'created_by', None) is not None:
+                v.created_by = new_name
+            if getattr(v, 'approved_by', None) is not None:
+                v.approved_by = new_name
+            # قيود السند
+            if v.journal_entry_id:
+                vje = JournalEntry.query.get(v.journal_entry_id)
+                if vje:
+                    if getattr(vje, 'created_by', None) is not None:
+                        vje.created_by = new_name
+                    if getattr(vje, 'posted_by', None) is not None:
+                        vje.posted_by = new_name
+            for vje2 in JournalEntry.query.filter_by(
+                reference_type='voucher', reference_id=v.id
+            ).all():
+                if getattr(vje2, 'created_by', None) is not None:
+                    vje2.created_by = new_name
+                if getattr(vje2, 'posted_by', None) is not None:
+                    vje2.posted_by = new_name
+    except Exception:
+        pass
+
+    try:
+        actor = _actor_username()
+        db.session.add(AuditLog(
+            action='reassign_employee',
+            entity_type='invoice',
+            entity_id=invoice_id,
+            actor=actor,
+            details=f'تغيير منشئ {invoice.invoice_number}: {old_name} ← {new_name} (شامل القيود والسندات)',
+        ))
+    except Exception:
+        pass
+
+    db.session.commit()
+    return jsonify({'success': True, 'new_employee': {'id': new_emp.id, 'name': new_emp.name}})
+
+
+
 @api.route('/invoices/<int:invoice_id>/payments/<int:payment_id>/correct-method', methods=['POST'])
 @require_admin
 def correct_invoice_payment_method(invoice_id: int, payment_id: int):
@@ -9833,6 +9968,99 @@ def list_safe_box_balances():
         },
         'count': len(results),
     })
+
+
+@api.route('/safe-boxes/stones-balance', methods=['GET'])
+@require_permission('safe_boxes.view')
+def safe_boxes_stones_balance():
+    """رصيد الفصوص لكل خزينة ذهب مع تفصيل العيار.
+
+    المنطق:
+    1. لكل SBT بوزن فصوص > 0، إذا كانت حقول العيار المخصصة (stones_18k..24k) مُعبّأة → استخدمها.
+    2. إذا لم تكن مُعبّأة (بيانات قديمة) → استنتج العيار من حقول الذهب (weight_18k..24k) في نفس الـ SBT.
+    """
+    safe_box_id_filter = request.args.get('safe_box_id', type=int)
+
+    try:
+        q = db.session.query(SafeBoxTransaction).filter(
+            SafeBoxTransaction.stones_weight > 0
+        )
+        if safe_box_id_filter:
+            q = q.filter(SafeBoxTransaction.safe_box_id == safe_box_id_filter)
+        sbts = q.all()
+    except Exception:
+        return jsonify({'safes': []})
+
+    # تجميع البيانات لكل خزينة
+    safe_totals = {}   # safe_box_id -> {'total': float, '18': float, ...}
+
+    for sbt in sbts:
+        sid = sbt.safe_box_id
+        if sid not in safe_totals:
+            safe_totals[sid] = {'total': 0.0, '18': 0.0, '21': 0.0, '22': 0.0, '24': 0.0}
+
+        sw = float(sbt.stones_weight or 0.0)
+        sign = 1.0 if sbt.direction == 'in' else -1.0
+        safe_totals[sid]['total'] += sign * sw
+
+        # هل البيانات المفصّلة بالعيار موجودة؟
+        s18 = float(getattr(sbt, 'stones_18k', 0.0) or 0.0)
+        s21 = float(getattr(sbt, 'stones_21k', 0.0) or 0.0)
+        s22 = float(getattr(sbt, 'stones_22k', 0.0) or 0.0)
+        s24 = float(getattr(sbt, 'stones_24k', 0.0) or 0.0)
+        karat_sum = s18 + s21 + s22 + s24
+
+        if karat_sum > 0.0001:
+            # بيانات مفصّلة موجودة → استخدمها مباشرة
+            safe_totals[sid]['18'] += sign * s18
+            safe_totals[sid]['21'] += sign * s21
+            safe_totals[sid]['22'] += sign * s22
+            safe_totals[sid]['24'] += sign * s24
+        elif sw > 0.0001:
+            # بيانات قديمة → استنتج العيار من أوزان الذهب في نفس الـ SBT
+            w18 = float(getattr(sbt, 'weight_18k', 0.0) or 0.0)
+            w21 = float(getattr(sbt, 'weight_21k', 0.0) or 0.0)
+            w22 = float(getattr(sbt, 'weight_22k', 0.0) or 0.0)
+            w24 = float(getattr(sbt, 'weight_24k', 0.0) or 0.0)
+            gold_total = w18 + w21 + w22 + w24
+
+            if gold_total > 0.0001:
+                # توزيع الفصوص بنسبة الذهب في كل عيار
+                safe_totals[sid]['18'] += sign * sw * (w18 / gold_total)
+                safe_totals[sid]['21'] += sign * sw * (w21 / gold_total)
+                safe_totals[sid]['22'] += sign * sw * (w22 / gold_total)
+                safe_totals[sid]['24'] += sign * sw * (w24 / gold_total)
+            else:
+                # لا يوجد معلومات عيار → يُضاف للإجمالي فقط بدون تفصيل
+                pass
+
+    # بناء الاستجابة
+    all_safe_ids = list(safe_totals.keys())
+    safes_map = {}
+    if all_safe_ids:
+        try:
+            safes_map = {s.id: s for s in SafeBox.query.filter(SafeBox.id.in_(all_safe_ids)).all()}
+        except Exception:
+            pass
+
+    results = []
+    for sid, data in safe_totals.items():
+        total = round(data['total'], 6)
+        if total <= 0.0001:
+            continue
+        results.append({
+            'safe_box_id':    sid,
+            'safe_box_name':  safes_map[sid].name if sid in safes_map else str(sid),
+            'stones_balance': total,
+            'by_karat': {
+                '18': round(max(0.0, data['18']), 6),
+                '21': round(max(0.0, data['21']), 6),
+                '22': round(max(0.0, data['22']), 6),
+                '24': round(max(0.0, data['24']), 6),
+            },
+        })
+
+    return jsonify({'safes': results})
 
 
 @api.route('/safe-boxes/reconciliation', methods=['GET'])
@@ -13167,15 +13395,12 @@ def add_invoice():
             settled_gold_safe_box_id = None
 
         if settled_gold_weight > 0 and settled_gold_karat > 0:
-            # Resolve/override the target gold safe based on Settings.
-            # - If employee gold safes are enabled: prefer employee gold safe (if set)
-            # - If disabled: use main scrap gold safe
+            # Resolve the target gold safe — always use employee vault when available.
             try:
                 srow = Settings.query.first()
             except Exception:
                 srow = None
 
-            employee_gold_enabled = bool(getattr(srow, 'employee_gold_safes_enabled', False)) if srow else False
             emp_gold_safe_id = None
             try:
                 emp = getattr(new_invoice, 'employee', None)
@@ -13187,10 +13412,8 @@ def add_invoice():
             except Exception:
                 emp_gold_safe_id = None
 
-            # Enforce rule:
-            # - If employee gold safes are enabled and employee has a gold safe -> always use it.
-            # - Otherwise fall back to main scrap gold safe (customer-gold intake location).
-            if employee_gold_enabled and emp_gold_safe_id:
+            # الأولوية: خزينة ذهب الموظف دائماً (بغض النظر عن employee_gold_safes_enabled)
+            if emp_gold_safe_id:
                 settled_gold_safe_box_id = emp_gold_safe_id
             elif settled_gold_safe_box_id in (None, '', False):
                 settled_gold_safe_box_id = getattr(srow, 'main_scrap_gold_safe_box_id', None) if srow else None
@@ -13203,15 +13426,6 @@ def add_invoice():
                     'error': 'missing_or_invalid_gold_safe_box',
                     'message': 'يجب تحديد خزينة ذهب صحيحة للمقايضة/السداد بالذهب',
                 }), 400
-
-            # If employee gold safes are disabled, prevent routing into employee gold safe.
-            try:
-                if (not employee_gold_enabled) and emp_gold_safe_id and int(settled_gold_safe_box_id) == int(emp_gold_safe_id):
-                    main_scrap = getattr(srow, 'main_scrap_gold_safe_box_id', None) if srow else None
-                    if main_scrap not in (None, '', 0, '0', False):
-                        settled_gold_safe_box_id = int(main_scrap)
-            except Exception:
-                pass
 
             gold_safe = SafeBox.query.get(settled_gold_safe_box_id)
             if not gold_safe:
@@ -13485,9 +13699,18 @@ def add_invoice():
         # حساب وزن الفصوص الإجمالي من الأصناف — للتتبع المعلوماتي في SafeBoxTransaction فقط
         # لا يدخل في القيود المحاسبية
         _invoice_stones_weight = 0.0
+        _invoice_stones_by_karat = {'18': 0.0, '21': 0.0, '22': 0.0, '24': 0.0}
         if str(invoice_type).strip() == 'شراء من عميل' and not has_valid_karat_lines:
             for _item_d in (data.get('items') or []):
-                _invoice_stones_weight += _to_float(_item_d.get('stones_weight'), 0.0)
+                _sw = _to_float(_item_d.get('stones_weight'), 0.0)
+                _invoice_stones_weight += _sw
+                if _sw > 0:
+                    try:
+                        _k = str(int(float(_item_d.get('karat') or 0)))
+                        if _k in _invoice_stones_by_karat:
+                            _invoice_stones_by_karat[_k] += _sw
+                    except Exception:
+                        pass
 
         # --- Customer scrap purchase/return: move physical gold through a gold safe (employee or main) ---
         # Also expose the resolved gold safe account for weight journal entries.
@@ -13618,6 +13841,10 @@ def add_invoice():
                                 'weight_22k': float(gold_by_karat.get('22', 0.0) or 0.0),
                                 'weight_24k': float(gold_by_karat.get('24', 0.0) or 0.0),
                                 'stones_weight': round(_invoice_stones_weight, 6),
+                                'stones_18k':   round(_invoice_stones_by_karat.get('18', 0.0), 6),
+                                'stones_21k':   round(_invoice_stones_by_karat.get('21', 0.0), 6),
+                                'stones_22k':   round(_invoice_stones_by_karat.get('22', 0.0), 6),
+                                'stones_24k':   round(_invoice_stones_by_karat.get('24', 0.0), 6),
                             }
                             has_any_weight = any(v > 0 for v in weight_kwargs.values())
                             if has_any_weight:
@@ -21529,12 +21756,15 @@ def get_home_leaderboard():
 
     employee_ids = [int(r.employee_id) for r in rows if getattr(r, 'employee_id', None) is not None]
     name_map = {}
+    photo_map = {}
     if employee_ids:
         try:
             emps = Employee.query.filter(Employee.id.in_(employee_ids)).all()
-            name_map = {int(e.id): (e.name or '').strip() for e in emps}
+            name_map  = {int(e.id): (e.name or '').strip() for e in emps}
+            photo_map = {int(e.id): getattr(e, 'photo', None) for e in emps}
         except Exception:
-            name_map = {}
+            name_map  = {}
+            photo_map = {}
 
     # For points metric, we may have negative actor ids (fallback to posted_by).
     if metric == 'points':
@@ -21561,6 +21791,7 @@ def get_home_leaderboard():
         ranking_raw.append({
             'id': emp_id,
             'name': name_map.get(emp_id) or f'Employee {emp_id}',
+            'photo': photo_map.get(emp_id),
             'count': count_value,
             'weight': round(weight_value, 3),
             'points': int(employee_points_map.get(emp_id, 0) or 0),
@@ -21602,6 +21833,7 @@ def get_home_leaderboard():
         ranking.append({
             'id': it['id'],
             'name': it['name'],
+            'photo': it.get('photo'),
             'count': int(it.get('count') or 0),
             'score': round(score_value, 3 if metric_key == 'weight_g' else 0),
             'sales_amount': round(_to_float(it.get('sales_amount', 0.0), 0.0), 2),
@@ -23834,6 +24066,21 @@ def delete_employee(employee_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Failed to delete employee: {str(e)}'}), 500
+
+
+@api.route('/employees/<int:employee_id>/photo', methods=['PATCH'])
+@require_permission('employees.edit')
+def update_employee_photo(employee_id):
+    """رفع أو حذف صورة الموظف. الجسم: {'photo': '<base64 data URI>'} أو {'photo': null}."""
+    employee = Employee.query.get_or_404(employee_id)
+    data = request.get_json(silent=True) or {}
+    photo = data.get('photo')  # None = حذف الصورة
+    if photo is not None and not isinstance(photo, str):
+        return jsonify({'error': 'invalid_photo_format'}), 400
+    employee.photo = photo or None
+    employee.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'success': True, 'photo': employee.photo})
 
 
 @api.route('/employees/<int:employee_id>/toggle-active', methods=['POST'])
@@ -28671,6 +28918,33 @@ def create_safe_box_transfer_voucher():
 
         _append_safe_transactions_for_voucher(voucher, created_by=created_by)
 
+        # Stamp per-karat stones data onto SBTs (if provided)
+        if is_gold_transfer:
+            _st_raw = data.get('stones') or {}
+            _sf2 = lambda v: max(0.0, float(v or 0))
+            _st18 = _sf2(_st_raw.get('18k'))
+            _st21 = _sf2(_st_raw.get('21k'))
+            _st22 = _sf2(_st_raw.get('22k'))
+            _st24 = _sf2(_st_raw.get('24k'))
+            _st_total = _st18 + _st21 + _st22 + _st24
+            if _st_total > 0:
+                _sbts = SafeBoxTransaction.query.filter_by(
+                    ref_id=voucher.id, ref_type='voucher'
+                ).all()
+                for _sbt in _sbts:
+                    if _sbt.safe_box_id == from_safe.id and _sbt.direction == 'out':
+                        _sbt.stones_18k    = _st18
+                        _sbt.stones_21k    = _st21
+                        _sbt.stones_22k    = _st22
+                        _sbt.stones_24k    = _st24
+                        _sbt.stones_weight = _st_total
+                    elif _sbt.safe_box_id == to_safe.id and _sbt.direction == 'in':
+                        _sbt.stones_18k    = _st18
+                        _sbt.stones_21k    = _st21
+                        _sbt.stones_22k    = _st22
+                        _sbt.stones_24k    = _st24
+                        _sbt.stones_weight = _st_total
+
         db.session.commit()
 
         return jsonify({
@@ -29114,7 +29388,25 @@ def create_melting_renewal():
         voucher.journal_entry_id = journal_entry.id
 
         # stones_weight: معلوماتي فقط — لا يؤثر على رصيد الوزن الذهبي
-        _stones_kw = {'stones_weight': round(stones_weight, 6)} if stones_weight > 0 else {}
+        _stones_raw = data.get('stones') or {}
+        _sf = lambda v: max(0.0, float(v or 0))
+        _s18 = _sf(_stones_raw.get('18k'))
+        _s21 = _sf(_stones_raw.get('21k'))
+        _s22 = _sf(_stones_raw.get('22k'))
+        _s24 = _sf(_stones_raw.get('24k'))
+        _s_total = _s18 + _s21 + _s22 + _s24
+        if _s_total > 0:
+            _stones_kw = {
+                'stones_weight': round(_s_total, 6),
+                'stones_18k': round(_s18, 6),
+                'stones_21k': round(_s21, 6),
+                'stones_22k': round(_s22, 6),
+                'stones_24k': round(_s24, 6),
+            }
+        elif stones_weight > 0:
+            _stones_kw = {'stones_weight': round(stones_weight, 6)}
+        else:
+            _stones_kw = {}
 
         # SafeBoxTransaction: خروج من المصدر (وزن صافي + فصوص معلوماتي)
         db.session.add(SafeBoxTransaction(

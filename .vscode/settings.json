@@ -6,6 +6,17 @@
     ],
     "chat.tools.terminal.autoApprove": {
         "cd": true,
-        "/usr/bin/python3": true
+        "/usr/bin/python3": true,
+        "grep": true,
+        "head": true,
+        "/Users/salehalabbadi/yasargold/backend/venv/bin/python": true,
+        "/^curl -s http://localhost:8001/api/health 2>/dev/null \\| head -c 200$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^curl -s http://localhost:8001/api/gold_price 2>/dev/null \\| head -c 100$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

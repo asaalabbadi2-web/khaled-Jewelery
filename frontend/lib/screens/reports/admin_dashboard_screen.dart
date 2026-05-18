@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_service.dart';
+import '../../app_events.dart';
 import '../../providers/settings_provider.dart';
 import '../../utils/currency_utils.dart' as cu;
 import '../../theme/app_theme.dart';
@@ -16,8 +17,8 @@ import '../audit_log_screen.dart';
 import '../safe_boxes_screen.dart';
 import 'gold_price_history_report_screen.dart';
 import 'safe_box_hero_details_screen.dart';
-import 'system_alerts_screen.dart';
 import 'widgets/dashboard_summary_tabs_card.dart';
+import '../../widgets/alerts_dialog.dart';
 
 enum _TimeRange { today, month, year }
 
@@ -54,6 +55,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final Set<String> _dismissedAlertKeys = {};
   /// Live OverlayEntry for the floating toast stack (null = not shown).
   OverlayEntry? _toastOverlayEntry;
+
+  // ── Alert badge (pending approvals + system alerts) ──────────────────────
+  int _alertsBadgeCount = 0;
 
   // ── Vault ordering ────────────────────────────────────────────────────────
   /// Local ordered list of safe-box ids (persisted in SharedPreferences).
@@ -105,6 +109,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _weightFormat = NumberFormat('#,##0.000');
     _loadVaultOrder();
     _loadData();
+    AppEvents.vaultRefreshSignal.addListener(_onVaultRefresh);
+  }
+
+  void _onVaultRefresh() {
+    if (mounted) _loadData();
+  }
+
+  @override
+  void dispose() {
+    AppEvents.vaultRefreshSignal.removeListener(_onVaultRefresh);
+    _toastOverlayEntry?.remove();
+    _toastOverlayEntry = null;
+    _vaultScrollController.dispose();
+    super.dispose();
   }
 
   // ── Vault order persistence ──────────────────────────────────────────────
@@ -168,14 +186,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   @override
-  void dispose() {
-    _toastOverlayEntry?.remove();
-    _toastOverlayEntry = null;
-    _vaultScrollController.dispose();
-    super.dispose();
-  }
-
-  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
@@ -236,6 +246,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
+        _refreshAlertsBadge();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _updateToastOverlay();
         });
@@ -373,6 +384,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } finally {
       if (mounted) setState(() => _gramProfitLoading = false);
     }
+  }
+
+  void _refreshAlertsBadge() {
+    if (!mounted) return;
+    final alerts = (_response?['alerts'] as Map<String, dynamic>?) ?? {};
+    final criticalBar = (alerts['critical_bar'] as List?) ?? [];
+    final criticalCount = alerts['critical_unreviewed_count'];
+    final unpostedCount = alerts['unposted_invoices_count'];
+    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
+    final cashDiff = lastShift?['cash_difference'];
+    final goldDiff = lastShift?['gold_pure_24k_difference'];
+
+    int count = criticalBar.length;
+    if ((criticalCount is num ? criticalCount.toInt() : 0) > 0) count++;
+    if ((cashDiff is num ? cashDiff.toDouble() : 0.0).abs() > 0.01) count++;
+    if ((goldDiff is num ? goldDiff.toDouble() : 0.0).abs() > 0.001) count++;
+    if ((unpostedCount is num ? unpostedCount.toInt() : 0) > 0) count++;
+
+    setState(() => _alertsBadgeCount = count);
   }
 
   void _updateToastOverlay() {
@@ -677,19 +707,47 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
               ),
               const Spacer(),
-              IconButton(
-                icon: Icon(Icons.notifications_outlined, size: _s(22)),
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => SystemAlertsScreen(
+              Stack(
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.notifications_outlined, size: _s(22)),
+                    onPressed: () async {
+                      await AlertsDialog.show(
+                        context: context,
                         api: widget.api,
                         isArabic: widget.isArabic,
+                        onCountChanged: () {
+                          _loadData();
+                          _refreshAlertsBadge();
+                        },
+                      );
+                      _loadData();
+                    },
+                  ),
+                  if (_alertsBadgeCount > 0)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        width: 16,
+                        height: 16,
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: Text(
+                            _alertsBadgeCount > 9 ? '9+' : '$_alertsBadgeCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  );
-                  _loadData();
-                },
+                ],
               ),
               IconButton(
                 icon: Icon(Icons.refresh, size: _s(22)),

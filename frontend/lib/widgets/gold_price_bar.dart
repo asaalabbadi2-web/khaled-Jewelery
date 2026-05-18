@@ -13,13 +13,8 @@ class GoldPriceBar extends StatelessWidget {
   final bool isUpdating;
   final VoidCallback? onRefresh;
 
-  /// بيانات آخر 24 ساعة للـ sparkline المتحرك
   final List<SparklinePoint> sparklinePoints;
-
-  /// عند الضغط على الـ sparkline (مثلاً يفتح تقرير أسعار الذهب)
   final VoidCallback? onSparklineTap;
-
-  /// لغة العرض
   final bool isArabic;
 
   const GoldPriceBar({
@@ -240,110 +235,104 @@ class GoldPriceBar extends StatelessWidget {
           ),
         ],
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final w = constraints.maxWidth;
-          final showSparkline = w > 320;
-          return Row(
-            children: [
-              Container(
-                padding: const EdgeInsetsDirectional.only(start: 12),
-                decoration: BoxDecoration(
-                  border: Border(
-                    left: BorderSide(
-                      color: palette.primaryGold.withValues(alpha: 0.4),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsetsDirectional.only(start: 12),
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: palette.primaryGold.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: palette.primaryGold,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '${mainKarat}K',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        fontFamily: 'Cairo',
+                      ),
                     ),
                   ),
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: palette.primaryGold,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text(
-                          '${mainKarat}K',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 12,
-                            fontFamily: 'Cairo',
-                          ),
-                        ),
-                      ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'الأساسي',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: palette.darkGold,
+                      fontFamily: 'Cairo',
                     ),
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'الأساسي',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          color: palette.darkGold,
-                          fontFamily: 'Cairo',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                flex: 5,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _buildPrimaryValue(
-                        palette: palette,
-                        label: 'بيع / جم',
-                        value: sell,
-                        unit: 'ريال',
-                        color: AppColors.success,
-                        changePercent: _formatPercent(changePercent),
-                        isUp: isUp,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildPrimaryValue(
-                        palette: palette,
-                        label: 'شراء / جم',
-                        value: buy,
-                        unit: 'ريال',
-                        color: const Color(0xFF5E35B1),
-                        changePercent: _formatPercent(changePercent),
-                        isUp: isUp,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (showSparkline) ...[
-                const SizedBox(width: 10),
-                Expanded(
-                  flex: 3,
-                  child: GoldSparklineEnhanced(
-                    points: sparklinePoints,
-                    openingPrice: goldPriceOpening,
-                    isArabic: isArabic,
-                    height: 40,
-                    onTap: onSparklineTap,
                   ),
                 ),
               ],
-            ],
-          );
-        },
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildPrimaryValue(
+                    palette: palette,
+                    label: 'بيع / جم',
+                    value: sell,
+                    unit: 'ريال',
+                    color: AppColors.success,
+                    changePercent: _formatPercent(changePercent),
+                    isUp: isUp,
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: _buildPrimaryValue(
+                    palette: palette,
+                    label: 'شراء / جم',
+                    value: buy,
+                    unit: 'ريال',
+                    color: const Color(0xFF5E35B1),
+                    changePercent: _formatPercent(changePercent),
+                    isUp: isUp,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          if (sparklinePoints.isNotEmpty) ...[
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 160,
+              child: GoldSparklineEnhanced(
+                points: sparklinePoints,
+                openingPrice: goldPriceOpening,
+                isArabic: isArabic,
+                height: 28,
+                onTap: onSparklineTap,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -373,22 +362,17 @@ class GoldPriceBar extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Flexible(
-              fit: FlexFit.loose,
-              child: Text(
-                value != null ? _formatPrice(value) : '—',
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 21,
-                  fontWeight: FontWeight.w900,
-                  color: color,
-                  fontFamily: 'Cairo',
-                  height: 1,
-                ),
+            Text(
+              value != null ? _formatPrice(value) : '—',
+              style: TextStyle(
+                fontSize: 21,
+                fontWeight: FontWeight.w900,
+                color: color,
+                fontFamily: 'Cairo',
+                height: 1,
               ),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: BoxDecoration(
@@ -628,3 +612,4 @@ class _GoldBarPalette {
   Color get divider => isDark ? const Color(0xFF3D3D3D) : const Color(0xFFE0E0E0);
   Color get border => isDark ? const Color(0xFF3D3D3D) : const Color(0xFFE0E0E0);
 }
+

@@ -32,6 +32,46 @@ class AuthProvider extends ChangeNotifier {
     return _currentUser?.username ?? '';
   }
 
+  /// صورة المستخدم — يبحث في صورة المستخدم المباشرة أولاً ثم صورة الموظف
+  String? get userPhoto =>
+      _currentUser?.photo?.isNotEmpty == true
+          ? _currentUser!.photo
+          : _currentUser?.employee?.photo;
+
+  /// تحديث الصورة محلياً بعد رفع ناجح
+  void _updateLocalPhoto(String? photoBase64) {
+    if (_currentUser == null) return;
+    // تحديث صورة المستخدم المباشرة
+    var updated = _currentUser!.copyWith(photo: photoBase64);
+    // تحديث صورة الموظف المرتبط أيضاً (إذا وُجد)
+    final emp = updated.employee;
+    if (emp != null) {
+      updated = updated.copyWith(
+        employee: EmployeeSummary(
+          id: emp.id,
+          name: emp.name,
+          employeeCode: emp.employeeCode,
+          goldSafeBoxId: emp.goldSafeBoxId,
+          cashSafeBoxId: emp.cashSafeBoxId,
+          photo: photoBase64,
+        ),
+      );
+    }
+    _currentUser = updated;
+    notifyListeners();
+    SharedPreferences.getInstance().then((prefs) {
+      if (_currentUser != null) {
+        prefs.setString(_storageKey, json.encode(_currentUser!.toStorageMap()));
+      }
+    });
+  }
+
+  /// رفع أو حذف صورة المستخدم — يعمل مع جميع المستخدمين بدون موظف مرتبط
+  Future<void> updateUserPhoto(ApiService api, String? photoBase64) async {
+    await api.updateCurrentUserPhoto(photoBase64);
+    _updateLocalPhoto(photoBase64);
+  }
+
   String get role => _currentUser?.role ?? '';
   String get roleDisplayName {
     switch (role) {

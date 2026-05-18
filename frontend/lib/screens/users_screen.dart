@@ -5,6 +5,7 @@ import '../api_service.dart';
 import '../models/app_user_model.dart';
 import '../models/employee_model.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/user_avatar_widget.dart';
 import 'package:provider/provider.dart';
 
 import 'permissions_management_screen.dart';
@@ -583,15 +584,18 @@ class _UsersScreenState extends State<UsersScreen> {
                             child: ListTile(
                               leading: Stack(
                                 children: [
-                                  CircleAvatar(
-                                    backgroundColor: statusColor.withValues(
-                                      alpha: 0.15,
-                                    ),
-                                    child: Icon(
-                                      _roleIcon(user.role),
-                                      color: statusColor,
-                                    ),
-                                  ),
+                                  user.employee?.photo != null
+                                      ? EmployeeAvatarWidget(
+                                          name: user.employee!.name.isNotEmpty
+                                              ? user.employee!.name
+                                              : user.username,
+                                          photoBase64: user.employee!.photo,
+                                          radius: 20,
+                                        )
+                                      : CircleAvatar(
+                                          backgroundColor: statusColor.withValues(alpha: 0.15),
+                                          child: Icon(_roleIcon(user.role), color: statusColor),
+                                        ),
                                   if (!user.isActive)
                                     Positioned(
                                       right: 0,

@@ -14,6 +14,7 @@ class AppUserModel {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final EmployeeSummary? employee;
+  final String? photo;
 
   const AppUserModel({
     required this.id,
@@ -31,6 +32,7 @@ class AppUserModel {
     required this.createdAt,
     required this.updatedAt,
     required this.employee,
+    this.photo,
   });
 
   factory AppUserModel.fromJson(Map<String, dynamic> json) {
@@ -60,6 +62,7 @@ class AppUserModel {
       employee: json['employee'] != null
           ? EmployeeSummary.fromJson(json['employee'] as Map<String, dynamic>)
           : null,
+      photo: json['photo'] as String?,
     );
   }
 
@@ -100,6 +103,7 @@ class AppUserModel {
       'created_at': createdAt?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
       'employee': employee?.toMap(),
+      'photo': photo,
     };
 
     data.removeWhere((key, value) => value == null);
@@ -133,6 +137,7 @@ class AppUserModel {
       employee: json['employee'] is Map<String, dynamic>
           ? EmployeeSummary.fromJson(json['employee'] as Map<String, dynamic>)
           : null,
+      photo: json['photo'] as String?,
     );
   }
 
@@ -152,6 +157,7 @@ class AppUserModel {
     DateTime? createdAt,
     DateTime? updatedAt,
     EmployeeSummary? employee,
+    Object? photo = _sentinel,
   }) {
     return AppUserModel(
       id: id ?? this.id,
@@ -169,8 +175,11 @@ class AppUserModel {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       employee: employee ?? this.employee,
+      photo: photo == _sentinel ? this.photo : photo as String?,
     );
   }
+
+  static const Object _sentinel = Object();
 
   static DateTime? _parseDateTime(dynamic value) {
     if (value == null || value == '') {
@@ -186,6 +195,7 @@ class EmployeeSummary {
   final String employeeCode;
   final int? goldSafeBoxId;
   final int? cashSafeBoxId;
+  final String? photo; // base64 data URI
 
   const EmployeeSummary({
     required this.id,
@@ -193,6 +203,7 @@ class EmployeeSummary {
     required this.employeeCode,
     this.goldSafeBoxId,
     this.cashSafeBoxId,
+    this.photo,
   });
 
   factory EmployeeSummary.fromJson(Map<String, dynamic> json) {
@@ -202,6 +213,7 @@ class EmployeeSummary {
       employeeCode: json['employee_code'] as String? ?? '',
       goldSafeBoxId: json['gold_safe_box_id'] as int?,
       cashSafeBoxId: json['cash_safe_box_id'] as int?,
+      photo: json['photo'] as String?,
     );
   }
 
@@ -212,6 +224,7 @@ class EmployeeSummary {
       'employee_code': employeeCode,
       'gold_safe_box_id': goldSafeBoxId,
       'cash_safe_box_id': cashSafeBoxId,
+      'photo': photo,
     };
   }
 }

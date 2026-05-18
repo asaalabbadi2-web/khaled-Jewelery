@@ -13,6 +13,7 @@ import '../providers/auth_provider.dart';
 import '../providers/sales_race_refresh_provider.dart';
 import '../models/quick_action_item.dart';
 import '../widgets/gold_price_bar.dart';
+import '../widgets/user_avatar_widget.dart';
 import '../widgets/gold_price_ticker_bar.dart';
 import '../widgets/gold_sparkline_enhanced.dart';
 import '../widgets/app_logo.dart';
@@ -1753,13 +1754,40 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             ),
             Consumer<AuthProvider>(
               builder: (context, auth, _) {
-                final displayName = auth.username.isNotEmpty
-                    ? auth.username
-                    : (auth.fullName.isEmpty
-                          ? (isAr ? 'حساب المستخدم' : 'Account')
-                          : auth.fullName);
-                return PopupMenuButton<String>(
-                  tooltip: displayName,
+                // يفضل الاسم الكامل على اسم المستخدم للعرض
+                final fullName = auth.fullName;
+                final username = auth.username;
+                final displayName = fullName.isNotEmpty
+                    ? fullName
+                    : (username.isNotEmpty
+                        ? username
+                        : (isAr ? 'حساب المستخدم' : 'Account'));
+                final isDark = Theme.of(context).brightness == Brightness.dark;
+                final photoBase64 = auth.userPhoto;
+
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(width: 4),
+                    // ─── الأفاتار: مستقل تماماً عن الـ PopupMenuButton ───
+                    SizedBox(
+                      height: kToolbarHeight,
+                      child: Center(
+                        child: UserAvatarWidget(
+                          displayName: displayName,
+                          photoBase64: photoBase64,
+                          radius: 16,
+                          backgroundColor: isDark ? AppColors.primaryGold : Colors.white,
+                          foregroundColor: isDark ? const Color(0xFF1A1A1A) : AppColors.darkGold,
+                          editable: true,
+                          onUpload: (base64) => auth.updateUserPhoto(api, base64),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // ─── الـ PopupMenuButton: يحتوي فقط على الاسم ───
+                    PopupMenuButton<String>(
+                  tooltip: '',
                   offset: const Offset(0, 48),
                   child: SizedBox(
                     height: kToolbarHeight,
@@ -1767,42 +1795,47 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const SizedBox(width: 6),
+                          // اسم العرض (الاسم الكامل) + اسم المستخدم أصغر
                           ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 110),
-                            child: Text(
-                              displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              softWrap: false,
-                              style: TextStyle(
-                                color: Theme.of(context).brightness == Brightness.dark
-                                    ? AppColors.primaryGold
-                                    : Colors.white,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                                fontFamily: 'Cairo',
-                              ),
+                            constraints: const BoxConstraints(maxWidth: 120),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  displayName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: isDark ? AppColors.primaryGold : Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                    fontFamily: 'Cairo',
+                                  ),
+                                ),
+                                if (username.isNotEmpty && username != displayName)
+                                  Text(
+                                    '@$username',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: (isDark ? AppColors.primaryGold : Colors.white)
+                                          .withValues(alpha: 0.65),
+                                      fontSize: 10,
+                                      fontFamily: 'Cairo',
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          CircleAvatar(
-                            radius: 15,
-                            backgroundColor: Colors.white,
-                            child: Text(
-                              displayName.isNotEmpty
-                                  ? displayName[0].toUpperCase()
-                                  : '?',
-                              style: TextStyle(
-                                color: Theme.of(context).brightness == Brightness.dark
-                                    ? const Color(0xFF1A1A1A)
-                                    : AppColors.darkGold,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 12,
-                              ),
-                            ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.arrow_drop_down,
+                            color: (isDark ? AppColors.primaryGold : Colors.white)
+                                .withValues(alpha: 0.7),
+                            size: 18,
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 4),
                         ],
                       ),
                     ),
@@ -1947,7 +1980,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       return;
                     }
                   },
-                );
+                ),   // PopupMenuButton
+                  ],  // Row children
+                );    // Row
               },
             ),
           ],
@@ -2337,6 +2372,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     Widget buildRow(Map row, int index) {
       final name = (row['name'] ?? '').toString();
+      final photo = row['photo'] as String?;
       final score = (row['score'] as num?)?.toDouble() ?? 0.0;
       final share = (row['share'] as num?)?.toDouble() ?? 0.0;
       final count = (row['count'] as num?)?.toInt() ?? 0;
@@ -2380,15 +2416,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         _ => isAr ? 'جم' : 'g',
       };
       final numberFormat = NumberFormat('#,##0', 'en');
-      final avatarText = name.trim().isEmpty
-          ? '?'
-          : name
-                .trim()
-                .split(RegExp(r'\s+'))
-                .where((part) => part.isNotEmpty)
-                .take(2)
-                .map((part) => part.characters.first)
-                .join();
 
       bool hovered = false;
       return StatefulBuilder(
@@ -2454,27 +2481,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 _buildRankBadge(index, medalAccent),
                 const SizedBox(width: 8),
                 // Avatar
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: medalAccent.withValues(alpha: 0.10),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: medalAccent.withValues(alpha: 0.18),
-                    ),
-                  ),
-                  child: Center(
-                    child: Text(
-                      avatarText,
-                      style: TextStyle(
-                        fontFamily: 'Cairo',
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        color: medalAccent,
-                      ),
-                    ),
-                  ),
+                EmployeeAvatarWidget(
+                  name: name,
+                  photoBase64: photo,
+                  radius: 19,
                 ),
                 const SizedBox(width: 10),
                 // Employee info

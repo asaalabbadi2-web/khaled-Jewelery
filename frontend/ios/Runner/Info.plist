@@ -46,6 +46,10 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>نحتاج للوصول إلى الكاميرا لمسح الباركود والتعرف على الأصناف</string>
+	<string>نحتاج للوصول إلى الكاميرا لمسح الباركود والتعرف على الأصناف، وكذلك لالتقاط صورة الملف الشخصي</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>نحتاج للوصول إلى مكتبة الصور لاختيار صورة الملف الشخصي</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>نحتاج إلى إذن لحفظ الصور في مكتبة الصور</string>
 </dict>
 </plist>

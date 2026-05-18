@@ -105,7 +105,7 @@ class _OperationFormState extends State<_OperationForm> {
 
   // ── بيانات محملة ─────────────────────────────────────────────
   List<SafeBoxModel> _safes = [];
-  Map<int, double> _stonesMap = {}; // safe_box_id → stones grams
+  Map<int, Map<String, double>> _stonesMap = {}; // safe_box_id → {total, 18, 21, 22, 24}
   List<Map<String, dynamic>> _wageAccounts = [];
   bool _loading = true;
 
@@ -160,7 +160,7 @@ class _OperationFormState extends State<_OperationForm> {
       ]);
 
       final safes = results[0] as List<SafeBoxModel>;
-      final stones = results[1] as Map<int, double>;
+      final stones = results[1] as Map<int, Map<String, double>>;
       final accounts = results[2] as List;
       final prefs = results[3] as SharedPreferences;
 
@@ -261,7 +261,11 @@ class _OperationFormState extends State<_OperationForm> {
   }
 
   double _stonesFor(int? safeId) =>
-      safeId == null ? 0.0 : (_stonesMap[safeId] ?? 0.0);
+      safeId == null ? 0.0 : (_stonesMap[safeId]?['total'] ?? 0.0);
+
+  Map<String, double> _stonesInfoFor(int? safeId) => safeId == null
+      ? const {'total': 0.0, '18': 0.0, '21': 0.0, '22': 0.0, '24': 0.0}
+      : (_stonesMap[safeId] ?? const {'total': 0.0, '18': 0.0, '21': 0.0, '22': 0.0, '24': 0.0});
 
   // ── إدارة الأسطر ─────────────────────────────────────────────
   void _addLine() {
@@ -564,7 +568,7 @@ class _OperationFormState extends State<_OperationForm> {
                     line: _lines[i],
                     availableKarats: _availableKarats,
                     goldAvailable: (k) => _goldAvailable(_fromSafeId, k),
-                    stonesAvailable: _stonesFor(_fromSafeId),
+                    stonesInfo: _stonesInfoFor(_fromSafeId),
                     canRemove: _lines.length > 1,
                     onRemove: () => _removeLine(i),
                     onChanged: () => setState(() {}),
@@ -714,7 +718,7 @@ class _WeightLineRow extends StatefulWidget {
   final _WeightLine line;
   final List<int> availableKarats;
   final double Function(int karat) goldAvailable;
-  final double stonesAvailable;
+  final Map<String, double> stonesInfo;
   final bool canRemove;
   final VoidCallback onRemove;
   final VoidCallback onChanged;
@@ -724,7 +728,7 @@ class _WeightLineRow extends StatefulWidget {
     required this.line,
     required this.availableKarats,
     required this.goldAvailable,
-    required this.stonesAvailable,
+    required this.stonesInfo,
     required this.canRemove,
     required this.onRemove,
     required this.onChanged,
@@ -861,7 +865,8 @@ class _WeightLineRowState extends State<_WeightLineRow> {
             child: _InlineBalance(
               karat: widget.line.karat,
               goldAvail: avail,
-              stonesAvail: widget.stonesAvailable,
+              stonesAvail: widget.stonesInfo['${widget.line.karat}'] ?? 0.0,
+              stonesTotal: widget.stonesInfo['total'] ?? 0.0,
               over: over,
               cs: cs,
             ),
@@ -878,7 +883,8 @@ class _WeightLineRowState extends State<_WeightLineRow> {
 class _InlineBalance extends StatelessWidget {
   final int karat;
   final double goldAvail;
-  final double stonesAvail;
+  final double stonesAvail;  // فصوص خاصة بهذا العيار
+  final double stonesTotal;  // إجمالي الفصوص في الخزينة
   final bool over;
   final ColorScheme cs;
 
@@ -886,6 +892,7 @@ class _InlineBalance extends StatelessWidget {
     required this.karat,
     required this.goldAvail,
     required this.stonesAvail,
+    required this.stonesTotal,
     required this.over,
     required this.cs,
   });
@@ -898,8 +905,9 @@ class _InlineBalance extends StatelessWidget {
 
     return Wrap(
       spacing: 10,
+      runSpacing: 4,
       children: [
-        // ذهب متاح
+        // ذهب متاح لهذا العيار
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -915,20 +923,23 @@ class _InlineBalance extends StatelessWidget {
             ),
           ],
         ),
-        // فصوص
-        if (stonesAvail > 0)
+        // فصوص — عرض مدمج (عيار محدد أو إجمالي)
+        if (stonesAvail > 0.0001 || stonesTotal > 0.0001)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.diamond_outlined,
-                size: 12,
-                color: Colors.purple,
-              ),
+              const Icon(Icons.diamond_outlined, size: 11, color: Color(0xFFB56A2F)),
               const SizedBox(width: 3),
               Text(
-                'فصوص: ${stonesAvail.toStringAsFixed(3)} جم',
-                style: const TextStyle(fontSize: 11, color: Colors.purple),
+                stonesAvail > 0.0001
+                    ? '♦ ${stonesAvail.toStringAsFixed(3)} جم'
+                    : '♦ ${stonesTotal.toStringAsFixed(3)} جم',
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: stonesAvail > 0.0001
+                      ? const Color(0xFFB56A2F)
+                      : Colors.grey,
+                ),
               ),
             ],
           ),

@@ -407,6 +407,32 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
     }
   }
 
+  Future<void> _migrateScrapGold() async {
+    try {
+      final res = await _apiService.migrateScrapGoldToEmployeeSafes();
+      final moved = res['moved'] ?? 0;
+      if (!mounted) return;
+      _showSuccess('تم نقل $moved حركة لخزائن الموظفين الصحيحة');
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      _showError('فشل: $e');
+    }
+  }
+
+  Future<void> _syncOrphanEntries() async {
+    try {
+      final res = await _apiService.syncOrphanJournalEntries();
+      final fixed = res['fixed'] ?? 0;
+      if (!mounted) return;
+      _showSuccess('تم إصلاح $fixed قيد يتيم');
+      _loadUnpostedEntries();
+    } catch (e) {
+      if (!mounted) return;
+      _showError('فشل المزامنة: $e');
+    }
+  }
+
   Future<void> _saveSettings() async {
     try {
       // 🆕 Save core posting settings to BACKEND
@@ -2876,6 +2902,41 @@ class _PostingManagementScreenState extends State<PostingManagementScreen>
             ),
           ),
           const SizedBox(height: 16),
+
+          // Migrate scrap gold to correct employee safes
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _migrateScrapGold,
+              icon: const Icon(Icons.move_down_rounded, color: Colors.deepOrange),
+              label: const Text('نقل ذهب الكسر لخزائن الموظفين'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                foregroundColor: Colors.deepOrange,
+                side: const BorderSide(color: Colors.deepOrange),
+                textStyle: const TextStyle(fontSize: 16),
+              ),
+            ),
+          ),
+
+          // Sync Orphan Entries Button
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _syncOrphanEntries,
+              icon: const Icon(Icons.sync_problem, color: Colors.orange),
+              label: const Text('مزامنة القيود اليتيمة'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                foregroundColor: Colors.orange,
+                side: const BorderSide(color: Colors.orange),
+                textStyle: const TextStyle(fontSize: 16),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
 
           // Reset Button
           SizedBox(

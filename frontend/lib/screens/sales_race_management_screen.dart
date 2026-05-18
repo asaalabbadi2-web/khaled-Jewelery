@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../providers/auth_provider.dart';
 import '../providers/sales_race_refresh_provider.dart';
+import '../widgets/user_avatar_widget.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 
@@ -1009,6 +1010,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
           ...List.generate(rankingRows.length, (i) {
             final row = rankingRows[i];
             final name = (row['name'] ?? '').toString();
+            final photo = row['photo'] as String?;
             final share = (row['share'] as num?)?.toDouble() ?? 0.0;
             final salesAmount =
                 (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
@@ -1041,15 +1043,6 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
             final roleBadgeColor = i == 0
                 ? AppColors.darkGold
                 : colorScheme.onSurface.withValues(alpha: 0.62);
-            final avatarText = name.trim().isEmpty
-                ? '?'
-                : name
-                      .trim()
-                      .split(RegExp(r'\s+'))
-                      .where((part) => part.isNotEmpty)
-                      .take(2)
-                      .map((part) => part.characters.first)
-                      .join();
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -1111,25 +1104,10 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                   children: [
                     _buildRoyalRankBadge(i, medalAccent),
                     const SizedBox(width: 8),
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: medalAccent.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: medalAccent.withValues(alpha: 0.18),
-                        ),
-                      ),
-                      child: Text(
-                        avatarText,
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: medalAccent,
-                          fontWeight: FontWeight.w800,
-                          height: 2.0,
-                        ),
-                      ),
+                    EmployeeAvatarWidget(
+                      name: name,
+                      photoBase64: photo,
+                      radius: 21,
                     ),
                     const SizedBox(width: 12),
                     Expanded(

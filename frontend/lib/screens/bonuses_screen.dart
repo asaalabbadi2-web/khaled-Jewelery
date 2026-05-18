@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../api_service.dart';
 import '../models/employee_bonus_model.dart';
+import '../widgets/user_avatar_widget.dart';
 import '../models/safe_box_model.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
@@ -523,7 +524,7 @@ class _BonusesScreenState extends State<BonusesScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Row(
                   children: [
-                    _Avatar(name: b.employee?.fullName ?? '?', size: 48),
+                    _Avatar(name: b.employee?.fullName ?? '?', size: 48, photo: b.employee?.photo),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
@@ -1391,7 +1392,7 @@ class _BonusTile extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(children: [
-            _Avatar(name: bonus.employee?.fullName ?? '?', size: 42),
+            _Avatar(name: bonus.employee?.fullName ?? '?', size: 42, photo: bonus.employee?.photo),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -1445,30 +1446,16 @@ class _BonusTile extends StatelessWidget {
 class _Avatar extends StatelessWidget {
   final String name;
   final double size;
+  final String? photo;
 
-  const _Avatar({required this.name, required this.size});
+  const _Avatar({required this.name, required this.size, this.photo});
 
   @override
   Widget build(BuildContext context) {
-    final initials = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((p) => p.isNotEmpty)
-        .take(2)
-        .map((p) => p.characters.first)
-        .join();
-
-    return CircleAvatar(
+    return EmployeeAvatarWidget(
+      name: name,
+      photoBase64: photo,
       radius: size / 2,
-      backgroundColor: const Color(0xFFD4AF37).withValues(alpha: 0.15),
-      child: Text(
-        initials.toUpperCase(),
-        style: TextStyle(
-          color: const Color(0xFF8B6914),
-          fontWeight: FontWeight.bold,
-          fontSize: size * 0.35,
-        ),
-      ),
     );
   }
 }

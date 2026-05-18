@@ -620,10 +620,37 @@ def _resolve_gold_safe_for_invoice(invoice: Invoice, karat: int) -> SafeBox | No
     invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
     gold_type = (str(getattr(invoice, 'gold_type', '') or '').strip().lower() or 'new')
 
-    is_customer_scrap_purchase = (invoice_type == 'شراء من عميل' and gold_type == 'scrap')
+    is_customer_scrap_purchase = (invoice_type in ('شراء من عميل', 'مرتجع شراء') and gold_type == 'scrap')
     is_scrap_sale = (invoice_type in ('بيع', 'مرتجع بيع') and gold_type == 'scrap')
 
-    # Allow explicit invoice.safe_box_id override for gold if it points to an active gold safe.
+    # فواتير الكسر من العميل: خزينة الموظف دائماً تأخذ الأولوية القصوى.
+    # نتجاهل invoice.safe_box_id override هنا لأن الفاتورة قد تحمل safe_box_id نقدي أو خاطئ.
+    if is_customer_scrap_purchase:
+        emp = _resolve_employee_for_invoice(invoice, for_scrap_purchase=True)
+        try:
+            emp_gold = getattr(emp, 'gold_safe_box_id', None) if emp else None
+            if emp_gold not in (None, '', 0, '0', False):
+                sb = SafeBox.query.get(int(emp_gold))
+                if sb and (sb.safe_type or '').lower() == 'gold' and bool(getattr(sb, 'is_active', True)):
+                    return sb
+        except Exception:
+            pass
+        # fallback: صندوق الكسر الرئيسي
+        try:
+            scrap_sb_id = getattr(settings_row, 'main_scrap_gold_safe_box_id', None) if settings_row else None
+            if scrap_sb_id not in (None, '', 0, '0', False):
+                sb = SafeBox.query.get(int(scrap_sb_id))
+                if sb and bool(getattr(sb, 'is_active', True)):
+                    return sb
+        except Exception:
+            pass
+        # last resort: أي خزينة ذهب نشطة
+        try:
+            return SafeBox.get_gold_safe_by_karat(karat)
+        except Exception:
+            return None
+
+    # Allow explicit invoice.safe_box_id override for non-scrap-purchase invoices.
     try:
         inv_sb_id = getattr(invoice, 'safe_box_id', None)
         if inv_sb_id not in (None, '', 0, '0', False):
@@ -655,25 +682,8 @@ def _resolve_gold_safe_for_invoice(invoice: Invoice, karat: int) -> SafeBox | No
             pass
 
     if is_customer_scrap_purchase:
-        emp = _resolve_employee_for_invoice(invoice, for_scrap_purchase=True)
-        if bool(getattr(settings_row, 'employee_gold_safes_enabled', False)):
-            try:
-                emp_gold = getattr(emp, 'gold_safe_box_id', None) if emp else None
-                if emp_gold not in (None, '', 0, '0', False):
-                    sb = SafeBox.query.get(int(emp_gold))
-                    if sb and bool(getattr(sb, 'is_active', True)):
-                        return sb
-            except Exception:
-                pass
-
-        try:
-            scrap_sb_id = getattr(settings_row, 'main_scrap_gold_safe_box_id', None) if settings_row else None
-            if scrap_sb_id not in (None, '', 0, '0', False):
-                sb = SafeBox.query.get(int(scrap_sb_id))
-                if sb and bool(getattr(sb, 'is_active', True)):
-                    return sb
-        except Exception:
-            pass
+        # تمت معالجة هذا المسار مبكراً في أعلى الدالة — هذا الكود لن يُصل إليه أبداً
+        pass
 
     # Default: try configured sale gold safe
     try:
@@ -704,13 +714,24 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
     if not invoice or not getattr(invoice, 'id', None):
         return []
 
-    existing = (
-        SafeBoxTransaction.query.filter_by(ref_type='invoice_gold', ref_id=invoice.id)
-        .order_by(SafeBoxTransaction.id.desc())
-        .first()
-    )
-    if existing:
-        return []
+    # تحقق من الرصيد الصافي: إذا كان لا يزال موجباً (الذهب في الخزينة) → تجاهل
+    # إذا كان صفراً (عُكس كلياً) → أعد إنشاء الحركات (دعم دورات إعادة الترحيل)
+    all_gold_sbts = SafeBoxTransaction.query.filter_by(ref_type='invoice_gold', ref_id=invoice.id).all()
+    if all_gold_sbts:
+        all_rev_sbts  = SafeBoxTransaction.query.filter_by(ref_type='invoice_gold_reversal', ref_id=invoice.id).all()
+        net_gold = sum(
+            (float(t.weight_18k or 0) + float(t.weight_21k or 0) + float(t.weight_22k or 0) + float(t.weight_24k or 0))
+            * (1 if t.direction == 'in' else -1)
+            for t in all_gold_sbts
+        ) + sum(
+            (float(t.weight_18k or 0) + float(t.weight_21k or 0) + float(t.weight_22k or 0) + float(t.weight_24k or 0))
+            * (1 if t.direction == 'in' else -1)
+            for t in all_rev_sbts
+        )
+        if net_gold > 1e-6:
+            # الذهب لا يزال مسجلاً في الخزينة → لا تضاعف
+            return []
+        # الرصيد الصافي = 0 (عُكس كلياً) → مسموح بإعادة الإنشاء
 
     # Remove provisional invoice_scrap_receipt entries created at invoice-save time
     # (before posting). These are placeholders that would cause double-counting once
@@ -723,6 +744,7 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
         db.session.delete(_sbt)
 
     weights_by_karat = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
+    stones_by_karat  = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}  # فصوص حسب العيار
 
     invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
     gold_type = (str(getattr(invoice, 'gold_type', '') or '').strip().lower() or 'new')
@@ -780,6 +802,11 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
             if grams <= 0:
                 continue
             weights_by_karat[karat] += float(grams)
+
+            # استخراج وزن الفصوص لهذا الصنف (للفواتير الصنفية)
+            sw = _to_float(getattr(inv_item, 'stones_weight', 0.0))
+            if sw > 0 and is_customer_scrap_purchase:
+                stones_by_karat[karat] += sw
 
     # --- GL fallback: if weight extraction from items/karat-lines yielded nothing,
     #     read the already-committed GL lines for this invoice.  This handles
@@ -881,6 +908,18 @@ def _append_safe_transactions_for_invoice_gold(invoice: Invoice, created_by: str
         else:
             tx.weight_21k = grams
 
+        # إضافة الفصوص المقابلة لهذا العيار (للفواتير الكسر من العميل)
+        stones_for_karat = stones_by_karat.get(karat, 0.0)
+        if stones_for_karat > 1e-6:
+            try:
+                tx.stones_weight = round(stones_for_karat, 6)
+                if karat == 18:   tx.stones_18k = round(stones_for_karat, 6)
+                elif karat == 21: tx.stones_21k = round(stones_for_karat, 6)
+                elif karat == 22: tx.stones_22k = round(stones_for_karat, 6)
+                elif karat == 24: tx.stones_24k = round(stones_for_karat, 6)
+            except Exception:
+                pass
+
         db.session.add(tx)
         created.append(tx)
 
@@ -925,43 +964,172 @@ def _append_safe_reversal_transactions_for_voucher(voucher, created_by=None, rea
     return created
 
 
+def _restore_scrap_provisional_sbts(invoice: Invoice, created_by: str = None) -> None:
+    """إعادة إنشاء SBTs المؤقتة (invoice_scrap_receipt) لفاتورة شراء الكسر بعد إلغاء الترحيل.
+
+    عند الترحيل تُحذف هذه السجلات وتُستبدل بـ invoice_gold.
+    عند إلغاء الترحيل نُعيدها حتى تعكس الخزينة الوضع الفيزيائي.
+    """
+    if not invoice or not getattr(invoice, 'id', None):
+        return
+
+    invoice_type = (getattr(invoice, 'invoice_type', None) or '').strip()
+    gold_type    = (str(getattr(invoice, 'gold_type', '') or '')).strip().lower()
+    is_scrap     = (invoice_type in ('شراء من عميل',) and gold_type == 'scrap')
+    is_return    = (invoice_type == 'مرتجع شراء'     and gold_type == 'scrap')
+    if not (is_scrap or is_return):
+        return
+
+    # تجنب الإنشاء المزدوج
+    existing = SafeBoxTransaction.query.filter(
+        SafeBoxTransaction.ref_id   == invoice.id,
+        SafeBoxTransaction.ref_type.in_(['invoice_scrap_receipt', 'invoice_scrap_return']),
+    ).first()
+    if existing:
+        return
+
+    # استخراج أوزان الذهب والفصوص من أصناف الفاتورة
+    weights_by_karat = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
+    stones_by_karat  = {18: 0.0, 21: 0.0, 22: 0.0, 24: 0.0}
+    try:
+        for inv_item in getattr(invoice, 'items', None) or []:
+            karat_val = getattr(inv_item, 'karat', None)
+            try:
+                karat = int(float(karat_val or 21))
+            except Exception:
+                karat = 21
+            if karat not in weights_by_karat:
+                karat = 21
+            grams = _to_float(getattr(inv_item, 'weight', None))
+            if grams > 0:
+                weights_by_karat[karat] += grams
+            sw = _to_float(getattr(inv_item, 'stones_weight', 0.0))
+            if sw > 0:
+                stones_by_karat[karat] += sw
+    except Exception:
+        return
+
+    if all(v <= 1e-6 for v in weights_by_karat.values()):
+        return
+
+    # تحديد الخزينة
+    target_safe = _resolve_gold_safe_for_invoice(invoice, 21)
+    if not target_safe:
+        return
+
+    direction = 'out' if is_return else 'in'
+    ref_type  = 'invoice_scrap_return' if is_return else 'invoice_scrap_receipt'
+
+    total_stones = sum(stones_by_karat.values())
+    weight_kwargs = {
+        'weight_18k': round(weights_by_karat[18], 6),
+        'weight_21k': round(weights_by_karat[21], 6),
+        'weight_22k': round(weights_by_karat[22], 6),
+        'weight_24k': round(weights_by_karat[24], 6),
+    }
+    if total_stones > 1e-6:
+        try:
+            weight_kwargs['stones_weight'] = round(total_stones, 6)
+            weight_kwargs['stones_18k']    = round(stones_by_karat[18], 6)
+            weight_kwargs['stones_21k']    = round(stones_by_karat[21], 6)
+            weight_kwargs['stones_22k']    = round(stones_by_karat[22], 6)
+            weight_kwargs['stones_24k']    = round(stones_by_karat[24], 6)
+        except Exception:
+            pass
+
+    try:
+        db.session.add(SafeBoxTransaction(
+            safe_box_id=target_safe.id,
+            ref_type=ref_type,
+            ref_id=invoice.id,
+            invoice_id=invoice.id,
+            direction=direction,
+            amount_cash=0.0,
+            notes=f'إعادة سجل مؤقت بعد إلغاء الترحيل — {getattr(invoice, "invoice_number", invoice.id)}',
+            created_by=created_by or 'system',
+            **weight_kwargs,
+        ))
+    except Exception:
+        pass
+
+
 def _append_safe_reversal_transactions_for_invoice_gold(invoice: Invoice, created_by: str = None, reason: str = None):
-    """Append reversing SafeBoxTransaction rows for a previously-posted invoice gold movement."""
+    """Append reversing SafeBoxTransaction rows for invoice gold + stones — يعتمد على الرصيد الصافي.
+
+    يحسب (invoice_gold - invoice_gold_reversal) لكل خزينة ويُنشئ عكساً للصافي فقط.
+    يشمل أوزان الذهب والفصوص (stones).
+    يدعم دورات إعادة الترحيل وإلغائه بشكل صحيح.
+    """
     if not invoice or not getattr(invoice, 'id', None):
         return []
 
-    existing_reversal = (
-        SafeBoxTransaction.query.filter_by(ref_type='invoice_gold_reversal', ref_id=invoice.id)
-        .order_by(SafeBoxTransaction.id.desc())
-        .first()
-    )
-    if existing_reversal:
+    invoice_id     = invoice.id
+    invoice_number = getattr(invoice, 'invoice_number', None) or str(invoice_id)
+
+    all_gold = SafeBoxTransaction.query.filter_by(ref_type='invoice_gold',          ref_id=invoice_id).all()
+    all_rev  = SafeBoxTransaction.query.filter_by(ref_type='invoice_gold_reversal', ref_id=invoice_id).all()
+
+    if not all_gold:
         return []
 
-    original = SafeBoxTransaction.query.filter_by(ref_type='invoice_gold', ref_id=invoice.id).all()
-    if not original:
-        return []
+    # net[safe_box_id] = [w18, w21, w22, w24, s_total, s18, s21, s22, s24]
+    net: dict = {}
 
-    invoice_number = getattr(invoice, 'invoice_number', None) or str(getattr(invoice, 'id', ''))
+    def _add(d, sb, sign, tx):
+        if sb not in d:
+            d[sb] = [0.0] * 9
+        d[sb][0] += sign * float(tx.weight_18k   or 0.0)
+        d[sb][1] += sign * float(tx.weight_21k   or 0.0)
+        d[sb][2] += sign * float(tx.weight_22k   or 0.0)
+        d[sb][3] += sign * float(tx.weight_24k   or 0.0)
+        d[sb][4] += sign * float(getattr(tx, 'stones_weight', 0.0) or 0.0)
+        d[sb][5] += sign * float(getattr(tx, 'stones_18k',    0.0) or 0.0)
+        d[sb][6] += sign * float(getattr(tx, 'stones_21k',    0.0) or 0.0)
+        d[sb][7] += sign * float(getattr(tx, 'stones_22k',    0.0) or 0.0)
+        d[sb][8] += sign * float(getattr(tx, 'stones_24k',    0.0) or 0.0)
+
+    for tx in all_gold:
+        _add(net, tx.safe_box_id, 1.0 if (tx.direction or 'in') == 'in' else -1.0, tx)
+    for tx in all_rev:
+        _add(net, tx.safe_box_id, 1.0 if (tx.direction or 'out') == 'in' else -1.0, tx)
+
     created = []
-    for tx in original:
+    note = reason or f'إلغاء ترحيل فاتورة {invoice_number}'
+
+    for sb_id, vals in net.items():
+        w18, w21, w22, w24, st, s18, s21, s22, s24 = vals
+        gold_net   = w18 + w21 + w22 + w24
+        stones_net = st
+        if not any(abs(v) > 1e-6 for v in (w18, w21, w22, w24, st, s18, s21, s22, s24)):
+            continue
+
+        rev_dir = 'out' if (gold_net + stones_net) > 0 else 'in'
         rev = SafeBoxTransaction(
-            safe_box_id=tx.safe_box_id,
+            safe_box_id=sb_id,
             ref_type='invoice_gold_reversal',
-            ref_id=invoice.id,
-            invoice_id=invoice.id,
-            payment_method_id=None,
-            direction='out' if (tx.direction or 'in') == 'in' else 'in',
+            ref_id=invoice_id,
+            invoice_id=invoice_id,
+            direction=rev_dir,
             amount_cash=0.0,
-            weight_18k=float(tx.weight_18k or 0.0),
-            weight_21k=float(tx.weight_21k or 0.0),
-            weight_22k=float(tx.weight_22k or 0.0),
-            weight_24k=float(tx.weight_24k or 0.0),
-            notes=(reason or '') or f"Reversal for invoice {invoice_number}",
+            weight_18k=round(abs(w18), 6),
+            weight_21k=round(abs(w21), 6),
+            weight_22k=round(abs(w22), 6),
+            weight_24k=round(abs(w24), 6),
+            notes=note,
             created_by=created_by,
         )
+        # إضافة حقول الفصوص إذا كانت متاحة في النموذج
+        try:
+            rev.stones_weight = round(abs(st),  6)
+            rev.stones_18k    = round(abs(s18), 6)
+            rev.stones_21k    = round(abs(s21), 6)
+            rev.stones_22k    = round(abs(s22), 6)
+            rev.stones_24k    = round(abs(s24), 6)
+        except Exception:
+            pass
         db.session.add(rev)
         created.append(rev)
+
     return created
 
 def _get_shift_window_for_user(user_name: str):
@@ -1890,15 +2058,40 @@ def post_invoice(invoice_id):
         # Append gold inventory movements into SafeBox ledger (append-only)
         _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
 
-        # ✅ ترحيل القيود المرتبطة بالفاتورة تلقائياً (لمنع الازدواجية عند ترحيل القيود منفردةً)
+        # ✅ ترحيل جميع القيود المرتبطة بالفاتورة (مباشرة + عبر السندات)
+        now_ts = datetime.now()
         try:
+            # 1) قيود مرتبطة مباشرةً بالفاتورة
             linked_jes = JournalEntry.query.filter_by(
                 reference_type='invoice', reference_id=invoice_id, is_posted=False
             ).filter(JournalEntry.is_deleted == False).all()
             for _je in linked_jes:
                 _je.is_posted = True
-                _je.posted_at = datetime.now()
+                _je.posted_at = now_ts
                 _je.posted_by = posted_by
+
+            # 2) قيود السندات المرتبطة بالفاتورة (reference_type='voucher')
+            linked_vouchers = Voucher.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id
+            ).all()
+            for _v in linked_vouchers:
+                # قيد السند عبر journal_entry_id
+                if _v.journal_entry_id:
+                    _vje = JournalEntry.query.get(_v.journal_entry_id)
+                    if _vje and not _vje.is_posted and not getattr(_vje, 'is_deleted', False):
+                        _vje.is_posted = True
+                        _vje.posted_at = now_ts
+                        _vje.posted_by = posted_by
+                # قيود مرتبطة بالسند عبر reference_type='voucher'
+                for _vje2 in JournalEntry.query.filter_by(
+                    reference_type='voucher', reference_id=_v.id, is_posted=False
+                ).filter(JournalEntry.is_deleted == False).all():
+                    _vje2.is_posted = True
+                    _vje2.posted_at = now_ts
+                    _vje2.posted_by = posted_by
+                # تحديث حالة السند
+                if _v.status == 'pending':
+                    _v.status = 'approved'
         except Exception as _je_err:
             print(f"[post_invoice] خطأ في ترحيل القيود المرتبطة: {_je_err}")
 
@@ -2077,17 +2270,29 @@ def post_invoices_batch():
                 # Append gold inventory movements into SafeBox ledger (append-only)
                 _append_safe_transactions_for_invoice_gold(invoice, created_by=posted_by)
 
-                # ✅ ترحيل القيود المرتبطة بالفاتورة تلقائياً (لمنع الازدواجية)
+                # ✅ ترحيل جميع القيود المرتبطة (مباشرة + عبر السندات)
                 try:
+                    _now = datetime.now()
                     linked_jes = JournalEntry.query.filter_by(
                         reference_type='invoice', reference_id=invoice.id, is_posted=False
                     ).filter(JournalEntry.is_deleted == False).all()
                     for _je in linked_jes:
                         _je.is_posted = True
-                        _je.posted_at = datetime.now()
+                        _je.posted_at = _now
                         _je.posted_by = posted_by
+                    for _v in Voucher.query.filter_by(reference_type='invoice', reference_id=invoice.id).all():
+                        if _v.journal_entry_id:
+                            _vje = JournalEntry.query.get(_v.journal_entry_id)
+                            if _vje and not _vje.is_posted and not getattr(_vje, 'is_deleted', False):
+                                _vje.is_posted = True; _vje.posted_at = _now; _vje.posted_by = posted_by
+                        for _vje2 in JournalEntry.query.filter_by(
+                            reference_type='voucher', reference_id=_v.id, is_posted=False
+                        ).filter(JournalEntry.is_deleted == False).all():
+                            _vje2.is_posted = True; _vje2.posted_at = _now; _vje2.posted_by = posted_by
+                        if _v.status == 'pending':
+                            _v.status = 'approved'
                 except Exception as _je_err:
-                    print(f"[post_invoices_batch] خطأ في ترحيل القيود المرتبطة للفاتورة {invoice.id}: {_je_err}")
+                    print(f"[post_invoices_batch] خطأ في ترحيل القيود للفاتورة {invoice.id}: {_je_err}")
 
                 # ✅ إنشاء حركات الخزينة وقيود التسوية للدفعات المؤجلة
                 try:
@@ -2188,7 +2393,7 @@ def unpost_invoice(invoice_id):
         
         if not invoice.is_posted:
             AuditLog.log_action(
-                user_name=request.json.get('posted_by', 'system'),
+                user_name=(request.json or {}).get('posted_by', 'system') if request.content_type and 'json' in request.content_type else 'system',
                 action='unpost',
                 entity_type='invoice',
                 entity_id=invoice_id,
@@ -2258,7 +2463,7 @@ def unpost_invoice(invoice_id):
         invoice.is_posted = False
         invoice.posted_at = None
         invoice.posted_by = None
-        
+
         # تسجيل العملية الناجحة
         posted_by = g.current_user.username if hasattr(g, 'current_user') else 'system'
         AuditLog.log_action(
@@ -3541,6 +3746,106 @@ def admin_move_sbt():
 # ============================================================
 # 🔧 Repair: Create missing gold SBT from GL lines
 # ============================================================
+
+@posting_bp.route('/admin/migrate-scrap-gold-to-employee-safes', methods=['POST'])
+@require_permission('admin')
+def migrate_scrap_gold_to_employee_safes():
+    """نقل حركات invoice_gold للفواتير (شراء كسر) من صندوق الكسر لخزينة الموظف الصحيحة.
+
+    يعالج البيانات التاريخية التي أُنشئت قبل إصلاح _resolve_gold_safe_for_invoice.
+    """
+    try:
+        moved = 0
+        errors = 0
+
+        scrap_invoices = Invoice.query.filter(
+            Invoice.invoice_type == 'شراء من عميل',
+            Invoice.gold_type == 'scrap',
+            Invoice.is_posted == True,
+        ).all()
+
+        for inv in scrap_invoices:
+            emp = _resolve_employee_for_invoice(inv, for_scrap_purchase=True)
+            if not emp or not getattr(emp, 'gold_safe_box_id', None):
+                continue
+
+            correct_safe = SafeBox.query.get(int(emp.gold_safe_box_id))
+            if not correct_safe or (correct_safe.safe_type or '').lower() != 'gold':
+                continue
+
+            gold_sbts = SafeBoxTransaction.query.filter_by(
+                ref_type='invoice_gold', ref_id=inv.id
+            ).all()
+
+            for sbt in gold_sbts:
+                if sbt.safe_box_id == correct_safe.id:
+                    continue  # already in correct safe
+                sbt.safe_box_id = correct_safe.id
+                moved += 1
+
+            # نقل العكوسات أيضاً
+            rev_sbts = SafeBoxTransaction.query.filter_by(
+                ref_type='invoice_gold_reversal', ref_id=inv.id
+            ).all()
+            for sbt in rev_sbts:
+                if sbt.safe_box_id == correct_safe.id:
+                    continue
+                sbt.safe_box_id = correct_safe.id
+                moved += 1
+
+        db.session.commit()
+        return jsonify({'success': True, 'moved': moved, 'message': f'تم نقل {moved} حركة للخزائن الصحيحة'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@posting_bp.route('/admin/sync-orphan-entries', methods=['POST'])
+@require_permission('admin')
+def sync_orphan_journal_entries():
+    """مزامنة القيود اليتيمة: ترحيل أي قيد مرتبط بفاتورة مرحّلة لكنه غير مرحّل.
+
+    يعالج حالة عدم الاتساق بين is_posted للفاتورة وقيودها/سنداتها.
+    """
+    try:
+        now_ts = datetime.now()
+        fixed = 0
+
+        # القيود المرتبطة مباشرةً بفواتير مرحّلة لكنها غير مرحّلة
+        orphan_jes = (
+            db.session.query(JournalEntry)
+            .join(Invoice, (Invoice.id == JournalEntry.reference_id) & (JournalEntry.reference_type == 'invoice'))
+            .filter(Invoice.is_posted == True, JournalEntry.is_posted == False)
+            .filter(getattr(JournalEntry, 'is_deleted', False) == False)
+            .all()
+        )
+        for _je in orphan_jes:
+            _je.is_posted = True
+            _je.posted_at = now_ts
+            _je.posted_by = 'system:sync'
+            fixed += 1
+
+        # القيود المرتبطة بسندات مرتبطة بفواتير مرحّلة
+        orphan_voucher_jes = (
+            db.session.query(JournalEntry)
+            .join(Voucher, (Voucher.id == JournalEntry.reference_id) & (JournalEntry.reference_type == 'voucher'))
+            .join(Invoice, (Invoice.id == Voucher.reference_id) & (Voucher.reference_type == 'invoice'))
+            .filter(Invoice.is_posted == True, JournalEntry.is_posted == False)
+            .filter(getattr(JournalEntry, 'is_deleted', False) == False)
+            .all()
+        )
+        for _je in orphan_voucher_jes:
+            _je.is_posted = True
+            _je.posted_at = now_ts
+            _je.posted_by = 'system:sync'
+            fixed += 1
+
+        db.session.commit()
+        return jsonify({'success': True, 'fixed': fixed, 'message': f'تم إصلاح {fixed} قيد يتيم'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @posting_bp.route('/admin/repair-sbt-for-invoice/<int:invoice_id>', methods=['POST'])
 @require_permission('admin')

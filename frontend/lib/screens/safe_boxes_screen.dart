@@ -2,14 +2,12 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import '../api_service.dart';
+import '../app_events.dart';
 import '../models/safe_box_model.dart';
 import 'account_statement_screen.dart';
 import 'add_voucher_screen.dart';
 import 'clearing_settlement_screen.dart';
 import 'safe_transfer_screen.dart';
-import '../providers/settings_provider.dart';
-import '../utils/currency_utils.dart' as cu;
-import 'package:provider/provider.dart';
 
 enum _SafeCardMenuAction { statement, edit, settlement, delete }
 
@@ -53,6 +51,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   bool _isLoading = false;
   final Set<int> _expandedCardKeys = <int>{};
   int? _pressedCardId;
+  Map<int, Map<String, double>> _stonesMap = {};
 
   String _effectiveFilterType() {
     if (widget.lockFilterType) {
@@ -62,9 +61,6 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
     return _filterType;
   }
 
-  String get _currencySymbol =>
-      context.read<SettingsProvider>().currencySymbolText;
-
   @override
   void initState() {
     super.initState();
@@ -73,10 +69,16 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
       _filterType = widget.initialFilterType!;
     }
     _loadSafeBoxes();
+    AppEvents.vaultRefreshSignal.addListener(_onVaultRefresh);
+  }
+
+  void _onVaultRefresh() {
+    if (mounted) _loadSafeBoxes();
   }
 
   @override
   void dispose() {
+    AppEvents.vaultRefreshSignal.removeListener(_onVaultRefresh);
     _searchController.dispose();
     super.dispose();
   }
@@ -88,18 +90,25 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
           ? (widget.initialFilterType ?? _filterType)
           : _filterType;
 
-      final boxes = widget.balancesView
-          ? await widget.api.getSafeBoxBalances(
+      final boxesFuture = widget.balancesView
+          ? widget.api.getSafeBoxBalances(
               type: effectiveType == 'all' ? null : effectiveType,
               isActive: null,
             )
-          : await widget.api.getSafeBoxes(
+          : widget.api.getSafeBoxes(
               safeType: effectiveType == 'all' ? null : effectiveType,
               includeAccount: true,
               includeBalance: true,
             );
+
+      final stonesFuture = widget.api.getStonesBalance();
+      final results = await Future.wait([boxesFuture, stonesFuture]);
+      final boxes = results[0] as List<SafeBoxModel>;
+      final stones = results[1] as Map<int, Map<String, double>>;
+
       setState(() {
         _safeBoxes = boxes;
+        _stonesMap = stones;
         _isLoading = false;
       });
     } catch (e) {
@@ -648,7 +657,10 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   }
 
   double _effectiveGoldMainKaratBalance(SafeBoxModel safeBox) {
-    if (safeBox.hasNonZeroLedgerWeight) {
+    // When balance rows come from the ledger endpoint, treat zero as valid
+    // ledger data (not as missing data) to avoid falling back to stale account balances.
+    final hasLedgerPayload = (safeBox.weightBalance != null);
+    if (widget.balancesView || hasLedgerPayload) {
       final direct = safeBox.totalWeightMainKarat;
       if (direct != null && direct.abs() > 1e-9) {
         return direct;
@@ -662,7 +674,8 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   }
 
   List<MapEntry<String, double>> _goldBreakdown(SafeBoxModel safeBox) {
-    if (safeBox.hasNonZeroLedgerWeight) {
+    final hasLedgerPayload = (safeBox.weightBalance != null);
+    if (widget.balancesView || hasLedgerPayload) {
       return [
         MapEntry('24k', safeBox.goldBalance24k),
         MapEntry('22k', safeBox.goldBalance22k),
@@ -679,7 +692,7 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
   }
 
   String _formatCurrency(double value) {
-    final unit = _currencySymbol;
+    final unit = widget.isArabic ? 'ر.س' : 'SAR';
     return '${value.toStringAsFixed(2)} $unit';
   }
 
@@ -978,9 +991,8 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: AlignmentDirectional.centerStart,
-                  child: cu.SarAwareText(
+                  child: Text(
                     value,
-                    isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -1337,25 +1349,26 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                               final isNeg = e.value < 0;
                               return Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 3,
+                                  horizontal: 10,
+                                  vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
                                   color: isNeg
                                       ? _dangerColor.withValues(alpha: 0.08)
-                                      : _primaryColor.withValues(alpha: 0.10),
+                                      : _primaryColor.withValues(alpha: 0.13),
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(
                                     color: isNeg
-                                        ? _dangerColor.withValues(alpha: 0.25)
-                                        : _primaryColor.withValues(alpha: 0.30),
+                                        ? _dangerColor.withValues(alpha: 0.35)
+                                        : _primaryColor.withValues(alpha: 0.40),
+                                    width: 1.2,
                                   ),
                                 ),
                                 child: Text(
-                                  '${e.key}: ${e.value.toStringAsFixed(2)} جم',
+                                  '${e.key}: ${e.value.toStringAsFixed(3)} جم',
                                   style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
                                     color: isNeg ? _dangerColor : _primaryColor,
                                   ),
                                 ),
@@ -1365,6 +1378,68 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
                         },
                       ),
                       const SizedBox(height: 8),
+                    ],
+                    // -- Stones display (gold only) --
+                    if (isGold) ...[
+                      Builder(
+                        builder: (_) {
+                          final info = _stonesMap[safeBox.id];
+                          final total = info?['total'] ?? 0.0;
+                          if (total <= 0.0001) return const SizedBox.shrink();
+                          final karatEntries = ['18','21','22','24']
+                              .where((k) => (info?[k] ?? 0.0) > 0.0001)
+                              .toList();
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // الإجمالي
+                              Row(children: [
+                                const Icon(Icons.diamond_outlined,
+                                    size: 12, color: Color(0xFFB56A2F)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${total.toStringAsFixed(3)} جم',
+                                  style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w700,
+                                    color: Color(0xFFB56A2F),
+                                  ),
+                                ),
+                              ]),
+                              // تفصيل العيارات (صغير ومدمج)
+                              if (karatEntries.isNotEmpty) ...[
+                                const SizedBox(height: 3),
+                                Wrap(
+                                  spacing: 4, runSpacing: 3,
+                                  children: karatEntries.map((k) {
+                                    final v = info![k]!;
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFB56A2F)
+                                            .withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(
+                                          color: const Color(0xFFB56A2F)
+                                              .withValues(alpha: 0.25),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        '$k: ${v.toStringAsFixed(2)}',
+                                        style: const TextStyle(
+                                          fontSize: 10, fontWeight: FontWeight.w600,
+                                          color: Color(0xFFB56A2F),
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 6),
                     ],
                     // -- Row 3: Action buttons --
                     Row(
@@ -1491,8 +1566,6 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
     final isAr = widget.isArabic;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final useWideSummaryLayout = screenWidth >= 900;

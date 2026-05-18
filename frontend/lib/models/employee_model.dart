@@ -23,6 +23,7 @@ class EmployeeModel {
   final AccountSummary? account;
   final int payrollCount;
   final int attendanceCount;
+  final String? photo;
 
   const EmployeeModel({
     required this.id,
@@ -47,6 +48,7 @@ class EmployeeModel {
     required this.account,
     required this.payrollCount,
     required this.attendanceCount,
+    this.photo,
   });
 
   factory EmployeeModel.fromJson(Map<String, dynamic> json) {
@@ -75,6 +77,7 @@ class EmployeeModel {
           : null,
       payrollCount: json['payroll_count'] as int? ?? 0,
       attendanceCount: json['attendance_count'] as int? ?? 0,
+      photo: json['photo'] as String?,
     );
   }
 

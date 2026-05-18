@@ -2086,7 +2086,7 @@ class Settings(db.Model):
     
     # إعدادات أساسية
     main_karat = db.Column(db.Integer, default=21)
-    currency_symbol = db.Column(db.String(20), default='ر.س')
+    currency_symbol = db.Column(db.String(10), default='ر.س')
     manufacturing_wage_mode = db.Column(db.String(20), default='expense')  # expense | inventory
     
     # إعدادات الضريبة
@@ -2846,6 +2846,10 @@ class SafeBoxTransaction(db.Model):
     # وزن الفصوص المُضمَّنة في القطعة — مستقل عن العيار
     # يُملأ عند الشراء والتجديد لمعرفة الفصوص في أي خزينة
     stones_weight = db.Column(db.Float, nullable=False, default=0.0)
+    stones_18k    = db.Column(db.Float, nullable=False, default=0.0)
+    stones_21k    = db.Column(db.Float, nullable=False, default=0.0)
+    stones_22k    = db.Column(db.Float, nullable=False, default=0.0)
+    stones_24k    = db.Column(db.Float, nullable=False, default=0.0)
 
     notes = db.Column(db.Text, nullable=True)
 
@@ -2993,6 +2997,9 @@ class Employee(db.Model):
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False)
 
+    # صورة الموظف — مخزنة كـ data URI (base64). nullable لأنها اختيارية.
+    photo = db.Column(db.Text, nullable=True)
+
     account = db.relationship('Account', backref=db.backref('employees', lazy='dynamic'))
     gold_safe_box = db.relationship('SafeBox', foreign_keys=[gold_safe_box_id])
     cash_safe_box = db.relationship('SafeBox', foreign_keys=[cash_safe_box_id])
@@ -3018,6 +3025,7 @@ class Employee(db.Model):
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'photo': self.photo,
         }
 
         # `include_bonuses` kept for backward compatibility; not used currently
@@ -3060,6 +3068,9 @@ class AppUser(db.Model):
     totp_secret = db.Column(db.Text, nullable=True)
     two_factor_enabled = db.Column(db.Boolean, default=False, nullable=False)
     two_factor_verified_at = db.Column(db.DateTime, nullable=True)
+
+    # صورة الملف الشخصي — base64 data URI (مستقلة عن صورة الموظف)
+    photo = db.Column(db.Text, nullable=True)
 
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False)
@@ -3122,6 +3133,7 @@ class AppUser(db.Model):
             'password_changed_at': self.password_changed_at.isoformat() if self.password_changed_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'photo': self.photo,
         }
 
         if include_employee and self.employee:
@@ -3830,7 +3842,10 @@ class User(db.Model):
     
     # إدارة المستخدم
     created_by = db.Column(db.String(100))
-    
+
+    # صورة الملف الشخصي — base64 data URI
+    photo = db.Column(db.Text, nullable=True)
+
     # العلاقات
     roles = db.relationship('Role', secondary=user_roles, backref=db.backref('users', lazy='dynamic'))
     
@@ -3906,9 +3921,10 @@ class User(db.Model):
             'position': self.position,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_login': self.last_login.isoformat() if self.last_login else None,
-            'created_by': self.created_by
+            'created_by': self.created_by,
+            'photo': self.photo,
         }
-        
+
         if include_roles:
             data['roles'] = [role.to_dict(include_permissions=False) for role in self.roles]
         

@@ -1,13 +1,8 @@
-import 'dart:convert' as json;
-
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../providers/settings_provider.dart';
 
 import '../api_service.dart';
 import '../models/safe_box_model.dart';
 import '../theme/app_theme.dart';
-import '../utils/currency_utils.dart' as cu;
 
 class SafeTransferScreen extends StatefulWidget {
   final ApiService api;
@@ -42,6 +37,9 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
   final Map<int, SafeBoxModel> _safeById = <int, SafeBoxModel>{};
   bool _isLoadingSafes = false;
 
+  // Stones balance per safe: safeId -> {total, 18, 21, 22, 24}
+  Map<int, Map<String, double>> _stonesBalance = {};
+
   int? _fromSafeId;
   int? _toSafeId;
 
@@ -56,6 +54,12 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
   final _weight22kController = TextEditingController();
   final _weight21kController = TextEditingController();
   final _weight18kController = TextEditingController();
+
+  // Stones weight inputs per karat
+  final _stones24kController = TextEditingController();
+  final _stones22kController = TextEditingController();
+  final _stones21kController = TextEditingController();
+  final _stones18kController = TextEditingController();
 
   final _notesController = TextEditingController();
 
@@ -75,6 +79,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     _weight22kController.addListener(_onInputChanged);
     _weight21kController.addListener(_onInputChanged);
     _weight18kController.addListener(_onInputChanged);
+    _stones24kController.addListener(_onInputChanged);
+    _stones22kController.addListener(_onInputChanged);
+    _stones21kController.addListener(_onInputChanged);
+    _stones18kController.addListener(_onInputChanged);
     _corrWeightController.addListener(_onInputChanged);
 
     _loadSafes();
@@ -92,6 +100,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     _weight22kController.dispose();
     _weight21kController.dispose();
     _weight18kController.dispose();
+    _stones24kController.dispose();
+    _stones22kController.dispose();
+    _stones21kController.dispose();
+    _stones18kController.dispose();
     _corrWeightController.dispose();
     _notesController.dispose();
     super.dispose();
@@ -123,6 +135,11 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
         type: _mode == 'gold' ? 'gold' : null,
         isActive: true,
       );
+
+      // Load stones balance alongside safes
+      widget.api.getStonesBalance().then((sb) {
+        if (mounted) setState(() => _stonesBalance = sb);
+      }).catchError((_) {});
 
       final usable = rows.where((s) => s.id != null).toList();
       final filtered = (_mode == 'gold' || _mode == 'karat_correction')
@@ -197,13 +214,14 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
 
   Widget _balanceCard({required String title, required SafeBoxModel safe}) {
     final isAr = widget.isArabic;
+    final stonesInfo = _stonesBalance[safe.id] ?? {};
+    final totalStones = stonesInfo['total'] ?? 0.0;
 
     final content = _mode == 'cash'
-        ? cu.SarAwareText(
+        ? Text(
             isAr
-                ? 'الرصيد المتاح: ${_fmtCash(safe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText}'
+                ? 'الرصيد المتاح: ${_fmtCash(safe.cashBalance)} ر.س'
                 : 'Available: ${_fmtCash(safe.cashBalance)}',
-              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
             style: TextStyle(color: Colors.grey.shade800),
           )
         : Column(
@@ -240,6 +258,38 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                   ),
                 ],
               ),
+              // ── Stones balance ────────────────────────────
+              if (totalStones > 0.0001) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Icon(Icons.diamond_outlined, size: 12, color: Color(0xFFB56A2F)),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${_fmtWeight(totalStones)} جم',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFB56A2F)),
+                  ),
+                ]),
+                const SizedBox(height: 3),
+                Wrap(
+                  spacing: 4, runSpacing: 3,
+                  children: [
+                    for (final k in ['18', '21', '22', '24'])
+                      if ((stonesInfo[k] ?? 0.0) > 0.0001)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFB56A2F).withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFFB56A2F).withValues(alpha: 0.25)),
+                          ),
+                          child: Text(
+                            '$k: ${_fmtWeight(stonesInfo[k] ?? 0.0)}',
+                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFFB56A2F)),
+                          ),
+                        ),
+                  ],
+                ),
+              ],
             ],
           );
 
@@ -296,53 +346,6 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     );
   }
 
-  Map<String, dynamic>? _parseErrorPayload(Object error) {
-    final raw = error.toString();
-    final start = raw.indexOf('{');
-    final end = raw.lastIndexOf('}');
-    if (start < 0 || end <= start) return null;
-
-    final jsonPart = raw.substring(start, end + 1);
-    try {
-      final decoded = json.jsonDecode(jsonPart);
-      if (decoded is Map<String, dynamic>) {
-        return decoded;
-      }
-    } catch (_) {
-      return null;
-    }
-    return null;
-  }
-
-  String _friendlyTransferError(Object error) {
-    final payload = _parseErrorPayload(error);
-    if (payload == null) {
-      return widget.isArabic
-          ? 'فشل إنشاء سند التحويل: $error'
-          : 'Failed to create transfer: $error';
-    }
-
-    final code = (payload['error'] ?? '').toString().trim();
-    final message = (payload['message'] ?? '').toString().trim();
-
-    if (code == 'insufficient_cash_balance') {
-      final available = (payload['available'] as num?)?.toDouble() ?? 0.0;
-      return widget.isArabic
-          ? 'الرصيد المتاح للتحويل غير كافٍ. المتاح حالياً: ${_fmtCash(available)} ${context.read<SettingsProvider>().currencySymbolText}'
-          : 'Insufficient available balance. Available now: ${_fmtCash(available)}';
-    }
-
-    if (message.isNotEmpty) {
-      return widget.isArabic
-          ? 'فشل إنشاء سند التحويل: $message'
-          : 'Failed to create transfer: $message';
-    }
-
-    return widget.isArabic
-        ? 'فشل إنشاء سند التحويل: ${json.jsonEncode(payload)}'
-        : 'Failed to create transfer: ${json.jsonEncode(payload)}';
-  }
-
   double _parseDouble(String value) {
     try {
       return double.parse(value.trim());
@@ -367,7 +370,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
     if (amount <= 0) return null;
     if (amount > fromSafe.cashBalance + _epsilon) {
       return widget.isArabic
-          ? 'المبلغ أكبر من الرصيد المتاح (${_fmtCash(fromSafe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText})'
+          ? 'المبلغ أكبر من الرصيد المتاح (${_fmtCash(fromSafe.cashBalance)} ر.س)'
           : 'Exceeds available (${_fmtCash(fromSafe.cashBalance)})';
     }
     return null;
@@ -425,6 +428,38 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       return widget.isArabic
           ? 'أكبر من المتاح (${_fmtWeight(available)} جم)'
           : 'Exceeds available (${_fmtWeight(available)} g)';
+    }
+    return null;
+  }
+
+  // ── Stones balance validation ──────────────────────────
+  String? _stonesOverdraftError(String karat) {
+    if (_mode != 'gold') return null;
+    final fromSafe = _safeByIdOrNull(_fromSafeId);
+    if (fromSafe == null) return null;
+
+    final stonesInfo = _stonesBalance[fromSafe.id] ?? {};
+    final entered = switch (karat) {
+      '24k' => _parseDouble(_stones24kController.text),
+      '22k' => _parseDouble(_stones22kController.text),
+      '21k' => _parseDouble(_stones21kController.text),
+      '18k' => _parseDouble(_stones18kController.text),
+      _ => 0.0,
+    };
+    if (entered <= 0) return null;
+
+    final available = switch (karat) {
+      '24k' => stonesInfo['24'] ?? 0.0,
+      '22k' => stonesInfo['22'] ?? 0.0,
+      '21k' => stonesInfo['21'] ?? 0.0,
+      '18k' => stonesInfo['18'] ?? 0.0,
+      _ => 0.0,
+    };
+
+    if (entered > available + _epsilon) {
+      return widget.isArabic
+          ? 'أكبر من المتاح (${_fmtWeight(available)} g)'
+          : 'Exceeds (${_fmtWeight(available)} g)';
     }
     return null;
   }
@@ -585,7 +620,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       if (fromSafe != null && amount > fromSafe.cashBalance + 0.0001) {
         _showSnack(
           widget.isArabic
-              ? 'المبلغ أكبر من رصيد الخزينة المتاح (${_fmtCash(fromSafe.cashBalance)} ${context.read<SettingsProvider>().currencySymbolText})'
+              ? 'المبلغ أكبر من رصيد الخزينة المتاح (${_fmtCash(fromSafe.cashBalance)} ر.س)'
               : 'Amount exceeds available balance (${_fmtCash(fromSafe.cashBalance)})',
           isError: true,
         );
@@ -615,6 +650,29 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
           );
           return;
         }
+
+        // Validate stones
+        final s24 = _parseDouble(_stones24kController.text);
+        final s22 = _parseDouble(_stones22kController.text);
+        final s21 = _parseDouble(_stones21kController.text);
+        final s18 = _parseDouble(_stones18kController.text);
+
+        if ((s24 + s22 + s21 + s18) > 0) {
+          final sOver24 = _stonesOverdraftError('24k') != null;
+          final sOver22 = _stonesOverdraftError('22k') != null;
+          final sOver21 = _stonesOverdraftError('21k') != null;
+          final sOver18 = _stonesOverdraftError('18k') != null;
+
+          if (sOver24 || sOver22 || sOver21 || sOver18) {
+            _showSnack(
+              widget.isArabic
+                  ? 'أحد أوزان الفصوص أكبر من الرصيد المتاح'
+                  : 'One of the stones weights exceeds available balance',
+              isError: true,
+            );
+            return;
+          }
+        }
       }
     }
 
@@ -628,6 +686,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       Map<String, dynamic> result;
       if (_mode == 'gold') {
         final weights = <String, double>{};
+        final stones = <String, double>{};
 
         final w24 = _parseDouble(_weight24kController.text);
         final w22 = _parseDouble(_weight22kController.text);
@@ -639,10 +698,21 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
         if (w21 > 0) weights['21k'] = w21;
         if (w18 > 0) weights['18k'] = w18;
 
+        final s24 = _parseDouble(_stones24kController.text);
+        final s22 = _parseDouble(_stones22kController.text);
+        final s21 = _parseDouble(_stones21kController.text);
+        final s18 = _parseDouble(_stones18kController.text);
+
+        if (s24 > 0) stones['24k'] = s24;
+        if (s22 > 0) stones['22k'] = s22;
+        if (s21 > 0) stones['21k'] = s21;
+        if (s18 > 0) stones['18k'] = s18;
+
         result = await widget.api.createSafeBoxTransferVoucher(
           fromSafeBoxId: _fromSafeId!,
           toSafeBoxId: _toSafeId!,
           weights: weights,
+          stonesWeights: stones.isNotEmpty ? stones : null,
           notes: notes,
           date: DateTime.now(),
         );
@@ -674,6 +744,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
         _weight22kController.clear();
         _weight21kController.clear();
         _weight18kController.clear();
+        _stones24kController.clear();
+        _stones22kController.clear();
+        _stones21kController.clear();
+        _stones18kController.clear();
         _notesController.clear();
       });
 
@@ -700,11 +774,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                   ),
                   const SizedBox(height: 8),
                   if (_mode == 'cash')
-                    cu.SarAwareText(
+                    Text(
                       widget.isArabic
-                          ? 'المبلغ: ${transfer?['amount_cash'] ?? '-'} ${context.read<SettingsProvider>().currencySymbolText}'
+                          ? 'المبلغ: ${transfer?['amount_cash'] ?? '-'} ر.س'
                           : 'Amount: ${transfer?['amount_cash'] ?? '-'}',
-              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
                     ),
                   if (_mode == 'gold') ...[
                     Text(widget.isArabic ? 'الأوزان:' : 'Weights:'),
@@ -721,6 +794,23 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                     Text(
                       '18k: ${(transfer?['weights']?['18k'] ?? 0).toString()}',
                     ),
+                    if ((transfer?['stones'] as Map<String, dynamic>?)?.isNotEmpty ?? false) ...[
+                      const SizedBox(height: 8),
+                      Text(widget.isArabic ? 'الفصوص:' : 'Stones:'),
+                      const SizedBox(height: 4),
+                      Text(
+                        '24k: ${(transfer?['stones']?['24k'] ?? 0).toString()}',
+                      ),
+                      Text(
+                        '22k: ${(transfer?['stones']?['22k'] ?? 0).toString()}',
+                      ),
+                      Text(
+                        '21k: ${(transfer?['stones']?['21k'] ?? 0).toString()}',
+                      ),
+                      Text(
+                        '18k: ${(transfer?['stones']?['18k'] ?? 0).toString()}',
+                      ),
+                    ],
                   ],
                 ],
               ),
@@ -740,8 +830,12 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      _showSnack(_friendlyTransferError(e), isError: true);
-      await _loadSafes();
+      _showSnack(
+        widget.isArabic
+            ? 'فشل إنشاء سند التحويل: $e'
+            : 'Failed to create transfer: $e',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -749,8 +843,6 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
 
   @override
   Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
     final isAr = widget.isArabic;
 
     final fromSafe = _safeByIdOrNull(_fromSafeId);
@@ -853,6 +945,10 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                           _weight22kController.clear();
                           _weight21kController.clear();
                           _weight18kController.clear();
+                          _stones24kController.clear();
+                          _stones22kController.clear();
+                          _stones21kController.clear();
+                          _stones18kController.clear();
                           _corrWeightController.clear();
                         });
                         _loadSafes();
@@ -1076,9 +1172,7 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                       TextField(
                         controller: _amountCashController,
                         decoration: InputDecoration(
-                          labelText: isAr
-                              ? 'المبلغ (${context.read<SettingsProvider>().currencySymbolText})'
-                              : 'Amount',
+                          labelText: isAr ? 'المبلغ (ر.س)' : 'Amount',
                           border: const OutlineInputBorder(),
                           prefixIcon: Icon(
                             Icons.payments,
@@ -1157,6 +1251,77 @@ class _SafeTransferScreenState extends State<SafeTransferScreen> {
                             color: Colors.yellow.shade500,
                           ),
                           errorText: goldOver18,
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // ── Stones weights (optional) ──────────────────────
+                      Text(
+                        isAr ? 'الفصوص (اختياري)' : 'Stones (optional)',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _stones24kController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'عيار 24 - فصوص' : '24k Stones',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: Icon(
+                            Icons.diamond_outlined,
+                            color: Colors.orange.shade400,
+                          ),
+                          errorText: _stonesOverdraftError('24k'),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _stones22kController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'عيار 22 - فصوص' : '22k Stones',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: Icon(
+                            Icons.diamond_outlined,
+                            color: Colors.orange.shade400,
+                          ),
+                          errorText: _stonesOverdraftError('22k'),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _stones21kController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'عيار 21 - فصوص' : '21k Stones',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: Icon(
+                            Icons.diamond_outlined,
+                            color: Colors.orange.shade400,
+                          ),
+                          errorText: _stonesOverdraftError('21k'),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _stones18kController,
+                        decoration: InputDecoration(
+                          labelText: isAr ? 'عيار 18 - فصوص' : '18k Stones',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: Icon(
+                            Icons.diamond_outlined,
+                            color: Colors.orange.shade400,
+                          ),
+                          errorText: _stonesOverdraftError('18k'),
                         ),
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,

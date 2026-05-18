@@ -499,30 +499,53 @@ def ensure_employee_cash_safe_columns(engine: Engine) -> None:
     _log_added(columns_added)
 
 
-def ensure_app_user_security_columns(engine: Engine) -> None:
-    """Ensure AppUser security columns exist (2FA + future session tooling)."""
+def ensure_app_user_photo_column(engine: Engine) -> None:
+    """Add photo column to both app_user and users tables for profile photos."""
+    for table in ("app_user", "users"):
+        try:
+            added = _ensure_columns(engine, table, [("photo", "TEXT", "NULL")])
+            _log_added(added)
+        except SQLAlchemyError as exc:
+            LOGGER.error("Auto schema guard (%s photo) failed: %s", table, exc)
+
+
+def ensure_employee_photo_column(engine: Engine) -> None:
+    """Add photo column to employee table for profile photos (base64 data URI)."""
     columns_added: list[str] = []
     try:
         columns_added.extend(
             _ensure_columns(
                 engine,
-                "app_user",
+                "employee",
                 [
-                    ("email", "VARCHAR(150)", "NULL"),
-                    ("phone", "VARCHAR(30)", "NULL"),
-                    ("must_change_password", "BOOLEAN", "0"),
-                    ("password_changed_at", "DATETIME", "NULL"),
-                    ("totp_secret", "TEXT", "NULL"),
-                    ("two_factor_enabled", "BOOLEAN", "0"),
-                    ("two_factor_verified_at", "DATETIME", "NULL"),
+                    ("photo", "TEXT", "NULL"),
                 ],
             )
         )
     except SQLAlchemyError as exc:
-        LOGGER.error("Auto schema guard failed: %s", exc)
+        LOGGER.error("Auto schema guard (employee photo) failed: %s", exc)
         return
 
     _log_added(columns_added)
+
+
+def ensure_app_user_security_columns(engine: Engine) -> None:
+    """Ensure AppUser security columns exist on both app_user and users tables (2FA + session tooling)."""
+    _security_cols = [
+        ("email", "VARCHAR(150)", "NULL"),
+        ("phone", "VARCHAR(30)", "NULL"),
+        ("must_change_password", "BOOLEAN", "0"),
+        ("password_changed_at", "DATETIME", "NULL"),
+        ("totp_secret", "TEXT", "NULL"),
+        ("two_factor_enabled", "BOOLEAN", "0"),
+        ("two_factor_verified_at", "DATETIME", "NULL"),
+    ]
+    for _tbl in ("app_user", "users"):
+        try:
+            added = _ensure_columns(engine, _tbl, _security_cols)
+            _log_added(added)
+        except SQLAlchemyError as exc:
+            LOGGER.error("Auto schema guard (%s security) failed: %s", _tbl, exc)
 
 
 def ensure_auth_security_columns(engine: Engine) -> None:
@@ -622,7 +645,7 @@ def ensure_account_columns(engine: Engine) -> None:
 
 
 def ensure_safe_box_transaction_stones_columns(engine: Engine) -> None:
-    """Add stones_weight column to safe_box_transaction for per-vault stones tracking."""
+    """Add stones columns to safe_box_transaction for per-vault stones tracking."""
     columns_added: list[str] = []
     try:
         columns_added.extend(
@@ -631,6 +654,10 @@ def ensure_safe_box_transaction_stones_columns(engine: Engine) -> None:
                 "safe_box_transaction",
                 [
                     ("stones_weight", "FLOAT", "0.0"),
+                    ("stones_18k",    "FLOAT", "0.0"),
+                    ("stones_21k",    "FLOAT", "0.0"),
+                    ("stones_22k",    "FLOAT", "0.0"),
+                    ("stones_24k",    "FLOAT", "0.0"),
                 ],
             )
         )

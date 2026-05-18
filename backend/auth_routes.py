@@ -1543,6 +1543,35 @@ def setup_initial_admin():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@auth_bp.route('/auth/me/photo', methods=['PATCH'])
+@require_auth
+def update_current_user_photo():
+    """رفع أو حذف صورة المستخدم الحالي — يدعم AppUser والـ User القديم."""
+    user = g.current_user
+    data = request.get_json(silent=True) or {}
+    photo = data.get('photo')
+    if photo is not None and not isinstance(photo, str):
+        return jsonify({'error': 'invalid_photo_format'}), 400
+
+    photo_val = photo or None
+
+    try:
+        user.photo = photo_val
+        if hasattr(user, 'updated_at'):
+            user.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        # إذا كان AppUser لديه موظف مرتبط → حدّث صورته أيضاً
+        if isinstance(user, AppUser) and getattr(user, 'employee', None):
+            user.employee.photo = photo_val
+            db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 500
+
+    return jsonify({'success': True, 'photo': user.photo})
+
+
 @auth_bp.route('/auth/me', methods=['GET'])
 @require_auth
 def get_current_user_info():
