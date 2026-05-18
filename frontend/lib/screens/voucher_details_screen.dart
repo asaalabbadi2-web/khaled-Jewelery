@@ -205,15 +205,9 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     }
   }
 
-  Future<Uint8List> _buildVoucherPdfBytesWithSp(
-    PdfPageFormat format,
-    SettingsProvider? sp,
-  ) async {
+  Future<Uint8List> _buildVoucherPdfBytesWithSp(PdfPageFormat format, SettingsProvider? sp) async {
     final voucher = _voucher;
     if (voucher == null) return Uint8List(0);
-    if (sp != null) {
-      await sp.ensureLoadedForPrint();
-    }
     return VoucherPdfBuilder.buildBytes(
       voucher: voucher,
       format: format,
@@ -236,18 +230,14 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     final v = _voucher;
     final id = (v?['id'] ?? '').toString();
     final number = (v?['voucher_number'] ?? '').toString();
-    final base = number.trim().isNotEmpty
-        ? number.trim()
-        : (id.isNotEmpty ? 'voucher_$id' : 'voucher');
+    final base = number.trim().isNotEmpty ? number.trim() : (id.isNotEmpty ? 'voucher_$id' : 'voucher');
     return '$base.pdf';
   }
 
   Future<void> _printVoucher() async {
     if (_voucher == null) return;
     SettingsProvider? sp;
-    try {
-      sp = context.read<SettingsProvider>();
-    } catch (_) {}
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
     if (widget.asSheet && mounted) Navigator.of(context).pop();
     try {
       await Printing.layoutPdf(
@@ -260,9 +250,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
   Future<void> _downloadVoucherPdf() async {
     if (_voucher == null) return;
     SettingsProvider? sp;
-    try {
-      sp = context.read<SettingsProvider>();
-    } catch (_) {}
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
     if (widget.asSheet && mounted) Navigator.of(context).pop();
     try {
       final prefs = await _loadPrintPrefs();
@@ -278,9 +266,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
   Future<void> _shareVoucherPdf() async {
     if (_voucher == null) return;
     SettingsProvider? sp;
-    try {
-      sp = context.read<SettingsProvider>();
-    } catch (_) {}
+    try { sp = context.read<SettingsProvider>(); } catch (_) {}
     if (widget.asSheet && mounted) Navigator.of(context).pop();
     try {
       final prefs = await _loadPrintPrefs();
@@ -295,8 +281,6 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
     if (_isLoading) {
       return widget.asSheet
           ? const Material(
@@ -410,7 +394,7 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
     final String dateText = _formatDateOnly(voucher['date']);
 
     final String? cashText = (amountCash != null && amountCash > 0)
-        ? '${_currencyFormat.format(amountCash)} ${context.read<SettingsProvider>().currencySymbolText}'
+        ? '${_currencyFormat.format(amountCash)} ر.س'
         : null;
     final String? goldText = (amountGold != null && amountGold > 0)
         ? '${_weightFormat.format(amountGold)} غ'

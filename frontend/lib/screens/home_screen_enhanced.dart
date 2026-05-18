@@ -13,7 +13,6 @@ import '../providers/auth_provider.dart';
 import '../providers/sales_race_refresh_provider.dart';
 import '../models/quick_action_item.dart';
 import '../widgets/gold_price_bar.dart';
-import '../widgets/user_avatar_widget.dart';
 import '../widgets/gold_price_ticker_bar.dart';
 import '../widgets/gold_sparkline_enhanced.dart';
 import '../widgets/app_logo.dart';
@@ -69,6 +68,7 @@ import 'security_sessions_screen.dart';
 import 'change_password_screen.dart';
 import 'user_profile_screen.dart';
 import 'sales_race_management_screen.dart';
+import 'voucher_details_screen.dart';
 import '../features/invoice/widgets/barcode_scanner_screen.dart';
 import '../widgets/pending_approvals_dialog.dart';
 
@@ -1754,40 +1754,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
             ),
             Consumer<AuthProvider>(
               builder: (context, auth, _) {
-                // يفضل الاسم الكامل على اسم المستخدم للعرض
-                final fullName = auth.fullName;
-                final username = auth.username;
-                final displayName = fullName.isNotEmpty
-                    ? fullName
-                    : (username.isNotEmpty
-                        ? username
-                        : (isAr ? 'حساب المستخدم' : 'Account'));
-                final isDark = Theme.of(context).brightness == Brightness.dark;
-                final photoBase64 = auth.userPhoto;
-
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(width: 4),
-                    // ─── الأفاتار: مستقل تماماً عن الـ PopupMenuButton ───
-                    SizedBox(
-                      height: kToolbarHeight,
-                      child: Center(
-                        child: UserAvatarWidget(
-                          displayName: displayName,
-                          photoBase64: photoBase64,
-                          radius: 16,
-                          backgroundColor: isDark ? AppColors.primaryGold : Colors.white,
-                          foregroundColor: isDark ? const Color(0xFF1A1A1A) : AppColors.darkGold,
-                          editable: true,
-                          onUpload: (base64) => auth.updateUserPhoto(api, base64),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    // ─── الـ PopupMenuButton: يحتوي فقط على الاسم ───
-                    PopupMenuButton<String>(
-                  tooltip: '',
+                final displayName = auth.username.isNotEmpty
+                    ? auth.username
+                    : (auth.fullName.isEmpty
+                          ? (isAr ? 'حساب المستخدم' : 'Account')
+                          : auth.fullName);
+                return PopupMenuButton<String>(
+                  tooltip: displayName,
                   offset: const Offset(0, 48),
                   child: SizedBox(
                     height: kToolbarHeight,
@@ -1795,47 +1768,42 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // اسم العرض (الاسم الكامل) + اسم المستخدم أصغر
+                          const SizedBox(width: 6),
                           ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 120),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  displayName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: isDark ? AppColors.primaryGold : Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13,
-                                    fontFamily: 'Cairo',
-                                  ),
-                                ),
-                                if (username.isNotEmpty && username != displayName)
-                                  Text(
-                                    '@$username',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: (isDark ? AppColors.primaryGold : Colors.white)
-                                          .withValues(alpha: 0.65),
-                                      fontSize: 10,
-                                      fontFamily: 'Cairo',
-                                    ),
-                                  ),
-                              ],
+                            constraints: const BoxConstraints(maxWidth: 110),
+                            child: Text(
+                              displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                              style: TextStyle(
+                                color: Theme.of(context).brightness == Brightness.dark
+                                    ? AppColors.primaryGold
+                                    : Colors.white,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                                fontFamily: 'Cairo',
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.arrow_drop_down,
-                            color: (isDark ? AppColors.primaryGold : Colors.white)
-                                .withValues(alpha: 0.7),
-                            size: 18,
+                          const SizedBox(width: 8),
+                          CircleAvatar(
+                            radius: 15,
+                            backgroundColor: Colors.white,
+                            child: Text(
+                              displayName.isNotEmpty
+                                  ? displayName[0].toUpperCase()
+                                  : '?',
+                              style: TextStyle(
+                                color: Theme.of(context).brightness == Brightness.dark
+                                    ? const Color(0xFF1A1A1A)
+                                    : AppColors.darkGold,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                              ),
+                            ),
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
                         ],
                       ),
                     ),
@@ -1980,9 +1948,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       return;
                     }
                   },
-                ),   // PopupMenuButton
-                  ],  // Row children
-                );    // Row
+                );
               },
             ),
           ],
@@ -2372,7 +2338,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     Widget buildRow(Map row, int index) {
       final name = (row['name'] ?? '').toString();
-      final photo = row['photo'] as String?;
       final score = (row['score'] as num?)?.toDouble() ?? 0.0;
       final share = (row['share'] as num?)?.toDouble() ?? 0.0;
       final count = (row['count'] as num?)?.toInt() ?? 0;
@@ -2416,6 +2381,26 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         _ => isAr ? 'جم' : 'g',
       };
       final numberFormat = NumberFormat('#,##0', 'en');
+      final avatarText = name.trim().isEmpty
+          ? '?'
+          : name
+                .trim()
+                .split(RegExp(r'\s+'))
+                .where((part) => part.isNotEmpty)
+                .take(2)
+                .map((part) => part.characters.first)
+                .join();
+      final photoStr = (row['photo'] as String?);
+      MemoryImage? photoImage;
+      if (photoStr != null && photoStr.isNotEmpty) {
+        try {
+          final comma = photoStr.indexOf(',');
+          final raw = comma >= 0 ? photoStr.substring(comma + 1) : photoStr;
+          photoImage = MemoryImage(base64Decode(raw));
+        } catch (_) {
+          photoImage = null;
+        }
+      }
 
       bool hovered = false;
       return StatefulBuilder(
@@ -2481,10 +2466,31 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 _buildRankBadge(index, medalAccent),
                 const SizedBox(width: 8),
                 // Avatar
-                EmployeeAvatarWidget(
-                  name: name,
-                  photoBase64: photo,
-                  radius: 19,
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: medalAccent.withValues(alpha: 0.10),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: medalAccent.withValues(alpha: 0.18),
+                    ),
+                  ),
+                  child: ClipOval(
+                    child: photoImage != null
+                        ? Image(image: photoImage, fit: BoxFit.cover, width: 38, height: 38)
+                        : Center(
+                            child: Text(
+                              avatarText,
+                              style: TextStyle(
+                                fontFamily: 'Cairo',
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                                color: medalAccent,
+                              ),
+                            ),
+                          ),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 // Employee info
@@ -4956,18 +4962,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
               builder: (_) => const BarcodeScannerScreen(),
             ),
           );
-          if (scanned != null && scanned.isNotEmpty && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  widget.isArabic
-                      ? 'تم المسح: $scanned'
-                      : 'Scanned: $scanned',
-                ),
-                duration: const Duration(seconds: 3),
-              ),
-            );
-          }
+          if (scanned == null || scanned.isEmpty || !mounted) break;
+          await _handleScannedCode(scanned);
         }
         break;
       default:
@@ -4982,6 +4978,108 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     if (result == true) {
       _loadAllData();
     }
+  }
+
+  Future<void> _handleScannedCode(String code) async {
+    final api = ApiService();
+    final isAr = widget.isArabic;
+
+    // Voucher QR: "voucher_number=VCH001;voucher_id=5;..."
+    if (code.contains('voucher_id=')) {
+      final match = RegExp(r'voucher_id=(\d+)').firstMatch(code);
+      final id = int.tryParse(match?.group(1) ?? '');
+      if (id == null) {
+        _showBarcodeError(isAr ? 'رقم السند غير صالح' : 'Invalid voucher id');
+        return;
+      }
+      await showVoucherDetailsSheet(context, voucherId: id);
+      return;
+    }
+
+    // Invoice QR: "invoice_no=#5;date=...;type=...;party=..."
+    if (code.contains('invoice_no=')) {
+      final match = RegExp(r'invoice_no=#?(\d+)').firstMatch(code);
+      final numStr = match?.group(1) ?? '';
+      if (numStr.isEmpty) {
+        _showBarcodeError(isAr ? 'رقم الفاتورة غير صالح' : 'Invalid invoice number');
+        return;
+      }
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => InvoicesListScreen(
+            isArabic: isAr,
+            initialSearch: numStr,
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Item barcode: "I-XXXXXX"
+    if (RegExp(r'^I-', caseSensitive: false).hasMatch(code)) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+      try {
+        final item = await api.searchItemByBarcode(code);
+        if (!mounted) return;
+        Navigator.of(context, rootNavigator: true).pop();
+        if (item.isEmpty || item['id'] == null) {
+          _showBarcodeError(isAr ? 'لم يتم العثور على القطعة' : 'Item not found');
+          return;
+        }
+        final name = item['name'] ?? item['barcode'] ?? code;
+        final karat = item['karat']?.toString() ?? '-';
+        final weight = item['weight']?.toString() ?? '-';
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(isAr ? 'تفاصيل القطعة' : 'Item Details'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${isAr ? 'الاسم' : 'Name'}: $name'),
+                Text('${isAr ? 'الباركود' : 'Barcode'}: $code'),
+                Text('${isAr ? 'العيار' : 'Karat'}: $karat'),
+                Text('${isAr ? 'الوزن' : 'Weight'}: $weight ${isAr ? 'جم' : 'g'}'),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(isAr ? 'إغلاق' : 'Close'),
+              ),
+            ],
+          ),
+        );
+      } catch (_) {
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+          _showBarcodeError(isAr ? 'خطأ في البحث عن القطعة' : 'Error looking up item');
+        }
+      }
+      return;
+    }
+
+    // Unknown code
+    _showBarcodeError(isAr ? 'رمز غير معروف: $code' : 'Unknown code: $code');
+  }
+
+  void _showBarcodeError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppColors.error,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 }
 

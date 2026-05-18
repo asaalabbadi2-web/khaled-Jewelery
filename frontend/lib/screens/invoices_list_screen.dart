@@ -8,8 +8,6 @@ import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
 import '../api_service.dart';
-import '../app_events.dart';
-import '../models/employee_model.dart';
 import '../providers/auth_provider.dart';
 import '../services/data_sync_bus.dart';
 import '../utils/invoice_direct_print.dart';
@@ -33,7 +31,7 @@ enum _InvoiceCreationTarget {
 
 enum _InvoiceListView { table, cards }
 
-enum _InvoiceRowAction { view, editContent, updateStatus, print, changeEmployee, post, unpost, delete }
+enum _InvoiceRowAction { view, editContent, updateStatus, print, delete }
 
 class _InvoiceTabConfig {
   final String labelAr;
@@ -53,8 +51,9 @@ class _InvoiceTabConfig {
 
 class InvoicesListScreen extends StatefulWidget {
   final bool isArabic;
+  final String? initialSearch;
 
-  const InvoicesListScreen({super.key, this.isArabic = true});
+  const InvoicesListScreen({super.key, this.isArabic = true, this.initialSearch});
 
   @override
   State<InvoicesListScreen> createState() => _InvoicesListScreenState();
@@ -209,6 +208,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     DataSyncBus.itemsRevision.addListener(_itemsRevisionListener!);
     _loadInvoices();
     _warmFilterLookups();
+    if (widget.initialSearch != null && widget.initialSearch!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _searchControllers[_tabController.index].text = widget.initialSearch!;
+        }
+      });
+    }
   }
 
   @override
@@ -2678,8 +2684,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     final isCancelled =
         _normalizeStatus((invoice['status'] ?? '').toString()) == 'cancelled';
     final canEditContent = invoice['is_posted'] != true && !isCancelled;
-    final isPosted = invoice['is_posted'] == true;
-    final isManager = Provider.of<AuthProvider>(context, listen: false).isManager;
 
     PopupMenuItem<_InvoiceRowAction> item({
       required _InvoiceRowAction value,
@@ -2726,25 +2730,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
           icon: Icons.print_outlined,
           label: isAr ? 'طباعة' : 'Print',
         ),
-        if (canEditContent &&
-            Provider.of<AuthProvider>(context, listen: false).isManager)
-          item(
-            value: _InvoiceRowAction.changeEmployee,
-            icon: Icons.person_outlined,
-            label: isAr ? 'تغيير المنشئ' : 'Change Creator',
-          ),
-        if (!isPosted && !isCancelled && isManager)
-          item(
-            value: _InvoiceRowAction.post,
-            icon: Icons.check_circle_outline,
-            label: isAr ? 'ترحيل' : 'Post',
-          ),
-        if (isPosted && isManager)
-          item(
-            value: _InvoiceRowAction.unpost,
-            icon: Icons.cancel_outlined,
-            label: isAr ? 'إلغاء الترحيل' : 'Unpost',
-          ),
         item(
           value: _InvoiceRowAction.delete,
           icon: Icons.delete_outline,
@@ -2782,229 +2767,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       case _InvoiceRowAction.print:
         await _viewInvoiceDetails(invoice, autoPrint: true);
         break;
-      case _InvoiceRowAction.changeEmployee:
-        await _changeInvoiceEmployee(invoice);
-        break;
-      case _InvoiceRowAction.post:
-        await _postInvoiceAction(invoice);
-        break;
-      case _InvoiceRowAction.unpost:
-        await _unpostInvoiceAction(invoice);
-        break;
       case _InvoiceRowAction.delete:
         await _deleteInvoice(invoice);
         break;
-    }
-  }
-
-
-  Future<void> _postInvoiceAction(Map<String, dynamic> invoice) async {
-    final isAr = widget.isArabic;
-    final invoiceId = invoice['id'] as int?;
-    if (invoiceId == null) return;
-
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final postedBy = authProvider.currentUser?.username ?? 'admin';
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(children: [
-          const Icon(Icons.check_circle_outline, color: Colors.green),
-          const SizedBox(width: 8),
-          Text(isAr ? 'تأكيد الترحيل' : 'Confirm Post'),
-        ]),
-        content: Text(
-          isAr
-              ? 'هل تريد ترحيل الفاتورة رقم ${invoice['invoice_number'] ?? invoiceId}؟'
-              : 'Post invoice ${invoice['invoice_number'] ?? invoiceId}?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(isAr ? 'إلغاء' : 'Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-            child: Text(isAr ? 'ترحيل' : 'Post',
-                style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    try {
-      await _apiService.postInvoice(invoiceId, postedBy);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(isAr ? 'تم الترحيل بنجاح' : 'Invoice posted successfully'),
-        backgroundColor: Colors.green,
-      ));
-      AppEvents.notifyVaultChanged();
-      _loadInvoices();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(isAr ? 'فشل الترحيل: ${e.toString()}' : 'Post failed: ${e.toString()}'),
-        backgroundColor: Colors.red,
-      ));
-    }
-  }
-
-  Future<void> _unpostInvoiceAction(Map<String, dynamic> invoice) async {
-    final isAr = widget.isArabic;
-    final invoiceId = invoice['id'] as int?;
-    if (invoiceId == null) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(children: [
-          const Icon(Icons.cancel_outlined, color: Colors.orange),
-          const SizedBox(width: 8),
-          Text(isAr ? 'تأكيد إلغاء الترحيل' : 'Confirm Unpost'),
-        ]),
-        content: Text(
-          isAr
-              ? 'هل تريد إلغاء ترحيل الفاتورة رقم ${invoice['invoice_number'] ?? invoiceId}؟\nسيتم عكس جميع حركات الخزائن والقيود المرتبطة.'
-              : 'Unpost invoice ${invoice['invoice_number'] ?? invoiceId}?\nAll vault movements and related entries will be reversed.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(isAr ? 'إلغاء' : 'Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-            child: Text(isAr ? 'إلغاء الترحيل' : 'Unpost',
-                style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    try {
-      await _apiService.unpostInvoice(invoiceId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(isAr ? 'تم إلغاء الترحيل بنجاح' : 'Invoice unposted successfully'),
-        backgroundColor: Colors.orange,
-      ));
-      AppEvents.notifyVaultChanged();
-      _loadInvoices();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          isAr ? 'فشل إلغاء الترحيل: ${e.toString()}' : 'Unpost failed: ${e.toString()}'),
-        backgroundColor: Colors.red,
-      ));
-    }
-  }
-
-  Future<void> _changeInvoiceEmployee(Map<String, dynamic> invoice) async {
-    final isAr = widget.isArabic;
-    final invoiceId = invoice['id'] as int?;
-    if (invoiceId == null) return;
-
-    List<EmployeeModel> empList = [];
-    try {
-      final res = await _apiService.getEmployees(perPage: 200, isActive: true);
-      empList = res['employees'] as List<EmployeeModel>? ?? [];
-    } catch (_) {}
-
-    if (!mounted) return;
-    if (empList.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(isAr ? 'لا يوجد موظفون' : 'No employees')),
-      );
-      return;
-    }
-
-    int? selectedId = invoice['employee_id'] is int
-        ? invoice['employee_id'] as int
-        : null;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: Row(children: [
-            const Icon(Icons.person_outlined, color: Colors.orange),
-            const SizedBox(width: 8),
-            Text(isAr ? 'تغيير المنشئ' : 'Change Creator'),
-          ]),
-          content: SizedBox(
-            width: 340,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${isAr ? 'الفاتورة' : 'Invoice'}: ${invoice['invoice_number'] ?? invoiceId}',
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${isAr ? 'المنشئ الحالي' : 'Current'}: ${invoice['employee_name'] ?? invoice['posted_by'] ?? '—'}',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<int>(
-                  value: selectedId,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'الموظف الجديد' : 'New Employee',
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: empList
-                      .where((e) => e.id != null)
-                      .map((e) => DropdownMenuItem(
-                            value: e.id!,
-                            child: Text(e.name, style: const TextStyle(fontSize: 13)),
-                          ))
-                      .toList(),
-                  onChanged: (v) => setState(() => selectedId = v),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(isAr ? 'إلغاء' : 'Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: selectedId == null ? null : () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.check, size: 16),
-              label: Text(isAr ? 'تأكيد' : 'Confirm'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (confirmed != true || selectedId == null || !mounted) return;
-
-    try {
-      await _apiService.reassignInvoiceEmployee(invoiceId, selectedId!);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(isAr ? 'تم تغيير المنشئ' : 'Creator updated'),
-        backgroundColor: Colors.green,
-      ));
-      _loadInvoices(page: _currentPage);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${isAr ? 'خطأ' : 'Error'}: $e'),
-        backgroundColor: Colors.red,
-      ));
     }
   }
 
@@ -4185,24 +3950,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                         color: colorScheme.primary,
                                       ),
                                     ),
-                                    if (auth.isManager && paymentId != null)
-                                      IconButton(
-                                        onPressed: () =>
-                                            _showCorrectPaymentMethodDialog(
-                                          sheetContext: sheetContext,
-                                          invoice: invoice,
-                                          paymentId: paymentId,
-                                          currentMethodName: methodName,
-                                        ),
-                                        tooltip: isAr
-                                            ? 'تصحيح وسيلة الدفع'
-                                            : 'Correct payment method',
-                                        icon: Icon(
-                                          Icons.edit_outlined,
-                                          size: 20,
-                                          color: colorScheme.secondary,
-                                        ),
-                                      ),
                                   ],
                                 ),
                               );
@@ -4368,118 +4115,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
           ),
         );
       },
-    );
-  }
-
-  Future<void> _showCorrectPaymentMethodDialog({
-    required BuildContext sheetContext,
-    required Map<String, dynamic> invoice,
-    required int paymentId,
-    required String currentMethodName,
-  }) async {
-    final isAr = Localizations.localeOf(sheetContext).languageCode == 'ar';
-    final invoiceId = _tryParseInt(invoice['id']);
-    if (invoiceId == null) return;
-
-    List<dynamic> methods = [];
-    try {
-      methods = await _apiService.getActivePaymentMethods();
-    } catch (_) {}
-
-    int? selectedMethodId;
-    final reasonController = TextEditingController();
-
-    await showDialog<void>(
-      context: sheetContext,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: Text(isAr ? 'تصحيح وسيلة الدفع' : 'Correct Payment Method'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                isAr
-                    ? 'الوسيلة الحالية: $currentMethodName'
-                    : 'Current method: $currentMethodName',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                decoration: InputDecoration(
-                  labelText: isAr ? 'وسيلة الدفع الصحيحة' : 'Correct method',
-                  border: const OutlineInputBorder(),
-                ),
-                value: selectedMethodId,
-                items: methods.map<DropdownMenuItem<int>>((m) {
-                  final id = _tryParseInt(m['id']);
-                  final name = m['name']?.toString() ?? '';
-                  return DropdownMenuItem(value: id, child: Text(name));
-                }).toList(),
-                onChanged: (v) => setState(() => selectedMethodId = v),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: reasonController,
-                decoration: InputDecoration(
-                  labelText: isAr ? 'سبب التصحيح' : 'Reason',
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(isAr ? 'إلغاء' : 'Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: selectedMethodId == null
-                  ? null
-                  : () async {
-                      Navigator.pop(ctx);
-                      try {
-                        await _apiService.correctInvoicePaymentMethod(
-                          invoiceId: invoiceId,
-                          paymentId: paymentId,
-                          newPaymentMethodId: selectedMethodId!,
-                          reason: reasonController.text.trim().isNotEmpty
-                              ? reasonController.text.trim()
-                              : (isAr
-                                    ? 'تصحيح وسيلة الدفع'
-                                    : 'Correct payment method'),
-                        );
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                isAr
-                                    ? 'تم تصحيح وسيلة الدفع بنجاح'
-                                    : 'Payment method corrected successfully',
-                              ),
-                              backgroundColor: Colors.green,
-                            ),
-                          );
-                          _loadInvoices();
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                isAr ? 'خطأ: $e' : 'Error: $e',
-                              ),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      }
-                    },
-              child: Text(isAr ? 'تصحيح' : 'Correct'),
-            ),
-          ],
-        ),
-      ),
     );
   }
 

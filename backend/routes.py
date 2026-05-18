@@ -31045,8 +31045,10 @@ def _auto_consume_weight_closing(
         cash_spent += chunk_cash_value
 
         # ─── قيد تكلفة المبيعات (COGS): د/521 × ه/مخزون مالي ────────────────────
-        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense") لتعكس تكلفة الذهب المباع.
-        if journal_entry_id and chunk_cash_value > 0 and execution_type != 'expense':
+        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense" أو "office_reservation").
+        # مكاتب التسكير (office_reservation) لا تحتاج قيد COGS هنا لأن القيد الرئيسي
+        # في settle_office_reservation يُعالج المشتريات بشكل منفصل.
+        if journal_entry_id and chunk_cash_value > 0 and execution_type not in ('expense', 'office_reservation'):
             _cogs_account = Account.query.filter_by(account_number='521').first()
             if _cogs_account:
                 _karat_ln = (
@@ -31580,6 +31582,69 @@ def create_office_reservation():
                 voucher.journal_entry_id = voucher_entry.id
             _append_safe_transactions_for_voucher(voucher, created_by=voucher.created_by)
 
+        # ─── قيد وزني عند إنشاء الحجز ──────────────────────────────────────────
+        # يُسجّل خروج الذهب من مخزوننا إلى حيازة المكتب حتى يظهر حساب المكتب
+        # مديناً للذهب (عليه ذهب) أثناء فترة الحجز، ويُصفَّر عند التسوية.
+        # مدين: وزني المكتب  — الذهب في حيازتهم (عليه)
+        # دائن: مخزون الكسر الوزني — الذهب غادر مخزوننا مؤقتاً
+        _res_gold_je_ok = False
+        try:
+            _res_inv_acc_id = _resolve_inventory_account_id_for_invoice('شراء', 'scrap')
+            _res_inv_memo_id = None
+            if _res_inv_acc_id:
+                _inv_obj = Account.query.get(_res_inv_acc_id)
+                if _inv_obj and _inv_obj.memo_account_id:
+                    _res_inv_memo_id = _inv_obj.memo_account_id
+            if not _res_inv_memo_id:
+                _res_inv_memo_id = get_account_id_by_number('7521')
+
+            _res_office_acc = Account.query.get(int(office.account_category_id))
+            _res_office_memo_id = getattr(_res_office_acc, 'memo_account_id', None) if _res_office_acc else None
+            if not _res_office_memo_id:
+                ensure_office_account(office)
+                db.session.flush()
+                _res_office_acc = Account.query.get(int(office.account_category_id))
+                _res_office_memo_id = getattr(_res_office_acc, 'memo_account_id', None) if _res_office_acc else None
+
+            if _res_inv_memo_id and _res_office_memo_id:
+                _karat_n = karat if karat in (18, 21, 22, 24) else int(get_main_karat() or 21)
+                _kd = f'debit_{_karat_n}k'
+                _kc = f'credit_{_karat_n}k'
+
+                _res_gold_je = JournalEntry(
+                    entry_number=_generate_journal_entry_number('WGT'),
+                    date=reservation_date,
+                    description=f'إرسال ذهب للحجز ({reservation.reservation_code}) - مكتب {office.name}',
+                    reference_type='office_reservation',
+                    reference_id=reservation.id,
+                    is_posted=True,
+                    posted_at=reservation_date,
+                    posted_by=str(data.get('created_by') or 'system'),
+                )
+                db.session.add(_res_gold_je)
+                db.session.flush()
+
+                # مدين: وزني المكتب — الذهب في حيازة المكتب (عليه ذهب)
+                create_dual_journal_entry(
+                    journal_entry_id=_res_gold_je.id,
+                    account_id=int(_res_office_memo_id),
+                    supplier_id=supplier.id,
+                    description=f'ذهب بحيازة مكتب التسكير عيار {_karat_n}',
+                    **{_kd: weight_grams},
+                )
+                # دائن: مخزون الكسر الوزني — الذهب غادر مخزوننا
+                create_dual_journal_entry(
+                    journal_entry_id=_res_gold_je.id,
+                    account_id=int(_res_inv_memo_id),
+                    description=f'خروج ذهب كسر للتسكير عيار {_karat_n}',
+                    **{_kc: weight_grams},
+                )
+                reservation.gold_journal_entry_id = _res_gold_je.id if hasattr(reservation, 'gold_journal_entry_id') else None
+                _res_gold_je_ok = True
+        except Exception as _rje_exc:
+            print(f"⚠️ تحذير: تعذر إنشاء قيد الذهب عند الحجز: {_rje_exc}")
+        # ─────────────────────────────────────────────────────────────────────────
+
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
         office.total_amount_paid = (office.total_amount_paid or 0.0) + paid_amount
@@ -31589,6 +31654,7 @@ def create_office_reservation():
 
         response = _serialize_office_reservation(reservation)
         response['purchase_invoice_id'] = reservation.purchase_invoice_id
+        response['gold_journal_entry_created'] = _res_gold_je_ok
         # Echo payment safe box (if provided via request or settings) for UI/debugging.
         payment_sb = _normalize_fk_ref(data.get('safe_box_id')) or _normalize_fk_ref(data.get('cash_safe_box_id'))
         if payment_sb is not None:
@@ -31758,68 +31824,26 @@ def settle_office_reservation(reservation_id: int):
             db.session.rollback()
             return jsonify({'error': 'وزن الحجز غير صالح'}), 400
 
-        karat_debit = f'debit_{karat}k'
-        karat_credit = f'credit_{karat}k'
-
-        # الوزن يجب أن يذهب لحساب المذكرة (7xxxx) لا الحساب المالي (1xxx).
-        inventory_memo_acc_id = None
-        try:
-            inv_acc_obj = Account.query.get(inventory_account_id)
-            if inv_acc_obj and inv_acc_obj.memo_account_id:
-                inventory_memo_acc_id = inv_acc_obj.memo_account_id
-        except Exception:
-            inventory_memo_acc_id = None
-        if not inventory_memo_acc_id:
-            inventory_memo_acc_id = get_account_id_by_number('7521')
-        if not inventory_memo_acc_id:
-            db.session.rollback()
-            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمخزون الذهب عند التسكير'}), 500
-
-        # مدين: مشتريات ذهب (512/511) — تكلفة الشراء من المكتب
+        # ─── قيد التسوية: نقدي فقط — الذهب يبقى وديعةً في خزنة المكتب ──────────
+        # بعد التسكير يصبح الذهب وديعةً لنا عند المكتب (خزنة المكتب الذهبية).
+        # لا يُسجَّل خروج الذهب من المكتب هنا، لأنه لم يُستلَم فعلياً.
+        # الذهب سيُصرف لاحقاً إما بسحبه للمخزون أو بتوزيعه على المندوبين
+        # عبر سند صرف من خزنة المكتب الذهبية.
+        # ────────────────────────────────────────────────────────────────────────
+        # مدين: مشتريات ذهب (512/511) — تكلفة التسكير المستحقة للمكتب
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=purchases_acc_id,
             cash_debit=total_amount,
-            description=f'شراء ذهب تسكير عيار {karat} - مشتريات',
+            description=f'تكلفة تسكير ذهب عيار {karat} - مستحق للمكتب',
         )
-        # مدين: مخزون وزني (memo) — الذهب يدخل مخزوننا
-        create_dual_journal_entry(
-            journal_entry_id=gold_entry.id,
-            account_id=inventory_memo_acc_id,
-            description=f'استلام ذهب تسكير عيار {karat} - دخول وزن للمخزون',
-            **{karat_debit: weight_grams},
-        )
-
-        # IMPORTANT: office bridge account is used for cash-equivalent tracking.
-        # Weight must be posted to the memo (7xxxx) account so it maps cleanly
-        # to the office gold SafeBox (which is linked to the memo account).
+        # دائن: حساب المكتب النقدي — المبلغ المستحق للمكتب مقابل التسكير
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=office.account_category_id,
             cash_credit=total_amount,
             supplier_id=supplier.id,
-            description=f'ذهب لدى مكتب التسكير (قيمة نقدية مكافئة) - عيار {karat}',
-        )
-
-        office_account = Account.query.get(int(office.account_category_id))
-        office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
-        if not office_memo_id:
-            # Ensure memo exists for legacy offices.
-            ensure_office_account(office)
-            db.session.flush()
-            office_account = Account.query.get(int(office.account_category_id))
-            office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
-        if not office_memo_id:
-            db.session.rollback()
-            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمكتب التسكير'}), 500
-
-        # دائن: وزني المكتب — الذهب يغادر المكتب بعد التنفيذ
-        create_dual_journal_entry(
-            journal_entry_id=gold_entry.id,
-            account_id=int(office_memo_id),
-            supplier_id=supplier.id,
-            description=f'خروج ذهب من مكتب التسكير (وزن) - عيار {karat}',
-            **{karat_credit: weight_grams},
+            description=f'مستحقات مكتب التسكير عيار {karat} (وديعة ذهبية قيد الصرف)',
         )
         verify_dual_balance(gold_entry.id)
 
@@ -31908,6 +31932,21 @@ def cancel_office_reservation(reservation_id: int):
 
     reservation.status = 'cancelled'
     db.session.add(reservation)
+
+    # عكس قيد الذهب الوزني الذي أُنشئ عند الحجز (إرسال الذهب للمكتب).
+    # يُبحث عن القيد بالمرجع ويُحذف لأن الحجز لم يُنفَّذ ولا توجد دفعات.
+    try:
+        reservation_gold_entries = JournalEntry.query.filter_by(
+            reference_type='office_reservation',
+            reference_id=reservation.id,
+        ).all()
+        for je in reservation_gold_entries:
+            # حذف أسطر القيد ثم القيد نفسه
+            JournalEntryLine.query.filter_by(journal_entry_id=je.id).delete()
+            db.session.delete(je)
+    except Exception as _rev_exc:
+        print(f"⚠️ تحذير: تعذر حذف قيود الحجز الملغى {reservation_id}: {_rev_exc}")
+
     db.session.commit()
 
     return jsonify(_serialize_office_reservation(reservation)), 200
