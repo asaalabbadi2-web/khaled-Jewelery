@@ -59,6 +59,15 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "Git: Commit & Push via Hook",
+			"type": "shell",
+			"command": "git add -A && (git diff --cached --quiet || git commit -m \"${input:commitMessage}\") && git push",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		},
+		{
 			"label": "Analyze Accounts Numbering",
 			"type": "shell",
 			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json; from collections import Counter\naccounts=json.load(sys.stdin)\nfor a in accounts: a[\"account_number\"]=str(a.get(\"account_number\"))\nprint(\"count\", len(accounts))\ntracks=[a for a in accounts if a.get(\"tracks_weight\")]\nnon=[a for a in accounts if not a.get(\"tracks_weight\")]\nprint(\"tracks_weight\", len(tracks), \"non_weight\", len(non))\nprint(\"min_account_number\", min(a[\"account_number\"] for a in accounts))\nprint(\"max_account_number\", max(a[\"account_number\"] for a in accounts))\n# prefix groups\npref=Counter(a[\"account_number\"][0] for a in accounts if a.get(\"account_number\"))\nprint(\"prefix_counts\", dict(sorted(pref.items())))\n# anomalies\nbad_weight=[a for a in tracks if not a[\"account_number\"].startswith(\"7\")]\nbad_non=[a for a in non if a[\"account_number\"].startswith(\"7\")]\nprint(\"bad_weight_prefix\", len(bad_weight))\nprint(\"bad_non_weight_prefix\", len(bad_non))\nctr=Counter(a[\"account_number\"] for a in accounts)\ndup=[k for k,v in ctr.items() if v>1]\nprint(\"duplicate_account_numbers\", len(dup))\nroot_like=[a for a in accounts if a.get(\"parent_id\") is None and len(a[\"account_number\"])>1]\nprint(\"root_like_len>1\", len(root_like))\n'",
