@@ -105,7 +105,7 @@ class BackupScheduler:
         backup_dir = self._backup_dir()
         backup_dir.mkdir(parents=True, exist_ok=True)
 
-        created_at = datetime.now().strftime("%Y%m%d-%H%M%S")
+        created_at = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         filename = f"yasargold-backup-{created_at}.zip"
         zip_path = backup_dir / filename
 
@@ -126,7 +126,7 @@ class BackupScheduler:
             import zipfile
 
             meta = {
-                "created_at_utc": datetime.now().isoformat() + "Z",
+                "created_at_utc": datetime.utcnow().isoformat() + "Z",
                 "db_backend": "postgres" if is_pg else "sqlite",
                 "format": "pg_dump_custom" if is_pg else "sqlite_file",
             }

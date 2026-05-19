@@ -1281,12 +1281,7 @@ class _ScrapPurchaseInvoiceScreenState
       }
 
       if (!mounted) return;
-      if (shouldPrint == 'new_invoice') {
-        _resetAfterSave();
-      } else {
-        // 'done' or null → return to home
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
+      _resetAfterSave();
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
     }
@@ -1623,11 +1618,6 @@ class _ScrapPurchaseInvoiceScreenState
               label: 'مشاركة',
               icon: Icons.share_rounded,
               value: 'share',
-            ),
-            InvoiceSummaryAction.secondary(
-              label: 'فاتورة جديدة',
-              icon: Icons.add_circle_outline_rounded,
-              value: 'new_invoice',
             ),
             InvoiceSummaryAction.primary(
               label: 'تم',

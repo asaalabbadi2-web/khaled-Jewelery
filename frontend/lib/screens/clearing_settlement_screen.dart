@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 
 import 'package:flutter/material.dart';
@@ -82,6 +83,10 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
   /// المبلغ المستحق الفعلي من API (المستحقات - ما تمت تسويته)
   double? _dueAmount;
+
+  // Settlement history — loaded for admin/manager reversal
+  List<Map<String, dynamic>> _settlementHistory = [];
+  bool _loadingHistory = false;
 
   DateTime _settlementDate = DateTime.now();
 
@@ -312,6 +317,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
       // Apply default fee policy based on the selected clearing safe (if it maps to a payment method).
       _applyFeePolicyFromClearingSafe();
+
+      // Load settlement history for admin/manager reversal.
+      _loadHistory();
 
       // If policy indicates fee was already applied at invoice time, disable fee inputs to avoid double-deduction.
       if (_feeAlreadyAppliedInInvoice) {
@@ -897,6 +905,76 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
             : theme.AppColors.success,
       ),
     );
+  }
+
+  /// Load recent clearing settlement vouchers (for admin/manager reversal).
+  Future<void> _loadHistory() async {
+    if (!mounted) return;
+    setState(() => _loadingHistory = true);
+    try {
+      final res = await _api.getVouchers(
+        referenceType: 'clearing_settlement',
+        perPage: 15,
+        sortBy: 'date',
+        sortOrder: 'desc',
+      );
+      final raw = res['vouchers'];
+      if (!mounted) return;
+      setState(() {
+        _settlementHistory = (raw is List)
+            ? raw.whereType<Map<String, dynamic>>().toList()
+            : [];
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _settlementHistory = []);
+    } finally {
+      if (mounted) setState(() => _loadingHistory = false);
+    }
+  }
+
+  /// Reverse a clearing settlement voucher after admin confirmation.
+  Future<void> _reverseSettlement(
+    int voucherId,
+    String voucherNumber,
+  ) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('عكس التسوية'),
+        content: Text(
+          'هل تريد عكس سند التسوية رقم $voucherNumber؟\n'
+          'سيتم إنشاء قيد محاسبي عكسي وإلغاء السند.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text(
+              'عكس',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await _api.cancelVoucher(voucherId, 'عكس تسوية مقاصة');
+      if (!mounted) return;
+      _showSnack('تم عكس التسوية بنجاح');
+      _loadHistory();
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack(e.toString(), error: true);
+    }
   }
 
   Future<void> _submit() async {
@@ -1761,6 +1839,152 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
+                // ── Settlement history (admin/manager only) ──
+                if (context.read<AuthProvider>().isManager) ...[
+                  const SizedBox(height: 20),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  'سجل التسويات السابقة',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                              InkWell(
+                                onTap: _loadHistory,
+                                borderRadius: BorderRadius.circular(20),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(4),
+                                  child: Icon(Icons.refresh, size: 18),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          if (_loadingHistory)
+                            const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          else if (_settlementHistory.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Text(
+                                'لا توجد تسويات سابقة',
+                                style: TextStyle(color: Colors.grey.shade600),
+                              ),
+                            )
+                          else
+                            ..._settlementHistory.map((v) {
+                              final voucherId =
+                                  (v['id'] as num?)?.toInt() ?? 0;
+                              final voucherNumber =
+                                  v['voucher_number']?.toString() ??
+                                  '#$voucherId';
+                              final dateStr =
+                                  (v['date'] ?? v['created_at'] ?? '')
+                                      .toString();
+                              final displayDate = dateStr.length >= 10
+                                  ? dateStr.substring(0, 10)
+                                  : dateStr;
+                              final status =
+                                  (v['status'] ?? '').toString();
+                              final totalCash =
+                                  (v['total_cash'] as num?)?.toDouble() ??
+                                  0.0;
+                              final isActive = status == 'active';
+                              return Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 5),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'سند: $voucherNumber',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          if (displayDate.isNotEmpty)
+                                            Text(
+                                              displayDate,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.grey.shade600,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    Text(
+                                      _formatMoney(totalCash),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    if (isActive)
+                                      OutlinedButton(
+                                        onPressed: () => _reverseSettlement(
+                                          voucherId,
+                                          voucherNumber,
+                                        ),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.red,
+                                          side: const BorderSide(
+                                            color: Colors.red,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 2,
+                                          ),
+                                          minimumSize: const Size(56, 30),
+                                          tapTargetSize: MaterialTapTargetSize
+                                              .shrinkWrap,
+                                        ),
+                                        child: const Text(
+                                          'عكس',
+                                          style: TextStyle(fontSize: 12),
+                                        ),
+                                      )
+                                    else
+                                      Chip(
+                                        label: const Text(
+                                          'ملغي',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                        backgroundColor: Colors.grey.shade200,
+                                        padding: EdgeInsets.zero,
+                                        materialTapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                  ],
+                                ),
+                              );
+                            }),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
     );

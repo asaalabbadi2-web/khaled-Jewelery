@@ -9,7 +9,6 @@ import '../api_service.dart';
 import '../app_route_observer.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
-import '../utils/currency_utils.dart' as cu;
 import '../widgets/account_picker_sheet.dart';
 import 'journal_entry_form.dart';
 
@@ -44,6 +43,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   bool _isLoading = true;
   String? _error;
 
+  String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   int _mainKarat = 21;
 
@@ -67,9 +67,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   Timer? _searchDebounce;
   double _topChromeHeight = 0;
   double _topChromeCollapseOffset = 0;
-
-  String get _currencySymbol =>
-      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -111,15 +108,21 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
 
   void _syncSettings() {
     final settings = context.read<SettingsProvider>();
+    final nextSymbol = settings.currencySymbol;
     final nextDecimals = settings.decimalPlaces;
     final nextMainKarat = settings.mainKarat;
 
-    if (nextDecimals != _currencyDecimalPlaces || nextMainKarat != _mainKarat) {
-      setState(() {
-        _currencyDecimalPlaces = nextDecimals;
-        _mainKarat = nextMainKarat;
-      });
+    if (_currencySymbol == nextSymbol &&
+        _currencyDecimalPlaces == nextDecimals &&
+        _mainKarat == nextMainKarat) {
+      return;
     }
+
+    setState(() {
+      _currencySymbol = nextSymbol;
+      _currencyDecimalPlaces = nextDecimals;
+      _mainKarat = nextMainKarat;
+    });
   }
 
   void _onContentScroll() {
@@ -147,8 +150,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
       if (renderObject is! RenderBox) {
         return;
       }
-      final screenHeight = MediaQuery.of(this.context).size.height;
-      final height = renderObject.size.height.clamp(0.0, screenHeight * 0.38);
+      final height = renderObject.size.height;
       if (height <= 0 || (height - _topChromeHeight).abs() < 0.5) {
         return;
       }
@@ -324,11 +326,10 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   }
 
   String _formatCash(dynamic raw) {
-    final formatted = NumberFormat(
-      '#,##0.${'0' * _currencyDecimalPlaces}',
-      widget.isArabic ? 'ar' : 'en',
+    return NumberFormat.currency(
+      symbol: _currencySymbol,
+      decimalDigits: _currencyDecimalPlaces,
     ).format(_asDouble(raw));
-    return '$formatted $_currencySymbol';
   }
 
   String _formatGold(dynamic raw) {
@@ -948,7 +949,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
                     ),
                   ),
                   const SizedBox(height: 2),
-                  context.read<SettingsProvider>().buildText(
+                  Text(
                     value,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
@@ -1765,15 +1766,15 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             Icon(icon, size: 15, color: color),
             const SizedBox(width: 6),
             Flexible(
-              child: context.read<SettingsProvider>().buildText(
+              child: Text(
                 value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
                   color: emphasize ? color.withValues(alpha: 0.98) : null,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
               ),
             ),
           ],
@@ -2392,13 +2393,13 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label, style: theme.textTheme.bodySmall),
-                context.read<SettingsProvider>().buildText(
+                Text(
                   value,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
                     color: emphasize ? resolvedAccent : null,
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -2621,8 +2622,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
 
   @override
   Widget build(BuildContext context) {
-    context.watch<SettingsProvider>();
-
     return Directionality(
       textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
@@ -2660,26 +2659,19 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
           ],
         ),
         body: Column(
-            children: [
-              _buildCollapsibleTopChrome(),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.28,
-                ),
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: _buildManagementToolbar(),
-                  ),
-                ),
+          children: [
+            _buildCollapsibleTopChrome(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _buildManagementToolbar(),
+            ),
+            if (_isLoading && _entries.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: LinearProgressIndicator(minHeight: 2),
               ),
-              if (_isLoading && _entries.isNotEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: LinearProgressIndicator(minHeight: 2),
-                ),
-              Expanded(child: _buildBody()),
-            ],
+            Expanded(child: _buildBody()),
+          ],
         ),
       ),
     );
@@ -2899,42 +2891,35 @@ class _JournalEntryDetailSheet extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _totalCard(context, isArabic ? 'مدين نقد' : 'Cash Debit', _fmt(cashDebit, decimals: 2),
-              context.read<SettingsProvider>().currencySymbolText, Colors.green[700]!),
+          _totalCard(isArabic ? 'مدين نقد' : 'Cash Debit', _fmt(cashDebit, decimals: 2),
+              isArabic ? 'ر.س' : 'SAR', Colors.green[700]!),
           Container(width: 1, height: 40, color: Colors.grey[300]),
-          _totalCard(context, isArabic ? 'دائن نقد' : 'Cash Credit', _fmt(cashCredit, decimals: 2),
-              context.read<SettingsProvider>().currencySymbolText, Colors.red[700]!),
+          _totalCard(isArabic ? 'دائن نقد' : 'Cash Credit', _fmt(cashCredit, decimals: 2),
+              isArabic ? 'ر.س' : 'SAR', Colors.red[700]!),
           Container(width: 1, height: 40, color: Colors.grey[300]),
-          _totalCard(context, isArabic ? 'مدين ذهب' : 'Gold Debit', _fmt(goldDebit),
+          _totalCard(isArabic ? 'مدين ذهب' : 'Gold Debit', _fmt(goldDebit),
               isArabic ? 'جم' : 'g', _gold),
           Container(width: 1, height: 40, color: Colors.grey[300]),
-          _totalCard(context, isArabic ? 'دائن ذهب' : 'Gold Credit', _fmt(goldCredit),
+          _totalCard(isArabic ? 'دائن ذهب' : 'Gold Credit', _fmt(goldCredit),
               isArabic ? 'جم' : 'g', Colors.orange[700]!),
         ],
       ),
     );
   }
 
-  Widget _totalCard(BuildContext context, String label, String value, String unit, Color color) {
-    final isNewSar = context.read<SettingsProvider>().currencyIsNewSar;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-        const SizedBox(height: 2),
-        RichText(text: TextSpan(
-          children: [
-            TextSpan(text: value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color)),
-            const TextSpan(text: ' '),
-            if (isNewSar)
-              cu.SarSymbolSpan(fontSize: 11, color: Colors.grey[600]!)
-            else
-              TextSpan(text: unit, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-          ],
-        )),
-      ],
-    );
-  }
+  Widget _totalCard(String label, String value, String unit, Color color) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+      const SizedBox(height: 2),
+      RichText(text: TextSpan(
+        children: [
+          TextSpan(text: value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color)),
+          TextSpan(text: ' $unit', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ],
+      )),
+    ],
+  );
 
   Widget _buildLinesHeader(BuildContext context) {
     final style = TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey[700]);

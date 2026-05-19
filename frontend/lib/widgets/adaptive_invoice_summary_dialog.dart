@@ -762,10 +762,9 @@ class _InvoiceSummaryActions<T> extends StatelessWidget {
         final colorScheme = theme.colorScheme;
         final primary = primaryAction;
         final showCompactSingleSecondary = secondaryActions.length == 1 && primary != null;
-        final secondaryCount = secondaryActions.length;
-        final secondaryWidth = secondaryCount <= 1
+        final secondaryWidth = secondaryActions.length <= 1
             ? constraints.maxWidth
-            : (constraints.maxWidth - (secondaryCount - 1) * 8) / secondaryCount;
+            : (constraints.maxWidth - 12) / 2;
         final compactSecondaryWidth = math.min(
           180.0,
           math.max(132.0, constraints.maxWidth * 0.42),
@@ -775,33 +774,34 @@ class _InvoiceSummaryActions<T> extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (!showCompactSingleSecondary && secondaryActions.isNotEmpty)
-              Row(
-                children: [
-                  for (int i = 0; i < secondaryActions.length; i++) ...[
-                    if (i > 0) const SizedBox(width: 8),
-                    SizedBox(
-                      width: secondaryWidth,
-                      height: 48,
-                      child: OutlinedButton.icon(
-                        onPressed: () => Navigator.of(context).pop(secondaryActions[i].value),
-                        icon: Icon(secondaryActions[i].icon, size: 18),
-                        label: Text(secondaryActions[i].label),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: colorScheme.onSurface,
-                          side: BorderSide(
-                            color: AppColors.primaryGold.withValues(alpha: 0.48),
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          textStyle: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: secondaryActions
+                    .map(
+                      (action) => SizedBox(
+                        width: secondaryWidth,
+                        height: 48,
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pop(action.value),
+                          icon: Icon(action.icon, size: 18),
+                          label: Text(action.label),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: colorScheme.onSurface,
+                            side: BorderSide(
+                              color: AppColors.primaryGold.withValues(alpha: 0.48),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            textStyle: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ],
+                    )
+                    .toList(),
               ),
             if (primary != null) ...[
               if (!showCompactSingleSecondary && secondaryActions.isNotEmpty)

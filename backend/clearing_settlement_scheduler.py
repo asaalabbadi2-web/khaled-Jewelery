@@ -327,53 +327,6 @@ class ClearingSettlementScheduler:
                 result.append(ip.id)
         return result
 
-    def _trim_ip_ids_to_gross(self, ip_ids: list[int], gross_amount: float) -> list[int]:
-        """Return only the oldest IP IDs whose total remaining unsettled balance
-        fits within gross_amount (FIFO).
-
-        This prevents the scheduler from passing more IPs than the capped
-        gross_amount can cover, which would cause _create_clearing_settlement_voucher
-        to stop mid-list and leave newer IPs without SettlementLine records even
-        though they were included in the settlement voucher (phantom settlement).
-
-        IPs are sorted oldest-first so the order matches the settlement FIFO logic.
-        The last IP in the returned list may be partially settled if its full amount
-        exceeds the remaining gross — the route handles this correctly.
-        """
-        if not ip_ids or gross_amount <= 0.005:
-            return []
-        ip_rows = sorted(
-            InvoicePayment.query.filter(InvoicePayment.id.in_(ip_ids)).all(),
-            key=lambda x: x.created_at or datetime.min,
-        )
-        # Re-check settled amounts (SettlementLine) to get the actual remaining per IP.
-        all_ids = [ip.id for ip in ip_rows]
-        settled_by_ip: dict[int, float] = {}
-        if all_ids:
-            rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .filter(SettlementLine.invoice_payment_id.in_(all_ids))
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            settled_by_ip = {r[0]: float(r[1]) for r in rows}
-        result: list[int] = []
-        remaining = round(float(gross_amount), 2)
-        for ip in ip_rows:
-            if remaining <= 0.005:
-                break
-            ip_amt = round(float(ip.amount or 0), 2)
-            sl_amt = round(settled_by_ip.get(ip.id, 0.0), 2)
-            available = round(ip_amt - sl_amt, 2)
-            if available <= 0.005:
-                continue
-            result.append(ip.id)
-            remaining = round(remaining - available, 2)
-        return result
-
     def process_due_settlements(self) -> dict:
         """Run auto-settlement for all eligible payment methods.
 
@@ -595,13 +548,8 @@ class ClearingSettlementScheduler:
 
                         reference_number = f"AUTO-PM-{pm.id}-W-{today.isoformat()}"
 
-                        # Collect all unsettled IP IDs up to cutoff for this safe box,
-                        # then trim to only those covered by gross_amount (FIFO).
-                        # Trimming prevents phantom-settlement: marking an IP as settled
-                        # when the capped gross_amount doesn't actually cover it, which
-                        # would cause due_amount > 0 while pending_count = 0.
+                        # Collect all unsettled IP IDs up to cutoff for this safe box
                         weekly_ip_ids = self._get_unsettled_ip_ids_up_to(clearing_sb.id, cutoff_dt)
-                        weekly_ip_ids = self._trim_ip_ids_to_gross(weekly_ip_ids, gross_amount)
 
                         fee_amount, fee_tx_count = self._compute_fee_amount_with_count(
                             pm=pm,
@@ -739,10 +687,8 @@ class ClearingSettlementScheduler:
 
                         reference_number = f"AUTO-PM-{pm.id}-{settle_day.isoformat()}"
 
-                        # Collect unsettled IP IDs for this day and trim to gross_amount
-                        # to prevent phantom-settlement when day_amount is capped.
+                        # Collect unsettled IP IDs for this day (for SettlementLine creation)
                         day_ip_ids = self._get_unsettled_ip_ids_for_day(clearing_sb.id, day_start, day_end)
-                        day_ip_ids = self._trim_ip_ids_to_gross(day_ip_ids, day_amount)
 
                         fee_amount_day, fee_tx_count = self._compute_fee_amount_with_count(
                             pm=pm,
