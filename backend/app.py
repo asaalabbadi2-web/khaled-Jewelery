@@ -116,6 +116,7 @@ from schema_guard import (
 	ensure_employee_cash_safe_columns,
 	ensure_app_user_photo_column,
 	ensure_employee_photo_column,
+	ensure_employee_goal_columns,
 	ensure_journal_line_dimension_columns,
 	ensure_supplier_columns,
 	ensure_payment_method_columns,
@@ -319,6 +320,7 @@ with app.app_context():
 	ensure_employee_cash_safe_columns(db.engine)
 	ensure_app_user_photo_column(db.engine)
 	ensure_employee_photo_column(db.engine)
+	ensure_employee_goal_columns(db.engine)
 	ensure_journal_line_dimension_columns(db.engine)
 	ensure_supplier_columns(db.engine)
 	ensure_payment_method_columns(db.engine)
@@ -388,6 +390,7 @@ def create_tables():
 		ensure_employee_cash_safe_columns(db.engine)
 		ensure_app_user_photo_column(db.engine)
 		ensure_employee_photo_column(db.engine)
+		ensure_employee_goal_columns(db.engine)
 		ensure_journal_line_dimension_columns(db.engine)
 		ensure_supplier_columns(db.engine)
 		ensure_payment_method_columns(db.engine)

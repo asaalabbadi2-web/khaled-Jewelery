@@ -387,13 +387,16 @@ class SuppliersScreenState extends State<SuppliersScreen> {
     required String cashFormatted,
     required String goldFormatted,
     Map<String, double> karatWeights = const {},
+    bool isClosingOffice = false,
   }) {
     final theme = Theme.of(context);
     final nonZeroKarats = karatWeights.entries
         .where((e) => e.value.abs() > 0.0001)
         .toList();
-    // Only show chips when there are 2+ different karats
-    final showChips = nonZeroKarats.length >= 2;
+    // Show chips when 2+ karats OR when it's a closing office with any karat
+    final showChips =
+        nonZeroKarats.isNotEmpty &&
+        (nonZeroKarats.length >= 2 || isClosingOffice);
     final weightFmt = showChips
         ? NumberFormat('#,##0.00', Localizations.localeOf(context).toString())
         : null;
@@ -456,40 +459,48 @@ class SuppliersScreenState extends State<SuppliersScreen> {
             ],
           ),
           if (showChips) ...[
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: nonZeroKarats.map((e) {
-                  final isNeg = e.value < 0;
-                  final chipColor = isNeg
-                      ? app_theme.AppColors.error
-                      : const Color(0xFFC69214);
-                  return Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                for (int _ki = 0; _ki < nonZeroKarats.length; _ki++) ...[
+                  if (_ki > 0) const SizedBox(width: 4),
+                  Expanded(
+                    child: Builder(
+                      builder: (_) {
+                        final e = nonZeroKarats[_ki];
+                        final isNeg = e.value < 0;
+                        final chipColor = isNeg
+                            ? app_theme.AppColors.error
+                            : const Color(0xFFC69214);
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: chipColor.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: chipColor.withValues(alpha: 0.28),
+                            ),
+                          ),
+                          child: Text(
+                            '${e.key}: ${weightFmt!.format(e.value)}',
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: chipColor,
+                            ),
+                          ),
+                        );
+                      },
                     ),
-                    decoration: BoxDecoration(
-                      color: chipColor.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: chipColor.withValues(alpha: 0.28),
-                      ),
-                    ),
-                    child: Text(
-                      '${e.key}: ${weightFmt!.format(e.value)}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: chipColor,
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
+                  ),
+                ],
+              ],
             ),
           ],
         ],
@@ -1228,6 +1239,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                 cashFormatted: cashFormatted,
                 goldFormatted: goldFormatted,
                 karatWeights: karatWeights,
+                isClosingOffice: isClosingOffice,
               );
 
               return Column(
@@ -1239,7 +1251,7 @@ class SuppliersScreenState extends State<SuppliersScreen> {
                       children: [
                         Expanded(flex: 6, child: detailsColumn),
                         const SizedBox(width: 12),
-                        SizedBox(width: 320, child: balancePanel),
+                        SizedBox(width: 360, child: balancePanel),
                       ],
                     )
                   else ...[

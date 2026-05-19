@@ -17,6 +17,64 @@
         "/^curl -s http://localhost:8001/api/gold_price 2>/dev/null \\| head -c 100$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "git diff": true,
+        "wc": true,
+        "echo": true,
+        "/^cd /Users/salehalabbadi/yasargold/backend && source venv/bin/activate && python -c \"from app import app; print\\('Backend OK'\\)\" && echo \"---\" && grep -c \"_postInvoiceAction\\\\\\|_unpostInvoiceAction\\\\\\|_changeInvoiceEmployee\" \\.\\./frontend/lib/screens/invoices_list_screen\\.dart && echo \"invoice actions restored\" && grep -c \"_buildRoyalRankBadge\\\\\\|BackdropFilter\" \\.\\./frontend/lib/screens/sales_race_management_screen\\.dart && echo \"sales race UI restored\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "flutter": true,
+        "git log": true,
+        "git -C /Users/salehalabbadi/yasargold": true,
+        "/^python3 scripts/quality_guard\\.py --base 4e90096 --head afcf7a1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "chmod": true,
+        "/^python3 -m py_compile scripts/quality_guard\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "./venv/bin/python": true,
+        "tail": true,
+        "/^cd /Users/salehalabbadi/yasargold && python3 -m py_compile scripts/quality_guard\\.py && bash -n \\.githooks/pre-commit && bash -n \\.githooks/pre-push && bash -n scripts/install_hooks\\.sh$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python3 scripts/quality_guard\\.py --staged$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python3 -m py_compile scripts/quality_guard\\.py && python3 scripts/quality_guard\\.py --staged$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "./scripts/install_hooks.sh": true,
+        "git config": true,
+        "/^cd /Users/salehalabbadi/yasargold && python3 -m py_compile scripts/quality_guard\\.py && cd backend && \\./venv/bin/python -m coverage report --fail-under=15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "sed": true,
+        "git show": true,
+        "cut": true,
+        "sort": true,
+        "awk": true,
+        "git status": true,
+        "git add": true
+    },
+    "github-actions.org-secrets": [
+        "SSH_PRIVATE_KEY",
+        "VPS_HOST",
+        "VPS_USER",
+        "GHCR_PAT"
+    ],
+    "yaml.schemas": {
+        "https://json.schemastore.org/github-workflow.json": [
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml"
+        ]
     }
 }

@@ -529,6 +529,34 @@ def ensure_employee_photo_column(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_employee_goal_columns(engine: Engine) -> None:
+    """Add per-employee personal goal columns for the goal achievement system."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "employee",
+                [
+                    ("goal_metric",           "VARCHAR(20)", "NULL"),
+                    ("goal_name",             "VARCHAR(200)", "NULL"),
+                    ("goal_weight_monthly",   "REAL",         "NULL"),
+                    ("goal_weight_weekly",    "REAL",         "NULL"),
+                    ("goal_points_monthly",   "REAL",         "NULL"),
+                    ("goal_points_weekly",    "REAL",         "NULL"),
+                    ("goal_invoices_monthly", "INTEGER",      "NULL"),
+                    ("goal_invoices_weekly",  "INTEGER",      "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard (employee goals) failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
+
 def ensure_app_user_security_columns(engine: Engine) -> None:
     """Ensure AppUser security columns exist on both app_user and users tables (2FA + session tooling)."""
     _security_cols = [

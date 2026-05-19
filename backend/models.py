@@ -2993,6 +2993,16 @@ class Employee(db.Model):
     is_active = db.Column(db.Boolean, default=True, index=True, nullable=False)
     notes = db.Column(db.Text, nullable=True)
 
+    # 🎯 أهداف الأداء الشخصية (مستقلة عن أهداف الفريق في الإعدادات)
+    goal_metric          = db.Column(db.String(20),  nullable=True)   # 'weight'|'points'|'invoices'
+    goal_name            = db.Column(db.String(200), nullable=True)   # عنوان يظهر في الاحتفالية
+    goal_weight_monthly  = db.Column(db.Float,   nullable=True)
+    goal_weight_weekly   = db.Column(db.Float,   nullable=True)
+    goal_points_monthly  = db.Column(db.Float,   nullable=True)
+    goal_points_weekly   = db.Column(db.Float,   nullable=True)
+    goal_invoices_monthly = db.Column(db.Integer, nullable=True)
+    goal_invoices_weekly  = db.Column(db.Integer, nullable=True)
+
     created_by = db.Column(db.String(100), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False)
@@ -3026,6 +3036,15 @@ class Employee(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'photo': self.photo,
+            # 🎯 أهداف الأداء الشخصية
+            'goal_metric':           self.goal_metric,
+            'goal_name':             self.goal_name,
+            'goal_weight_monthly':   self.goal_weight_monthly,
+            'goal_weight_weekly':    self.goal_weight_weekly,
+            'goal_points_monthly':   self.goal_points_monthly,
+            'goal_points_weekly':    self.goal_points_weekly,
+            'goal_invoices_monthly': self.goal_invoices_monthly,
+            'goal_invoices_weekly':  self.goal_invoices_weekly,
         }
 
         # `include_bonuses` kept for backward compatibility; not used currently
@@ -4308,6 +4327,58 @@ class BonusInvoiceLink(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     bonus_id = db.Column(db.Integer, db.ForeignKey('employee_bonus.id'), nullable=False)
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False)
+
+
+class GoalAchievement(db.Model):
+    """سجل الإنجازات التي يحققها الموظف عند تجاوز أهداف المبيعات/النقاط.
+    
+    يُعرض للمستخدم كـ overlay احتفالية عند فتح التطبيق.
+    """
+
+    __tablename__ = 'goal_achievement'
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
+    bonus_rule_id = db.Column(db.Integer, db.ForeignKey('bonus_rule.id'), nullable=True)
+    bonus_id = db.Column(db.Integer, db.ForeignKey('employee_bonus.id'), nullable=True)
+
+    goal_name = db.Column(db.String(200), nullable=False)
+    goal_description = db.Column(db.Text, nullable=True)
+    bonus_amount = db.Column(db.Float, nullable=False, default=0.0)
+    currency = db.Column(db.String(10), default='ر.س')
+    metrics = db.Column(db.JSON, nullable=True)  # {points, invoices, rank, ...}
+
+    achieved_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+    seen_by_user = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    seen_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+
+    employee = db.relationship('Employee', backref=db.backref('achievements', lazy=True))
+
+    def mark_seen(self):
+        self.seen_by_user = True
+        self.seen_at = datetime.now()
+
+    def to_dict(self):
+        emp = self.employee
+        return {
+            'id': self.id,
+            'employee_id': self.employee_id,
+            'employee_name': emp.name if emp else '—',
+            'department': emp.department if emp else None,
+            'position': emp.job_title if emp else None,
+            'bonus_rule_id': self.bonus_rule_id,
+            'bonus_id': self.bonus_id,
+            'goal_name': self.goal_name,
+            'goal_description': self.goal_description,
+            'bonus_amount': self.bonus_amount,
+            'currency': self.currency,
+            'metrics': self.metrics or {},
+            'achieved_at': self.achieved_at.isoformat() if self.achieved_at else None,
+            'seen_by_user': bool(self.seen_by_user),
+            'seen_at': self.seen_at.isoformat() if self.seen_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class SystemAlert(db.Model):

@@ -59,6 +59,7 @@ from models import (
     AuditLog,
     SupplierGoldTransaction,
     SettlementLine,
+    GoalAchievement,
 )
 from utils import normalize_number
 try:
@@ -31643,7 +31644,7 @@ def create_office_reservation():
                 _res_gold_je_ok = True
         except Exception as _rje_exc:
             print(f"⚠️ تحذير: تعذر إنشاء قيد الذهب عند الحجز: {_rje_exc}")
-        # ─────────────────────────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────────────
 
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
@@ -31824,26 +31825,68 @@ def settle_office_reservation(reservation_id: int):
             db.session.rollback()
             return jsonify({'error': 'وزن الحجز غير صالح'}), 400
 
-        # ─── قيد التسوية: نقدي فقط — الذهب يبقى وديعةً في خزنة المكتب ──────────
-        # بعد التسكير يصبح الذهب وديعةً لنا عند المكتب (خزنة المكتب الذهبية).
-        # لا يُسجَّل خروج الذهب من المكتب هنا، لأنه لم يُستلَم فعلياً.
-        # الذهب سيُصرف لاحقاً إما بسحبه للمخزون أو بتوزيعه على المندوبين
-        # عبر سند صرف من خزنة المكتب الذهبية.
-        # ────────────────────────────────────────────────────────────────────────
-        # مدين: مشتريات ذهب (512/511) — تكلفة التسكير المستحقة للمكتب
+        karat_debit = f'debit_{karat}k'
+        karat_credit = f'credit_{karat}k'
+
+        # الوزن يجب أن يذهب لحساب المذكرة (7xxxx) لا الحساب المالي (1xxx).
+        inventory_memo_acc_id = None
+        try:
+            inv_acc_obj = Account.query.get(inventory_account_id)
+            if inv_acc_obj and inv_acc_obj.memo_account_id:
+                inventory_memo_acc_id = inv_acc_obj.memo_account_id
+        except Exception:
+            inventory_memo_acc_id = None
+        if not inventory_memo_acc_id:
+            inventory_memo_acc_id = get_account_id_by_number('7521')
+        if not inventory_memo_acc_id:
+            db.session.rollback()
+            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمخزون الذهب عند التسكير'}), 500
+
+        # مدين: مشتريات ذهب (512/511) — تكلفة الشراء من المكتب
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=purchases_acc_id,
             cash_debit=total_amount,
-            description=f'تكلفة تسكير ذهب عيار {karat} - مستحق للمكتب',
+            description=f'شراء ذهب تسكير عيار {karat} - مشتريات',
         )
-        # دائن: حساب المكتب النقدي — المبلغ المستحق للمكتب مقابل التسكير
+        # مدين: مخزون وزني (memo) — الذهب يدخل مخزوننا
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=inventory_memo_acc_id,
+            description=f'استلام ذهب تسكير عيار {karat} - دخول وزن للمخزون',
+            **{karat_debit: weight_grams},
+        )
+
+        # IMPORTANT: office bridge account is used for cash-equivalent tracking.
+        # Weight must be posted to the memo (7xxxx) account so it maps cleanly
+        # to the office gold SafeBox (which is linked to the memo account).
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=office.account_category_id,
             cash_credit=total_amount,
             supplier_id=supplier.id,
-            description=f'مستحقات مكتب التسكير عيار {karat} (وديعة ذهبية قيد الصرف)',
+            description=f'ذهب لدى مكتب التسكير (قيمة نقدية مكافئة) - عيار {karat}',
+        )
+
+        office_account = Account.query.get(int(office.account_category_id))
+        office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
+        if not office_memo_id:
+            # Ensure memo exists for legacy offices.
+            ensure_office_account(office)
+            db.session.flush()
+            office_account = Account.query.get(int(office.account_category_id))
+            office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
+        if not office_memo_id:
+            db.session.rollback()
+            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمكتب التسكير'}), 500
+
+        # دائن: وزني المكتب — الذهب يغادر المكتب بعد التنفيذ
+        create_dual_journal_entry(
+            journal_entry_id=gold_entry.id,
+            account_id=int(office_memo_id),
+            supplier_id=supplier.id,
+            description=f'خروج ذهب من مكتب التسكير (وزن) - عيار {karat}',
+            **{karat_credit: weight_grams},
         )
         verify_dual_balance(gold_entry.id)
 
@@ -35108,4 +35151,266 @@ def serve_temp_pdf(token):
         return jsonify({'error': 'not found or expired'}), 404
 
     return send_file(filepath, mimetype='application/pdf', as_attachment=False)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Goal Achievements — إنجازات الأهداف
+# ──────────────────────────────────────────────────────────────────────────────
+
+@api.route('/achievements/unseen', methods=['GET'])
+@require_auth
+def get_unseen_achievements():
+    """
+    GET /api/achievements/unseen
+    يرجع قائمة الإنجازات التي لم يشاهدها المستخدم بعد.
+    """
+    try:
+        current_user = getattr(g, 'current_user', None)
+        employee_id = getattr(current_user, 'employee_id', None) if current_user else None
+
+        query = GoalAchievement.query.filter_by(seen_by_user=False)
+        if employee_id:
+            query = query.filter_by(employee_id=employee_id)
+
+        achievements = (
+            query
+            .order_by(GoalAchievement.achieved_at.desc())
+            .limit(10)
+            .all()
+        )
+        return jsonify({'achievements': [a.to_dict() for a in achievements]}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/achievements/<int:achievement_id>/mark-seen', methods=['POST'])
+@require_auth
+def mark_achievement_seen(achievement_id):
+    """
+    POST /api/achievements/<id>/mark-seen
+    يضع علامة "تمت المشاهدة" على الإنجاز حتى لا يظهر مرة أخرى.
+    """
+    try:
+        achievement = GoalAchievement.query.get_or_404(achievement_id)
+        achievement.mark_seen()
+        db.session.commit()
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/achievements', methods=['POST'])
+@require_auth
+def create_achievement():
+    """
+    POST /api/achievements
+    ينشئ سجل إنجاز جديد (يستخدم من الـ backend أو admin).
+    
+    Body (JSON):
+        employee_id, goal_name, bonus_amount,
+        goal_description?, bonus_rule_id?, bonus_id?,
+        currency?, metrics?, achieved_at?
+    """
+    try:
+        data = request.get_json(force=True) or {}
+
+        employee_id = data.get('employee_id')
+        goal_name = data.get('goal_name', '').strip()
+        bonus_amount = float(data.get('bonus_amount', 0.0))
+
+        if not employee_id or not goal_name:
+            return jsonify({'error': 'employee_id و goal_name مطلوبان'}), 400
+
+        from datetime import datetime as _dt
+        achieved_at_raw = data.get('achieved_at')
+        achieved_at = (
+            _dt.fromisoformat(achieved_at_raw)
+            if achieved_at_raw
+            else _dt.now()
+        )
+
+        achievement = GoalAchievement(
+            employee_id=int(employee_id),
+            bonus_rule_id=data.get('bonus_rule_id'),
+            bonus_id=data.get('bonus_id'),
+            goal_name=goal_name,
+            goal_description=data.get('goal_description'),
+            bonus_amount=bonus_amount,
+            currency=data.get('currency', 'ر.س'),
+            metrics=data.get('metrics') or {},
+            achieved_at=achieved_at,
+        )
+        db.session.add(achievement)
+        db.session.commit()
+        return jsonify(achievement.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/achievements/check-progress', methods=['POST'])
+@require_auth
+def check_goal_progress():
+    """
+    POST /api/achievements/check-progress
+
+    يقارن أداء الموظف (الوزن المباع) بالأهداف العامة المحددة في الإعدادات
+    (weekly_sales_target_weight / monthly_sales_target_weight).
+    إن تحقق الهدف ولم يُسجَّل مسبقاً في هذه الفترة → ينشئ GoalAchievement.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    try:
+        current_user = getattr(g, 'current_user', None)
+        if not current_user:
+            return jsonify({'achievements': []}), 200
+
+        employee_id = getattr(current_user, 'employee_id', None)
+        if not employee_id:
+            return jsonify({'achievements': []}), 200
+
+        employee = Employee.query.get(employee_id)
+        if not employee or not employee.is_active:
+            return jsonify({'achievements': []}), 200
+
+        # ── قراءة الأهداف: شخصية أولاً، ثم الفريق كاحتياط ──
+        settings_row = _get_settings_singleton(create_if_missing=False)
+
+        try:
+            weekly_target = float(
+                getattr(employee, 'goal_weight_weekly', None) or
+                (getattr(settings_row, 'weekly_sales_target_weight', None) if settings_row else None) or 0.0
+            )
+        except Exception:
+            weekly_target = 0.0
+
+        try:
+            monthly_target = float(
+                getattr(employee, 'goal_weight_monthly', None) or
+                (getattr(settings_row, 'monthly_sales_target_weight', None) if settings_row else None) or 0.0
+            )
+        except Exception:
+            monthly_target = 0.0
+
+        if weekly_target <= 0 and monthly_target <= 0:
+            return jsonify({'achievements': []}), 200
+
+        now = _dt.now()
+        new_achievements = []
+
+        # ── دالة: حساب الوزن المباع لفترة معينة ──
+        def _sold_weight(start_dt, end_dt):
+            invoices = Invoice.query.filter(
+                Invoice.is_posted.is_(True),
+                Invoice.date >= start_dt,
+                Invoice.date < end_dt,
+                Invoice.invoice_type == 'بيع',
+                Invoice.employee_id == employee_id,
+            ).all()
+            total_w = 0.0
+            for inv in invoices:
+                for item in (inv.items or []):
+                    try:
+                        total_w += float(getattr(item, 'weight', None) or 0.0)
+                    except Exception:
+                        pass
+            return total_w
+
+        # ── دالة: هل يوجد إنجاز مسجّل لهذه الفترة؟ (يعمل مع SQLite وPostgreSQL) ──
+        def _already_achieved(period_key: str) -> bool:
+            # تحقق بلغة Python بدلاً من JSON SQL operator (SQLite لا يدعم ->>)
+            existing = GoalAchievement.query.filter_by(
+                employee_id=employee_id
+            ).with_entities(GoalAchievement.metrics).all()
+            return any(
+                (row.metrics or {}).get('period_key') == period_key
+                for row in existing
+            )
+
+        # ─── فحص الهدف الشهري ──────────────────────────────────────────────
+        if monthly_target > 0:
+            month_start = _dt(now.year, now.month, 1)
+            month_end = _dt(now.year + 1, 1, 1) if now.month == 12 else _dt(now.year, now.month + 1, 1)
+            period_key_m = f'monthly-{now.year}-{now.month:02d}'
+            if not _already_achieved(period_key_m):
+                actual_m = _sold_weight(month_start, month_end)
+                if actual_m >= monthly_target:
+                    a = GoalAchievement(
+                        employee_id=employee_id,
+                        goal_name=getattr(employee, 'goal_name', None) or f'هدف الشهر {now.year}/{now.month:02d}',
+                        goal_description=f'تحققت {actual_m:.1f} جم من أصل {monthly_target:.1f} جم',
+                        bonus_amount=0.0,
+                        metrics={
+                            'period_key': period_key_m,
+                            'weight': round(actual_m, 2),
+                            'target': monthly_target,
+                            'period': f'{now.year}/{now.month:02d}',
+                        },
+                        achieved_at=now,
+                    )
+                    db.session.add(a)
+                    new_achievements.append(a)
+
+        # ─── فحص الهدف الأسبوعي ────────────────────────────────────────────
+        if weekly_target > 0:
+            week_start_date = now.date() - _td(days=now.weekday())
+            week_start = _dt.combine(week_start_date, _dt.min.time())
+            week_end = week_start + _td(days=7)
+            iso_week = now.isocalendar()[1]
+            period_key_w = f'weekly-{now.year}-W{iso_week:02d}'
+            if not _already_achieved(period_key_w):
+                actual_w = _sold_weight(week_start, week_end)
+                if actual_w >= weekly_target:
+                    a = GoalAchievement(
+                        employee_id=employee_id,
+                        goal_name=getattr(employee, 'goal_name', None) or f'هدف الأسبوع {iso_week}',
+                        goal_description=f'تحققت {actual_w:.1f} جم من أصل {weekly_target:.1f} جم',
+                        bonus_amount=0.0,
+                        metrics={
+                            'period_key': period_key_w,
+                            'weight': round(actual_w, 2),
+                            'target': weekly_target,
+                            'period': f'أسبوع {iso_week}',
+                        },
+                        achieved_at=now,
+                    )
+                    db.session.add(a)
+                    new_achievements.append(a)
+
+        if new_achievements:
+            db.session.commit()
+
+        return jsonify({'achievements': [a.to_dict() for a in new_achievements]}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'achievements': [], 'error': str(e)}), 200
+
+
+# ─── تعديل أهداف الأداء الشخصية للموظف ─────────────────────────────────────
+@api.route('/employees/<int:employee_id>/goals', methods=['PATCH'])
+@require_auth
+def update_employee_goals(employee_id):
+    """تحديث أهداف الأداء الشخصية للموظف (مستقلة عن أهداف الفريق في الإعدادات)."""
+    employee = Employee.query.get_or_404(employee_id)
+    data = request.get_json(force=True) or {}
+    _GOAL_FIELDS = [
+        'goal_metric', 'goal_name',
+        'goal_weight_monthly', 'goal_weight_weekly',
+        'goal_points_monthly', 'goal_points_weekly',
+        'goal_invoices_monthly', 'goal_invoices_weekly',
+    ]
+    for field in _GOAL_FIELDS:
+        if field not in data:
+            continue
+        val = data[field]
+        if field not in ('goal_metric', 'goal_name') and val is not None:
+            try:
+                val = int(val) if 'invoices' in field else float(val)
+            except (TypeError, ValueError):
+                val = None
+        setattr(employee, field, val)
+    db.session.commit()
+    return jsonify({'success': True, 'employee': employee.to_dict()}), 200
 

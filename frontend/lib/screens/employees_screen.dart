@@ -927,6 +927,20 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                       ),
                       const SizedBox(height: 16),
                     ],
+                    if (employee.id != null) ...[
+                      _GoalSettingsTile(
+                        employee: employee,
+                        isArabic: isAr,
+                        api: widget.api,
+                        onSaved: (updated) {
+                          setModalState(() => currentEmployee = updated);
+                          setState(() {
+                            final idx = _employees.indexWhere((e) => e.id == updated.id);
+                            if (idx != -1) _employees[idx] = updated;
+                          });
+                        },
+                      ),
+                    ],
                     Row(
                       children: [
                         TextButton.icon(
@@ -1610,4 +1624,231 @@ class _StatChip extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🎯 بطاقة أهداف الأداء الشخصية
+// ═══════════════════════════════════════════════════════════════
+class _GoalSettingsTile extends StatefulWidget {
+  final EmployeeModel employee;
+  final bool isArabic;
+  final ApiService api;
+  final ValueChanged<EmployeeModel> onSaved;
+  const _GoalSettingsTile({
+    required this.employee,
+    required this.isArabic,
+    required this.api,
+    required this.onSaved,
+  });
+  @override
+  State<_GoalSettingsTile> createState() => _GoalSettingsTileState();
+}
+
+class _GoalSettingsTileState extends State<_GoalSettingsTile> {
+  bool _editing = false;
+  bool _saving  = false;
+
+  late String _metric;
+  late TextEditingController _nameCtrl;
+  late TextEditingController _monthlyCtrl;
+  late TextEditingController _weeklyCtrl;
+
+  static const _gold = Color(0xFFD4AF37);
+
+  @override
+  void initState() { super.initState(); _init(); }
+
+  void _init() {
+    final e = widget.employee;
+    _metric      = e.goalMetric ?? 'weight';
+    _nameCtrl    = TextEditingController(text: e.goalName ?? '');
+    _monthlyCtrl = TextEditingController(text: _monthly(e)?.toString() ?? '');
+    _weeklyCtrl  = TextEditingController(text: _weekly(e)?.toString() ?? '');
+  }
+
+  num? _monthly(EmployeeModel e) => switch (e.goalMetric ?? 'weight') {
+    'points'   => e.goalPointsMonthly,
+    'invoices' => e.goalInvoicesMonthly,
+    _          => e.goalWeightMonthly,
+  };
+  num? _weekly(EmployeeModel e) => switch (e.goalMetric ?? 'weight') {
+    'points'   => e.goalPointsWeekly,
+    'invoices' => e.goalInvoicesWeekly,
+    _          => e.goalWeightWeekly,
+  };
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose();
+    super.dispose();
+  }
+
+  String _metricLabel(String m) => switch (m) {
+    'points'   => widget.isArabic ? 'نقاط' : 'Points',
+    'invoices' => widget.isArabic ? 'فواتير' : 'Invoices',
+    _          => widget.isArabic ? 'وزن (جم)' : 'Weight (g)',
+  };
+  String _unit(String m) => switch (m) {
+    'points'   => widget.isArabic ? 'نقطة' : 'pts',
+    'invoices' => widget.isArabic ? 'فاتورة' : 'inv',
+    _          => 'g',
+  };
+
+  Future<void> _save() async {
+    if (widget.employee.id == null) return;
+    setState(() => _saving = true);
+    try {
+      final monthly = double.tryParse(_monthlyCtrl.text.trim());
+      final weekly  = double.tryParse(_weeklyCtrl.text.trim());
+      final payload = <String, dynamic>{
+        'goal_metric': _metric,
+        'goal_name': _nameCtrl.text.trim().isEmpty ? null : _nameCtrl.text.trim(),
+        if (_metric == 'weight') ...{
+          'goal_weight_monthly': monthly,
+          'goal_weight_weekly':  weekly,
+        } else if (_metric == 'points') ...{
+          'goal_points_monthly': monthly,
+          'goal_points_weekly':  weekly,
+        } else ...{
+          'goal_invoices_monthly': monthly?.toInt(),
+          'goal_invoices_weekly':  weekly?.toInt(),
+        },
+      };
+      final res = await widget.api.updateEmployeeGoals(widget.employee.id!, payload);
+      final updated = EmployeeModel.fromJson(res['employee'] as Map<String, dynamic>);
+      widget.onSaved(updated);
+      setState(() => _editing = false);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString()), backgroundColor: Colors.red.shade700),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isAr = widget.isArabic;
+    final e    = widget.employee;
+    final hasGoal = e.goalMetric != null && (_monthly(e) != null || _weekly(e) != null);
+
+    return Card(
+      elevation: 0,
+      color: _gold.withValues(alpha: 0.06),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: _gold.withValues(alpha: 0.35)),
+      ),
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // ── رأس البطاقة ──
+          Row(children: [
+            const Icon(Icons.flag_rounded, color: _gold, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              isAr ? 'الهدف الشخصي' : 'Personal Goal',
+              style: const TextStyle(fontWeight: FontWeight.w700, color: _gold, fontSize: 13.5),
+            ),
+            const Spacer(),
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: () => setState(() {
+                if (_editing) { _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose(); _init(); }
+                _editing = !_editing;
+              }),
+              child: Text(_editing ? (isAr ? 'إلغاء' : 'Cancel') : (isAr ? 'تعديل' : 'Edit')),
+            ),
+          ]),
+          // ── عرض الهدف ──
+          if (!_editing) ...[
+            const SizedBox(height: 8),
+            if (!hasGoal)
+              Text(isAr ? 'لم يُحدَّد هدف. اضغط تعديل.' : 'No goal set. Tap Edit.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600))
+            else ...[
+              Text('${_metricLabel(e.goalMetric!)}${e.goalName != null ? "  ·  ${e.goalName}" : ""}',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              const SizedBox(height: 6),
+              Wrap(spacing: 8, children: [
+                if (_monthly(e) != null) _chip(isAr ? 'شهري' : 'Monthly', '${_monthly(e)} ${_unit(e.goalMetric!)}'),
+                if (_weekly(e)  != null) _chip(isAr ? 'أسبوعي' : 'Weekly',  '${_weekly(e)}  ${_unit(e.goalMetric!)}'),
+              ]),
+            ],
+          ],
+          // ── نموذج التعديل ──
+          if (_editing) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _metric,
+              decoration: InputDecoration(
+                labelText: isAr ? 'نوع الهدف' : 'Goal Type',
+                border: const OutlineInputBorder(), isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              items: [
+                DropdownMenuItem(value: 'weight',   child: Text(isAr ? 'وزن مبيعات (جم)' : 'Sales Weight (g)')),
+                DropdownMenuItem(value: 'points',   child: Text(isAr ? 'نقاط الأداء' : 'Performance Points')),
+                DropdownMenuItem(value: 'invoices', child: Text(isAr ? 'عدد الفواتير' : 'Invoice Count')),
+              ],
+              onChanged: (v) => setState(() => _metric = v ?? 'weight'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _nameCtrl,
+              decoration: InputDecoration(
+                labelText: isAr ? 'عنوان الهدف (يظهر في الاحتفالية)' : 'Goal title (shown in celebration)',
+                border: const OutlineInputBorder(), isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: TextField(
+                controller: _monthlyCtrl, keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'الهدف الشهري' : 'Monthly',
+                  suffixText: _unit(_metric), border: const OutlineInputBorder(), isDense: true,
+                ),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: TextField(
+                controller: _weeklyCtrl, keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'الهدف الأسبوعي' : 'Weekly',
+                  suffixText: _unit(_metric), border: const OutlineInputBorder(), isDense: true,
+                ),
+              )),
+            ]),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save_rounded, size: 18),
+                label: Text(isAr ? 'حفظ الهدف' : 'Save Goal'),
+                style: FilledButton.styleFrom(backgroundColor: _gold),
+              ),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _chip(String label, String value) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    decoration: BoxDecoration(
+      color: _gold.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: _gold.withValues(alpha: 0.3)),
+    ),
+    child: Text('$label: $value',
+        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF8B6914))),
+  );
 }

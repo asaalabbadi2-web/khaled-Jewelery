@@ -524,10 +524,10 @@ def build_sale_je(
             w = WeightByKarat.from_dict({str(karat): weight})
             je.add(_weight_credit(inv_acc, w, f"{description} - مخزون عيار {karat} يخرج"))
 
-    # ── مدين: مبيعات وزني (ذهب بيع نقداً — لا تحميل على حساب العميل) ──
+    # ── مدين: عميل وزني (ذهب تم تسليمه للعميل) ──
     if not weights.is_empty():
-        je.add(_weight_debit(accounts.sales_account_id, weights,
-                             f"{description} - مبيعات ذهب وزني"))
+        je.add(_weight_debit(customer.weight_account_id, weights,
+                             f"{description} - ذهب مُسلَّم للعميل [{customer.party_name}]"))
 
     je.assert_balanced()
     return je
@@ -587,10 +587,10 @@ def build_sale_return_je(
         je.add(_cash_credit(customer.financial_account_id, remaining,
                             f"{description} - رصيد للعميل [{customer.party_name}]"))
 
-    # ── دائن: مردودات مبيعات وزني (ذهب عاد للمخزون) ──
+    # ── دائن: عميل وزني (عكس الذهب المُسلّم للعميل) ──
     if not weights.is_empty():
-        je.add(_weight_credit(accounts.sales_returns_account_id, weights,
-                              f"{description} - مردودات مبيعات وزني"))
+        je.add(_weight_credit(customer.weight_account_id, weights,
+                              f"{description} - عكس ذهب العميل [{customer.party_name}]"))
 
     je.assert_balanced()
     return je

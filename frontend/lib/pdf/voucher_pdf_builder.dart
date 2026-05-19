@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../pdf/pdf_sar_cache.dart';
 import '../pdf/pdf_text_utils.dart';
 import '../providers/settings_provider.dart';
 
@@ -19,7 +19,7 @@ class VoucherPdfColors {
   static const greenTagBg = PdfColor.fromInt(0xFFEAF5EF);
   static const grayBg = PdfColor.fromInt(0xFFF7F6F2);
   static const grayBorder = PdfColor.fromInt(0xFFEBEBEB);
-  static const grayMuted = PdfColor.fromInt(0xFFAAAAAA);
+  static const grayMuted = PdfColor.fromInt(0xFF555555);
   static const black = PdfColor.fromInt(0xFF1A1A1A);
 }
 
@@ -62,32 +62,129 @@ class VoucherPdfBuilder {
     required VoucherPdfOptions options,
     SettingsProvider? settings,
   }) async {
-    // Fonts
+    // ═══ Main thread: lazy-load assets into cache on first print ═══
+    await Future.wait([
+      PdfSarCache.ensureFontBytes(),
+      PdfSarCache.ensureDefaultLogo(),
+    ]);
+
+    final fontRegBytes = PdfSarCache.fontRegBytes!;
+    final fontBoldBytes = PdfSarCache.fontBoldBytes!;
+
+    final isNewSar = settings?.currencyIsNewSar == true;
+    if (isNewSar) {
+      await Future.wait([
+        PdfSarCache.tinted(VoucherPdfColors.amberDark),
+        PdfSarCache.tinted(VoucherPdfColors.black),
+      ]);
+    }
+    final sarAmberBytes = isNewSar
+        ? PdfSarCache.tintedBytes(VoucherPdfColors.amberDark)
+        : null;
+    final sarBlackBytes = isNewSar
+        ? PdfSarCache.tintedBytes(VoucherPdfColors.black)
+        : null;
+
+    final showLogoFlag = settings?.showCompanyLogo ?? true;
+    Uint8List? logoBytes;
+    if (showLogoFlag) {
+      final logoB64 = (settings?.settings['company_logo_base64'] ?? '')
+          .toString()
+          .trim();
+      if (logoB64.isNotEmpty) {
+        try {
+          var p = logoB64;
+          final ci = p.indexOf(',');
+          if (p.startsWith('data:') && ci >= 0) p = p.substring(ci + 1);
+          final raw = base64Decode(p);
+          if (raw.isNotEmpty) {
+            logoBytes = PdfSarCache.resizePng(raw, 128) ?? raw;
+          }
+        } catch (_) {}
+      }
+      if (logoBytes == null) {
+        final raw =
+            PdfSarCache.defaultLogoBytes ??
+            (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+        logoBytes = PdfSarCache.resizePng(raw, 128) ?? raw;
+      }
+    }
+
+    final cashSym = settings?.currencySymbolText ?? 'ر.س';
+
+    // Yield one frame so loading indicator renders before heavy work.
+    await Future.delayed(Duration.zero);
+
+    // Build fonts from cached bytes (deferred from preload to avoid startup freeze).
     pw.Font fontReg;
     pw.Font fontBold;
     try {
-      final reg = (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-          .buffer
-          .asUint8List();
-      final bold = (await rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
-          .buffer
-          .asUint8List();
-      fontReg = pw.Font.ttf(reg.buffer.asByteData());
-      fontBold = pw.Font.ttf(bold.buffer.asByteData());
+      fontReg = pw.Font.ttf(fontRegBytes.buffer.asByteData());
+      fontBold = pw.Font.ttf(fontBoldBytes.buffer.asByteData());
     } catch (_) {
-      // Fallback font if bundled Cairo assets are missing.
       fontReg = pw.Font.helvetica();
       fontBold = pw.Font.helveticaBold();
     }
+    pw.MemoryImage? logoImage = logoBytes != null
+        ? pw.MemoryImage(logoBytes)
+        : null;
+    pw.ImageProvider? sarAmber = sarAmberBytes != null
+        ? pw.MemoryImage(sarAmberBytes)
+        : null;
+    pw.ImageProvider? sarBlack = sarBlackBytes != null
+        ? pw.MemoryImage(sarBlackBytes)
+        : null;
+    final cashCurrencySymbol = cashSym;
 
     final bool isA5 =
-      (format.width <= PdfPageFormat.a5.width + 1 &&
-        format.height <= PdfPageFormat.a5.height + 1) ||
-      (format.height <= PdfPageFormat.a5.width + 1 &&
-        format.width <= PdfPageFormat.a5.height + 1);
+        (format.width <= PdfPageFormat.a5.width + 1 &&
+            format.height <= PdfPageFormat.a5.height + 1) ||
+        (format.height <= PdfPageFormat.a5.width + 1 &&
+            format.width <= PdfPageFormat.a5.height + 1);
 
     final currencyFmt = NumberFormat('#,##0.00', 'ar');
     final goldFmt = NumberFormat('#,##0.000', 'ar');
+    String fmtCashAmount(double amt) {
+      final num = currencyFmt.format(amt);
+      return options.isArabic
+          ? '$cashCurrencySymbol $num'
+          : '$num $cashCurrencySymbol';
+    }
+
+    // Widget-based cash amount — uses SAR image inline when new symbol is active.
+    pw.Widget buildCashAmountWidget(
+      double amt, {
+      double size = 16,
+      PdfColor color = VoucherPdfColors.amberDark,
+      pw.Font? font,
+    }) {
+      font ??= fontBold;
+      final numStr = pdfVisualArabic(currencyFmt.format(amt));
+      final sarImg =
+          (color == VoucherPdfColors.amberDark ||
+              color == VoucherPdfColors.amberMid)
+          ? sarAmber
+          : sarBlack;
+      if (sarImg != null) {
+        // In RTL pages pw.Row reverses child order, so swap to keep
+        // symbol visually to the LEFT of the number in both directions.
+        final img = pw.Image(sarImg, width: size * 0.72, height: size);
+        final num = pw.Text(
+          numStr,
+          textDirection: pw.TextDirection.ltr,
+          style: pw.TextStyle(font: font, fontSize: size, color: color),
+        );
+        return pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [num, pw.SizedBox(width: 3), img],
+        );
+      }
+      return pw.Text(
+        pdfVisualArabic(fmtCashAmount(amt)),
+        textDirection: pw.TextDirection.ltr,
+        style: pw.TextStyle(font: font, fontSize: size, color: color),
+      );
+    }
 
     String fmtDate(dynamic raw) {
       if (raw == null) return '';
@@ -184,7 +281,8 @@ class VoucherPdfBuilder {
       bool isAdjustment,
       String titleAr,
       String titleEn,
-    }) voucherMeta(Map<String, dynamic> voucher) {
+    })
+    voucherMeta(Map<String, dynamic> voucher) {
       final typeKey = (voucher['voucher_type']?.toString() ?? '')
           .trim()
           .toLowerCase();
@@ -215,12 +313,8 @@ class VoucherPdfBuilder {
       );
     }
 
-    ({
-      int background,
-      int foreground,
-      int dot,
-      String label,
-    }) statusPresentation(Map<String, dynamic> voucher) {
+    ({int background, int foreground, int dot, String label})
+    statusPresentation(Map<String, dynamic> voucher) {
       final raw = voucher['status']?.toString().trim() ?? '';
       final normalized = raw.toLowerCase();
       final isApproved =
@@ -233,7 +327,9 @@ class VoucherPdfBuilder {
           background: 0xFFEAF3DE,
           foreground: 0xFF27500A,
           dot: 0xFF3B6D11,
-          label: options.isArabic ? 'معتمد ومُصادق عليه' : 'Approved & Verified',
+          label: options.isArabic
+              ? 'معتمد ومُصادق عليه'
+              : 'Approved & Verified',
         );
       }
       if (isDraft) {
@@ -261,36 +357,20 @@ class VoucherPdfBuilder {
       );
     }
 
-    Future<Uint8List?> resizeImageBytes(Uint8List bytes, int targetSize) async {
-      try {
-        final codec = await ui.instantiateImageCodec(
-          bytes,
-          targetWidth: targetSize,
-          targetHeight: targetSize,
-        );
-        final frame = await codec.getNextFrame();
-        final byteData =
-            await frame.image.toByteData(format: ui.ImageByteFormat.png);
-        frame.image.dispose();
-        if (byteData != null) return byteData.buffer.asUint8List();
-      } catch (_) {}
-      return null;
-    }
-
     final meta = voucherMeta(voucher);
     final webStatus = statusPresentation(voucher);
 
     final party = partyDisplay(voucher);
     final voucherNum =
         (voucher['voucher_number']?.toString().trim().isNotEmpty ?? false)
-            ? voucher['voucher_number'].toString().trim()
-            : '#${voucher['id'] ?? ''}';
+        ? voucher['voucher_number'].toString().trim()
+        : '#${voucher['id'] ?? ''}';
     final createdBy = voucher['created_by']?.toString().trim() ?? '';
     final approvedBy = voucher['approved_by']?.toString().trim() ?? '';
     final description =
         (voucher['description']?.toString().trim().isNotEmpty ?? false)
-            ? voucher['description'].toString().trim()
-            : '—';
+        ? voucher['description'].toString().trim()
+        : '—';
     final statusText = webStatus.label;
     final dateText = fmtHumanDate(voucher['date']);
     final printDate = fmtHumanDate(DateTime.now().toIso8601String());
@@ -307,56 +387,29 @@ class VoucherPdfBuilder {
     final companyName = (settings?.companyName.trim() ?? '').isNotEmpty
         ? settings!.companyName.trim()
         : (options.isArabic ? 'خالد للمجوهرات' : 'Khaled Jewelry');
-    final companyCr = (settings?.companyCrNumber.trim() ?? '');
-    final companyVat = (settings?.companyTaxNumber.trim() ?? '');
-    final companyPhone = (settings?.companyPhone.trim() ?? '');
-    final companyAddr = (settings?.companyAddress.trim() ?? '');
-    final showLogo = settings?.showCompanyLogo ?? true;
-    final logoBase64 =
-        (settings?.settings['company_logo_base64'] ?? '').toString().trim();
-
-    pw.MemoryImage? logoImage;
-    if (showLogo && logoBase64.isNotEmpty) {
-      try {
-        var payload = logoBase64;
-        final commaIdx = payload.indexOf(',');
-        if (payload.startsWith('data:') && commaIdx >= 0) {
-          payload = payload.substring(commaIdx + 1);
-        }
-        final rawLogoBytes = base64Decode(payload);
-        if (rawLogoBytes.isNotEmpty) {
-          final resized = await resizeImageBytes(rawLogoBytes, 128);
-          logoImage = pw.MemoryImage(resized ?? rawLogoBytes);
-        }
-      } catch (_) {}
-    }
-    if (logoImage == null && showLogo) {
-      try {
-        final raw = (await rootBundle.load('assets/KHGL.png'))
-            .buffer
-            .asUint8List();
-        final resized = await resizeImageBytes(raw, 128);
-        logoImage = pw.MemoryImage(resized ?? raw);
-      } catch (_) {}
-    }
+    final companyCr = settings?.companyCrNumber.trim() ?? '';
+    final companyVat = settings?.companyTaxNumber.trim() ?? '';
+    final companyPhone = settings?.companyPhone.trim() ?? '';
+    final companyAddr = settings?.companyAddress.trim() ?? '';
 
     // Gold rows from account_lines / gold_breakdown
     List<Map<String, dynamic>> goldRows() {
       final accountLinesRaw = voucher['account_lines'];
       final accountLines = accountLinesRaw is List
           ? accountLinesRaw
-              .whereType<Map>()
-              .cast<Map<String, dynamic>>()
-              .toList()
+                .whereType<Map>()
+                .cast<Map<String, dynamic>>()
+                .toList()
           : <Map<String, dynamic>>[];
 
-      final voucherType =
-          (voucher['voucher_type'] ?? '').toString().toLowerCase();
+      final voucherType = (voucher['voucher_type'] ?? '')
+          .toString()
+          .toLowerCase();
       final operationalLineType = voucherType == 'payment'
           ? 'credit'
           : voucherType == 'receipt'
-              ? 'debit'
-              : null;
+          ? 'debit'
+          : null;
 
       final rows = <Map<String, dynamic>>[];
       for (final line in accountLines) {
@@ -375,10 +428,10 @@ class VoucherPdfBuilder {
 
         final lineDesc =
             (line['description']?.toString().trim().isNotEmpty ?? false)
-                ? line['description'].toString().trim()
-                : (account['name']?.toString().trim().isNotEmpty ?? false)
-                    ? account['name'].toString().trim()
-                    : (voucher['description']?.toString().trim() ?? 'سطر ذهب');
+            ? line['description'].toString().trim()
+            : (account['name']?.toString().trim().isNotEmpty ?? false)
+            ? account['name'].toString().trim()
+            : (voucher['description']?.toString().trim() ?? 'سطر ذهب');
 
         final weight = toDouble(line['amount']);
         final netWeight = toDouble(line['net_weight']);
@@ -406,8 +459,8 @@ class VoucherPdfBuilder {
           final karat = item['karat']?.toString().replaceAll('.0', '') ?? '—';
           final weight = toDouble(item['weight']);
           rows.add({
-            'description': (voucher['description']?.toString().trim().isNotEmpty ??
-                    false)
+            'description':
+                (voucher['description']?.toString().trim().isNotEmpty ?? false)
                 ? voucher['description'].toString().trim()
                 : 'ذهب',
             'karat': karat,
@@ -431,18 +484,19 @@ class VoucherPdfBuilder {
     final bool compactAL = isA5 || accountLines.length > 8;
     final int maxAL = compactAL ? (isA5 ? 9 : 12) : 14;
     final visibleAL = accountLines.take(maxAL).toList();
-    final int hiddenAL = accountLines.length > maxAL ? accountLines.length - maxAL : 0;
+    final int hiddenAL = accountLines.length > maxAL
+        ? accountLines.length - maxAL
+        : 0;
 
     pw.TextStyle ts({
       double size = 10,
       bool bold = false,
       PdfColor color = VoucherPdfColors.black,
-    }) =>
-        pw.TextStyle(
-          font: bold ? fontBold : fontReg,
-          fontSize: size,
-          color: color,
-        );
+    }) => pw.TextStyle(
+      font: bold ? fontBold : fontReg,
+      fontSize: size,
+      color: color,
+    );
 
     pw.Widget txt(
       String t, {
@@ -450,99 +504,96 @@ class VoucherPdfBuilder {
       bool bold = false,
       PdfColor color = VoucherPdfColors.black,
       pw.TextAlign? align,
-    }) =>
-        pw.Text(
-          pdfVisualArabic(t),
-          style: ts(size: size, bold: bold, color: color),
-          textDirection: pw.TextDirection.ltr,
-          textAlign: align,
-        );
+    }) => pw.Text(
+      pdfVisualArabic(t),
+      style: ts(size: size, bold: bold, color: color),
+      textDirection: pw.TextDirection.ltr,
+      textAlign: align,
+    );
 
     pw.Widget sectionTitle(String t) => pw.Padding(
-          padding: const pw.EdgeInsets.only(bottom: 8),
-          child: pw.Align(
-            alignment: pw.Alignment.centerRight,
-            child: txt(
-              t,
-              size: isA5 ? 7.5 : 8.5,
-              bold: true,
-              color: VoucherPdfColors.amberMid,
-            ),
-          ),
-        );
+      padding: const pw.EdgeInsets.only(bottom: 8),
+      child: pw.Align(
+        alignment: pw.Alignment.centerRight,
+        child: txt(
+          t,
+          size: isA5 ? 7.5 : 8.5,
+          bold: true,
+          color: VoucherPdfColors.amberMid,
+        ),
+      ),
+    );
 
     pw.Widget section(pw.Widget child, {bool last = false}) => pw.Container(
-          decoration: pw.BoxDecoration(
-            border: last
-                ? null
-                : const pw.Border(
-                    bottom: pw.BorderSide(
-                      color: VoucherPdfColors.grayBorder,
-                      width: 0.5,
-                    ),
-                  ),
-          ),
-          padding: pw.EdgeInsets.symmetric(
-            horizontal: isA5 ? 12 : 16,
-            vertical: isA5 ? 8 : 10,
-          ),
-          child: child,
-        );
+      decoration: pw.BoxDecoration(
+        border: last
+            ? null
+            : const pw.Border(
+                bottom: pw.BorderSide(
+                  color: VoucherPdfColors.grayBorder,
+                  width: 0.5,
+                ),
+              ),
+      ),
+      padding: pw.EdgeInsets.symmetric(
+        horizontal: isA5 ? 12 : 16,
+        vertical: isA5 ? 8 : 10,
+      ),
+      child: child,
+    );
 
     pw.Widget buildHeader() {
       pw.Widget goldRule({double height = 4}) => pw.Container(
-            height: height,
-            decoration: const pw.BoxDecoration(
-              gradient: pw.LinearGradient(
-                colors: [
-                  PdfColor.fromInt(0xFF8B6914),
-                  PdfColor.fromInt(0xFFC9A84C),
-                  PdfColor.fromInt(0xFFE8C97A),
-                  PdfColor.fromInt(0xFFC9A84C),
-                  PdfColor.fromInt(0xFF8B6914),
-                ],
-              ),
-            ),
-          );
+        height: height,
+        decoration: const pw.BoxDecoration(
+          gradient: pw.LinearGradient(
+            colors: [
+              PdfColor.fromInt(0xFF8B6914),
+              PdfColor.fromInt(0xFFC9A84C),
+              PdfColor.fromInt(0xFFE8C97A),
+              PdfColor.fromInt(0xFFC9A84C),
+              PdfColor.fromInt(0xFF8B6914),
+            ],
+          ),
+        ),
+      );
 
-      pw.Widget thinRule() => pw.Container(
-            height: 0.8,
-            color: VoucherPdfColors.amberBorder,
-          );
+      pw.Widget thinRule() =>
+          pw.Container(height: 0.8, color: VoucherPdfColors.amberBorder);
 
       pw.Widget infoLine(String label, String value) => pw.Padding(
-            padding: const pw.EdgeInsets.only(bottom: 3),
-            child: pw.Row(
-              mainAxisSize: pw.MainAxisSize.min,
-              children: [
-                pw.Text(
-                  pdfVisualArabic('$label:'),
-                  textDirection: pw.TextDirection.ltr,
-                  style: pw.TextStyle(
-                    font: fontReg,
-                    fontSize: 8,
-                    color: PdfColor.fromInt(0xFF444444),
-                  ),
-                ),
-                pw.SizedBox(width: 6),
-                pw.Text(
-                  pdfVisualArabic(value),
-                  textDirection: pw.TextDirection.ltr,
-                  style: pw.TextStyle(
-                    font: fontReg,
-                    fontSize: 8,
-                    color: PdfColor.fromInt(0xFF666666),
-                  ),
-                ),
-              ],
+        padding: const pw.EdgeInsets.only(bottom: 3),
+        child: pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [
+            pw.Text(
+              pdfVisualArabic('$label:'),
+              textDirection: pw.TextDirection.ltr,
+              style: pw.TextStyle(
+                font: fontReg,
+                fontSize: 8,
+                color: PdfColor.fromInt(0xFF444444),
+              ),
             ),
-          );
+            pw.SizedBox(width: 6),
+            pw.Text(
+              pdfVisualArabic(value),
+              textDirection: pw.TextDirection.ltr,
+              style: pw.TextStyle(
+                font: fontReg,
+                fontSize: 8,
+                color: PdfColor.fromInt(0xFF333333),
+              ),
+            ),
+          ],
+        ),
+      );
 
       final subtitleEn = meta.isPayment
           ? 'Payment Voucher'
           : meta.isReceipt
-              ? 'Receipt Voucher'
-              : 'Adjustment Voucher';
+          ? 'Receipt Voucher'
+          : 'Adjustment Voucher';
 
       return pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.stretch,
@@ -569,7 +620,7 @@ class VoucherPdfBuilder {
                             style: pw.TextStyle(
                               font: fontReg,
                               fontSize: 7,
-                              color: PdfColor.fromInt(0xFF666666),
+                              color: PdfColor.fromInt(0xFF444444),
                             ),
                           ),
                         ),
@@ -594,7 +645,7 @@ class VoucherPdfBuilder {
                             style: pw.TextStyle(
                               font: fontReg,
                               fontSize: 7,
-                              color: PdfColor.fromInt(0xFF666666),
+                              color: PdfColor.fromInt(0xFF444444),
                             ),
                           ),
                         ),
@@ -626,7 +677,7 @@ class VoucherPdfBuilder {
                               style: pw.TextStyle(
                                 font: fontReg,
                                 fontSize: 7,
-                                color: PdfColor.fromInt(0xFF666666),
+                                color: PdfColor.fromInt(0xFF444444),
                               ),
                             ),
                           ),
@@ -671,7 +722,7 @@ class VoucherPdfBuilder {
                         style: pw.TextStyle(
                           font: fontReg,
                           fontSize: 8.5,
-                          color: PdfColor.fromInt(0xFF666666),
+                          color: PdfColor.fromInt(0xFF333333),
                           letterSpacing: 1.8,
                         ),
                       ),
@@ -699,13 +750,15 @@ class VoucherPdfBuilder {
                             pw.SizedBox(height: 3),
                             pw.Text(
                               pdfVisualArabic(
-                                options.isArabic ? 'تحقق من السند' : 'Verify Voucher',
+                                options.isArabic
+                                    ? 'تحقق من السند'
+                                    : 'Verify Voucher',
                               ),
                               textDirection: pw.TextDirection.ltr,
                               style: pw.TextStyle(
                                 font: fontReg,
                                 fontSize: 6,
-                                color: PdfColor.fromInt(0xFF666666),
+                                color: PdfColor.fromInt(0xFF444444),
                               ),
                             ),
                           ],
@@ -849,159 +902,210 @@ class VoucherPdfBuilder {
     }
 
     pw.Widget buildDetails() => section(
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-            children: [
-              sectionTitle(options.isArabic ? 'تفاصيل السند' : 'Voucher Details'),
-              pw.Padding(
-                padding: pw.EdgeInsets.only(top: isA5 ? 2 : 4),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                  children: [
-                    pw.Align(
-                      alignment: options.isArabic
-                          ? pw.Alignment.centerRight
-                          : pw.Alignment.centerLeft,
-                      child: pw.Text(
-                        pdfVisualArabic(
-                          '${options.isArabic ? 'الطرف' : 'Party'}: '
-                          '${party.isEmpty ? '—' : party}',
-                        ),
-                        textDirection: pw.TextDirection.ltr,
-                        textAlign: options.isArabic
-                            ? pw.TextAlign.right
-                            : pw.TextAlign.left,
-                        style: pw.TextStyle(
-                          font: fontReg,
-                          fontSize: isA5 ? 9 : 10,
-                          color: PdfColor.fromInt(0xFF222222),
-                        ),
-                      ),
+      pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+        children: [
+          sectionTitle(options.isArabic ? 'تفاصيل السند' : 'Voucher Details'),
+          pw.Padding(
+            padding: pw.EdgeInsets.only(top: isA5 ? 2 : 4),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                pw.Align(
+                  alignment: options.isArabic
+                      ? pw.Alignment.centerRight
+                      : pw.Alignment.centerLeft,
+                  child: pw.Text(
+                    pdfVisualArabic(
+                      '${options.isArabic ? 'الطرف' : 'Party'}: '
+                      '${party.isEmpty ? '—' : party}',
                     ),
-                    pw.SizedBox(height: isA5 ? 4 : 6),
-                    pw.Align(
-                      alignment: options.isArabic
-                          ? pw.Alignment.centerRight
-                          : pw.Alignment.centerLeft,
-                      child: pw.Text(
-                        pdfVisualArabic(
-                          '${options.isArabic ? 'السبب' : 'Reason'}: '
-                          '${description.trim().isEmpty ? '—' : description.trim()}',
-                        ),
-                        textDirection: pw.TextDirection.ltr,
-                        textAlign: options.isArabic
-                            ? pw.TextAlign.right
-                            : pw.TextAlign.left,
-                        style: pw.TextStyle(
-                          font: fontReg,
-                          fontSize: isA5 ? 9 : 10,
-                          color: PdfColor.fromInt(0xFF222222),
-                        ),
-                      ),
+                    textDirection: pw.TextDirection.ltr,
+                    textAlign: options.isArabic
+                        ? pw.TextAlign.right
+                        : pw.TextAlign.left,
+                    style: pw.TextStyle(
+                      font: fontReg,
+                      fontSize: isA5 ? 9 : 10,
+                      color: PdfColor.fromInt(0xFF222222),
                     ),
-                    pw.SizedBox(height: isA5 ? 4 : 6),
-                    pw.Align(
-                      alignment: options.isArabic
-                          ? pw.Alignment.centerRight
-                          : pw.Alignment.centerLeft,
-                      child: pw.Text(
-                        pdfVisualArabic(
-                          '${options.isArabic ? 'أنشئ بواسطة' : 'Created by'}: '
-                          '${createdBy.isEmpty ? 'system' : createdBy}',
-                        ),
-                        textDirection: pw.TextDirection.ltr,
-                        textAlign: options.isArabic
-                            ? pw.TextAlign.right
-                            : pw.TextAlign.left,
-                        style: pw.TextStyle(
-                          font: fontReg,
-                          fontSize: isA5 ? 9 : 10,
-                          color: PdfColor.fromInt(0xFF222222),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
+                pw.SizedBox(height: isA5 ? 4 : 6),
+                pw.Align(
+                  alignment: options.isArabic
+                      ? pw.Alignment.centerRight
+                      : pw.Alignment.centerLeft,
+                  child: pw.Text(
+                    pdfVisualArabic(
+                      '${options.isArabic ? 'السبب' : 'Reason'}: '
+                      '${description.trim().isEmpty ? '—' : description.trim()}',
+                    ),
+                    textDirection: pw.TextDirection.ltr,
+                    textAlign: options.isArabic
+                        ? pw.TextAlign.right
+                        : pw.TextAlign.left,
+                    style: pw.TextStyle(
+                      font: fontReg,
+                      fontSize: isA5 ? 9 : 10,
+                      color: PdfColor.fromInt(0xFF222222),
+                    ),
+                  ),
+                ),
+                pw.SizedBox(height: isA5 ? 4 : 6),
+                pw.Align(
+                  alignment: options.isArabic
+                      ? pw.Alignment.centerRight
+                      : pw.Alignment.centerLeft,
+                  child: pw.Text(
+                    pdfVisualArabic(
+                      '${options.isArabic ? 'أنشئ بواسطة' : 'Created by'}: '
+                      '${createdBy.isEmpty ? 'system' : createdBy}',
+                    ),
+                    textDirection: pw.TextDirection.ltr,
+                    textAlign: options.isArabic
+                        ? pw.TextAlign.right
+                        : pw.TextAlign.left,
+                    style: pw.TextStyle(
+                      font: fontReg,
+                      fontSize: isA5 ? 9 : 10,
+                      color: PdfColor.fromInt(0xFF222222),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        );
+        ],
+      ),
+    );
 
-    pw.Widget amtRow(String label, String mainVal, String subText, bool isLast) =>
-        pw.Container(
-          padding: pw.EdgeInsets.symmetric(
-            horizontal: isA5 ? 12 : 16,
-            vertical: isA5 ? 8 : 10,
-          ),
-          decoration: isLast
-              ? null
-              : const pw.BoxDecoration(
-                  border: pw.Border(
-                    bottom: pw.BorderSide(
-                      color: VoucherPdfColors.amberBorder,
-                      width: 0.5,
-                    ),
-                  ),
-                ),
-          child: pw.Row(
-            children: [
-              pw.Expanded(
-                flex: 6,
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    txt(
-                      mainVal,
-                      size: isA5 ? 14 : 16,
-                      bold: true,
-                      color: VoucherPdfColors.amberDark,
-                    ),
-                    if (subText.isNotEmpty) ...[
-                      pw.SizedBox(height: 2),
-                      txt(
-                        subText,
-                        size: isA5 ? 7 : 8,
-                        color: VoucherPdfColors.amberMid,
-                      ),
-                    ],
-                  ],
+    pw.Widget amtRow(
+      String label,
+      pw.Widget mainWidget,
+      pw.Widget? subWidget,
+      bool isLast,
+    ) => pw.Container(
+      padding: pw.EdgeInsets.symmetric(
+        horizontal: isA5 ? 12 : 16,
+        vertical: isA5 ? 8 : 10,
+      ),
+      decoration: isLast
+          ? null
+          : const pw.BoxDecoration(
+              border: pw.Border(
+                bottom: pw.BorderSide(
+                  color: VoucherPdfColors.amberBorder,
+                  width: 0.5,
                 ),
               ),
-              pw.Expanded(
-                flex: 4,
-                child: pw.Align(
-                  alignment: pw.Alignment.centerRight,
-                  child: txt(
-                    label,
-                    size: isA5 ? 8 : 9,
-                    bold: true,
-                    color: VoucherPdfColors.amberMid,
-                  ),
-                ),
-              ),
-            ],
+            ),
+      child: pw.Row(
+        children: [
+          pw.Expanded(
+            flex: 6,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                mainWidget,
+                if (subWidget != null) ...[
+                  pw.SizedBox(height: 3),
+                  subWidget,
+                ],
+              ],
+            ),
           ),
-        );
+          pw.Expanded(
+            flex: 4,
+            child: pw.Align(
+              alignment: pw.Alignment.centerRight,
+              child: txt(
+                label,
+                size: isA5 ? 9 : 10,
+                bold: true,
+                color: const PdfColor.fromInt(0xFF333333),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
 
     pw.Widget buildAmounts() {
       final rows = <pw.Widget>[];
 
       if (hasGold) {
-        final karatSuffix =
-            (voucher['gold_karat']?.toString().trim().isNotEmpty ?? false)
-                ? ' (${voucher['gold_karat'].toString().trim()})'
-                : '';
+        final goldKarat = voucher['gold_karat']?.toString().trim() ?? '';
         final mk = mainKarat > 0 ? mainKarat.toStringAsFixed(0) : '';
-        final totalSub = equivWeight > 0
-            ? (options.isArabic
-                  ? 'المكافئ عيار $mk: ${goldFmt.format(equivWeight)} جرام'
-                  : 'Karat $mk equivalent: ${goldFmt.format(equivWeight)} g')
-            : '';
+
+        // Line 1 (small, dark): karat label  —  Line 2 (large, amber): weight
+        final goldMainWidget = pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            if (goldKarat.isNotEmpty) ...[
+              txt(
+                options.isArabic
+                    ? 'العيار: $goldKarat'
+                    : 'Karat: $goldKarat',
+                size: isA5 ? 8 : 9,
+                color: const PdfColor.fromInt(0xFF555555),
+              ),
+              pw.SizedBox(height: 2),
+            ],
+            txt(
+              '${goldFmt.format(goldAmt)} ${options.isArabic ? 'جم' : 'g'}',
+              size: isA5 ? 14 : 16,
+              bold: true,
+              color: VoucherPdfColors.amberDark,
+            ),
+          ],
+        );
+
+        // Line 3 (subWidget): equiv weight row — label right, value left (RTL)
+        pw.Widget? goldSubWidget;
+        if (equivWeight > 0) {
+          final equivLabel = options.isArabic
+              ? 'المكافئ عيار $mk:'
+              : 'Karat $mk equivalent:';
+          final equivValue = options.isArabic
+              ? '${goldFmt.format(equivWeight)} جم'
+              : '${goldFmt.format(equivWeight)} g';
+          goldSubWidget = pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: options.isArabic
+                ? [
+                    // RTL: value on visual-left, label on visual-right
+                    txt(
+                      equivValue,
+                      size: isA5 ? 8 : 9,
+                      color: VoucherPdfColors.amberDark,
+                    ),
+                    txt(
+                      equivLabel,
+                      size: isA5 ? 8 : 9,
+                      color: const PdfColor.fromInt(0xFF555555),
+                    ),
+                  ]
+                : [
+                    txt(
+                      equivLabel,
+                      size: isA5 ? 8 : 9,
+                      color: const PdfColor.fromInt(0xFF555555),
+                    ),
+                    txt(
+                      equivValue,
+                      size: isA5 ? 8 : 9,
+                      color: VoucherPdfColors.amberDark,
+                    ),
+                  ],
+          );
+        }
+
         rows.add(
           amtRow(
             options.isArabic ? 'وزن الذهب الإجمالي' : 'Total Gold Weight',
-            '${goldFmt.format(goldAmt)} ${options.isArabic ? 'جرام' : 'g'}$karatSuffix',
-            totalSub,
+            goldMainWidget,
+            goldSubWidget,
             !hasCash,
           ),
         );
@@ -1011,8 +1115,12 @@ class VoucherPdfBuilder {
         rows.add(
           amtRow(
             options.isArabic ? 'المبلغ النقدي' : 'Cash Amount',
-            '${currencyFmt.format(cashAmt)} ${options.isArabic ? 'ريال' : 'SAR'}',
-            _amountInWords(options.isArabic, cashAmt),
+            buildCashAmountWidget(cashAmt, size: isA5 ? 14 : 16),
+            txt(
+              _amountInWords(options.isArabic, cashAmt),
+              size: isA5 ? 7.5 : 8.5,
+              color: const PdfColor.fromInt(0xFF777777),
+            ),
             true,
           ),
         );
@@ -1025,10 +1133,8 @@ class VoucherPdfBuilder {
         final heroTitle = meta.isReceipt
             ? (options.isArabic ? 'المبلغ المستلم' : 'Received Amount')
             : meta.isPayment
-                ? (options.isArabic ? 'المبلغ المدفوع' : 'Paid Amount')
-                : (options.isArabic ? 'المبلغ' : 'Amount');
-        final heroAmount =
-            '${currencyFmt.format(cashAmt)} ${options.isArabic ? 'ريال' : 'SAR'}';
+            ? (options.isArabic ? 'المبلغ المدفوع' : 'Paid Amount')
+            : (options.isArabic ? 'المبلغ' : 'Amount');
         final heroWords = _amountInWords(options.isArabic, cashAmt);
 
         return section(
@@ -1050,23 +1156,19 @@ class VoucherPdfBuilder {
                       ),
                     ),
                     pw.SizedBox(height: isA5 ? 8 : 10),
-                    pw.Text(
-                      pdfVisualArabic(heroAmount),
-                      textDirection: pw.TextDirection.ltr,
-                      style: pw.TextStyle(
-                        font: fontBold,
-                        fontSize: isA5 ? 26 : 32,
-                        color: VoucherPdfColors.amberDark,
-                      ),
+                    buildCashAmountWidget(
+                      cashAmt,
+                      size: isA5 ? 26 : 32,
+                      color: VoucherPdfColors.amberDark,
                     ),
                     pw.SizedBox(height: isA5 ? 6 : 8),
                     pw.Text(
                       pdfVisualArabic('($heroWords)'),
                       textDirection: pw.TextDirection.ltr,
                       style: pw.TextStyle(
-                        font: fontReg,
-                        fontSize: isA5 ? 8 : 9,
-                        color: VoucherPdfColors.grayMuted,
+                        font: fontBold,
+                        fontSize: isA5 ? 9 : 10,
+                        color: const PdfColor.fromInt(0xFF333333),
                       ),
                     ),
                   ],
@@ -1117,21 +1219,15 @@ class VoucherPdfBuilder {
         bool bold = false,
         PdfColor? bg,
         PdfColor textColor = VoucherPdfColors.black,
-      }) =>
-          pw.Container(
-            color: bg,
-            padding: pw.EdgeInsets.symmetric(
-              horizontal: isA5 ? 7 : 9,
-              vertical: isA5 ? 5 : 7,
-            ),
-            alignment: pw.Alignment.centerRight,
-            child: txt(
-              text,
-              size: isA5 ? 8 : 9,
-              bold: bold,
-              color: textColor,
-            ),
-          );
+      }) => pw.Container(
+        color: bg,
+        padding: pw.EdgeInsets.symmetric(
+          horizontal: isA5 ? 7 : 9,
+          vertical: isA5 ? 5 : 7,
+        ),
+        alignment: pw.Alignment.centerRight,
+        child: txt(text, size: isA5 ? 8 : 9, bold: bold, color: textColor),
+      );
 
       final tableRows = <pw.TableRow>[];
 
@@ -1200,7 +1296,9 @@ class VoucherPdfBuilder {
         pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch,
           children: [
-            sectionTitle(options.isArabic ? 'جدول الصرف' : 'Disbursement Table'),
+            sectionTitle(
+              options.isArabic ? 'جدول الصرف' : 'Disbursement Table',
+            ),
             pw.Container(
               decoration: pw.BoxDecoration(
                 border: pw.Border.all(
@@ -1252,10 +1350,14 @@ class VoucherPdfBuilder {
             ];
 
       List<String> rowFor(Map<String, dynamic> line) {
-        final account = (line['account'] is Map) ? (line['account'] as Map) : const {};
+        final account = (line['account'] is Map)
+            ? (line['account'] as Map)
+            : const {};
         final accountName = account['name']?.toString() ?? '';
         final accountNumber = account['account_number']?.toString() ?? '';
-        final display = accountNumber.isNotEmpty ? '$accountNumber - $accountName' : accountName;
+        final display = accountNumber.isNotEmpty
+            ? '$accountNumber - $accountName'
+            : accountName;
         final lineType = line['line_type']?.toString().toLowerCase();
         final amtType = line['amount_type']?.toString().toLowerCase();
         final amt = (line['amount'] is num)
@@ -1304,7 +1406,9 @@ class VoucherPdfBuilder {
       }
 
       final rows = visibleAL.map(rowFor).toList();
-      final headers = options.isArabic ? baseHeaders.reversed.toList() : baseHeaders;
+      final headers = options.isArabic
+          ? baseHeaders.reversed.toList()
+          : baseHeaders;
       final data = options.isArabic
           ? rows.map((r) => r.reversed.toList()).toList()
           : rows;
@@ -1341,8 +1445,12 @@ class VoucherPdfBuilder {
               5: pw.Alignment.center,
             };
 
-      final cw = options.isArabic ? reverseMap(baseCW, baseHeaders.length) : baseCW;
-      final ca = options.isArabic ? reverseMap(baseCa, baseHeaders.length) : baseCa;
+      final cw = options.isArabic
+          ? reverseMap(baseCW, baseHeaders.length)
+          : baseCW;
+      final ca = options.isArabic
+          ? reverseMap(baseCa, baseHeaders.length)
+          : baseCa;
 
       return section(
         pw.Column(
@@ -1352,13 +1460,18 @@ class VoucherPdfBuilder {
             pw.Container(
               padding: pw.EdgeInsets.all(isA5 ? 8 : 10),
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: VoucherPdfColors.grayBorder, width: 0.5),
+                border: pw.Border.all(
+                  color: VoucherPdfColors.grayBorder,
+                  width: 0.5,
+                ),
                 borderRadius: pw.BorderRadius.circular(6),
               ),
               child: pw.TableHelper.fromTextArray(
                 headers: headers,
                 data: data,
-                headerDecoration: pw.BoxDecoration(color: VoucherPdfColors.grayBg),
+                headerDecoration: pw.BoxDecoration(
+                  color: VoucherPdfColors.grayBg,
+                ),
                 headerStyle: pw.TextStyle(
                   fontWeight: pw.FontWeight.bold,
                   fontSize: isA5 ? 7.8 : 10.5,
@@ -1389,32 +1502,37 @@ class VoucherPdfBuilder {
     }
 
     pw.Widget sigCell(String sigTitle, String name) => pw.Expanded(
-          child: pw.Column(
-            children: [
-              txt(
-                sigTitle,
-                size: isA5 ? 8 : 9,
-                color: const PdfColor.fromInt(0xFF777777),
-              ),
-              pw.SizedBox(height: isA5 ? 18 : 22),
-              pw.Container(
-                decoration: const pw.BoxDecoration(
-                  border: pw.Border(
-                    top: pw.BorderSide(color: VoucherPdfColors.grayMuted, width: 0.8),
-                  ),
-                ),
-                padding: const pw.EdgeInsets.only(top: 4),
-                child: pw.Center(
-                  child: txt(
-                    name,
-                    size: isA5 ? 7 : 8,
-                    color: VoucherPdfColors.grayMuted,
-                  ),
-                ),
-              ),
-            ],
+      child: pw.Column(
+        children: [
+          txt(
+            sigTitle,
+            size: isA5 ? 9 : 10,
+            bold: true,
+            color: const PdfColor.fromInt(0xFF222222),
           ),
-        );
+          pw.SizedBox(height: isA5 ? 18 : 22),
+          pw.Container(
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                top: pw.BorderSide(
+                  color: PdfColor.fromInt(0xFF555555),
+                  width: 1.2,
+                ),
+              ),
+            ),
+            padding: const pw.EdgeInsets.only(top: 4),
+            child: pw.Center(
+              child: txt(
+                name,
+                size: isA5 ? 8 : 9,
+                bold: true,
+                color: const PdfColor.fromInt(0xFF222222),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
 
     pw.Widget buildSignatures() {
       final sigs = [
@@ -1453,33 +1571,37 @@ class VoucherPdfBuilder {
     }
 
     pw.Widget buildFooter() => pw.Container(
-          padding: pw.EdgeInsets.symmetric(
-            horizontal: isA5 ? 12 : 16,
-            vertical: isA5 ? 5 : 7,
+      padding: pw.EdgeInsets.symmetric(
+        horizontal: isA5 ? 12 : 16,
+        vertical: isA5 ? 5 : 7,
+      ),
+      decoration: const pw.BoxDecoration(
+        color: VoucherPdfColors.grayBg,
+        border: pw.Border(
+          top: pw.BorderSide(color: VoucherPdfColors.grayBorder, width: 0.5),
+        ),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          txt(
+            voucherNum,
+            size: isA5 ? 7 : 8,
+            color: VoucherPdfColors.grayMuted,
           ),
-          decoration: const pw.BoxDecoration(
-            color: VoucherPdfColors.grayBg,
-            border: pw.Border(
-              top: pw.BorderSide(color: VoucherPdfColors.grayBorder, width: 0.5),
-            ),
+          txt(
+            '$companyName — ${options.isArabic ? 'جميع الحقوق محفوظة' : 'All rights reserved'}',
+            size: isA5 ? 7 : 8,
+            color: VoucherPdfColors.grayMuted,
           ),
-          child: pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              txt(voucherNum, size: isA5 ? 7 : 8, color: VoucherPdfColors.grayMuted),
-              txt(
-                '$companyName — ${options.isArabic ? 'جميع الحقوق محفوظة' : 'All rights reserved'}',
-                size: isA5 ? 7 : 8,
-                color: VoucherPdfColors.grayMuted,
-              ),
-              txt(
-                '${options.isArabic ? 'طُبع بتاريخ' : 'Printed'}: $printDate',
-                size: isA5 ? 7 : 8,
-                color: VoucherPdfColors.grayMuted,
-              ),
-            ],
+          txt(
+            '${options.isArabic ? 'طُبع بتاريخ' : 'Printed'}: $printDate',
+            size: isA5 ? 7 : 8,
+            color: VoucherPdfColors.grayMuted,
           ),
-        );
+        ],
+      ),
+    );
 
     final double hMargin = isA5 ? 10 * PdfPageFormat.mm : 14 * PdfPageFormat.mm;
     final double vMargin = isA5 ? 8 * PdfPageFormat.mm : 12 * PdfPageFormat.mm;
@@ -1487,18 +1609,26 @@ class VoucherPdfBuilder {
     final doc = pw.Document(title: title, author: companyName);
 
     final bool showGoldTable = goldRowsList.isNotEmpty;
-    final bool showAccountLines = options.includeAccountLines && visibleAL.isNotEmpty;
+    final bool showAccountLines =
+        options.includeAccountLines && visibleAL.isNotEmpty;
     final int contentComplexity =
-        (showGoldTable ? goldRowsList.length : 0) + (showAccountLines ? visibleAL.length : 0);
+        (showGoldTable ? goldRowsList.length : 0) +
+        (showAccountLines ? visibleAL.length : 0);
     final bool useMultiPage =
-        contentComplexity > (isA5 ? 8 : 10) || (description.trim().length > 220);
+        contentComplexity > (isA5 ? 8 : 10) ||
+        (description.trim().length > 220);
 
     if (!useMultiPage) {
       doc.addPage(
         pw.Page(
           pageFormat: format,
-          margin: pw.EdgeInsets.symmetric(horizontal: hMargin, vertical: vMargin),
-          textDirection: options.isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          margin: pw.EdgeInsets.symmetric(
+            horizontal: hMargin,
+            vertical: vMargin,
+          ),
+          textDirection: options.isArabic
+              ? pw.TextDirection.rtl
+              : pw.TextDirection.ltr,
           theme: pw.ThemeData.withFont(base: fontReg, bold: fontBold),
           build: (ctx) => pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.stretch,
@@ -1508,7 +1638,8 @@ class VoucherPdfBuilder {
               buildDetails(),
               buildAmounts(),
               buildGoldDisbursementTable(),
-              if (options.includeAccountLines && visibleAL.isNotEmpty) buildAccountLines(),
+              if (options.includeAccountLines && visibleAL.isNotEmpty)
+                buildAccountLines(),
               pw.Spacer(),
               buildSignatures(),
               buildFooter(),
@@ -1520,8 +1651,13 @@ class VoucherPdfBuilder {
       doc.addPage(
         pw.MultiPage(
           pageFormat: format,
-          margin: pw.EdgeInsets.symmetric(horizontal: hMargin, vertical: vMargin),
-          textDirection: options.isArabic ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          margin: pw.EdgeInsets.symmetric(
+            horizontal: hMargin,
+            vertical: vMargin,
+          ),
+          textDirection: options.isArabic
+              ? pw.TextDirection.rtl
+              : pw.TextDirection.ltr,
           theme: pw.ThemeData.withFont(base: fontReg, bold: fontBold),
           footer: (ctx) {
             if (ctx.pageNumber != ctx.pagesCount) return pw.SizedBox.shrink();
@@ -1533,7 +1669,8 @@ class VoucherPdfBuilder {
             buildDetails(),
             buildAmounts(),
             buildGoldDisbursementTable(),
-            if (options.includeAccountLines && visibleAL.isNotEmpty) buildAccountLines(),
+            if (options.includeAccountLines && visibleAL.isNotEmpty)
+              buildAccountLines(),
             buildSignatures(),
           ],
         ),
@@ -1621,10 +1758,10 @@ class VoucherPdfBuilder {
         final thousandWord = thousand == 1
             ? 'ألف'
             : thousand == 2
-                ? 'ألفان'
-                : thousand < 11
-                    ? '${numberToArabic(thousand)} آلاف'
-                    : '${numberToArabic(thousand)} ألف';
+            ? 'ألفان'
+            : thousand < 11
+            ? '${numberToArabic(thousand)} آلاف'
+            : '${numberToArabic(thousand)} ألف';
         if (remainder == 0) return thousandWord;
         return '$thousandWord و${numberToArabic(remainder)}';
       }

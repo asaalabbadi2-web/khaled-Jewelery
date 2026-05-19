@@ -25,6 +25,16 @@ class EmployeeModel {
   final int attendanceCount;
   final String? photo;
 
+  // 🎯 أهداف الأداء الشخصية
+  final String? goalMetric;
+  final String? goalName;
+  final double? goalWeightMonthly;
+  final double? goalWeightWeekly;
+  final double? goalPointsMonthly;
+  final double? goalPointsWeekly;
+  final int? goalInvoicesMonthly;
+  final int? goalInvoicesWeekly;
+
   const EmployeeModel({
     required this.id,
     required this.employeeCode,
@@ -49,6 +59,14 @@ class EmployeeModel {
     required this.payrollCount,
     required this.attendanceCount,
     this.photo,
+    this.goalMetric,
+    this.goalName,
+    this.goalWeightMonthly,
+    this.goalWeightWeekly,
+    this.goalPointsMonthly,
+    this.goalPointsWeekly,
+    this.goalInvoicesMonthly,
+    this.goalInvoicesWeekly,
   });
 
   factory EmployeeModel.fromJson(Map<String, dynamic> json) {
@@ -78,6 +96,14 @@ class EmployeeModel {
       payrollCount: json['payroll_count'] as int? ?? 0,
       attendanceCount: json['attendance_count'] as int? ?? 0,
       photo: json['photo'] as String?,
+      goalMetric: json['goal_metric'] as String?,
+      goalName: json['goal_name'] as String?,
+      goalWeightMonthly: (json['goal_weight_monthly'] as num?)?.toDouble(),
+      goalWeightWeekly: (json['goal_weight_weekly'] as num?)?.toDouble(),
+      goalPointsMonthly: (json['goal_points_monthly'] as num?)?.toDouble(),
+      goalPointsWeekly: (json['goal_points_weekly'] as num?)?.toDouble(),
+      goalInvoicesMonthly: json['goal_invoices_monthly'] as int?,
+      goalInvoicesWeekly: json['goal_invoices_weekly'] as int?,
     );
   }
 

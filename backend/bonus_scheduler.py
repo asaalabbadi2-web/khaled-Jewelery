@@ -37,11 +37,12 @@ class BonusScheduler:
                 bonuses = BonusCalculator.calculate_all_bonuses_for_period(
                     period_start=yesterday,
                     period_end=yesterday,
-                    auto_approve=False  # تتطلب الموافقة اليدوية
+                    auto_approve=True  # 🎉 يُعتمد تلقائياً وينشئ إنجاز فوري
                 )
                 
                 if bonuses:
-                    print(f"[BonusScheduler] ✓ تم حساب {len(bonuses)} مكافأة يومية")
+                    achieved = [b for b in bonuses if b.status == 'approved']
+                    print(f"[BonusScheduler] ✓ {len(achieved)} مكافأة يومية مُعتمدة تلقائياً")
                 else:
                     print(f"[BonusScheduler] لا توجد مكافآت يومية لحسابها")
                     
@@ -62,11 +63,12 @@ class BonusScheduler:
                 bonuses = BonusCalculator.calculate_all_bonuses_for_period(
                     period_start=last_monday,
                     period_end=last_sunday,
-                    auto_approve=False
+                    auto_approve=True  # 🎉 يُعتمد تلقائياً وينشئ إنجاز فوري
                 )
                 
                 if bonuses:
-                    print(f"[BonusScheduler] ✓ تم حساب {len(bonuses)} مكافأة أسبوعية")
+                    achieved = [b for b in bonuses if b.status == 'approved']
+                    print(f"[BonusScheduler] ✓ {len(achieved)} مكافأة أسبوعية مُعتمدة تلقائياً")
                 else:
                     print(f"[BonusScheduler] لا توجد مكافآت أسبوعية لحسابها")
                     
@@ -97,12 +99,13 @@ class BonusScheduler:
                 bonuses = BonusCalculator.calculate_all_bonuses_for_period(
                     period_start=period_start,
                     period_end=period_end,
-                    auto_approve=False
+                    auto_approve=True  # 🎉 يُعتمد تلقائياً وينشئ إنجاز فوري
                 )
                 
                 if bonuses:
-                    total_amount = sum(b.amount for b in bonuses)
-                    print(f"[BonusScheduler] ✓ تم حساب {len(bonuses)} مكافأة شهرية بإجمالي {total_amount} ريال")
+                    achieved = [b for b in bonuses if b.status == 'approved']
+                    total_amount = sum(b.amount for b in achieved)
+                    print(f"[BonusScheduler] ✓ {len(achieved)} مكافأة شهرية مُعتمدة تلقائياً بإجمالي {total_amount} ريال")
                 else:
                     print(f"[BonusScheduler] لا توجد مكافآت شهرية لحسابها")
                     

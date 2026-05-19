@@ -7260,4 +7260,75 @@ class ApiService {
       throw Exception(error['error'] ?? 'فشل في تحديث الدور');
     }
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Goal Achievements — إنجازات الأهداف
+  // ────────────────────────────────────────────────────────────
+
+  /// يرجع قائمة الإنجازات التي لم يشاهدها المستخدم بعد
+  Future<List<Map<String, dynamic>>> getUnseenAchievements() async {
+    try {
+      final response =
+          await _authedGet(Uri.parse('$_baseUrl/achievements/unseen'));
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final list = data['achievements'] as List? ?? [];
+        return list.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('❌ Error loading achievements: $e');
+      return [];
+    }
+  }
+
+  /// يضع علامة "تمت المشاهدة" على الإنجاز
+  Future<void> markAchievementSeen(int id) async {
+    try {
+      await _authedPost(
+        Uri.parse('$_baseUrl/achievements/$id/mark-seen'),
+        body: '{}',
+      );
+    } catch (e) {
+      debugPrint('❌ Error marking achievement seen: $e');
+    }
+  }
+
+  /// يفحص أداء الموظف المرتبط بالمستخدم الحالي ويُنشئ
+  /// GoalAchievement تلقائياً إن تحقق الهدف الشخصي.
+  /// يُستدعى عند كل عودة للشاشة الرئيسية.
+  Future<List<Map<String, dynamic>>> checkGoalProgress() async {
+    try {
+      final response = await _authedPost(
+        Uri.parse('$_baseUrl/achievements/check-progress'),
+        body: '{}',
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final list = data['achievements'] as List? ?? [];
+        return list.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('❌ Error checking goal progress: $e');
+      return [];
+    }
+  }
+
+  /// تحديث أهداف الأداء الشخصية للموظف
+  Future<Map<String, dynamic>> updateEmployeeGoals(
+    int employeeId,
+    Map<String, dynamic> goals,
+  ) async {
+    final token = await _requireAuthToken();
+    final response = await http.patch(
+      Uri.parse('$_baseUrl/employees/$employeeId/goals'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(goals),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception('فشل تحديث أهداف الموظف: ${response.statusCode}');
+  }
 }

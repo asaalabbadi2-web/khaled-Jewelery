@@ -55,6 +55,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   DateTimeRange? _dateRange;
   final TextEditingController _searchController = TextEditingController();
   String _filterType = 'all'; // 'all', 'credit', 'debit'
+  int? _filterKarat; // null=all, 18, 21, 22, 24
   // int? _expandedTransactionId; // Removed: unused
 
   bool _isRepairingBalances = false;
@@ -62,19 +63,17 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   final ScrollController _contentScrollController = ScrollController();
   final ScrollController _horizontalController = ScrollController();
   final ScrollController _verticalController = ScrollController();
-  final GlobalKey _topChromeKey = GlobalKey();
 
   int _viewMode = 0; // 0: dual, 1: gold, 2: cash
   _StatementDisplayMode _displayMode = _StatementDisplayMode.table;
   bool _showOnlyMovement = false;
   bool _includeBreakdown = true;
   bool _isExporting = false;
+  // Default: newest transactions first
+  // (field kept for future use)
   bool _resolvedViewModeDefault = false;
-  _StatementSortColumn? _sortColumn;
-  bool _sortAscending = false;
-
-  double _topChromeHeight = 0;
-  double _topChromeCollapseOffset = 0;
+  _StatementSortColumn? _sortColumn = _StatementSortColumn.date;
+  bool _sortAscending = false; // newest first by default
 
   bool _pdfIncludeValuation = true;
   int? _pdfViewModeOverride;
@@ -90,7 +89,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       settingsProvider = null;
     }
 
-    if (fetchIfEmpty && settingsProvider != null && settingsProvider.settings.isEmpty) {
+    if (fetchIfEmpty &&
+        settingsProvider != null &&
+        settingsProvider.settings.isEmpty) {
       try {
         await settingsProvider.fetchSettings().timeout(
           const Duration(milliseconds: 800),
@@ -117,6 +118,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       companyCr: companyCr,
       showCompanyLogo: showCompanyLogo,
       companyLogoBase64: companyLogoBase64,
+      currencySymbol: settingsProvider?.currencySymbol ?? 'ر.س',
     );
   }
 
@@ -128,8 +130,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         targetHeight: targetSize,
       );
       final frame = await codec.getNextFrame();
-      final byteData =
-          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      final byteData = await frame.image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
       frame.image.dispose();
       if (byteData != null) return byteData.buffer.asUint8List();
     } catch (_) {}
@@ -306,6 +309,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     setState(() {
       _dateRange = null;
       _filterType = 'all';
+      _filterKarat = null;
       _showOnlyMovement = false;
     });
     _searchController.clear();
@@ -338,39 +342,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   void _onContentScroll() {
-    final activeController = _displayMode == _StatementDisplayMode.cards
-        ? _contentScrollController
-        : _verticalController;
-    final nextOffset = activeController.hasClients
-        ? activeController.offset.clamp(0.0, _topChromeHeight)
-        : 0.0;
-    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
-      return;
-    }
-    setState(() {
-      _topChromeCollapseOffset = nextOffset;
-    });
+    // No-op: collapse animation removed; CustomScrollView handles scroll natively.
   }
 
-  void _measureTopChrome() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final context = _topChromeKey.currentContext;
-      if (context == null) return;
-      final renderObject = context.findRenderObject();
-      if (renderObject is! RenderBox) return;
-      final measuredHeight = renderObject.size.height;
-      if (measuredHeight <= 0 || (measuredHeight - _topChromeHeight).abs() < 0.5) {
-        return;
-      }
-      setState(() {
-        _topChromeHeight = measuredHeight;
-        if (_topChromeCollapseOffset > measuredHeight) {
-          _topChromeCollapseOffset = measuredHeight;
-        }
-      });
-    });
-  }
 
   Future<void> _fetchAccountStatement() async {
     setState(() => _isLoading = true);
@@ -576,6 +550,18 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           matchesFilterType = line.goldDebit > 0 || line.cashDebit > 0;
         }
 
+        bool matchesKarat = true;
+        if (_filterKarat != null) {
+          final k = _filterKarat!;
+          matchesKarat = k == 18
+              ? (line.debit18k.abs() + line.credit18k.abs()) > 0.0001
+              : k == 21
+              ? (line.debit21k.abs() + line.credit21k.abs()) > 0.0001
+              : k == 22
+              ? (line.debit22k.abs() + line.credit22k.abs()) > 0.0001
+              : (line.debit24k.abs() + line.credit24k.abs()) > 0.0001;
+        }
+
         final hasGoldMovement =
             (line.goldDebit + line.goldCredit).abs() > 0.0001;
         final hasCashMovement =
@@ -597,6 +583,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         return matchesDateRange &&
             matchesSearch &&
             matchesFilterType &&
+            matchesKarat &&
             matchesMovement;
       }).toList();
 
@@ -653,9 +640,10 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           );
           break;
         case _StatementSortColumn.goldMovement:
-          result = _goldMovementForLine(a, mainKarat).compareTo(
-            _goldMovementForLine(b, mainKarat),
-          );
+          result = _goldMovementForLine(
+            a,
+            mainKarat,
+          ).compareTo(_goldMovementForLine(b, mainKarat));
           break;
         case _StatementSortColumn.goldBalance:
           result = (a.runningGoldBalance ?? 0).compareTo(
@@ -874,11 +862,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       headers.addAll(['ذهب مدين', 'ذهب دائن', 'رصيد الذهب']);
     }
     if (_viewMode != 1) {
-      headers.addAll([
-        '$cashLabel مدين',
-        '$cashLabel دائن',
-        'رصيد $cashLabel',
-      ]);
+      headers.addAll(['$cashLabel مدين', '$cashLabel دائن', 'رصيد $cashLabel']);
     }
 
     final rows = <List<String>>[headers];
@@ -941,7 +925,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     }
     try {
       final bytes = await _buildStatementPdfBytes(
-        options.landscape ? pdf.PdfPageFormat.a4.landscape : pdf.PdfPageFormat.a4,
+        options.landscape
+            ? pdf.PdfPageFormat.a4.landscape
+            : pdf.PdfPageFormat.a4,
         viewModeOverride: options.viewModeOverride,
         includeValuation: options.includeValuation,
         branding: branding,
@@ -1004,8 +990,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Future<({bool includeValuation, int? viewModeOverride, bool landscape})?>
-  _askPdfOptions()
-  async {
+  _askPdfOptions() async {
     final currentViewMode = _viewMode;
     var includeValuation = _pdfIncludeValuation;
     var viewModeOverride = _pdfViewModeOverride;
@@ -1013,93 +998,95 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     final cashLabel = (_statement?.isMerged ?? false) ? 'قيمة' : 'نقد';
 
-    final result = await showDialog<({
-      bool includeValuation,
-      int? viewModeOverride,
-      bool landscape,
-    })>(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            final effectiveViewMode = viewModeOverride ?? currentViewMode;
-            return AlertDialog(
-              title: const Text('خيارات الطباعة'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: includeValuation,
-                    onChanged: (value) {
-                      setStateDialog(() {
-                        includeValuation = value ?? true;
-                      });
-                    },
-                    title: const Text('إظهار التقييم المالي للذهب (السعر اللحظي)'),
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: landscape,
-                    onChanged: (value) {
-                      setStateDialog(() {
-                        landscape = value;
-                      });
-                    },
-                    title: const Text('طباعة بالعرض (Landscape)'),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('نمط الطباعة:'),
-                  const SizedBox(height: 6),
-                  DropdownButton<int>(
-                    value: effectiveViewMode,
-                    isDense: true,
-                    items: [
-                      DropdownMenuItem(
-                        value: 0,
-                        child: Text('ذهب + $cashLabel'),
+    final result =
+        await showDialog<
+          ({bool includeValuation, int? viewModeOverride, bool landscape})
+        >(
+          context: context,
+          builder: (context) {
+            return StatefulBuilder(
+              builder: (context, setStateDialog) {
+                final effectiveViewMode = viewModeOverride ?? currentViewMode;
+                return AlertDialog(
+                  title: const Text('خيارات الطباعة'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: includeValuation,
+                        onChanged: (value) {
+                          setStateDialog(() {
+                            includeValuation = value ?? true;
+                          });
+                        },
+                        title: const Text(
+                          'إظهار التقييم المالي للذهب (السعر اللحظي)',
+                        ),
                       ),
-                      const DropdownMenuItem(
-                        value: 1,
-                        child: Text('ذهب فقط'),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: landscape,
+                        onChanged: (value) {
+                          setStateDialog(() {
+                            landscape = value;
+                          });
+                        },
+                        title: const Text('طباعة بالعرض (Landscape)'),
                       ),
-                      DropdownMenuItem(
-                        value: 2,
-                        child: Text('$cashLabel فقط'),
+                      const SizedBox(height: 8),
+                      const Text('نمط الطباعة:'),
+                      const SizedBox(height: 6),
+                      DropdownButton<int>(
+                        value: effectiveViewMode,
+                        isDense: true,
+                        items: [
+                          DropdownMenuItem(
+                            value: 0,
+                            child: Text('ذهب + $cashLabel'),
+                          ),
+                          const DropdownMenuItem(
+                            value: 1,
+                            child: Text('ذهب فقط'),
+                          ),
+                          DropdownMenuItem(
+                            value: 2,
+                            child: Text('$cashLabel فقط'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setStateDialog(() {
+                            viewModeOverride = (value == currentViewMode)
+                                ? null
+                                : value;
+                          });
+                        },
                       ),
                     ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setStateDialog(() {
-                        viewModeOverride =
-                            (value == currentViewMode) ? null : value;
-                      });
-                    },
                   ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(null),
-                  child: const Text('إلغاء'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).pop((
-                      includeValuation: includeValuation,
-                      viewModeOverride: viewModeOverride,
-                      landscape: landscape,
-                    ));
-                  },
-                  child: const Text('متابعة'),
-                ),
-              ],
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(null),
+                      child: const Text('إلغاء'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).pop((
+                          includeValuation: includeValuation,
+                          viewModeOverride: viewModeOverride,
+                          landscape: landscape,
+                        ));
+                      },
+                      child: const Text('متابعة'),
+                    ),
+                  ],
+                );
+              },
             );
           },
         );
-      },
-    );
 
     if (!mounted) return null;
     if (result == null) return null;
@@ -1126,23 +1113,24 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     // Pre-load assets on the main isolate; rootBundle is not available in
     // spawned isolates, so we pass the raw bytes to the builder instead.
-    final fontBytes =
-        (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-            .buffer
-            .asUint8List();
-    final boldFontBytes =
-        (await rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
-            .buffer
-            .asUint8List();
+    final fontBytes = (await rootBundle.load(
+      'assets/fonts/Cairo-Regular.ttf',
+    )).buffer.asUint8List();
+    final boldFontBytes = (await rootBundle.load(
+      'assets/fonts/Cairo-Bold.ttf',
+    )).buffer.asUint8List();
     Uint8List? fallbackLogoBytes;
     try {
-      final raw = (await rootBundle.load('assets/KHGL.png')).buffer.asUint8List();
+      final raw = (await rootBundle.load(
+        'assets/KHGL.png',
+      )).buffer.asUint8List();
       fallbackLogoBytes = await _resizeImageBytes(raw, 128);
     } catch (_) {}
 
     // Pre-decode and resize the base64 company logo (main isolate only).
     Uint8List? preloadedLogo;
-    if (branding.showCompanyLogo && branding.companyLogoBase64.trim().isNotEmpty) {
+    if (branding.showCompanyLogo &&
+        branding.companyLogoBase64.trim().isNotEmpty) {
       try {
         final b64 = branding.companyLogoBase64.trim();
         final commaIdx = b64.indexOf(',');
@@ -1183,22 +1171,22 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         : null;
 
     Future<Uint8List> buildPdf() => AccountStatementPdfBuilder.build(
-          fmt,
-          statement: statement,
-          tableLines: lines,
-          accountName: accountName,
-          accountId: accountId,
-          viewMode: effectiveViewMode,
-          includeValuation: includeValuation,
-          dateRange: dateRange,
-          filterType: filterType,
-          showOnlyMovement: showOnlyMovement,
-          branding: branding,
-          preloadedRegularFont: fontBytes,
-          preloadedBoldFont: boldFontBytes,
-          preloadedFallbackLogo: fallbackLogoBytes,
-          preloadedLogo: preloadedLogo,
-        );
+      fmt,
+      statement: statement,
+      tableLines: lines,
+      accountName: accountName,
+      accountId: accountId,
+      viewMode: effectiveViewMode,
+      includeValuation: includeValuation,
+      dateRange: dateRange,
+      filterType: filterType,
+      showOnlyMovement: showOnlyMovement,
+      branding: branding,
+      preloadedRegularFont: fontBytes,
+      preloadedBoldFont: boldFontBytes,
+      preloadedFallbackLogo: fallbackLogoBytes,
+      preloadedLogo: preloadedLogo,
+    );
 
     // dart:isolate is not supported on Flutter Web — run directly there.
     if (kIsWeb) return buildPdf();
@@ -1296,91 +1284,102 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Widget _buildStatementContent() {
+    final isCard = _displayMode == _StatementDisplayMode.cards;
+    final filteredLines = _filteredLines;
+    final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        return Column(
-          children: [
-            _buildCollapsibleTopChrome(constraints.maxWidth),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: _buildToolbar(constraints.maxWidth),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: _buildFilteredTotalsBar(),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                child: _buildStatementBody(),
+        // Measure toolbar + totals bar height after first frame
+        final toolbarWidget = _buildToolbar(constraints.maxWidth);
+        final totalsWidget = _buildFilteredTotalsBar();
+
+        return RefreshIndicator(
+          onRefresh: _fetchAccountStatement,
+          child: CustomScrollView(
+            controller: _contentScrollController,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              // Summary cards — scroll away with page
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: _buildSummaryOverview(constraints.maxWidth - 32),
+                ),
               ),
-            ),
-          ],
+
+              // ── Sticky: Filter toolbar + totals bar ─────────────────
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _PinnedWidgetDelegate(
+                  height: _stickyHeaderHeight(constraints.maxWidth),
+                  child: Material(
+                    elevation: 2,
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: toolbarWidget,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                          child: totalsWidget,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              // Transaction list
+              if (filteredLines.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    child: _buildEmptyLinesState(),
+                  ),
+                )
+              else if (isCard)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  sliver: SliverList.separated(
+                    itemCount: filteredLines.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) =>
+                        _buildLineCard(filteredLines[index], mainKarat),
+                  ),
+                )
+              else
+                SliverFillRemaining(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    child: _buildStatementTable(),
+                  ),
+                ),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildCollapsibleTopChrome(double maxWidth) {
-    final content = KeyedSubtree(
-      key: _topChromeKey,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: _buildSummaryOverview(maxWidth),
-      ),
-    );
-
-    _measureTopChrome();
-
-    if (_topChromeHeight <= 0) {
-      return content;
-    }
-
-    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(0.0, _topChromeHeight);
-    if (visibleHeight <= 0) {
-      return const SizedBox.shrink();
-    }
-
-    return ClipRect(
-      child: SizedBox(
-        height: visibleHeight,
-        child: OverflowBox(
-          alignment: Alignment.topCenter,
-          minHeight: _topChromeHeight,
-          maxHeight: _topChromeHeight,
-          child: Transform.translate(
-            offset: Offset(0, -collapse),
-            child: content,
-          ),
-        ),
-      ),
-    );
+  /// Estimated height for the pinned sticky header.
+  /// On narrow screens the toolbar wraps into more rows so we allow more space.
+  double _stickyHeaderHeight(double maxWidth) {
+    // toolbar rows:
+    //   row 1: results badge + filters badge + clear button  ≈ 46
+    //   row 2: search + date range + type dropdown          ≈ 52
+    //   row 3: view mode + karat + movement chip + export   ≈ 52
+    // totals bar                                            ≈ 54
+    // padding (top 8 + bottom 8 + 6 between)               ≈ 22
+    if (maxWidth < 420) return 310;
+    if (maxWidth < 600) return 280;
+    return 240;
   }
 
-  Widget _buildStatementBody() {
-    if (_filteredLines.isEmpty) {
-      return _buildEmptyLinesState();
-    }
-
-    if (_displayMode == _StatementDisplayMode.cards) {
-      return RefreshIndicator(
-        onRefresh: _fetchAccountStatement,
-        child: ListView.separated(
-          controller: _contentScrollController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: _filteredLines.length,
-          separatorBuilder: (context, index) => const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final mainKarat = (_statement?.mainKarat ?? 21).toDouble();
-            return _buildLineCard(_filteredLines[index], mainKarat);
-          },
-        ),
-      );
-    }
-
-    return _buildStatementTable();
-  }
 
   Widget _buildEmptyLinesState() {
     final theme = Theme.of(context);
@@ -1587,8 +1586,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     final isCompact = maxWidth < 720;
     final cardsPerRow = isCompact ? 1 : (cards.length == 4 ? 2 : 3);
-    final cardWidth =
-        isCompact ? maxWidth : (maxWidth - (12 * (cardsPerRow - 1))) / cardsPerRow;
+    final cardWidth = isCompact
+        ? maxWidth
+        : (maxWidth - (12 * (cardsPerRow - 1))) / cardsPerRow;
 
     return Wrap(
       spacing: 12,
@@ -1609,6 +1609,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     if (_dateRange != null) count++;
     if (_searchController.text.trim().isNotEmpty) count++;
     if (_filterType != 'all') count++;
+    if (_filterKarat != null) count++;
     if (_showOnlyMovement) count++;
     if (!_includeBreakdown) count++;
     if (_viewMode != 0) count++;
@@ -1627,7 +1628,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.14)),
+        border: Border.all(
+          color: theme.colorScheme.outline.withValues(alpha: 0.14),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1641,25 +1644,37 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                        color: theme.colorScheme.surfaceContainerHighest
+                            .withValues(alpha: 0.6),
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
                         'النتائج: ${_filteredLines.length}',
-                        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                        color: theme.colorScheme.surfaceContainerHighest
+                            .withValues(alpha: 0.6),
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
                         'الفلاتر النشطة: $_activeFiltersCount',
-                        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ],
@@ -1743,7 +1758,12 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                       isDense: true,
                     ),
                     items: viewModeLabels.entries
-                        .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                        .map(
+                          (e) => DropdownMenuItem(
+                            value: e.key,
+                            child: Text(e.value),
+                          ),
+                        )
                         .toList(),
                     onChanged: (value) {
                       if (value == null) return;
@@ -1764,6 +1784,28 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                     setState(() => _viewMode = value.first);
                     _filterLines();
                   },
+                ),
+              if (_viewMode == 1 || _viewMode == 0)
+                SizedBox(
+                  width: 110,
+                  child: DropdownButtonFormField<int?>(
+                    value: _filterKarat,
+                    decoration: const InputDecoration(
+                      labelText: 'العيار',
+                      isDense: true,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: null, child: Text('الكل')),
+                      DropdownMenuItem(value: 18, child: Text('18')),
+                      DropdownMenuItem(value: 21, child: Text('21')),
+                      DropdownMenuItem(value: 22, child: Text('22')),
+                      DropdownMenuItem(value: 24, child: Text('24')),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _filterKarat = value);
+                      _filterLines();
+                    },
+                  ),
                 ),
               FilterChip(
                 label: const Text('حركات فقط'),
@@ -1821,7 +1863,10 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       if (_includeBreakdown && _viewMode != 2) 'breakdown': 170,
       'actions': 56,
     };
-    final baseWidth = widths.values.fold<double>(0, (sum, width) => sum + width);
+    final baseWidth = widths.values.fold<double>(
+      0,
+      (sum, width) => sum + width,
+    );
     final tableWidth = viewportWidth > baseWidth ? viewportWidth : baseWidth;
     final extraWidth = tableWidth - baseWidth;
     if (extraWidth > 0) {
@@ -1859,9 +1904,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w800,
-                        color: isActive
-                            ? theme.colorScheme.primary
-                            : null,
+                        color: isActive ? theme.colorScheme.primary : null,
                       ),
                     ),
                   ),
@@ -1905,7 +1948,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         Expanded(
           child: Card(
             elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Scrollbar(
               controller: _horizontalController,
               thumbVisibility: true,
@@ -1921,10 +1966,13 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                       Container(
                         height: 48,
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                          color: theme.colorScheme.surfaceContainerHighest
+                              .withValues(alpha: 0.5),
                           border: Border(
                             bottom: BorderSide(
-                              color: theme.colorScheme.outline.withValues(alpha: 0.14),
+                              color: theme.colorScheme.outline.withValues(
+                                alpha: 0.14,
+                              ),
                             ),
                           ),
                         ),
@@ -1970,8 +2018,16 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                                 sortColumn: _StatementSortColumn.cashBalance,
                               ),
                             if (_includeBreakdown && _viewMode != 2)
-                              headerCell(label: 'العيارات', width: widths['breakdown']!, alignment: Alignment.center),
-                            headerCell(label: '⋮', width: widths['actions']!, alignment: Alignment.center),
+                              headerCell(
+                                label: 'العيارات',
+                                width: widths['breakdown']!,
+                                alignment: Alignment.center,
+                              ),
+                            headerCell(
+                              label: '⋮',
+                              width: widths['actions']!,
+                              alignment: Alignment.center,
+                            ),
                           ],
                         ),
                       ),
@@ -1994,7 +2050,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                               return Material(
                                 color: index.isEven
                                     ? theme.colorScheme.surface
-                                    : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.22),
+                                    : theme.colorScheme.surfaceContainerHighest
+                                          .withValues(alpha: 0.22),
                                 child: InkWell(
                                   onTap: () => _handleRowTap(line, mainKarat),
                                   child: Container(
@@ -2002,7 +2059,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                                     decoration: BoxDecoration(
                                       border: Border(
                                         bottom: BorderSide(
-                                          color: theme.colorScheme.outline.withValues(alpha: 0.08),
+                                          color: theme.colorScheme.outline
+                                              .withValues(alpha: 0.08),
                                         ),
                                       ),
                                     ),
@@ -2012,7 +2070,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                                           width: widths['date']!,
                                           alignment: Alignment.center,
                                           child: Text(
-                                            DateFormat('yyyy-MM-dd').format(line.date),
+                                            DateFormat(
+                                              'yyyy-MM-dd',
+                                            ).format(line.date),
                                             style: theme.textTheme.bodySmall,
                                           ),
                                         ),
@@ -2023,42 +2083,54 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                                         if (_viewMode != 2)
                                           bodyCell(
                                             width: widths['gold_movement']!,
-                                            alignment: AlignmentDirectional.centerEnd,
+                                            alignment:
+                                                AlignmentDirectional.centerEnd,
                                             child: _signedNumCell(
                                               goldMovement,
-                                              positiveColor: theme.colorScheme.primary,
-                                              negativeColor: theme.colorScheme.error,
+                                              positiveColor:
+                                                  theme.colorScheme.primary,
+                                              negativeColor:
+                                                  theme.colorScheme.error,
                                               fractionDigits: 3,
                                             ),
                                           ),
                                         if (_viewMode != 2)
                                           bodyCell(
                                             width: widths['gold_balance']!,
-                                            alignment: AlignmentDirectional.centerEnd,
+                                            alignment:
+                                                AlignmentDirectional.centerEnd,
                                             child: _numCell(
                                               line.runningGoldBalance,
-                                              color: theme.colorScheme.onSurfaceVariant,
+                                              color: theme
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
                                               fractionDigits: 3,
                                             ),
                                           ),
                                         if (_viewMode != 1)
                                           bodyCell(
                                             width: widths['cash_movement']!,
-                                            alignment: AlignmentDirectional.centerEnd,
+                                            alignment:
+                                                AlignmentDirectional.centerEnd,
                                             child: _signedNumCell(
                                               cashMovement,
-                                              positiveColor: theme.colorScheme.primary,
-                                              negativeColor: theme.colorScheme.error,
+                                              positiveColor:
+                                                  theme.colorScheme.primary,
+                                              negativeColor:
+                                                  theme.colorScheme.error,
                                               fractionDigits: 2,
                                             ),
                                           ),
                                         if (_viewMode != 1)
                                           bodyCell(
                                             width: widths['cash_balance']!,
-                                            alignment: AlignmentDirectional.centerEnd,
+                                            alignment:
+                                                AlignmentDirectional.centerEnd,
                                             child: _numCell(
                                               line.runningCashBalance,
-                                              color: theme.colorScheme.onSurfaceVariant,
+                                              color: theme
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
                                               fractionDigits: 2,
                                             ),
                                           ),
@@ -2067,10 +2139,16 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                                             width: widths['breakdown']!,
                                             alignment: Alignment.center,
                                             child: OutlinedButton(
-                                              onPressed: () => _showLineDetails(line, mainKarat),
+                                              onPressed: () => _showLineDetails(
+                                                line,
+                                                mainKarat,
+                                              ),
                                               style: OutlinedButton.styleFrom(
                                                 minimumSize: const Size(0, 36),
-                                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                    ),
                                               ),
                                               child: const Text('تفصيل'),
                                             ),
@@ -2081,27 +2159,54 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                                           child: PopupMenuButton<String>(
                                             onSelected: (value) {
                                               if (value == 'details') {
-                                                _showLineDetails(line, mainKarat);
+                                                _showLineDetails(
+                                                  line,
+                                                  mainKarat,
+                                                );
                                               } else if (value == 'copy') {
                                                 Clipboard.setData(
-                                                  ClipboardData(text: _buildLineSummary(line, mainKarat)),
+                                                  ClipboardData(
+                                                    text: _buildLineSummary(
+                                                      line,
+                                                      mainKarat,
+                                                    ),
+                                                  ),
                                                 );
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text('تم نسخ ملخص الحركة')),
+                                                ScaffoldMessenger.of(
+                                                  context,
+                                                ).showSnackBar(
+                                                  const SnackBar(
+                                                    content: Text(
+                                                      'تم نسخ ملخص الحركة',
+                                                    ),
+                                                  ),
                                                 );
                                               }
                                             },
                                             itemBuilder: (context) => const [
-                                              PopupMenuItem(value: 'details', child: Text('التفاصيل')),
-                                              PopupMenuItem(value: 'copy', child: Text('نسخ الملخص')),
+                                              PopupMenuItem(
+                                                value: 'details',
+                                                child: Text('التفاصيل'),
+                                              ),
+                                              PopupMenuItem(
+                                                value: 'copy',
+                                                child: Text('نسخ الملخص'),
+                                              ),
                                             ],
                                             child: Container(
                                               padding: const EdgeInsets.all(6),
                                               decoration: BoxDecoration(
-                                                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
-                                                borderRadius: BorderRadius.circular(10),
+                                                color: theme
+                                                    .colorScheme
+                                                    .surfaceContainerHighest
+                                                    .withValues(alpha: 0.7),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
                                               ),
-                                              child: const Icon(Icons.more_horiz, size: 18),
+                                              child: const Icon(
+                                                Icons.more_horiz,
+                                                size: 18,
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -2239,7 +2344,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                         _showLineDetails(line, mainKarat);
                       } else if (value == 'copy') {
                         Clipboard.setData(
-                          ClipboardData(text: _buildLineSummary(line, mainKarat)),
+                          ClipboardData(
+                            text: _buildLineSummary(line, mainKarat),
+                          ),
                         );
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('تم نسخ ملخص الحركة')),
@@ -2260,16 +2367,23 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                     metricTile(
                       label: 'حركة الذهب',
                       movement: goldMovement.toStringAsFixed(3),
-                      balance: (line.runningGoldBalance ?? 0).toStringAsFixed(3),
+                      balance: (line.runningGoldBalance ?? 0).toStringAsFixed(
+                        3,
+                      ),
                       color: const Color(0xFFD4A017),
                       icon: Icons.auto_awesome_outlined,
                     ),
-                  if (_viewMode != 2 && _viewMode != 1) const SizedBox(width: 8),
+                  if (_viewMode != 2 && _viewMode != 1)
+                    const SizedBox(width: 8),
                   if (_viewMode != 1)
                     metricTile(
-                      label: (_statement?.isMerged ?? false) ? 'حركة القيمة' : 'حركة النقد',
+                      label: (_statement?.isMerged ?? false)
+                          ? 'حركة القيمة'
+                          : 'حركة النقد',
                       movement: cashMovement.toStringAsFixed(2),
-                      balance: (line.runningCashBalance ?? 0).toStringAsFixed(2),
+                      balance: (line.runningCashBalance ?? 0).toStringAsFixed(
+                        2,
+                      ),
                       color: Colors.green,
                       icon: Icons.payments_outlined,
                     ),
@@ -2945,7 +3059,10 @@ class _ValuationCard extends StatelessWidget {
                     color: theme.colorScheme.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(Icons.price_check, color: theme.colorScheme.primary),
+                  child: Icon(
+                    Icons.price_check,
+                    color: theme.colorScheme.primary,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -2991,7 +3108,9 @@ class _ValuationCard extends StatelessWidget {
                   child: _SummaryMetric(
                     label: 'قيمة تقديرية (ر.س)',
                     value: totalText,
-                    subtitle: goldValueText == null ? null : 'ذهب: $goldValueText',
+                    subtitle: goldValueText == null
+                        ? null
+                        : 'ذهب: $goldValueText',
                     color: cashColor,
                     icon: Icons.assessment,
                   ),
@@ -3080,4 +3199,36 @@ class _SummaryMetric extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sliver delegate that pins a widget at the top of a CustomScrollView
+// ─────────────────────────────────────────────────────────────────────────────
+class _PinnedWidgetDelegate extends SliverPersistentHeaderDelegate {
+  const _PinnedWidgetDelegate({
+    required this.child,
+    required this.height,
+  });
+
+  final Widget child;
+  final double height;
+
+  @override
+  double get minExtent => height;
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return SizedBox.expand(child: child);
+  }
+
+  @override
+  bool shouldRebuild(_PinnedWidgetDelegate oldDelegate) =>
+      oldDelegate.height != height || oldDelegate.child != child;
 }

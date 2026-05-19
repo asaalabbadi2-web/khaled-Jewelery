@@ -20,6 +20,7 @@ from models import (
     BonusRule,
     Employee,
     EmployeeBonus,
+    GoalAchievement,
     Invoice,
     db,
     get_race_points_per_gram,
@@ -501,6 +502,9 @@ class BonusCalculator:
                     if invoice_ids is not None:
                         _sync_invoice_links(bonus, invoice_ids)
 
+                    if auto_approve:
+                        _auto_create_achievement(bonus, employee, rule)
+
                     processed_bonus_ids.append(bonus.id)
                     bonuses.append(bonus)
 
@@ -602,3 +606,67 @@ class BonusCalculator:
             "bonuses_count": len(bonuses),
             "bonuses": [b.to_dict(include_employee=False, include_rule=True) for b in bonuses],
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Private helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _auto_create_achievement(bonus: EmployeeBonus, employee: Employee, rule: BonusRule):
+    """
+    ينشئ GoalAchievement تلقائياً عند اعتماد مكافأة بدون انتظار موافقة يدوية.
+    لا يُنشئ إنجازاً مكرراً لنفس المكافأة.
+    يُستدعى من calculate_all_bonuses_for_period عندما auto_approve=True.
+    """
+    try:
+        if GoalAchievement.query.filter_by(bonus_id=bonus.id).first():
+            return  # مكرر
+
+        calc = bonus.calculation_data or {}
+
+        # ── بناء الـ metrics من calculation_data ──
+        _METRIC_KEYS = {
+            'points': 'points',
+            'invoice_count': 'invoices',
+            'invoices': 'invoices',
+            'rank': 'rank',
+            'sales_amount': 'sales',
+            'total_profit_cash': 'amount',
+            'achievement_percentage': 'percentage',
+        }
+        metrics = {}
+        for src_key, display_key in _METRIC_KEYS.items():
+            val = calc.get(src_key)
+            if val is not None and display_key not in metrics:
+                metrics[display_key] = round(float(val), 2) if isinstance(val, float) else val
+
+        goal_name = rule.name if rule else _bonus_type_label(bonus.bonus_type)
+        goal_description = rule.description if rule else None
+
+        achievement = GoalAchievement(
+            employee_id=bonus.employee_id,
+            bonus_rule_id=bonus.bonus_rule_id,
+            bonus_id=bonus.id,
+            goal_name=goal_name,
+            goal_description=goal_description,
+            bonus_amount=bonus.amount,
+            metrics=metrics,
+            achieved_at=bonus.approved_at or datetime.now(),
+        )
+        db.session.add(achievement)
+    except Exception:
+        import traceback
+        traceback.print_exc()  # non-fatal
+
+
+def _bonus_type_label(bonus_type: str) -> str:
+    return {
+        'sales_target': 'هدف المبيعات',
+        'attendance': 'مكافأة الحضور',
+        'performance': 'مكافأة الأداء',
+        'fixed': 'مكافأة ثابتة',
+        'profit_based': 'مكافأة الأرباح',
+        'goal_achieved': 'تحقيق هدف',
+        'custom': 'مكافأة خاصة',
+    }.get(bonus_type, 'مكافأة معتمدة')
+

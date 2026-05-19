@@ -15,7 +15,7 @@ Endpoints:
 """
 
 from flask import Blueprint, request, jsonify, g
-from models import db, Employee, BonusRule, EmployeeBonus, Voucher, VoucherAccountLine, Account, Office, SafeBox
+from models import db, Employee, BonusRule, EmployeeBonus, Voucher, VoucherAccountLine, Account, Office, SafeBox, GoalAchievement
 from bonus_calculator import BonusCalculator
 from datetime import datetime, date
 from auth_decorators import require_auth, require_permission, require_any_permission
@@ -734,6 +734,9 @@ def approve_bonus(bonus_id):
         # اعتماد المكافأة
         bonus.approve(approved_by)
         bonus.payment_reference = voucher_number  # حفظ رقم سند الاستحقاق
+
+        # 🎉 إنشاء سجل إنجاز تلقائي ليظهر للموظف كـ overlay احتفالية
+        _create_achievement_for_bonus(bonus, employee)
         
         try:
             db.session.commit()
@@ -767,6 +770,66 @@ def approve_bonus(bonus_id):
         }), 500
 
 
+def _create_achievement_for_bonus(bonus: EmployeeBonus, employee):
+    """
+    ينشئ سجل GoalAchievement مرتبط بالمكافأة المعتمدة.
+    يُستدعى تلقائياً من approve_bonus() قبل commit().
+    
+    - يبني اسم الهدف من نوع المكافأة أو من القاعدة إن وُجدت
+    - يضع الـ metrics من calculation_data إن كانت موجودة
+    - لا يرفع exception — الإنجاز اختياري ولا يعطّل الاعتماد
+    """
+    try:
+        # لا تُنشئ إنجازاً مكرراً لنفس المكافأة
+        existing = GoalAchievement.query.filter_by(bonus_id=bonus.id).first()
+        if existing:
+            return
+
+        rule = bonus.rule
+        goal_name = (rule.name if rule else None) or _bonus_type_label(bonus.bonus_type)
+        goal_description = rule.description if rule else None
+
+        # استخرج الـ metrics من calculation_data
+        calc = bonus.calculation_data or {}
+        metrics = {}
+        for key in ('points', 'invoices', 'invoice_count', 'rank',
+                    'sales_weight', 'total_sales', 'percentage'):
+            val = calc.get(key)
+            if val is not None:
+                # normalize key names for the Flutter widget
+                display_key = 'invoices' if key == 'invoice_count' else key
+                metrics[display_key] = val
+
+        achievement = GoalAchievement(
+            employee_id=bonus.employee_id,
+            bonus_rule_id=bonus.bonus_rule_id,
+            bonus_id=bonus.id,
+            goal_name=goal_name,
+            goal_description=goal_description,
+            bonus_amount=bonus.amount,
+            metrics=metrics,
+            achieved_at=bonus.approved_at or bonus.created_at,
+        )
+        db.session.add(achievement)
+    except Exception as exc:
+        # Non-fatal: log and continue
+        import traceback
+        traceback.print_exc()
+
+
+def _bonus_type_label(bonus_type: str) -> str:
+    labels = {
+        'sales_target': 'هدف المبيعات',
+        'attendance': 'مكافأة الحضور',
+        'performance': 'مكافأة الأداء',
+        'fixed': 'مكافأة ثابتة',
+        'profit_based': 'مكافأة الأرباح',
+        'goal_achieved': 'تحقيق هدف',
+        'custom': 'مكافأة خاصة',
+    }
+    return labels.get(bonus_type, 'مكافأة معتمدة')
+
+
 @bonus_bp.route('/bonuses/bulk/approve', methods=['POST'])
 @bonus_bp.route('/bonuses/bulk-approve', methods=['POST'])
 @require_auth
@@ -786,7 +849,9 @@ def bulk_approve_bonuses():
 
         for bonus in bonuses:
             if bonus.status == 'pending':
+                employee = Employee.query.get(bonus.employee_id)
                 bonus.approve(approved_by)
+                _create_achievement_for_bonus(bonus, employee)
                 approved.append(bonus.id)
             else:
                 skipped.append({'id': bonus.id, 'status': bonus.status})
