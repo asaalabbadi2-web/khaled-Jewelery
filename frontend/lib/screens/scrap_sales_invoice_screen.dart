@@ -1338,6 +1338,11 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
           icon: Icons.share_rounded,
           value: 'share',
         ),
+        InvoiceSummaryAction.secondary(
+          label: 'فاتورة جديدة',
+          icon: Icons.add_circle_outline_rounded,
+          value: 'new_invoice',
+        ),
         InvoiceSummaryAction.primary(
           label: 'تم',
           icon: Icons.check_rounded,
@@ -1799,7 +1804,12 @@ class _ScrapSalesInvoiceScreenState extends State<ScrapSalesInvoiceScreen> {
         }
 
         if (!context.mounted) return;
-        _resetAfterSave();
+        if (shouldPrint == 'new_invoice') {
+          _resetAfterSave();
+        } else {
+          // 'done' or null → return to home
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
       }
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');

@@ -1652,6 +1652,8 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
   late TextEditingController _nameCtrl;
   late TextEditingController _monthlyCtrl;
   late TextEditingController _weeklyCtrl;
+  late TextEditingController _bonusMonthlyCtrl;
+  late TextEditingController _bonusWeeklyCtrl;
 
   static const _gold = Color(0xFFD4AF37);
 
@@ -1660,10 +1662,12 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
 
   void _init() {
     final e = widget.employee;
-    _metric      = e.goalMetric ?? 'weight';
-    _nameCtrl    = TextEditingController(text: e.goalName ?? '');
-    _monthlyCtrl = TextEditingController(text: _monthly(e)?.toString() ?? '');
-    _weeklyCtrl  = TextEditingController(text: _weekly(e)?.toString() ?? '');
+    _metric           = e.goalMetric ?? 'weight';
+    _nameCtrl         = TextEditingController(text: e.goalName ?? '');
+    _monthlyCtrl      = TextEditingController(text: _monthly(e)?.toString() ?? '');
+    _weeklyCtrl       = TextEditingController(text: _weekly(e)?.toString() ?? '');
+    _bonusMonthlyCtrl = TextEditingController(text: e.goalBonusMonthly?.toString() ?? '');
+    _bonusWeeklyCtrl  = TextEditingController(text: e.goalBonusWeekly?.toString() ?? '');
   }
 
   num? _monthly(EmployeeModel e) => switch (e.goalMetric ?? 'weight') {
@@ -1680,6 +1684,7 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
   @override
   void dispose() {
     _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose();
+    _bonusMonthlyCtrl.dispose(); _bonusWeeklyCtrl.dispose();
     super.dispose();
   }
 
@@ -1713,6 +1718,8 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
           'goal_invoices_monthly': monthly?.toInt(),
           'goal_invoices_weekly':  weekly?.toInt(),
         },
+        'goal_bonus_monthly': double.tryParse(_bonusMonthlyCtrl.text.trim()),
+        'goal_bonus_weekly':  double.tryParse(_bonusWeeklyCtrl.text.trim()),
       };
       final res = await widget.api.updateEmployeeGoals(widget.employee.id!, payload);
       final updated = EmployeeModel.fromJson(res['employee'] as Map<String, dynamic>);
@@ -1759,7 +1766,7 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
                 minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               onPressed: () => setState(() {
-                if (_editing) { _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose(); _init(); }
+                if (_editing) { _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose(); _bonusMonthlyCtrl.dispose(); _bonusWeeklyCtrl.dispose(); _init(); }
                 _editing = !_editing;
               }),
               child: Text(_editing ? (isAr ? 'إلغاء' : 'Cancel') : (isAr ? 'تعديل' : 'Edit')),
@@ -1778,6 +1785,8 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
               Wrap(spacing: 8, children: [
                 if (_monthly(e) != null) _chip(isAr ? 'شهري' : 'Monthly', '${_monthly(e)} ${_unit(e.goalMetric!)}'),
                 if (_weekly(e)  != null) _chip(isAr ? 'أسبوعي' : 'Weekly',  '${_weekly(e)}  ${_unit(e.goalMetric!)}'),
+                if ((e.goalBonusMonthly ?? 0) > 0) _chip(isAr ? 'مكافأة/شهر' : 'Bonus/Mo', '${e.goalBonusMonthly} ر.س'),
+                if ((e.goalBonusWeekly  ?? 0) > 0) _chip(isAr ? 'مكافأة/أسبوع' : 'Bonus/Wk', '${e.goalBonusWeekly} ر.س'),
               ]),
             ],
           ],
@@ -1821,6 +1830,27 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
                 decoration: InputDecoration(
                   labelText: isAr ? 'الهدف الأسبوعي' : 'Weekly',
                   suffixText: _unit(_metric), border: const OutlineInputBorder(), isDense: true,
+                ),
+              )),
+            ]),
+            const SizedBox(height: 12),
+            // 💰 مبلغ المكافأة
+            Row(children: [
+              Expanded(child: TextField(
+                controller: _bonusMonthlyCtrl, keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'مكافأة شهرية (ر.س)' : 'Monthly Bonus (SAR)',
+                  prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
+                  border: const OutlineInputBorder(), isDense: true,
+                ),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: TextField(
+                controller: _bonusWeeklyCtrl, keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: isAr ? 'مكافأة أسبوعية (ر.س)' : 'Weekly Bonus (SAR)',
+                  prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
+                  border: const OutlineInputBorder(), isDense: true,
                 ),
               )),
             ]),

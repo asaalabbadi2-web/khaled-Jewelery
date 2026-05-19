@@ -303,13 +303,18 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final size = MediaQuery.sizeOf(context);
-      for (int i = 0; i < 60; i++) {
+      for (int i = 0; i < 40; i++) {
         _particles.add(_ConfettiParticle.random(_random, size));
       }
     });
 
-    _confettiController.repeat(); // ♾️ loops until dispose()
+    _confettiController.repeat(); // يتوقف تلقائياً بعد 5 ثوانٍ
     _modalController.forward();
+
+    // ── أداء: إيقاف الكونفيتي تلقائياً بعد 5 ثوانٍ ──
+    Future.delayed(const Duration(seconds: 15), () {
+      if (mounted) _confettiController.stop();
+    });
   }
 
   void _updateConfetti() {
@@ -375,8 +380,87 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
       'percentage': 'النسبة',
       'target': 'الهدف',
       'progress': 'التقدّم',
+      'metric': 'المقياس',
+      'period': 'الفترة',
+      'race_rank': 'المرتبة في السباق',
+      'race_total': 'المشاركون',
+      'race_beaten': 'تفوقت على',
+      'race_points': 'أعلى نقاط',
+      'race_weight': 'أعلى وزن',
+      'race_invoices': 'أعلى فواتير',
+      'race_top_name': 'صاحب المرتبة الأولى',
+      'race_is_champion': 'البطولة',
     };
     return translations[key.toLowerCase()] ?? key;
+  }
+
+  /// يُعيد حقول السباق من metrics إن وُجدت.
+  bool _hasRaceData(GoalAchievement a) =>
+      a.metrics.containsKey('race_rank');
+
+  Widget _buildRaceRow(ThemeData theme, bool isAr, GoalAchievement achievement) {
+    final m = achievement.metrics;
+    final rank = m['race_rank'] as int?;
+    final total = m['race_total'] as int?;
+    final beaten = m['race_beaten'] as int?;
+    final isChampion = m['race_is_champion'] == true;
+    final topName = m['race_top_name']?.toString() ?? '';
+    if (rank == null) return const SizedBox.shrink();
+
+    final medal = rank == 1 ? '🥇' : rank == 2 ? '🥈' : rank == 3 ? '🥉' : '🏅';
+    final rankLabel = isAr ? 'المرتبة $rank من ${total ?? '?'}' : 'Rank $rank of ${total ?? '?'}';
+    final beatenLabel = beaten != null && beaten > 0
+        ? (isAr ? 'تفوقت على $beaten موظف' : 'Beat $beaten employees')
+        : null;
+    final championLabel = isChampion
+        ? (isAr ? 'أنت بطل هذه الفترة! 🏆' : 'You are the champion! 🏆')
+        : (topName.isNotEmpty
+            ? (isAr ? 'المتصدر: $topName' : 'Leader: $topName')
+            : null);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isChampion
+              ? [const Color(0xFFFFD700).withValues(alpha: 0.18), const Color(0xFFFFF3CD).withValues(alpha: 0.35)]
+              : [theme.colorScheme.surface, theme.colorScheme.surface.withValues(alpha: 0.7)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isChampion
+              ? AppColors.primaryGold.withValues(alpha: 0.6)
+              : theme.dividerColor.withValues(alpha: 0.25),
+          width: isChampion ? 1.5 : 1.0,
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(medal, style: const TextStyle(fontSize: 26)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  rankLabel,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: isChampion ? AppColors.darkGold : theme.colorScheme.onSurface,
+                  ),
+                ),
+                if (beatenLabel != null) ...[const SizedBox(height: 2), Text(beatenLabel, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)))],
+                if (championLabel != null) ...[const SizedBox(height: 2), Text(championLabel, style: TextStyle(fontSize: 12, color: isChampion ? AppColors.primaryGold : theme.colorScheme.onSurface.withValues(alpha: 0.55)))],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -781,8 +865,14 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
 
           const SizedBox(height: 14),
 
-          // Stats row
-          if (achievement.metrics.isNotEmpty)
+          // Race rank row (shown first if race data present)
+          if (_hasRaceData(achievement))
+            _buildRaceRow(theme, isAr, achievement),
+
+          // Stats row (exclude race/internal keys)
+          if (achievement.metrics.entries
+              .where((e) => !e.key.startsWith('race_') && e.key != 'period_key' && e.key != 'metric')
+              .isNotEmpty)
             _buildStatsRow(theme, isAr, achievement),
 
           const SizedBox(height: 16),
@@ -846,7 +936,14 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
 
   Widget _buildStatsRow(
       ThemeData theme, bool isAr, GoalAchievement achievement) {
-    final entries = achievement.metrics.entries.take(3).toList();
+    // استبعاد مفاتيح السباق والمفاتيح الداخلية من الصف الإحصائي
+    const hiddenKeys = {'period_key', 'metric', 'race_rank', 'race_total',
+        'race_beaten', 'race_points', 'race_weight', 'race_invoices',
+        'race_top_name', 'race_is_champion'};
+    final entries = achievement.metrics.entries
+        .where((e) => !hiddenKeys.contains(e.key))
+        .take(4)
+        .toList();
     if (entries.isEmpty) return const SizedBox.shrink();
 
     return Row(

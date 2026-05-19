@@ -3002,6 +3002,9 @@ class Employee(db.Model):
     goal_points_weekly   = db.Column(db.Float,   nullable=True)
     goal_invoices_monthly = db.Column(db.Integer, nullable=True)
     goal_invoices_weekly  = db.Column(db.Integer, nullable=True)
+    # 💰 مبلغ المكافأة المباشرة عند تحقيق الهدف (بدون الحاجة لـ BonusRule)
+    goal_bonus_monthly   = db.Column(db.Float, nullable=True)   # ر.س
+    goal_bonus_weekly    = db.Column(db.Float, nullable=True)   # ر.س
 
     created_by = db.Column(db.String(100), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
@@ -3045,6 +3048,8 @@ class Employee(db.Model):
             'goal_points_weekly':    self.goal_points_weekly,
             'goal_invoices_monthly': self.goal_invoices_monthly,
             'goal_invoices_weekly':  self.goal_invoices_weekly,
+            'goal_bonus_monthly':    self.goal_bonus_monthly,
+            'goal_bonus_weekly':     self.goal_bonus_weekly,
         }
 
         # `include_bonuses` kept for backward compatibility; not used currently

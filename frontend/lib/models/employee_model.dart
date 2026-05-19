@@ -34,6 +34,9 @@ class EmployeeModel {
   final double? goalPointsWeekly;
   final int? goalInvoicesMonthly;
   final int? goalInvoicesWeekly;
+  // 💰 مبلغ المكافأة المباشر عند تحقيق الهدف
+  final double? goalBonusMonthly;
+  final double? goalBonusWeekly;
 
   const EmployeeModel({
     required this.id,
@@ -67,6 +70,8 @@ class EmployeeModel {
     this.goalPointsWeekly,
     this.goalInvoicesMonthly,
     this.goalInvoicesWeekly,
+    this.goalBonusMonthly,
+    this.goalBonusWeekly,
   });
 
   factory EmployeeModel.fromJson(Map<String, dynamic> json) {
@@ -104,6 +109,8 @@ class EmployeeModel {
       goalPointsWeekly: (json['goal_points_weekly'] as num?)?.toDouble(),
       goalInvoicesMonthly: json['goal_invoices_monthly'] as int?,
       goalInvoicesWeekly: json['goal_invoices_weekly'] as int?,
+      goalBonusMonthly: (json['goal_bonus_monthly'] as num?)?.toDouble(),
+      goalBonusWeekly: (json['goal_bonus_weekly'] as num?)?.toDouble(),
     );
   }
 

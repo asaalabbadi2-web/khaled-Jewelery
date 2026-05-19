@@ -2613,6 +2613,11 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                       icon: Icons.share_rounded,
                       value: 'share',
                     ),
+                    InvoiceSummaryAction.secondary(
+                      label: 'فاتورة جديدة',
+                      icon: Icons.add_circle_outline_rounded,
+                      value: 'new_invoice',
+                    ),
                     InvoiceSummaryAction.primary(
                       label: 'تم',
                       icon: Icons.check_rounded,
@@ -2659,9 +2664,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       if (!mounted) return;
       if (_isEditMode) {
         Navigator.pop(context, true);
-      } else {
+      } else if (shouldPrint == 'new_invoice') {
         await _clearLocalDraft();
         _resetAfterSave();
+      } else {
+        await _clearLocalDraft();
+        // 'done' or null → return to home
+        if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
       if (!mounted) return;

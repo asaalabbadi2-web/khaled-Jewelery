@@ -2734,8 +2734,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           );
           Navigator.of(context).pop(true);
         }
-      } else {
+      } else if (shouldPrint == 'new_invoice') {
         _resetAfterSave();
+      } else {
+        // 'done' or null → return to home
+        if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
       _showError('فشل حفظ الفاتورة: $e');
@@ -2979,6 +2982,11 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           label: 'مشاركة',
           icon: Icons.share_rounded,
           value: 'share',
+        ),
+        InvoiceSummaryAction.secondary(
+          label: 'فاتورة جديدة',
+          icon: Icons.add_circle_outline_rounded,
+          value: 'new_invoice',
         ),
         InvoiceSummaryAction.primary(
           label: 'تم',
