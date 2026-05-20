@@ -198,7 +198,6 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   final Set<int> _safeBoxAccountIds = {};
   final List<int> _supportedKarats = [18, 21, 22, 24];
   int _mainKarat = 21;
-  String _currencySymbol = 'ر.س';
   int _currencyDecimalPlaces = 2;
   bool _settingsSynced = false;
   bool _calculatingTotals = false;
@@ -211,6 +210,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
   double _totalGoldCredit = 0.0;
 
   bool _checkedLocalDraft = false;
+
+  String get _currencySymbol =>
+      context.read<SettingsProvider>().currencySymbolText;
 
   @override
   void initState() {
@@ -427,7 +429,7 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     super.didChangeDependencies();
     final settings = Provider.of<SettingsProvider>(context);
 
-    final newSymbol = settings.currencySymbol;
+    final newSymbol = settings.currencySymbolText;
     final newDecimals = settings.decimalPlaces;
     final newMainKarat = settings.mainKarat;
 
@@ -440,7 +442,6 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     if (shouldSync) {
       _settingsSynced = true;
       setState(() {
-        _currencySymbol = newSymbol;
         _currencyDecimalPlaces = newDecimals;
         _mainKarat = newMainKarat;
       });

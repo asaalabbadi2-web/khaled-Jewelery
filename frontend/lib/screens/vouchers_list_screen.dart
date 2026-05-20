@@ -692,13 +692,19 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       return _buildErrorState(themeData);
     }
 
-    return Column(
-      children: [
-        _buildCollapsibleTopChrome(themeData),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: _buildManagementToolbar(themeData),
-        ),
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: constraints.maxHeight * 0.45,
+            ),
+            child: _buildCollapsibleTopChrome(themeData),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _buildManagementToolbar(themeData),
+          ),
         Expanded(
           child: _viewMode == _VoucherListView.table
               ? Padding(
@@ -745,7 +751,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                   ),
                 ),
         ),
-      ],
+        ],
+      ),
     );
   }
 
