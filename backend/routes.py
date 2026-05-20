@@ -35291,16 +35291,15 @@ def check_goal_progress():
                         pass
             return float(total_w)
 
-        # ── دالة: هل يوجد إنجاز مسجّل لهذه الفترة؟ (يعمل مع SQLite وPostgreSQL) ──
-        def _already_achieved(period_key: str) -> bool:
-            # تحقق بلغة Python بدلاً من JSON SQL operator (SQLite لا يدعم ->>)
-            existing = GoalAchievement.query.filter_by(
-                employee_id=employee_id
-            ).with_entities(GoalAchievement.metrics).all()
-            return any(
-                (row.metrics or {}).get('period_key') == period_key
-                for row in existing
-            )
+        # ── جلب جميع إنجازات الموظف مرة واحدة + مساعد بحث حسب period_key ──
+        employee_achievements = GoalAchievement.query.filter_by(employee_id=employee_id).all()
+
+        def _find_existing(period_key: str):
+            for ach in employee_achievements:
+                m = ach.metrics or {}
+                if m.get('period_key') == period_key:
+                    return ach
+            return None
 
         unit_label = {'weight': 'جم', 'points': 'نقطة', 'invoices': 'فاتورة'}.get(metric, 'جم')
 
@@ -35338,14 +35337,41 @@ def check_goal_progress():
             else:
                 period_key = f'monthly-{now.year}-{now.month:02d}'
 
-            if _already_achieved(period_key):
-                continue
-
             actual = _sold_weight(start_dt, end_dt)
             if actual < target:
                 continue
 
             bonus_amount, bonus_rule_id = _calc_bonus_for(period_name)
+
+            existing = _find_existing(period_key)
+            if existing is not None:
+                # إذا كان الإنجاز موجوداً سابقاً بمكافأة صفر ثم تم ربط قاعدة/مبلغ لاحقاً
+                # صحّح المبلغ وأعد إظهاره للمستخدم مرة واحدة.
+                should_refresh_seen = (
+                    float(existing.bonus_amount or 0.0) <= 0.0 and
+                    float(bonus_amount or 0.0) > 0.0
+                )
+                if should_refresh_seen:
+                    existing.bonus_amount = float(bonus_amount)
+                    existing.bonus_rule_id = bonus_rule_id
+                    existing.goal_description = f'تحققت {actual:.1f} {unit_label} من أصل {target:.1f} {unit_label}'
+                    m = dict(existing.metrics or {})
+                    m.update({
+                        metric: round(actual, 2),
+                        'actual': round(actual, 2),
+                        'target': round(target, 2),
+                        'metric': metric,
+                        'period': period_label,
+                        'period_key': period_key,
+                    })
+                    existing.metrics = m
+                    existing.seen_by_user = False
+                    existing.seen_at = None
+                    new_achievements.append(existing)
+                elif not bool(existing.seen_by_user):
+                    new_achievements.append(existing)
+                continue
+
             a = GoalAchievement(
                 employee_id=employee_id,
                 bonus_rule_id=bonus_rule_id,
