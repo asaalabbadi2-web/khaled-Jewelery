@@ -608,374 +608,417 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                       ],
                     ),
                     const Divider(height: 20),
-
-                    if (canManageAccounts) ...[
-                      const SizedBox(height: 12),
-                      FilledButton.icon(
-                        onPressed: () async {
-                          try {
-                            final updated = await widget.api
-                                .ensureEmployeeSetup(
-                                  employee.id ?? 0,
-                                  ensurePersonalAccount: true,
-                                  ensurePayablesAccounts: true,
-                                  ensureCashSafe: true,
-                                  ensureGoldSafe: true,
-                                );
-
-                            // Update list + modal copy
-                            setState(() {
-                              final index = _employees.indexWhere(
-                                (e) => e.id == updated.id,
-                              );
-                              if (index != -1) {
-                                _employees[index] = updated;
-                              }
-                            });
-
-                            setModalState(() {
-                              currentEmployee = updated;
-                            });
-
-                            _showSnack(
-                              widget.isArabic
-                                  ? 'تم إنشاء/ربط حسابات وخزائن الموظف'
-                                  : 'Employee setup ensured',
-                            );
-                          } catch (e) {
-                            _showSnack(e.toString(), isError: true);
-                          }
-                        },
-                        icon: const Icon(Icons.build_circle),
-                        label: Text(
-                          widget.isArabic
-                              ? 'إصلاح حسابات وخزائن الموظف'
-                              : 'Fix employee accounts & safes',
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    _InfoRow(
-                      label: isAr ? 'الرقم الوظيفي' : 'Employee Code',
-                      value: employee.employeeCode,
-                    ),
-                    _InfoRow(
-                      label: isAr ? 'القسم' : 'Department',
-                      value: employee.department ?? '-',
-                    ),
-                    _InfoRow(
-                      label: isAr ? 'المسمى' : 'Job Title',
-                      value: employee.jobTitle ?? '-',
-                    ),
-                    _InfoRow(
-                      label: isAr ? 'الراتب' : 'Salary',
-                      value: employee.salary.toStringAsFixed(2),
-                    ),
-                    _InfoRow(
-                      label: isAr ? 'الهاتف' : 'Phone',
-                      value: employee.phone ?? '-',
-                    ),
-                    _InfoRow(
-                      label: isAr ? 'البريد' : 'Email',
-                      value: employee.email ?? '-',
-                    ),
-                    _InfoRow(
-                      label: isAr ? 'ملاحظات' : 'Notes',
-                      value: employee.notes ?? '-',
-                    ),
-                    if (employee.account != null)
-                      _InfoRow(
-                        label: isAr ? 'الحساب المحاسبي' : 'Account',
-                        value:
-                            '${employee.account!.accountNumber} - ${employee.account!.name}',
-                      ),
-                    if (employee.account != null)
-                      Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: TextButton.icon(
-                          onPressed: () {
-                            final acc = employee.account!;
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => AccountStatementScreen(
-                                  accountId: acc.id,
-                                  accountName: acc.name,
-                                ),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.receipt_long, size: 18),
-                          label: Text(isAr ? 'كشف حساب' : 'Account Statement'),
-                        ),
-                      ),
-                    Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: TextButton.icon(
-                        onPressed: openingSalaryStatement
-                            ? null
-                            : () async {
-                                setModalState(() {
-                                  openingSalaryStatement = true;
-                                });
-
-                                try {
-                                  final accounts = await widget.api
-                                      .getAccounts();
-                                  final salaryAccount =
-                                      _pickEmployeeSalaryAccount(
-                                        accounts,
-                                        employee,
-                                      );
-
-                                  if (salaryAccount == null) {
-                                    _showSnack(
-                                      isAr
-                                          ? 'تعذر العثور على حساب رواتب الموظف. ابحث في كشف الحساب عن: رواتب ${employee.name}'
-                                          : 'Could not find salary account. Search statements for: Salary ${employee.name}',
-                                      isError: true,
-                                    );
-                                    return;
-                                  }
-
-                                  final id = salaryAccount['id'];
-                                  final accountId = id is int
-                                      ? id
-                                      : int.tryParse('$id');
-                                  if (accountId == null) {
-                                    _showSnack(
-                                      isAr
-                                          ? 'تعذر فتح كشف الرواتب (معرّف الحساب غير صالح)'
-                                          : 'Failed to open salary statement (invalid account id)',
-                                      isError: true,
-                                    );
-                                    return;
-                                  }
-
-                                  final accountName =
-                                      (salaryAccount['name'] ?? '').toString();
-                                  if (!mounted) return;
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => AccountStatementScreen(
-                                        accountId: accountId,
-                                        accountName: accountName.isEmpty
-                                            ? (isAr
-                                                  ? 'رواتب الموظف'
-                                                  : 'Employee Salary')
-                                            : accountName,
-                                      ),
-                                    ),
-                                  );
-                                } catch (e) {
-                                  _showSnack(e.toString(), isError: true);
-                                } finally {
-                                  setModalState(() {
-                                    openingSalaryStatement = false;
-                                  });
-                                }
-                              },
-                        icon: openingSalaryStatement
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.payments_outlined, size: 18),
-                        label: Text(
-                          isAr
-                              ? 'كشف حساب الرواتب (2400)'
-                              : 'Salary Statement (2400)',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _StatChip(
-                          icon: Icons.payments_outlined,
-                          label: isAr ? 'سجلات الرواتب' : 'Payroll Entries',
-                          value: employee.payrollCount.toString(),
-                        ),
-                        _StatChip(
-                          icon: Icons.timer_outlined,
-                          label: isAr ? 'سجلات الحضور' : 'Attendance Records',
-                          value: employee.attendanceCount.toString(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (canManageAccounts && employee.id != null) ...[
-                      Text(
-                        isAr ? 'حساب الدخول' : 'Login Account',
-                        style: textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      FutureBuilder<AppUserModel?>(
-                        future: widget.api.getUserByEmployeeId(employee.id!),
-                        builder: (context, snap) {
-                          if (snap.connectionState == ConnectionState.waiting) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 8),
-                              child: Center(child: CircularProgressIndicator()),
-                            );
-                          }
-
-                          if (snap.hasError) {
-                            return Text(
-                              isAr
-                                  ? 'تعذر تحميل حساب الدخول'
-                                  : 'Failed to load login account',
-                              style: textTheme.bodyMedium,
-                            );
-                          }
-
-                          final linked = snap.data;
-                          if (linked == null) {
-                            return Text(
-                              isAr
-                                  ? 'لا يوجد حساب دخول مرتبط'
-                                  : 'No linked login account',
-                              style: textTheme.bodyMedium,
-                            );
-                          }
-
-                          final roleLabelAr = {
-                            'employee': 'بائع',
-                            'accountant': 'محاسب',
-                            'manager': 'مدير فرع',
-                            'system_admin': 'مسؤول النظام',
-                          }[linked.role];
-                          final roleLabelEn = {
-                            'employee': 'Seller',
-                            'accountant': 'Accountant',
-                            'manager': 'Branch Manager',
-                            'system_admin': 'System Admin',
-                          }[linked.role];
-
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _InfoRow(
-                                label: isAr ? 'اسم المستخدم' : 'Username',
-                                value: linked.username,
-                              ),
-                              _InfoRow(
-                                label: isAr ? 'الدور' : 'Role',
-                                value: isAr
-                                    ? (roleLabelAr ?? linked.role)
-                                    : (roleLabelEn ?? linked.role),
-                              ),
-                              _InfoRow(
-                                label: isAr ? 'الحالة' : 'Status',
-                                value: linked.isActive
-                                    ? (isAr ? 'مفعل' : 'Enabled')
-                                    : (isAr ? 'معطل' : 'Disabled'),
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 12,
-                                runSpacing: 12,
-                                children: [
-                                  TextButton.icon(
-                                    icon: Icon(
-                                      linked.isActive
-                                          ? Icons.lock_outline
-                                          : Icons.lock_open,
-                                    ),
-                                    label: Text(
-                                      linked.isActive
-                                          ? (isAr
-                                                ? 'تعطيل الحساب'
-                                                : 'Disable account')
-                                          : (isAr
-                                                ? 'تفعيل الحساب'
-                                                : 'Enable account'),
-                                    ),
-                                    onPressed: () async {
-                                      try {
-                                        final isActive = await widget.api
-                                            .toggleUserActive(linked.id ?? 0);
-                                        _showSnack(
-                                          isActive
-                                              ? (isAr
-                                                    ? 'تم تفعيل الحساب'
-                                                    : 'Account enabled')
-                                              : (isAr
-                                                    ? 'تم تعطيل الحساب'
-                                                    : 'Account disabled'),
-                                        );
-                                        // Reopen to refresh linked account snapshot.
-                                        Navigator.of(context).pop();
-                                        _showEmployeeDetails(employee);
-                                      } catch (e) {
-                                        _showSnack(e.toString(), isError: true);
-                                      }
-                                    },
-                                  ),
-                                  TextButton.icon(
-                                    icon: const Icon(Icons.key_outlined),
-                                    label: Text(
-                                      isAr
-                                          ? 'إعادة التعيين الإداري'
-                                          : 'Admin password reset',
-                                    ),
-                                    onPressed: () {
-                                      Navigator.of(context).pop();
-                                      _promptResetAppUserPassword(linked);
-                                    },
-                                  ),
-                                ],
-                              ),
+                    DefaultTabController(
+                      length: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TabBar(
+                            labelColor: colorScheme.primary,
+                            unselectedLabelColor: textTheme.bodyMedium?.color?.withValues(alpha: 0.65),
+                            indicatorColor: colorScheme.primary,
+                            tabs: [
+                              Tab(text: isAr ? 'بيانات الموظف' : 'Employee Data'),
+                              Tab(text: isAr ? 'الهدف الشخصي' : 'Personal Goal'),
                             ],
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    if (employee.id != null) ...[
-                      _GoalSettingsTile(
-                        employee: employee,
-                        isArabic: isAr,
-                        api: widget.api,
-                        onSaved: (updated) {
-                          setModalState(() => currentEmployee = updated);
-                          setState(() {
-                            final idx = _employees.indexWhere((e) => e.id == updated.id);
-                            if (idx != -1) _employees[idx] = updated;
-                          });
-                        },
-                      ),
-                    ],
-                    Row(
-                      children: [
-                        TextButton.icon(
-                          icon: const Icon(Icons.edit),
-                          label: Text(
-                            isAr ? 'تعديل البيانات' : 'Edit Employee',
                           ),
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            _openEmployeeForm(employee: employee);
-                          },
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton.icon(
-                          icon: const Icon(Icons.person_add),
-                          label: Text(
-                            isAr ? 'إنشاء حساب مستخدم' : 'Create User Account',
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 660,
+                            child: TabBarView(
+                              children: [
+                                SingleChildScrollView(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (canManageAccounts) ...[
+                                        FilledButton.icon(
+                                          onPressed: () async {
+                                            try {
+                                              final updated = await widget.api
+                                                  .ensureEmployeeSetup(
+                                                    employee.id ?? 0,
+                                                    ensurePersonalAccount: true,
+                                                    ensurePayablesAccounts: true,
+                                                    ensureCashSafe: true,
+                                                    ensureGoldSafe: true,
+                                                  );
+
+                                              setState(() {
+                                                final index = _employees.indexWhere(
+                                                  (e) => e.id == updated.id,
+                                                );
+                                                if (index != -1) {
+                                                  _employees[index] = updated;
+                                                }
+                                              });
+
+                                              setModalState(() {
+                                                currentEmployee = updated;
+                                              });
+
+                                              _showSnack(
+                                                widget.isArabic
+                                                    ? 'تم إنشاء/ربط حسابات وخزائن الموظف'
+                                                    : 'Employee setup ensured',
+                                              );
+                                            } catch (e) {
+                                              _showSnack(e.toString(), isError: true);
+                                            }
+                                          },
+                                          icon: const Icon(Icons.build_circle),
+                                          label: Text(
+                                            widget.isArabic
+                                                ? 'إصلاح حسابات وخزائن الموظف'
+                                                : 'Fix employee accounts & safes',
+                                          ),
+                                        ),
+                                        const SizedBox(height: 16),
+                                      ],
+                                      _InfoRow(
+                                        label: isAr ? 'الرقم الوظيفي' : 'Employee Code',
+                                        value: employee.employeeCode,
+                                      ),
+                                      _InfoRow(
+                                        label: isAr ? 'القسم' : 'Department',
+                                        value: employee.department ?? '-',
+                                      ),
+                                      _InfoRow(
+                                        label: isAr ? 'المسمى' : 'Job Title',
+                                        value: employee.jobTitle ?? '-',
+                                      ),
+                                      _InfoRow(
+                                        label: isAr ? 'الراتب' : 'Salary',
+                                        value: employee.salary.toStringAsFixed(2),
+                                      ),
+                                      _InfoRow(
+                                        label: isAr ? 'الهاتف' : 'Phone',
+                                        value: employee.phone ?? '-',
+                                      ),
+                                      _InfoRow(
+                                        label: isAr ? 'البريد' : 'Email',
+                                        value: employee.email ?? '-',
+                                      ),
+                                      _InfoRow(
+                                        label: isAr ? 'ملاحظات' : 'Notes',
+                                        value: employee.notes ?? '-',
+                                      ),
+                                      if (employee.account != null)
+                                        _InfoRow(
+                                          label: isAr ? 'الحساب المحاسبي' : 'Account',
+                                          value:
+                                              '${employee.account!.accountNumber} - ${employee.account!.name}',
+                                        ),
+                                      if (employee.account != null)
+                                        Align(
+                                          alignment: AlignmentDirectional.centerStart,
+                                          child: TextButton.icon(
+                                            onPressed: () {
+                                              final acc = employee.account!;
+                                              Navigator.of(context).push(
+                                                MaterialPageRoute(
+                                                  builder: (_) => AccountStatementScreen(
+                                                    accountId: acc.id,
+                                                    accountName: acc.name,
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                            icon: const Icon(Icons.receipt_long, size: 18),
+                                            label: Text(isAr ? 'كشف حساب' : 'Account Statement'),
+                                          ),
+                                        ),
+                                      Align(
+                                        alignment: AlignmentDirectional.centerStart,
+                                        child: TextButton.icon(
+                                          onPressed: openingSalaryStatement
+                                              ? null
+                                              : () async {
+                                                  setModalState(() {
+                                                    openingSalaryStatement = true;
+                                                  });
+
+                                                  try {
+                                                    final accounts = await widget.api
+                                                        .getAccounts();
+                                                    final salaryAccount =
+                                                        _pickEmployeeSalaryAccount(
+                                                          accounts,
+                                                          employee,
+                                                        );
+
+                                                    if (salaryAccount == null) {
+                                                      _showSnack(
+                                                        isAr
+                                                            ? 'تعذر العثور على حساب رواتب الموظف. ابحث في كشف الحساب عن: رواتب ${employee.name}'
+                                                            : 'Could not find salary account. Search statements for: Salary ${employee.name}',
+                                                        isError: true,
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    final id = salaryAccount['id'];
+                                                    final accountId = id is int
+                                                        ? id
+                                                        : int.tryParse('$id');
+                                                    if (accountId == null) {
+                                                      _showSnack(
+                                                        isAr
+                                                            ? 'تعذر فتح كشف الرواتب (معرّف الحساب غير صالح)'
+                                                            : 'Failed to open salary statement (invalid account id)',
+                                                        isError: true,
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    final accountName =
+                                                        (salaryAccount['name'] ?? '').toString();
+                                                    if (!mounted) return;
+                                                    await Navigator.of(context).push(
+                                                      MaterialPageRoute(
+                                                        builder: (_) => AccountStatementScreen(
+                                                          accountId: accountId,
+                                                          accountName: accountName.isEmpty
+                                                              ? (isAr
+                                                                    ? 'رواتب الموظف'
+                                                                    : 'Employee Salary')
+                                                              : accountName,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  } catch (e) {
+                                                    _showSnack(e.toString(), isError: true);
+                                                  } finally {
+                                                    setModalState(() {
+                                                      openingSalaryStatement = false;
+                                                    });
+                                                  }
+                                                },
+                                          icon: openingSalaryStatement
+                                              ? const SizedBox(
+                                                  width: 18,
+                                                  height: 18,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                  ),
+                                                )
+                                              : const Icon(Icons.payments_outlined, size: 18),
+                                          label: Text(
+                                            isAr
+                                                ? 'كشف حساب الرواتب (2400)'
+                                                : 'Salary Statement (2400)',
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Wrap(
+                                        spacing: 12,
+                                        runSpacing: 12,
+                                        children: [
+                                          _StatChip(
+                                            icon: Icons.payments_outlined,
+                                            label: isAr ? 'سجلات الرواتب' : 'Payroll Entries',
+                                            value: employee.payrollCount.toString(),
+                                          ),
+                                          _StatChip(
+                                            icon: Icons.timer_outlined,
+                                            label: isAr ? 'سجلات الحضور' : 'Attendance Records',
+                                            value: employee.attendanceCount.toString(),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 16),
+                                      if (canManageAccounts && employee.id != null) ...[
+                                        Text(
+                                          isAr ? 'حساب الدخول' : 'Login Account',
+                                          style: textTheme.titleMedium?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        FutureBuilder<AppUserModel?>(
+                                          future: widget.api.getUserByEmployeeId(employee.id!),
+                                          builder: (context, snap) {
+                                            if (snap.connectionState == ConnectionState.waiting) {
+                                              return const Padding(
+                                                padding: EdgeInsets.symmetric(vertical: 8),
+                                                child: Center(child: CircularProgressIndicator()),
+                                              );
+                                            }
+
+                                            if (snap.hasError) {
+                                              return Text(
+                                                isAr
+                                                    ? 'تعذر تحميل حساب الدخول'
+                                                    : 'Failed to load login account',
+                                                style: textTheme.bodyMedium,
+                                              );
+                                            }
+
+                                            final linked = snap.data;
+                                            if (linked == null) {
+                                              return Text(
+                                                isAr
+                                                    ? 'لا يوجد حساب دخول مرتبط'
+                                                    : 'No linked login account',
+                                                style: textTheme.bodyMedium,
+                                              );
+                                            }
+
+                                            final roleLabelAr = {
+                                              'employee': 'بائع',
+                                              'accountant': 'محاسب',
+                                              'manager': 'مدير فرع',
+                                              'system_admin': 'مسؤول النظام',
+                                            }[linked.role];
+                                            final roleLabelEn = {
+                                              'employee': 'Seller',
+                                              'accountant': 'Accountant',
+                                              'manager': 'Branch Manager',
+                                              'system_admin': 'System Admin',
+                                            }[linked.role];
+
+                                            return Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                _InfoRow(
+                                                  label: isAr ? 'اسم المستخدم' : 'Username',
+                                                  value: linked.username,
+                                                ),
+                                                _InfoRow(
+                                                  label: isAr ? 'الدور' : 'Role',
+                                                  value: isAr
+                                                      ? (roleLabelAr ?? linked.role)
+                                                      : (roleLabelEn ?? linked.role),
+                                                ),
+                                                _InfoRow(
+                                                  label: isAr ? 'الحالة' : 'Status',
+                                                  value: linked.isActive
+                                                      ? (isAr ? 'مفعل' : 'Enabled')
+                                                      : (isAr ? 'معطل' : 'Disabled'),
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Wrap(
+                                                  spacing: 12,
+                                                  runSpacing: 12,
+                                                  children: [
+                                                    TextButton.icon(
+                                                      icon: Icon(
+                                                        linked.isActive
+                                                            ? Icons.lock_outline
+                                                            : Icons.lock_open,
+                                                      ),
+                                                      label: Text(
+                                                        linked.isActive
+                                                            ? (isAr
+                                                                  ? 'تعطيل الحساب'
+                                                                  : 'Disable account')
+                                                            : (isAr
+                                                                  ? 'تفعيل الحساب'
+                                                                  : 'Enable account'),
+                                                      ),
+                                                      onPressed: () async {
+                                                        try {
+                                                          final isActive = await widget.api
+                                                              .toggleUserActive(linked.id ?? 0);
+                                                          _showSnack(
+                                                            isActive
+                                                                ? (isAr
+                                                                      ? 'تم تفعيل الحساب'
+                                                                      : 'Account enabled')
+                                                                : (isAr
+                                                                      ? 'تم تعطيل الحساب'
+                                                                      : 'Account disabled'),
+                                                          );
+                                                          Navigator.of(context).pop();
+                                                          _showEmployeeDetails(employee);
+                                                        } catch (e) {
+                                                          _showSnack(e.toString(), isError: true);
+                                                        }
+                                                      },
+                                                    ),
+                                                    TextButton.icon(
+                                                      icon: const Icon(Icons.key_outlined),
+                                                      label: Text(
+                                                        isAr
+                                                            ? 'إعادة التعيين الإداري'
+                                                            : 'Admin password reset',
+                                                      ),
+                                                      onPressed: () {
+                                                        Navigator.of(context).pop();
+                                                        _promptResetAppUserPassword(linked);
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
+                                            );
+                                          },
+                                        ),
+                                        const SizedBox(height: 16),
+                                      ],
+                                      Row(
+                                        children: [
+                                          TextButton.icon(
+                                            icon: const Icon(Icons.edit),
+                                            label: Text(
+                                              isAr ? 'تعديل البيانات' : 'Edit Employee',
+                                            ),
+                                            onPressed: () {
+                                              Navigator.of(context).pop();
+                                              _openEmployeeForm(employee: employee);
+                                            },
+                                          ),
+                                          const SizedBox(width: 12),
+                                          FilledButton.icon(
+                                            icon: const Icon(Icons.person_add),
+                                            label: Text(
+                                              isAr ? 'إنشاء حساب مستخدم' : 'Create User Account',
+                                            ),
+                                            onPressed: () {
+                                              Navigator.of(context).pop();
+                                              _showCreateUserDialog(employee);
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                SingleChildScrollView(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (employee.id != null)
+                                        _GoalSettingsTile(
+                                          employee: employee,
+                                          isArabic: isAr,
+                                          api: widget.api,
+                                          onSaved: (updated) {
+                                            setModalState(() => currentEmployee = updated);
+                                            setState(() {
+                                              final idx = _employees.indexWhere((e) => e.id == updated.id);
+                                              if (idx != -1) _employees[idx] = updated;
+                                            });
+                                          },
+                                        )
+                                      else
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(vertical: 12),
+                                          child: Text(
+                                            isAr
+                                                ? 'احفظ الموظف أولاً لتفعيل الهدف الشخصي.'
+                                                : 'Save employee first to enable personal goal.',
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            _showCreateUserDialog(employee);
-                          },
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1914,34 +1957,21 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
               ),
             ),
             const SizedBox(height: 14),
-            // ── تبويبان: الأهداف | المكافآت ──
-            DefaultTabController(
-              length: 2,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TabBar(
-                    labelColor: _gold,
-                    unselectedLabelColor: Colors.grey.shade600,
-                    indicatorColor: _gold,
-                    dividerColor: Colors.transparent,
-                    tabs: [
-                      Tab(text: isAr ? 'الأهداف' : 'Goals'),
-                      Tab(text: isAr ? 'المكافآت' : 'Bonuses'),
-                    ],
-                  ),
-                  const Divider(height: 1),
-                  SizedBox(
-                    height: 290,
-                    child: TabBarView(
-                      children: [
-                        _buildGoalTargetsTab(isAr),
-                        _buildBonusTab(isAr),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+            // ── الأهداف لكل فترة ──
+            ..._buildPeriodSection(isAr, 'monthly', isAr ? 'الهدف الشهري' : 'Monthly Goal', _monthlyCtrl, _bonusMonthlyCtrl,
+              _monthlyEnabled, (v) => setState(() => _monthlyEnabled = v),
+              _rewardTypeMonthly, (v) => setState(() => _rewardTypeMonthly = v),
+              _bonusRuleIdMonthly, (v) => setState(() => _bonusRuleIdMonthly = v),
+            ),
+            ..._buildPeriodSection(isAr, 'weekly', isAr ? 'الهدف الأسبوعي' : 'Weekly Goal', _weeklyCtrl, _bonusWeeklyCtrl,
+              _weeklyEnabled, (v) => setState(() => _weeklyEnabled = v),
+              _rewardTypeWeekly, (v) => setState(() => _rewardTypeWeekly = v),
+              _bonusRuleIdWeekly, (v) => setState(() => _bonusRuleIdWeekly = v),
+            ),
+            ..._buildPeriodSection(isAr, 'daily', isAr ? 'الهدف اليومي' : 'Daily Goal', _dailyCtrl, _bonusDailyCtrl,
+              _dailyEnabled, (v) => setState(() => _dailyEnabled = v),
+              _rewardTypeDaily, (v) => setState(() => _rewardTypeDaily = v),
+              _bonusRuleIdDaily, (v) => setState(() => _bonusRuleIdDaily = v),
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -1961,68 +1991,20 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
     );
   }
 
-  // ── تبويب 1: الأهداف ──
-  Widget _buildGoalTargetsTab(bool isAr) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(top: 4),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        _buildPeriodTargetOnly(isAr, isAr ? 'الهدف الشهري' : 'Monthly Goal',
-            _monthlyCtrl, _monthlyEnabled, (v) => setState(() => _monthlyEnabled = v)),
-        _buildPeriodTargetOnly(isAr, isAr ? 'الهدف الأسبوعي' : 'Weekly Goal',
-            _weeklyCtrl, _weeklyEnabled, (v) => setState(() => _weeklyEnabled = v)),
-        _buildPeriodTargetOnly(isAr, isAr ? 'الهدف اليومي' : 'Daily Goal',
-            _dailyCtrl, _dailyEnabled, (v) => setState(() => _dailyEnabled = v)),
-      ]),
-    );
-  }
-
-  // ── تبويب 2: المكافآت ──
-  Widget _buildBonusTab(bool isAr) {
-    final anyEnabled = _monthlyEnabled || _weeklyEnabled || _dailyEnabled;
-    if (!anyEnabled) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            isAr
-                ? 'فعّل فترة واحدة على الأقل من تبويب "الأهداف" أولاً'
-                : 'Enable at least one period in the Goals tab first',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-          ),
-        ),
-      );
-    }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(top: 4),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (_monthlyEnabled)
-          ..._buildPeriodBonusOnly(isAr, isAr ? 'المكافأة الشهرية' : 'Monthly Bonus',
-              _bonusMonthlyCtrl, _rewardTypeMonthly,
-              (v) => setState(() => _rewardTypeMonthly = v),
-              _bonusRuleIdMonthly, (v) => setState(() => _bonusRuleIdMonthly = v)),
-        if (_weeklyEnabled)
-          ..._buildPeriodBonusOnly(isAr, isAr ? 'المكافأة الأسبوعية' : 'Weekly Bonus',
-              _bonusWeeklyCtrl, _rewardTypeWeekly,
-              (v) => setState(() => _rewardTypeWeekly = v),
-              _bonusRuleIdWeekly, (v) => setState(() => _bonusRuleIdWeekly = v)),
-        if (_dailyEnabled)
-          ..._buildPeriodBonusOnly(isAr, isAr ? 'المكافأة اليومية' : 'Daily Bonus',
-              _bonusDailyCtrl, _rewardTypeDaily,
-              (v) => setState(() => _rewardTypeDaily = v),
-              _bonusRuleIdDaily, (v) => setState(() => _bonusRuleIdDaily = v)),
-      ]),
-    );
-  }
-
-  Widget _buildPeriodTargetOnly(
+  List<Widget> _buildPeriodSection(
     bool isAr,
+    String period,
     String title,
     TextEditingController targetCtrl,
+    TextEditingController bonusCtrl,
     bool enabled,
     ValueChanged<bool> onEnabledChanged,
+    String rewardType,
+    ValueChanged<String> onRewardTypeChanged,
+    int? bonusRuleId,
+    ValueChanged<int?> onRuleIdChanged,
   ) {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
+    return [
       SwitchListTile.adaptive(
         value: enabled,
         onChanged: onEnabledChanged,
@@ -2041,58 +2023,43 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
             border: const OutlineInputBorder(), isDense: true,
           ),
         ),
+        const SizedBox(height: 8),
+        Row(children: [
+          Text(isAr ? 'المكافأة:' : 'Reward:', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(width: 8),
+          _rewardTypeBtn(isAr ? 'مبلغ ثابت' : 'Fixed', 'fixed', rewardType, onRewardTypeChanged),
+          const SizedBox(width: 6),
+          _rewardTypeBtn(isAr ? 'قاعدة مكافأة' : 'Bonus Rule', 'rule', rewardType, onRewardTypeChanged),
+        ]),
+        const SizedBox(height: 8),
+        if (rewardType == 'fixed')
+          TextField(
+            controller: bonusCtrl,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: isAr ? 'مبلغ المكافأة (ر.س)' : 'Bonus Amount (SAR)',
+              prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
+              border: const OutlineInputBorder(), isDense: true,
+            ),
+          )
+        else
+          DropdownButtonFormField<int?>(
+            value: _bonusRules.any((r) => r['id'] == bonusRuleId) ? bonusRuleId : null,
+            decoration: InputDecoration(
+              labelText: isAr ? 'اختر قاعدة المكافأة' : 'Select Bonus Rule',
+              border: const OutlineInputBorder(), isDense: true,
+            ),
+            items: [
+              DropdownMenuItem<int?>(value: null, child: Text(isAr ? '— لا شيء —' : '— None —')),
+              ..._bonusRules.map((r) => DropdownMenuItem<int?>(
+                value: r['id'] as int?,
+                child: Text(r['name']?.toString() ?? ''),
+              )),
+            ],
+            onChanged: onRuleIdChanged,
+          ),
         const SizedBox(height: 10),
       ],
-    ]);
-  }
-
-  List<Widget> _buildPeriodBonusOnly(
-    bool isAr,
-    String title,
-    TextEditingController bonusCtrl,
-    String rewardType,
-    ValueChanged<String> onRewardTypeChanged,
-    int? bonusRuleId,
-    ValueChanged<int?> onRuleIdChanged,
-  ) {
-    return [
-      Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-      const SizedBox(height: 6),
-      Row(children: [
-        Text(isAr ? 'المكافأة:' : 'Reward:', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-        const SizedBox(width: 8),
-        _rewardTypeBtn(isAr ? 'مبلغ ثابت' : 'Fixed', 'fixed', rewardType, onRewardTypeChanged),
-        const SizedBox(width: 6),
-        _rewardTypeBtn(isAr ? 'قاعدة مكافأة' : 'Bonus Rule', 'rule', rewardType, onRewardTypeChanged),
-      ]),
-      const SizedBox(height: 8),
-      if (rewardType == 'fixed')
-        TextField(
-          controller: bonusCtrl,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-            labelText: isAr ? 'مبلغ المكافأة (ر.س)' : 'Bonus Amount (SAR)',
-            prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
-            border: const OutlineInputBorder(), isDense: true,
-          ),
-        )
-      else
-        DropdownButtonFormField<int?>(
-          value: _bonusRules.any((r) => r['id'] == bonusRuleId) ? bonusRuleId : null,
-          decoration: InputDecoration(
-            labelText: isAr ? 'اختر قاعدة المكافأة' : 'Select Bonus Rule',
-            border: const OutlineInputBorder(), isDense: true,
-          ),
-          items: [
-            DropdownMenuItem<int?>(value: null, child: Text(isAr ? '— لا شيء —' : '— None —')),
-            ..._bonusRules.map((r) => DropdownMenuItem<int?>(
-              value: r['id'] as int?,
-              child: Text(r['name']?.toString() ?? ''),
-            )),
-          ],
-          onChanged: onRuleIdChanged,
-        ),
-      const SizedBox(height: 14),
     ];
   }
 
