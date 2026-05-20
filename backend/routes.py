@@ -31046,10 +31046,8 @@ def _auto_consume_weight_closing(
         cash_spent += chunk_cash_value
 
         # ─── قيد تكلفة المبيعات (COGS): د/521 × ه/مخزون مالي ────────────────────
-        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense" أو "office_reservation").
-        # مكاتب التسكير (office_reservation) لا تحتاج قيد COGS هنا لأن القيد الرئيسي
-        # في settle_office_reservation يُعالج المشتريات بشكل منفصل.
-        if journal_entry_id and chunk_cash_value > 0 and execution_type not in ('expense', 'office_reservation'):
+        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense") لتعكس تكلفة الذهب المباع.
+        if journal_entry_id and chunk_cash_value > 0 and execution_type != 'expense':
             _cogs_account = Account.query.filter_by(account_number='521').first()
             if _cogs_account:
                 _karat_ln = (
@@ -31583,69 +31581,6 @@ def create_office_reservation():
                 voucher.journal_entry_id = voucher_entry.id
             _append_safe_transactions_for_voucher(voucher, created_by=voucher.created_by)
 
-        # ─── قيد وزني عند إنشاء الحجز ──────────────────────────────────────────
-        # يُسجّل خروج الذهب من مخزوننا إلى حيازة المكتب حتى يظهر حساب المكتب
-        # مديناً للذهب (عليه ذهب) أثناء فترة الحجز، ويُصفَّر عند التسوية.
-        # مدين: وزني المكتب  — الذهب في حيازتهم (عليه)
-        # دائن: مخزون الكسر الوزني — الذهب غادر مخزوننا مؤقتاً
-        _res_gold_je_ok = False
-        try:
-            _res_inv_acc_id = _resolve_inventory_account_id_for_invoice('شراء', 'scrap')
-            _res_inv_memo_id = None
-            if _res_inv_acc_id:
-                _inv_obj = Account.query.get(_res_inv_acc_id)
-                if _inv_obj and _inv_obj.memo_account_id:
-                    _res_inv_memo_id = _inv_obj.memo_account_id
-            if not _res_inv_memo_id:
-                _res_inv_memo_id = get_account_id_by_number('7521')
-
-            _res_office_acc = Account.query.get(int(office.account_category_id))
-            _res_office_memo_id = getattr(_res_office_acc, 'memo_account_id', None) if _res_office_acc else None
-            if not _res_office_memo_id:
-                ensure_office_account(office)
-                db.session.flush()
-                _res_office_acc = Account.query.get(int(office.account_category_id))
-                _res_office_memo_id = getattr(_res_office_acc, 'memo_account_id', None) if _res_office_acc else None
-
-            if _res_inv_memo_id and _res_office_memo_id:
-                _karat_n = karat if karat in (18, 21, 22, 24) else int(get_main_karat() or 21)
-                _kd = f'debit_{_karat_n}k'
-                _kc = f'credit_{_karat_n}k'
-
-                _res_gold_je = JournalEntry(
-                    entry_number=_generate_journal_entry_number('WGT'),
-                    date=reservation_date,
-                    description=f'إرسال ذهب للحجز ({reservation.reservation_code}) - مكتب {office.name}',
-                    reference_type='office_reservation',
-                    reference_id=reservation.id,
-                    is_posted=True,
-                    posted_at=reservation_date,
-                    posted_by=str(data.get('created_by') or 'system'),
-                )
-                db.session.add(_res_gold_je)
-                db.session.flush()
-
-                # مدين: وزني المكتب — الذهب في حيازة المكتب (عليه ذهب)
-                create_dual_journal_entry(
-                    journal_entry_id=_res_gold_je.id,
-                    account_id=int(_res_office_memo_id),
-                    supplier_id=supplier.id,
-                    description=f'ذهب بحيازة مكتب التسكير عيار {_karat_n}',
-                    **{_kd: weight_grams},
-                )
-                # دائن: مخزون الكسر الوزني — الذهب غادر مخزوننا
-                create_dual_journal_entry(
-                    journal_entry_id=_res_gold_je.id,
-                    account_id=int(_res_inv_memo_id),
-                    description=f'خروج ذهب كسر للتسكير عيار {_karat_n}',
-                    **{_kc: weight_grams},
-                )
-                reservation.gold_journal_entry_id = _res_gold_je.id if hasattr(reservation, 'gold_journal_entry_id') else None
-                _res_gold_je_ok = True
-        except Exception as _rje_exc:
-            print(f"⚠️ تحذير: تعذر إنشاء قيد الذهب عند الحجز: {_rje_exc}")
-        # ────────────────────────────────────────────────────────────────────────
-
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
         office.total_amount_paid = (office.total_amount_paid or 0.0) + paid_amount
@@ -31655,7 +31590,6 @@ def create_office_reservation():
 
         response = _serialize_office_reservation(reservation)
         response['purchase_invoice_id'] = reservation.purchase_invoice_id
-        response['gold_journal_entry_created'] = _res_gold_je_ok
         # Echo payment safe box (if provided via request or settings) for UI/debugging.
         payment_sb = _normalize_fk_ref(data.get('safe_box_id')) or _normalize_fk_ref(data.get('cash_safe_box_id'))
         if payment_sb is not None:
@@ -31975,21 +31909,6 @@ def cancel_office_reservation(reservation_id: int):
 
     reservation.status = 'cancelled'
     db.session.add(reservation)
-
-    # عكس قيد الذهب الوزني الذي أُنشئ عند الحجز (إرسال الذهب للمكتب).
-    # يُبحث عن القيد بالمرجع ويُحذف لأن الحجز لم يُنفَّذ ولا توجد دفعات.
-    try:
-        reservation_gold_entries = JournalEntry.query.filter_by(
-            reference_type='office_reservation',
-            reference_id=reservation.id,
-        ).all()
-        for je in reservation_gold_entries:
-            # حذف أسطر القيد ثم القيد نفسه
-            JournalEntryLine.query.filter_by(journal_entry_id=je.id).delete()
-            db.session.delete(je)
-    except Exception as _rev_exc:
-        print(f"⚠️ تحذير: تعذر حذف قيود الحجز الملغى {reservation_id}: {_rev_exc}")
-
     db.session.commit()
 
     return jsonify(_serialize_office_reservation(reservation)), 200
@@ -35162,20 +35081,18 @@ def serve_temp_pdf(token):
 def get_unseen_achievements():
     """
     GET /api/achievements/unseen
-    يرجع إنجازات المستخدم الحالي فقط (المرتبط بـ employee_id).
-    لا يُرجع شيئاً لمن ليس له موظف مرتبط — أمان كامل.
+    يرجع قائمة الإنجازات التي لم يشاهدها المستخدم بعد.
     """
     try:
         current_user = getattr(g, 'current_user', None)
         employee_id = getattr(current_user, 'employee_id', None) if current_user else None
 
-        # أمان: الاحتفالية تظهر فقط للموظف صاحب الإنجاز
-        if not employee_id:
-            return jsonify({'achievements': []}), 200
+        query = GoalAchievement.query.filter_by(seen_by_user=False)
+        if employee_id:
+            query = query.filter_by(employee_id=employee_id)
 
         achievements = (
-            GoalAchievement.query
-            .filter_by(employee_id=employee_id, seen_by_user=False)
+            query
             .order_by(GoalAchievement.achieved_at.desc())
             .limit(10)
             .all()
@@ -35190,18 +35107,10 @@ def get_unseen_achievements():
 def mark_achievement_seen(achievement_id):
     """
     POST /api/achievements/<id>/mark-seen
-    يضع علامة "تمت المشاهدة" — يتحقق أن الإنجاز يخص المستخدم الحالي فقط.
+    يضع علامة "تمت المشاهدة" على الإنجاز حتى لا يظهر مرة أخرى.
     """
     try:
-        current_user = getattr(g, 'current_user', None)
-        employee_id = getattr(current_user, 'employee_id', None) if current_user else None
-
         achievement = GoalAchievement.query.get_or_404(achievement_id)
-
-        # تحقق من الملكية: الإنجاز يجب أن يخص هذا الموظف
-        if employee_id and achievement.employee_id != employee_id:
-            return jsonify({'error': 'غير مصرح'}), 403
-
         achievement.mark_seen()
         db.session.commit()
         return jsonify({'success': True}), 200
@@ -35265,16 +35174,11 @@ def check_goal_progress():
     """
     POST /api/achievements/check-progress
 
-    يقارن أداء الموظف في السباق بهدفه الشخصي المحدد بنفس المقياس (goal_metric):
-      - 'points'   → نفس حساب نقاط سباق الأداء: sum(profit_gold) * points_per_gram
-      - 'weight'   → مجموع وزن البنود المباعة (جم)
-      - 'invoices' → عدد فواتير البيع المرحّلة
-
-    يقرأ الهدف من حقول الموظف الشخصية أولاً، ثم الإعدادات العامة كاحتياط.
-    إن تحقق الهدف ولم يُسجَّل مسبقاً في هذه الفترة → ينشئ GoalAchievement.
+    يفحص الأهداف الشخصية للموظف (weight/points/invoices) للفترات المفعلة
+    ويُنشئ GoalAchievement عند تحقق الهدف مع احتساب المكافأة المستحقة.
+    يدعم نوع المكافأة الثابتة أو المرتبطة بقاعدة BonusRule.
     """
     from datetime import datetime as _dt, timedelta as _td
-    from sqlalchemy import func as _func
 
     try:
         current_user = getattr(g, 'current_user', None)
@@ -35289,106 +35193,107 @@ def check_goal_progress():
         if not employee or not employee.is_active:
             return jsonify({'achievements': []}), 200
 
+        # ── قراءة الأهداف: شخصية أولاً، ثم هدف الفريق (وزن شهري/أسبوعي) كاحتياط ──
         settings_row = _get_settings_singleton(create_if_missing=False)
 
-        # ── تحديد المقياس المستخدم للهدف ──
-        goal_metric = (getattr(employee, 'goal_metric', None) or 'weight').strip().lower()
-        if goal_metric not in ('weight', 'points', 'invoices'):
-            goal_metric = 'weight'
+        metric = (getattr(employee, 'goal_metric', None) or 'weight').strip().lower()
+        if metric not in ('weight', 'points', 'invoices'):
+            metric = 'weight'
 
-        # ── points_per_gram من إعدادات السباق ──
-        points_per_gram = 10.0
-        try:
-            if settings_row:
-                raw_race = getattr(settings_row, 'sales_race_settings', None)
-                if raw_race:
-                    cfg = json.loads(raw_race)
-                    if isinstance(cfg, dict):
-                        points_per_gram = max(0.0, float(cfg.get('points_per_gram') or 10.0))
-        except Exception:
-            pass
+        def _target_for(period_name: str):
+            if period_name == 'daily':
+                mapping = {
+                    'weight': getattr(employee, 'goal_weight_daily', None),
+                    'points': getattr(employee, 'goal_points_daily', None),
+                    'invoices': getattr(employee, 'goal_invoices_daily', None),
+                }
+            elif period_name == 'weekly':
+                mapping = {
+                    'weight': getattr(employee, 'goal_weight_weekly', None),
+                    'points': getattr(employee, 'goal_points_weekly', None),
+                    'invoices': getattr(employee, 'goal_invoices_weekly', None),
+                }
+            else:
+                mapping = {
+                    'weight': getattr(employee, 'goal_weight_monthly', None),
+                    'points': getattr(employee, 'goal_points_monthly', None),
+                    'invoices': getattr(employee, 'goal_invoices_monthly', None),
+                }
 
-        # ── قراءة الأهداف حسب المقياس ──
-        def _read_target(field_emp, field_settings):
-            try:
-                return float(getattr(employee, field_emp, None) or
-                             (getattr(settings_row, field_settings, None) if settings_row else None) or 0.0)
-            except Exception:
-                return 0.0
+            target = mapping.get(metric)
+            if target is not None:
+                return target
 
-        if goal_metric == 'points':
-            weekly_target  = _read_target('goal_points_weekly',   'weekly_sales_target_weight')
-            monthly_target = _read_target('goal_points_monthly',  'monthly_sales_target_weight')
-        elif goal_metric == 'invoices':
-            weekly_target  = _read_target('goal_invoices_weekly',  'weekly_sales_target_weight')
-            monthly_target = _read_target('goal_invoices_monthly', 'monthly_sales_target_weight')
-        else:  # weight
-            weekly_target  = _read_target('goal_weight_weekly',   'weekly_sales_target_weight')
-            monthly_target = _read_target('goal_weight_monthly',  'monthly_sales_target_weight')
+            # fallback legacy settings only for weight weekly/monthly
+            if metric == 'weight' and settings_row is not None:
+                if period_name == 'weekly':
+                    return getattr(settings_row, 'weekly_sales_target_weight', None)
+                if period_name == 'monthly':
+                    return getattr(settings_row, 'monthly_sales_target_weight', None)
+            return None
 
-        if weekly_target <= 0 and monthly_target <= 0:
+        def _calc_bonus_for(period_name: str):
+            reward_type = (getattr(employee, f'goal_reward_type_{period_name}', None) or 'fixed').strip().lower()
+            if reward_type == 'rule':
+                rule_id = getattr(employee, f'goal_bonus_rule_id_{period_name}', None)
+                if rule_id:
+                    rule = BonusRule.query.get(rule_id)
+                    if rule and bool(getattr(rule, 'is_active', True)) and rule.is_valid_for_employee(employee):
+                        amount = float(getattr(rule, 'bonus_value', None) or 0.0)
+                        min_bonus = getattr(rule, 'min_bonus', None)
+                        max_bonus = getattr(rule, 'max_bonus', None)
+                        if min_bonus is not None:
+                            amount = max(amount, float(min_bonus))
+                        if max_bonus is not None:
+                            amount = min(amount, float(max_bonus))
+                        return amount, int(rule.id)
+                return 0.0, None
+            return float(getattr(employee, f'goal_bonus_{period_name}', None) or 0.0), None
+
+        if not any([
+            bool(getattr(employee, 'goal_daily_enabled', False)),
+            bool(getattr(employee, 'goal_weekly_enabled', True)),
+            bool(getattr(employee, 'goal_monthly_enabled', True)),
+        ]):
             return jsonify({'achievements': []}), 200
 
         now = _dt.now()
         new_achievements = []
 
-        # ── دالة: حساب نقاط سباق الأداء (نفس الحساب في leaderboard metric=points) ──
-        def _sold_points(start_dt, end_dt):
-            """sum(profit_gold) * points_per_gram  — نفس صيغة الـ leaderboard (بيع + شراء من عميل)."""
-            invoices = Invoice.query.filter(
-                Invoice.is_posted.is_(True),
-                Invoice.date >= start_dt,
-                Invoice.date < end_dt,
-                Invoice.invoice_type.in_(['بيع', 'شراء من عميل']),
-                Invoice.employee_id == employee_id,
-            ).all()
-            total_profit_gold = sum(
-                max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
-                for inv in invoices
-            )
-            return int(round(total_profit_gold * points_per_gram))
-
-        # ── دالة: مجموع وزن البنود المباعة ──
+        # ── دالة: حساب الأداء الفعلي لفترة معينة ──
         def _sold_weight(start_dt, end_dt):
             invoices = Invoice.query.filter(
-                Invoice.is_posted.is_(True),
+                or_(Invoice.is_posted.is_(True), Invoice.status == 'posted'),
                 Invoice.date >= start_dt,
                 Invoice.date < end_dt,
-                Invoice.invoice_type == 'بيع',
+                Invoice.invoice_type.in_(['بيع', 'sell', 'sale']),
                 Invoice.employee_id == employee_id,
             ).all()
+            if metric == 'invoices':
+                return float(len(invoices))
+            if metric == 'points':
+                return float(sum(float(getattr(inv, 'profit_gold', 0.0) or 0.0) for inv in invoices))
+
             total_w = 0.0
             for inv in invoices:
+                # نفضّل وزن الفاتورة الكلي؛ ثم نجمع من البنود كاحتياط
+                inv_weight = getattr(inv, 'total_weight', None)
+                if inv_weight is not None:
+                    try:
+                        total_w += float(inv_weight or 0.0)
+                        continue
+                    except Exception:
+                        pass
                 for item in (inv.items or []):
                     try:
                         total_w += float(getattr(item, 'weight', None) or 0.0)
                     except Exception:
                         pass
-            return total_w
+            return float(total_w)
 
-        # ── دالة: عدد فواتير البيع المرحّلة ──
-        def _sold_invoices(start_dt, end_dt):
-            return Invoice.query.filter(
-                Invoice.is_posted.is_(True),
-                Invoice.date >= start_dt,
-                Invoice.date < end_dt,
-                Invoice.invoice_type == 'بيع',
-                Invoice.employee_id == employee_id,
-            ).count()
-
-        # ── اختيار دالة الحساب حسب goal_metric ──
-        if goal_metric == 'points':
-            _calc = _sold_points
-            _unit = 'نقطة'
-        elif goal_metric == 'invoices':
-            _calc = _sold_invoices
-            _unit = 'فاتورة'
-        else:
-            _calc = _sold_weight
-            _unit = 'جم'
-
-        # ── دالة: هل يوجد إنجاز مسجّل لهذه الفترة؟ ──
+        # ── دالة: هل يوجد إنجاز مسجّل لهذه الفترة؟ (يعمل مع SQLite وPostgreSQL) ──
         def _already_achieved(period_key: str) -> bool:
+            # تحقق بلغة Python بدلاً من JSON SQL operator (SQLite لا يدعم ->>)
             existing = GoalAchievement.query.filter_by(
                 employee_id=employee_id
             ).with_entities(GoalAchievement.metrics).all()
@@ -35397,263 +35302,72 @@ def check_goal_progress():
                 for row in existing
             )
 
-        # ── دالة: ترتيب الموظف في السباق بنفس مقياس الهدف ──
-        def _get_race_rank(start_dt, end_dt):
-            """يحسب ترتيب الموظف بين زملائه بنفس مقياس goal_metric."""
+        unit_label = {'weight': 'جم', 'points': 'نقطة', 'invoices': 'فاتورة'}.get(metric, 'جم')
+
+        # ─── الفترات: يومي / أسبوعي / شهري ────────────────────────────────
+        today_start = _dt.combine(now.date(), _dt.min.time())
+        tomorrow_start = today_start + _td(days=1)
+        week_start_date = now.date() - _td(days=now.weekday())
+        week_start = _dt.combine(week_start_date, _dt.min.time())
+        week_end = week_start + _td(days=7)
+        month_start = _dt(now.year, now.month, 1)
+        month_end = _dt(now.year + 1, 1, 1) if now.month == 12 else _dt(now.year, now.month + 1, 1)
+
+        periods = [
+            ('daily', bool(getattr(employee, 'goal_daily_enabled', False)), today_start, tomorrow_start, f'{now.year}/{now.month:02d}/{now.day:02d}'),
+            ('weekly', bool(getattr(employee, 'goal_weekly_enabled', True)), week_start, week_end, f'W{now.isocalendar()[1]:02d}/{now.year}'),
+            ('monthly', bool(getattr(employee, 'goal_monthly_enabled', True)), month_start, month_end, f'{now.year}/{now.month:02d}'),
+        ]
+
+        for period_name, enabled, start_dt, end_dt, period_label in periods:
+            if not enabled:
+                continue
+
+            raw_target = _target_for(period_name)
             try:
-                if goal_metric == 'points':
-                    # نقاط = sum(profit_gold) * points_per_gram لكل موظف (بيع + شراء من عميل)
-                    rows_q = (
-                        db.session.query(
-                            Invoice.employee_id,
-                            _func.coalesce(_func.sum(Invoice.profit_gold), 0.0).label('pg'),
-                        )
-                        .filter(
-                            Invoice.is_posted.is_(True),
-                            Invoice.invoice_type.in_(['بيع', 'شراء من عميل']),
-                            Invoice.employee_id.isnot(None),
-                            Invoice.date >= start_dt,
-                            Invoice.date < end_dt,
-                        )
-                        .group_by(Invoice.employee_id)
-                        .all()
-                    )
-                    race_list = sorted(
-                        [
-                            {
-                                'employee_id': int(r.employee_id),
-                                'score': int(round(max(0.0, float(r.pg or 0.0)) * points_per_gram)),
-                            }
-                            for r in rows_q if r.employee_id is not None
-                        ],
-                        key=lambda x: x['score'],
-                        reverse=True,
-                    )
-                    score_label = 'race_points'
-                elif goal_metric == 'invoices':
-                    rows_q = (
-                        db.session.query(
-                            Invoice.employee_id,
-                            _func.count(Invoice.id).label('cnt'),
-                        )
-                        .filter(
-                            Invoice.is_posted.is_(True),
-                            Invoice.invoice_type == 'بيع',
-                            Invoice.employee_id.isnot(None),
-                            Invoice.date >= start_dt,
-                            Invoice.date < end_dt,
-                        )
-                        .group_by(Invoice.employee_id)
-                        .all()
-                    )
-                    race_list = sorted(
-                        [
-                            {'employee_id': int(r.employee_id), 'score': int(r.cnt or 0)}
-                            for r in rows_q if r.employee_id is not None
-                        ],
-                        key=lambda x: x['score'],
-                        reverse=True,
-                    )
-                    score_label = 'race_invoices'
-                else:  # weight
-                    rows_q = (
-                        db.session.query(
-                            Invoice.employee_id,
-                            _func.coalesce(_func.sum(Invoice.total_weight), 0.0).label('w'),
-                        )
-                        .filter(
-                            Invoice.is_posted.is_(True),
-                            Invoice.invoice_type == 'بيع',
-                            Invoice.employee_id.isnot(None),
-                            Invoice.date >= start_dt,
-                            Invoice.date < end_dt,
-                        )
-                        .group_by(Invoice.employee_id)
-                        .all()
-                    )
-                    race_list = sorted(
-                        [
-                            {'employee_id': int(r.employee_id), 'score': float(r.w or 0.0)}
-                            for r in rows_q if r.employee_id is not None
-                        ],
-                        key=lambda x: x['score'],
-                        reverse=True,
-                    )
-                    score_label = 'race_weight'
-
-                total_in_race = len(race_list)
-                if total_in_race == 0:
-                    return {}
-
-                rank = next(
-                    (i + 1 for i, x in enumerate(race_list) if x['employee_id'] == employee_id),
-                    None,
-                )
-                if rank is None:
-                    return {}
-
-                top = race_list[0]
-                top_name = ''
-                try:
-                    top_emp = Employee.query.get(top['employee_id'])
-                    top_name = (getattr(top_emp, 'name', '') or '').strip()
-                except Exception:
-                    pass
-
-                return {
-                    'race_rank': rank,
-                    'race_total': total_in_race,
-                    'race_beaten': total_in_race - rank,
-                    score_label: round(top['score'], 2) if goal_metric == 'weight' else top['score'],
-                    'race_top_name': top_name,
-                    'race_is_champion': rank == 1,
-                }
+                target = float(raw_target or 0.0)
             except Exception:
-                return {}
+                target = 0.0
+            if target <= 0:
+                continue
 
-        # ─── دالتا المكافأة: مصدر واحد للحقيقة ───────────────────────────────
-        # يستدعيان BonusCalculator مباشرةً — نفس المنطق الذي يراه مدير الرواتب.
+            if period_name == 'daily':
+                period_key = f'daily-{now.year}-{now.month:02d}-{now.day:02d}'
+            elif period_name == 'weekly':
+                period_key = f'weekly-{now.year}-W{now.isocalendar()[1]:02d}'
+            else:
+                period_key = f'monthly-{now.year}-{now.month:02d}'
 
-        def _compute_goal_bonus(p_start, p_end):
-            """
-            يحسب المكافأة المستحقة بالترتيب:
-            1) BonusRule النشطة (الأكثر مرونة ودقة).
-            2) الحقل المباشر goal_bonus_monthly/weekly على الموظف كاحتياط
-               لمن لم تُنشأ له قاعدة مكافأة بعد.
-            """
-            # 1) BonusRule — المصدر الرئيسي
-            try:
-                from bonus_calculator import BonusCalculator
-                p_start_d = p_start.date() if hasattr(p_start, 'date') else p_start
-                p_end_d = (p_end - _td(seconds=1)).date() if hasattr(p_end, 'date') else p_end
-                valid_rules = [
-                    r for r in BonusRule.query.filter_by(is_active=True).all()
-                    if r.is_valid_for_employee(employee)
-                ]
-                total = 0.0
-                for rule in valid_rules:
-                    result = BonusCalculator.calculate_bonus(employee, rule, p_start_d, p_end_d)
-                    if result:
-                        total += float(result[0] or 0.0)
-                if total > 0:
-                    return round(total, 2)
-            except Exception:
-                pass
+            if _already_achieved(period_key):
+                continue
 
-            # 2) الحقل المباشر — احتياط عند غياب BonusRule
-            is_monthly = (p_end - p_start).days >= 20
-            direct_field = 'goal_bonus_monthly' if is_monthly else 'goal_bonus_weekly'
-            direct = getattr(employee, direct_field, None)
-            if direct is not None:
-                try:
-                    v = float(direct)
-                    if v > 0:
-                        return round(v, 2)
-                except Exception:
-                    pass
+            actual = _sold_weight(start_dt, end_dt)
+            if actual < target:
+                continue
 
-            return 0.0
-
-        def _create_employee_bonus_records(p_start, p_end):
-            """
-            ينشئ سجلات EmployeeBonus(status='pending') للقواعد المستحقة.
-            يتجنب التكرار: يتخطى أي قاعدة لها سجل غير مرفوض لنفس الموظف والفترة.
-            """
-            try:
-                from bonus_calculator import BonusCalculator
-                p_start_d = p_start.date() if hasattr(p_start, 'date') else p_start
-                p_end_d = (p_end - _td(seconds=1)).date() if hasattr(p_end, 'date') else p_end
-                valid_rules = [
-                    r for r in BonusRule.query.filter_by(is_active=True).all()
-                    if r.is_valid_for_employee(employee)
-                ]
-                for rule in valid_rules:
-                    result = BonusCalculator.calculate_bonus(employee, rule, p_start_d, p_end_d)
-                    if not result or float(result[0] or 0.0) <= 0:
-                        continue
-                    amount, calc_data = result
-                    # تجنب التكرار
-                    already = EmployeeBonus.query.filter(
-                        EmployeeBonus.employee_id == employee_id,
-                        EmployeeBonus.bonus_rule_id == rule.id,
-                        EmployeeBonus.period_start == p_start_d,
-                        EmployeeBonus.status != 'rejected',
-                    ).first()
-                    if already:
-                        continue
-                    db.session.add(EmployeeBonus(
-                        employee_id=employee_id,
-                        bonus_rule_id=rule.id,
-                        bonus_type=rule.bonus_type,
-                        amount=float(amount),
-                        status='pending',
-                        period_start=p_start_d,
-                        period_end=p_end_d,
-                        calculation_data=calc_data,
-                        notes='أُنشئت تلقائياً عند تحقيق الهدف',
-                    ))
-            except Exception:
-                pass  # لا نوقف الاحتفالية بسبب خطأ في المكافأة
-
-        # ─── فحص الهدف الشهري ──────────────────────────────────────────────
-        if monthly_target > 0:
-            month_start = _dt(now.year, now.month, 1)
-            month_end = _dt(now.year + 1, 1, 1) if now.month == 12 else _dt(now.year, now.month + 1, 1)
-            period_key_m = f'monthly-{now.year}-{now.month:02d}'
-            if not _already_achieved(period_key_m):
-                actual_m = _calc(month_start, month_end)
-                if actual_m >= monthly_target:
-                    race_m = _get_race_rank(month_start, month_end)
-                    bonus_m = _compute_goal_bonus(month_start, month_end)
-                    _create_employee_bonus_records(month_start, month_end)
-                    a = GoalAchievement(
-                        employee_id=employee_id,
-                        goal_name=getattr(employee, 'goal_name', None) or f'هدف الشهر {now.year}/{now.month:02d}',
-                        goal_description=f'تحققت {actual_m} {_unit} من أصل {monthly_target} {_unit}',
-                        bonus_amount=bonus_m,
-                        metrics={
-                            'period_key': period_key_m,
-                            goal_metric: round(float(actual_m), 2) if goal_metric != 'invoices' else int(actual_m),
-                            'target': monthly_target,
-                            'period': f'{now.year}/{now.month:02d}',
-                            'metric': goal_metric,
-                            **race_m,
-                        },
-                        achieved_at=now,
-                    )
-                    db.session.add(a)
-                    new_achievements.append(a)
-
-        # ─── فحص الهدف الأسبوعي ────────────────────────────────────────────
-        if weekly_target > 0:
-            week_start_date = now.date() - _td(days=now.weekday())
-            week_start = _dt.combine(week_start_date, _dt.min.time())
-            week_end = week_start + _td(days=7)
-            iso_week = now.isocalendar()[1]
-            period_key_w = f'weekly-{now.year}-W{iso_week:02d}'
-            if not _already_achieved(period_key_w):
-                actual_w = _calc(week_start, week_end)
-                if actual_w >= weekly_target:
-                    race_w = _get_race_rank(week_start, week_end)
-                    bonus_w = _compute_goal_bonus(week_start, week_end)
-                    _create_employee_bonus_records(week_start, week_end)
-                    a = GoalAchievement(
-                        employee_id=employee_id,
-                        goal_name=getattr(employee, 'goal_name', None) or f'هدف الأسبوع {iso_week}',
-                        goal_description=f'تحققت {actual_w} {_unit} من أصل {weekly_target} {_unit}',
-                        bonus_amount=bonus_w,
-                        metrics={
-                            'period_key': period_key_w,
-                            goal_metric: round(float(actual_w), 2) if goal_metric != 'invoices' else int(actual_w),
-                            'target': weekly_target,
-                            'period': f'أسبوع {iso_week}',
-                            'metric': goal_metric,
-                            **race_w,
-                        },
-                        achieved_at=now,
-                    )
-                    db.session.add(a)
-                    new_achievements.append(a)
+            bonus_amount, bonus_rule_id = _calc_bonus_for(period_name)
+            a = GoalAchievement(
+                employee_id=employee_id,
+                bonus_rule_id=bonus_rule_id,
+                goal_name=getattr(employee, 'goal_name', None) or (
+                    f'هدف اليوم {period_label}' if period_name == 'daily' else
+                    f'هدف الأسبوع {period_label}' if period_name == 'weekly' else
+                    f'هدف الشهر {period_label}'
+                ),
+                goal_description=f'تحققت {actual:.1f} {unit_label} من أصل {target:.1f} {unit_label}',
+                bonus_amount=float(bonus_amount or 0.0),
+                metrics={
+                    'period_key': period_key,
+                    metric: round(actual, 2),
+                    'actual': round(actual, 2),
+                    'target': round(target, 2),
+                    'metric': metric,
+                    'period': period_label,
+                },
+                achieved_at=now,
+            )
+            db.session.add(a)
+            new_achievements.append(a)
 
         if new_achievements:
             db.session.commit()
@@ -35677,7 +35391,6 @@ def update_employee_goals(employee_id):
         'goal_weight_monthly', 'goal_weight_weekly',
         'goal_points_monthly', 'goal_points_weekly',
         'goal_invoices_monthly', 'goal_invoices_weekly',
-        'goal_bonus_monthly', 'goal_bonus_weekly',
     ]
     for field in _GOAL_FIELDS:
         if field not in data:
