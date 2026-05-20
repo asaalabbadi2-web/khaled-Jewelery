@@ -1914,21 +1914,34 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
               ),
             ),
             const SizedBox(height: 14),
-            // ── الأهداف لكل فترة ──
-            ..._buildPeriodSection(isAr, 'monthly', isAr ? 'الهدف الشهري' : 'Monthly Goal', _monthlyCtrl, _bonusMonthlyCtrl,
-              _monthlyEnabled, (v) => setState(() => _monthlyEnabled = v),
-              _rewardTypeMonthly, (v) => setState(() => _rewardTypeMonthly = v),
-              _bonusRuleIdMonthly, (v) => setState(() => _bonusRuleIdMonthly = v),
-            ),
-            ..._buildPeriodSection(isAr, 'weekly', isAr ? 'الهدف الأسبوعي' : 'Weekly Goal', _weeklyCtrl, _bonusWeeklyCtrl,
-              _weeklyEnabled, (v) => setState(() => _weeklyEnabled = v),
-              _rewardTypeWeekly, (v) => setState(() => _rewardTypeWeekly = v),
-              _bonusRuleIdWeekly, (v) => setState(() => _bonusRuleIdWeekly = v),
-            ),
-            ..._buildPeriodSection(isAr, 'daily', isAr ? 'الهدف اليومي' : 'Daily Goal', _dailyCtrl, _bonusDailyCtrl,
-              _dailyEnabled, (v) => setState(() => _dailyEnabled = v),
-              _rewardTypeDaily, (v) => setState(() => _rewardTypeDaily = v),
-              _bonusRuleIdDaily, (v) => setState(() => _bonusRuleIdDaily = v),
+            // ── تبويبان: الأهداف | المكافآت ──
+            DefaultTabController(
+              length: 2,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TabBar(
+                    labelColor: _gold,
+                    unselectedLabelColor: Colors.grey.shade600,
+                    indicatorColor: _gold,
+                    dividerColor: Colors.transparent,
+                    tabs: [
+                      Tab(text: isAr ? 'الأهداف' : 'Goals'),
+                      Tab(text: isAr ? 'المكافآت' : 'Bonuses'),
+                    ],
+                  ),
+                  const Divider(height: 1),
+                  SizedBox(
+                    height: 290,
+                    child: TabBarView(
+                      children: [
+                        _buildGoalTargetsTab(isAr),
+                        _buildBonusTab(isAr),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -1948,21 +1961,68 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
     );
   }
 
-  List<Widget> _buildPeriodSection(
+  // ── تبويب 1: الأهداف ──
+  Widget _buildGoalTargetsTab(bool isAr) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        _buildPeriodTargetOnly(isAr, isAr ? 'الهدف الشهري' : 'Monthly Goal',
+            _monthlyCtrl, _monthlyEnabled, (v) => setState(() => _monthlyEnabled = v)),
+        _buildPeriodTargetOnly(isAr, isAr ? 'الهدف الأسبوعي' : 'Weekly Goal',
+            _weeklyCtrl, _weeklyEnabled, (v) => setState(() => _weeklyEnabled = v)),
+        _buildPeriodTargetOnly(isAr, isAr ? 'الهدف اليومي' : 'Daily Goal',
+            _dailyCtrl, _dailyEnabled, (v) => setState(() => _dailyEnabled = v)),
+      ]),
+    );
+  }
+
+  // ── تبويب 2: المكافآت ──
+  Widget _buildBonusTab(bool isAr) {
+    final anyEnabled = _monthlyEnabled || _weeklyEnabled || _dailyEnabled;
+    if (!anyEnabled) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            isAr
+                ? 'فعّل فترة واحدة على الأقل من تبويب "الأهداف" أولاً'
+                : 'Enable at least one period in the Goals tab first',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+          ),
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (_monthlyEnabled)
+          ..._buildPeriodBonusOnly(isAr, isAr ? 'المكافأة الشهرية' : 'Monthly Bonus',
+              _bonusMonthlyCtrl, _rewardTypeMonthly,
+              (v) => setState(() => _rewardTypeMonthly = v),
+              _bonusRuleIdMonthly, (v) => setState(() => _bonusRuleIdMonthly = v)),
+        if (_weeklyEnabled)
+          ..._buildPeriodBonusOnly(isAr, isAr ? 'المكافأة الأسبوعية' : 'Weekly Bonus',
+              _bonusWeeklyCtrl, _rewardTypeWeekly,
+              (v) => setState(() => _rewardTypeWeekly = v),
+              _bonusRuleIdWeekly, (v) => setState(() => _bonusRuleIdWeekly = v)),
+        if (_dailyEnabled)
+          ..._buildPeriodBonusOnly(isAr, isAr ? 'المكافأة اليومية' : 'Daily Bonus',
+              _bonusDailyCtrl, _rewardTypeDaily,
+              (v) => setState(() => _rewardTypeDaily = v),
+              _bonusRuleIdDaily, (v) => setState(() => _bonusRuleIdDaily = v)),
+      ]),
+    );
+  }
+
+  Widget _buildPeriodTargetOnly(
     bool isAr,
-    String period,
     String title,
     TextEditingController targetCtrl,
-    TextEditingController bonusCtrl,
     bool enabled,
     ValueChanged<bool> onEnabledChanged,
-    String rewardType,
-    ValueChanged<String> onRewardTypeChanged,
-    int? bonusRuleId,
-    ValueChanged<int?> onRuleIdChanged,
   ) {
-    return [
-      // تبديل تفعيل الفترة
+    return Column(mainAxisSize: MainAxisSize.min, children: [
       SwitchListTile.adaptive(
         value: enabled,
         onChanged: onEnabledChanged,
@@ -1972,7 +2032,6 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
         dense: true,
       ),
       if (enabled) ...[
-        // حقل الهدف
         TextField(
           controller: targetCtrl,
           keyboardType: TextInputType.number,
@@ -1982,44 +2041,58 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
             border: const OutlineInputBorder(), isDense: true,
           ),
         ),
-        const SizedBox(height: 8),
-        // نوع المكافأة
-        Row(children: [
-          Text(isAr ? 'المكافأة:' : 'Reward:', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(width: 8),
-          _rewardTypeBtn(isAr ? 'مبلغ ثابت' : 'Fixed', 'fixed', rewardType, onRewardTypeChanged),
-          const SizedBox(width: 6),
-          _rewardTypeBtn(isAr ? 'قاعدة مكافأة' : 'Bonus Rule', 'rule', rewardType, onRewardTypeChanged),
-        ]),
-        const SizedBox(height: 8),
-        if (rewardType == 'fixed')
-          TextField(
-            controller: bonusCtrl,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: isAr ? 'مبلغ المكافأة (ر.س)' : 'Bonus Amount (SAR)',
-              prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
-              border: const OutlineInputBorder(), isDense: true,
-            ),
-          )
-        else
-          DropdownButtonFormField<int?>(
-            value: _bonusRules.any((r) => r['id'] == bonusRuleId) ? bonusRuleId : null,
-            decoration: InputDecoration(
-              labelText: isAr ? 'اختر قاعدة المكافأة' : 'Select Bonus Rule',
-              border: const OutlineInputBorder(), isDense: true,
-            ),
-            items: [
-              DropdownMenuItem<int?>(value: null, child: Text(isAr ? '— لا شيء —' : '— None —')),
-              ..._bonusRules.map((r) => DropdownMenuItem<int?>(
-                value: r['id'] as int?,
-                child: Text(r['name']?.toString() ?? ''),
-              )),
-            ],
-            onChanged: onRuleIdChanged,
-          ),
         const SizedBox(height: 10),
       ],
+    ]);
+  }
+
+  List<Widget> _buildPeriodBonusOnly(
+    bool isAr,
+    String title,
+    TextEditingController bonusCtrl,
+    String rewardType,
+    ValueChanged<String> onRewardTypeChanged,
+    int? bonusRuleId,
+    ValueChanged<int?> onRuleIdChanged,
+  ) {
+    return [
+      Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+      const SizedBox(height: 6),
+      Row(children: [
+        Text(isAr ? 'المكافأة:' : 'Reward:', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        const SizedBox(width: 8),
+        _rewardTypeBtn(isAr ? 'مبلغ ثابت' : 'Fixed', 'fixed', rewardType, onRewardTypeChanged),
+        const SizedBox(width: 6),
+        _rewardTypeBtn(isAr ? 'قاعدة مكافأة' : 'Bonus Rule', 'rule', rewardType, onRewardTypeChanged),
+      ]),
+      const SizedBox(height: 8),
+      if (rewardType == 'fixed')
+        TextField(
+          controller: bonusCtrl,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: isAr ? 'مبلغ المكافأة (ر.س)' : 'Bonus Amount (SAR)',
+            prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
+            border: const OutlineInputBorder(), isDense: true,
+          ),
+        )
+      else
+        DropdownButtonFormField<int?>(
+          value: _bonusRules.any((r) => r['id'] == bonusRuleId) ? bonusRuleId : null,
+          decoration: InputDecoration(
+            labelText: isAr ? 'اختر قاعدة المكافأة' : 'Select Bonus Rule',
+            border: const OutlineInputBorder(), isDense: true,
+          ),
+          items: [
+            DropdownMenuItem<int?>(value: null, child: Text(isAr ? '— لا شيء —' : '— None —')),
+            ..._bonusRules.map((r) => DropdownMenuItem<int?>(
+              value: r['id'] as int?,
+              child: Text(r['name']?.toString() ?? ''),
+            )),
+          ],
+          onChanged: onRuleIdChanged,
+        ),
+      const SizedBox(height: 14),
     ];
   }
 
