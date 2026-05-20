@@ -1301,6 +1301,7 @@ class ApiService {
     );
   }
 
+  /// تغيير موظف الفاتورة — للفواتير غير المرحّلة فقط
   Future<void> reassignInvoiceEmployee(int invoiceId, int newEmployeeId) async {
     final response = await _authedPatch(
       Uri.parse('$_baseUrl/invoices/$invoiceId/reassign-employee'),
@@ -2942,6 +2943,32 @@ class ApiService {
     }
   }
 
+  /// نقل حركات الكسر التاريخية من صندوق الكسر لخزائن الموظفين الصحيحة
+  Future<Map<String, dynamic>> migrateScrapGoldToEmployeeSafes() async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/admin/migrate-scrap-gold-to-employee-safes'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
+  /// مزامنة القيود اليتيمة — ترحيل قيود مرتبطة بفواتير مرحّلة لكنها غير مرحّلة
+  Future<Map<String, dynamic>> syncOrphanJournalEntries() async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/admin/sync-orphan-entries'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    }
+    throw Exception(_errorMessageFromResponse(response));
+  }
+
   Future<Map<String, dynamic>> updateSettings(Map<String, dynamic> settingsData) async {
     final response = await _authedPut(
       Uri.parse('$_baseUrl/settings'),
@@ -3849,107 +3876,21 @@ class ApiService {
     }
   }
 
-  /// Update employee goal settings (metric, targets, bonus amounts).
-  /// Returns `{'employee': {...}}` matching the caller convention.
-  Future<Map<String, dynamic>> updateEmployeeGoals(
-    int employeeId,
-    Map<String, dynamic> payload,
-  ) async {
+  /// Upload or clear the current user's profile photo.
+  /// Uses /auth/me/photo — works for all users (with or without employee).
+  Future<void> updateCurrentUserPhoto(String? photoBase64) async {
     final token = await _requireAuthToken();
-    // إرسال الـ payload كاملاً بما فيه null لإمكانية مسح القيم
-    final body = <String, dynamic>{};
-    payload.forEach((key, value) {
-      if (value is DateTime) {
-        body[key] = value.toIso8601String();
-      } else {
-        body[key] = value;
-      }
-    });
-    final response = await http.put(
-      Uri.parse('$_baseUrl/employees/$employeeId/goals'),
+    final response = await http.patch(
+      Uri.parse('$_baseUrl/auth/me/photo'),
       headers: _jsonHeaders(token: token),
-      body: json.encode(body),
+      body: json.encode({'photo': photoBase64}),
     );
-    if (response.statusCode == 200) {
-      final decoded =
-          json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
-      return decoded.containsKey('employee') ? decoded : {'employee': decoded};
-    }
-    throw Exception(_errorMessageFromResponse(response));
-  }
-
-  Future<List<Map<String, dynamic>>> getUnseenAchievements() async {
-    try {
-      final response =
-          await _authedGet(Uri.parse('$_baseUrl/achievements/unseen'));
-      if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes));
-        final list = data['achievements'] as List? ?? [];
-        return list.cast<Map<String, dynamic>>();
-      }
-      return [];
-    } catch (e) {
-      debugPrint('❌ Error loading achievements: $e');
-      return [];
+    if (response.statusCode != 200) {
+      throw Exception('فشل تحديث الصورة: ${response.body}');
     }
   }
 
-  Future<void> markAchievementSeen(int id) async {
-    try {
-      await _authedPost(
-        Uri.parse('$_baseUrl/achievements/$id/mark-seen'),
-        body: '{}',
-      );
-    } catch (e) {
-      debugPrint('❌ Error marking achievement seen: $e');
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> checkGoalProgress() async {
-    try {
-      final response = await _authedPost(
-        Uri.parse('$_baseUrl/achievements/check-progress'),
-        body: '{}',
-      );
-      if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes));
-        final list = data['achievements'] as List? ?? [];
-        return list.cast<Map<String, dynamic>>();
-      }
-      return [];
-    } catch (e) {
-      debugPrint('❌ Error checking goal progress: $e');
-      return [];
-    }
-  }
-
-  /// 🎯 POST /employees/{id}/goal-check
-  /// يتحقق من الأهداف الشخصية للموظف ويعيد الإنجازات غير المشاهدة.
-  Future<List<Map<String, dynamic>>> checkEmployeeGoals(int employeeId) async {
-    final response = await _authedPost(
-      Uri.parse('$_baseUrl/employees/$employeeId/goal-check'),
-    );
-    if (response.statusCode == 200) {
-      final decoded = json.decode(utf8.decode(response.bodyBytes));
-      final list = decoded is Map ? decoded['achievements'] : decoded;
-      if (list is List) {
-        return list.whereType<Map<String, dynamic>>().toList();
-      }
-      return const [];
-    }
-    // عدم رمي استثناء لتجنب تعطل الواجهة
-    return const [];
-  }
-
-  /// 🎯 POST /goal-achievements/{id}/mark-seen
-  Future<void> markGoalAchievementSeen(int achievementId) async {
-    await _authedPost(
-      Uri.parse('$_baseUrl/goal-achievements/$achievementId/mark-seen'),
-    );
-  }
-
-  /// Upload or clear an employee profile photo.
-  /// [photoBase64] is the base64 data URL string, or null to remove.
+  /// Upload or clear an employee profile photo (for admin use).
   Future<void> updateEmployeePhoto(int employeeId, String? photoBase64) async {
     final token = await _requireAuthToken();
     final response = await http.patch(
@@ -3958,7 +3899,7 @@ class ApiService {
       body: json.encode({'photo': photoBase64}),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to update photo: ${response.body}');
+      throw Exception('فشل تحديث صورة الموظف: ${response.body}');
     }
   }
 
@@ -5074,21 +5015,23 @@ class ApiService {
     String? approvedBy,
   }) async {
     final hasWeights = weights != null && weights.isNotEmpty;
-    final hasStones = stonesWeights != null && stonesWeights.isNotEmpty;
     final hasCash = amountCash != null && amountCash > 0;
 
-    if (hasCash && (hasWeights || hasStones)) {
-      throw ArgumentError('Provide either weights/stonesWeights or amountCash, not both');
+    if (hasWeights && hasCash) {
+      throw ArgumentError('Provide either weights or amountCash, not both');
     }
-    if (!hasWeights && !hasStones && !hasCash) {
+    if (!hasWeights && !hasCash) {
       throw ArgumentError('Provide weights (gold) or amountCash (cash)');
     }
+
+    final hasStones = stonesWeights != null &&
+        stonesWeights.values.any((v) => v > 0);
 
     final payload = <String, dynamic>{
       'from_safe_box_id': fromSafeBoxId,
       'to_safe_box_id': toSafeBoxId,
       if (hasWeights) 'weights': weights,
-      if (hasStones) 'stones_weights': stonesWeights,
+      if (hasWeights && hasStones) 'stones': stonesWeights,
       if (hasCash) 'amount_cash': amountCash,
       if (notes != null) 'notes': notes,
       if (date != null) 'date': date.toIso8601String(),
@@ -5533,30 +5476,6 @@ class ApiService {
     }
   }
 
-  /// Migrate scrap-gold SafeBoxTransactions to the correct employee safe boxes.
-  Future<Map<String, dynamic>> migrateScrapGoldToEmployeeSafes() async {
-    final response = await _authedPost(
-      Uri.parse('$_baseUrl/posting/migrate-scrap-gold'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
-    );
-    if (response.statusCode == 200) {
-      return json.decode(utf8.decode(response.bodyBytes));
-    }
-    throw Exception(_errorMessageFromResponse(response));
-  }
-
-  /// Sync (fix) journal entries that have no linked invoice or voucher.
-  Future<Map<String, dynamic>> syncOrphanJournalEntries() async {
-    final response = await _authedPost(
-      Uri.parse('$_baseUrl/posting/sync-orphan-journal-entries'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
-    );
-    if (response.statusCode == 200) {
-      return json.decode(utf8.decode(response.bodyBytes));
-    }
-    throw Exception(_errorMessageFromResponse(response));
-  }
-
   /// Get unposted invoices
   Future<Map<String, dynamic>> getUnpostedInvoices() async {
     final response = await _authedGet(Uri.parse('$_baseUrl/invoices/unposted'));
@@ -5673,6 +5592,7 @@ class ApiService {
   Future<Map<String, dynamic>> unpostInvoice(int invoiceId) async {
     final response = await _authedPost(
       Uri.parse('$_baseUrl/invoices/unpost/$invoiceId'),
+      body: json.encode({}),
     );
     if (response.statusCode == 200) {
       return json.decode(utf8.decode(response.bodyBytes));
@@ -6163,19 +6083,6 @@ class ApiService {
       return json.decode(utf8.decode(response.bodyBytes));
     } else {
       throw Exception('Failed to get current user');
-    }
-  }
-
-  /// Upload or clear the current user's profile photo.
-  /// [photoBase64] is a base64 data-URL string, or null to remove.
-  Future<void> updateCurrentUserPhoto(String? photoBase64) async {
-    final response = await _authedPatch(
-      Uri.parse('$_baseUrl/auth/me/photo'),
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
-      body: json.encode({'photo': photoBase64}),
-    );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to update user photo: ${response.body}');
     }
   }
 
@@ -7353,4 +7260,111 @@ class ApiService {
       throw Exception(error['error'] ?? 'فشل في تحديث الدور');
     }
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Goal Achievements — إنجازات الأهداف
+  // ────────────────────────────────────────────────────────────
+
+  /// يرجع قائمة الإنجازات التي لم يشاهدها المستخدم بعد
+  Future<List<Map<String, dynamic>>> getUnseenAchievements() async {
+    try {
+      final response =
+          await _authedGet(Uri.parse('$_baseUrl/achievements/unseen'));
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final list = data['achievements'] as List? ?? [];
+        return list.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('❌ Error loading achievements: $e');
+      return [];
+    }
+  }
+
+  /// يضع علامة "تمت المشاهدة" على الإنجاز
+  Future<void> markAchievementSeen(int id) async {
+    try {
+      await _authedPost(
+        Uri.parse('$_baseUrl/achievements/$id/mark-seen'),
+        body: '{}',
+      );
+    } catch (e) {
+      debugPrint('❌ Error marking achievement seen: $e');
+    }
+  }
+
+  /// يفحص أداء الموظف المرتبط بالمستخدم الحالي ويُنشئ
+  /// GoalAchievement تلقائياً إن تحقق الهدف الشخصي.
+  /// يُستدعى عند كل عودة للشاشة الرئيسية.
+  Future<List<Map<String, dynamic>>> checkGoalProgress() async {
+    try {
+      final response = await _authedPost(
+        Uri.parse('$_baseUrl/achievements/check-progress'),
+        body: '{}',
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final list = data['achievements'] as List? ?? [];
+        return list.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('❌ Error checking goal progress: $e');
+      return [];
+    }
+  }
+
+  /// تحديث أهداف الأداء الشخصية للموظف
+  Future<Map<String, dynamic>> updateEmployeeGoals(
+    int employeeId,
+    Map<String, dynamic> goals,
+  ) async {
+    final token = await _requireAuthToken();
+    // إرسال الـ payload كاملاً بما فيه null لإمكانية مسح القيم
+    final body = <String, dynamic>{};
+    goals.forEach((key, value) {
+      if (value is DateTime) {
+        body[key] = value.toIso8601String();
+      } else {
+        body[key] = value;
+      }
+    });
+    final response = await http.put(
+      Uri.parse('$_baseUrl/employees/$employeeId/goals'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode(body),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    throw Exception('فشل تحديث أهداف الموظف: ${response.statusCode}');
+  }
+
+  /// 🎯 POST /employees/{id}/goal-check
+  /// يتحقق من الأهداف الشخصية للموظف ويعيد الإنجازات غير المشاهدة.
+  Future<List<Map<String, dynamic>>> checkEmployeeGoals(int employeeId) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/employees/$employeeId/goal-check'),
+    );
+    if (response.statusCode == 200) {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      final list = data['achievements'] as List? ?? [];
+      return list.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  /// وضع علامة "مشاهَد" على إنجاز هدف شخصي
+  Future<void> markGoalAchievementSeen(int achievementId) async {
+    try {
+      await _authedPost(
+        Uri.parse('$_baseUrl/goal-achievements/$achievementId/mark-seen'),
+        body: '{}',
+      );
+    } catch (e) {
+      debugPrint('❌ markGoalAchievementSeen error: $e');
+    }
+  }
 }
+
