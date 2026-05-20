@@ -52,7 +52,7 @@
 		{
 			"label": "Git: Commit & Push",
 			"type": "shell",
-			"command": "git add -A && (git diff --cached --quiet || git commit -m \"${input:commitMessage}\") && git push",
+			"command": "bash _safe_commit.sh \"${input:commitMessage}\"",
 			"options": {
 				"cwd": "${workspaceFolder}"
 			},
@@ -61,7 +61,7 @@
 		{
 			"label": "Git: Commit & Push via Hook",
 			"type": "shell",
-			"command": "git add -A && (git diff --cached --quiet || git commit -m \"${input:commitMessage}\") && git push",
+			"command": "bash _safe_commit.sh \"${input:commitMessage}\"",
 			"options": {
 				"cwd": "${workspaceFolder}"
 			},
