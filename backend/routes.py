@@ -35294,9 +35294,20 @@ def check_goal_progress():
         # ── جلب جميع إنجازات الموظف مرة واحدة + مساعد بحث حسب period_key ──
         employee_achievements = GoalAchievement.query.filter_by(employee_id=employee_id).all()
 
+        def _metrics_dict(value):
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
         def _find_existing(period_key: str):
             for ach in employee_achievements:
-                m = ach.metrics or {}
+                m = _metrics_dict(ach.metrics)
                 if m.get('period_key') == period_key:
                     return ach
             return None
@@ -35355,7 +35366,7 @@ def check_goal_progress():
                     existing.bonus_amount = float(bonus_amount)
                     existing.bonus_rule_id = bonus_rule_id
                     existing.goal_description = f'تحققت {actual:.1f} {unit_label} من أصل {target:.1f} {unit_label}'
-                    m = dict(existing.metrics or {})
+                    m = dict(_metrics_dict(existing.metrics))
                     m.update({
                         metric: round(actual, 2),
                         'actual': round(actual, 2),
