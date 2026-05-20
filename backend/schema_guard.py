@@ -546,6 +546,23 @@ def ensure_employee_goal_columns(engine: Engine) -> None:
                     ("goal_points_weekly",    "REAL",         "NULL"),
                     ("goal_invoices_monthly", "INTEGER",      "NULL"),
                     ("goal_invoices_weekly",  "INTEGER",      "NULL"),
+                    # 🎛️ تفعيل/تعطيل الاحتفالية لكل فترة
+                    ("goal_daily_enabled",    "BOOLEAN",      "0"),
+                    ("goal_weekly_enabled",   "BOOLEAN",      "1"),
+                    ("goal_monthly_enabled",  "BOOLEAN",      "1"),
+                    # 📅 هدف يومي
+                    ("goal_weight_daily",     "REAL",         "NULL"),
+                    ("goal_points_daily",     "REAL",         "NULL"),
+                    ("goal_invoices_daily",   "INTEGER",      "NULL"),
+                    ("goal_bonus_daily",      "REAL",         "NULL"),
+                    # 🏆 نوع المكافأة: 'fixed' | 'rule'
+                    ("goal_reward_type_daily",   "VARCHAR(20)", "'fixed'"),
+                    ("goal_reward_type_weekly",  "VARCHAR(20)", "'fixed'"),
+                    ("goal_reward_type_monthly", "VARCHAR(20)", "'fixed'"),
+                    # 🔗 ربط بـ BonusRule
+                    ("goal_bonus_rule_id_daily",   "INTEGER", "NULL"),
+                    ("goal_bonus_rule_id_weekly",  "INTEGER", "NULL"),
+                    ("goal_bonus_rule_id_monthly", "INTEGER", "NULL"),
                 ],
             )
         )
@@ -691,6 +708,27 @@ def ensure_safe_box_transaction_stones_columns(engine: Engine) -> None:
         )
     except SQLAlchemyError as exc:
         LOGGER.error("Auto schema guard (safe_box_transaction stones) failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
+def ensure_goal_achievement_columns(engine: Engine) -> None:
+    """Add period_key / goal_period columns to goal_achievement for idempotent per-period tracking."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "goal_achievement",
+                [
+                    ("period_key",  "VARCHAR(30)", "NULL"),
+                    ("goal_period", "VARCHAR(20)", "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard (goal_achievement) failed: %s", exc)
         return
 
     _log_added(columns_added)

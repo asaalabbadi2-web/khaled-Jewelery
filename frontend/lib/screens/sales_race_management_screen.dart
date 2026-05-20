@@ -589,8 +589,8 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
         ? (currentValue / targetValue).clamp(0.0, 1.0)
         : targetProgress.clamp(0.0, 1.0);
     final isGoalAchieved =
-        (currentValue != null && targetValue != null && targetValue > 0 && currentValue >= targetValue) ||
-        targetProgress >= 0.9999;
+        currentValue != null && targetValue != null &&
+        targetValue > 0 && currentValue >= targetValue;
     final goalColor = isGoalAchieved
         ? AppColors.success
         : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);

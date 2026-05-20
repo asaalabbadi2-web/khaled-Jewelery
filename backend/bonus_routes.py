@@ -15,9 +15,9 @@ Endpoints:
 """
 
 from flask import Blueprint, request, jsonify, g
-from models import db, Employee, BonusRule, EmployeeBonus, Voucher, VoucherAccountLine, Account, Office, SafeBox, GoalAchievement
+from models import db, Employee, BonusRule, EmployeeBonus, Voucher, VoucherAccountLine, Account, Office, SafeBox, GoalAchievement, Invoice
 from bonus_calculator import BonusCalculator
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from auth_decorators import require_auth, require_permission, require_any_permission
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
@@ -1727,3 +1727,218 @@ def employee_bonus_summary(employee_id):
             'success': False,
             'message': str(e)
         }), 500
+
+
+# ==========================================
+# 🎯 أهداف موظف شخصية — فحص وإشعار الاحتفالية
+# ==========================================
+
+def _build_period_key(period_name: str, today: date) -> str:
+    """يبني مفتاح الفترة: daily_2026-05-20 | weekly_2026-W20 | monthly_2026-05."""
+    if period_name == 'daily':
+        return f"daily_{today.isoformat()}"
+    elif period_name == 'weekly':
+        # ISO week: YYYY-W##
+        iso = today.isocalendar()
+        return f"weekly_{iso[0]}-W{iso[1]:02d}"
+    else:  # monthly
+        return f"monthly_{today.year}-{today.month:02d}"
+
+
+def _get_period_goal_target(emp: Employee, period_name: str, metric: str):
+    """يعيد قيمة الهدف للفترة والمقياس المحدد، أو None إذا لم يُعيَّن."""
+    if period_name == 'daily':
+        mapping = {'weight': emp.goal_weight_daily, 'points': emp.goal_points_daily, 'invoices': emp.goal_invoices_daily}
+    elif period_name == 'weekly':
+        mapping = {'weight': emp.goal_weight_weekly, 'points': emp.goal_points_weekly, 'invoices': emp.goal_invoices_weekly}
+    else:
+        mapping = {'weight': emp.goal_weight_monthly, 'points': emp.goal_points_monthly, 'invoices': emp.goal_invoices_monthly}
+    return mapping.get(metric)
+
+
+def _calc_employee_period_performance(employee_id: int, metric: str, start: date, end: date) -> float:
+    """يحسب الأداء الفعلي للموظف في الفترة المحددة من الفواتير المرحّلة."""
+    from sqlalchemy import func as sqlfunc
+    # نحسب فقط فواتير البيع المرحّلة (posted)
+    base_q = (
+        Invoice.query
+        .filter(
+            Invoice.employee_id == employee_id,
+            Invoice.invoice_type.in_(['بيع', 'sell', 'sale']),
+            Invoice.status == 'posted',
+            Invoice.date >= start,
+            Invoice.date <= end,
+        )
+    )
+    if metric == 'invoices':
+        return float(base_q.count())
+    elif metric == 'points':
+        result = base_q.with_entities(sqlfunc.sum(Invoice.profit_gold)).scalar()
+        return float(result or 0)
+    else:  # weight (default)
+        result = base_q.with_entities(sqlfunc.sum(Invoice.total_weight)).scalar()
+        return float(result or 0)
+
+
+def _calc_goal_bonus(emp: Employee, period_name: str) -> float:
+    """يحسب مبلغ المكافأة بناءً على نوع المكافأة (ثابت أو قاعدة)."""
+    reward_type = getattr(emp, f'goal_reward_type_{period_name}') or 'fixed'
+    if reward_type == 'rule':
+        rule_id = getattr(emp, f'goal_bonus_rule_id_{period_name}')
+        if rule_id:
+            rule = BonusRule.query.get(rule_id)
+            if rule:
+                # نستخدم bonus_value من القاعدة كمبلغ الاحتفالية
+                return float(getattr(rule, 'bonus_value', None) or 0)
+    # fixed أو fallback
+    return float(getattr(emp, f'goal_bonus_{period_name}') or 0)
+
+
+@bonus_bp.route('/employees/<int:employee_id>/goals', methods=['PUT'])
+@require_auth
+def update_employee_goals(employee_id):
+    """
+    PUT /api/employees/{id}/goals
+    تحديث إعدادات الأهداف الشخصية للموظف.
+    يتطلب فقط تسجيل الدخول (require_auth).
+    """
+    try:
+        employee = Employee.query.get_or_404(employee_id)
+        data = request.get_json() or {}
+
+        _float_fields = [
+            'goal_weight_monthly', 'goal_weight_weekly', 'goal_weight_daily',
+            'goal_points_monthly', 'goal_points_weekly', 'goal_points_daily',
+            'goal_bonus_monthly',  'goal_bonus_weekly',  'goal_bonus_daily',
+        ]
+        _int_fields = [
+            'goal_invoices_monthly', 'goal_invoices_weekly', 'goal_invoices_daily',
+            'goal_bonus_rule_id_monthly', 'goal_bonus_rule_id_weekly', 'goal_bonus_rule_id_daily',
+        ]
+        _bool_fields = ['goal_monthly_enabled', 'goal_weekly_enabled', 'goal_daily_enabled']
+        _str_fields  = [
+            'goal_metric', 'goal_name',
+            'goal_reward_type_monthly', 'goal_reward_type_weekly', 'goal_reward_type_daily',
+        ]
+
+        for f in _float_fields:
+            if f in data:
+                setattr(employee, f, float(data[f]) if data[f] is not None else None)
+        for f in _int_fields:
+            if f in data:
+                setattr(employee, f, int(data[f]) if data[f] is not None else None)
+        for f in _bool_fields:
+            if f in data:
+                setattr(employee, f, bool(data[f]))
+        for f in _str_fields:
+            if f in data:
+                setattr(employee, f, data[f])
+
+        db.session.commit()
+        return jsonify({'employee': employee.to_dict(include_details=True)}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@bonus_bp.route('/employees/<int:employee_id>/goal-check', methods=['POST'])
+@require_auth
+def check_employee_personal_goals(employee_id):
+    """
+    POST /api/employees/{id}/goal-check
+    يتحقق من تحقيق الأهداف الشخصية للموظف للفترات المفعّلة.
+    ينشئ سجل GoalAchievement إن لم يكن موجوداً لهذه الفترة.
+    يُعيد الإنجازات غير المشاهدة.
+    """
+    emp = Employee.query.get_or_404(employee_id)
+    today = date.today()
+
+    week_start  = today - timedelta(days=today.weekday())  # الاثنين
+    month_start = today.replace(day=1)
+
+    metric = emp.goal_metric or 'weight'
+
+    periods = [
+        ('daily',   bool(emp.goal_daily_enabled),   today,        today,      'اليومي'),
+        ('weekly',  bool(emp.goal_weekly_enabled),  week_start,   today,      'الأسبوعي'),
+        ('monthly', bool(emp.goal_monthly_enabled), month_start,  today,      'الشهري'),
+    ]
+
+    new_achievements = []
+
+    for period_name, enabled, p_start, p_end, period_label in periods:
+        if not enabled:
+            continue
+
+        target = _get_period_goal_target(emp, period_name, metric)
+        if target is None or (isinstance(target, (int, float)) and target <= 0):
+            continue
+
+        period_key = _build_period_key(period_name, today)
+
+        existing = GoalAchievement.query.filter_by(
+            employee_id=emp.id,
+            period_key=period_key,
+        ).first()
+
+        if existing:
+            # أُنجز من قبل — أعده إذا لم يُشاهَد بعد
+            if not existing.seen_by_user:
+                new_achievements.append(existing.to_dict())
+            continue
+
+        # قياس الأداء الفعلي
+        actual = _calc_employee_period_performance(emp.id, metric, p_start, p_end)
+        if actual < float(target):
+            continue
+
+        # تحقّق الهدف!
+        bonus_amount = _calc_goal_bonus(emp, period_name)
+        achievement = GoalAchievement(
+            employee_id=emp.id,
+            goal_name=emp.goal_name or f'هدف {period_label}',
+            goal_description=f'تحقيق هدف {period_label}: {actual:.1f} / {float(target):.1f}',
+            bonus_amount=bonus_amount,
+            currency='SAR',
+            metrics={
+                'period': period_name,
+                'actual': round(actual, 2),
+                'target': round(float(target), 2),
+                'metric': metric,
+            },
+            period_key=period_key,
+            goal_period=period_name,
+            achieved_at=datetime.utcnow(),
+        )
+        db.session.add(achievement)
+        try:
+            db.session.flush()
+            new_achievements.append(achievement.to_dict())
+        except Exception:
+            db.session.rollback()
+            continue
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    return jsonify({'achievements': new_achievements}), 200
+
+
+@bonus_bp.route('/goal-achievements/<int:achievement_id>/mark-seen', methods=['POST'])
+@require_auth
+def mark_goal_achievement_seen(achievement_id):
+    """
+    POST /api/goal-achievements/{id}/mark-seen
+    يضع علامة "شوهد" على إنجاز هدف شخصي.
+    """
+    ach = GoalAchievement.query.get_or_404(achievement_id)
+    ach.mark_seen()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'فشل الحفظ'}), 500
+    return jsonify({'success': True}), 200

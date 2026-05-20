@@ -37,6 +37,23 @@ class EmployeeModel {
   // 💰 مبلغ المكافأة المباشر عند تحقيق الهدف
   final double? goalBonusMonthly;
   final double? goalBonusWeekly;
+  // 🎛️ تفعيل/تعطيل الاحتفالية لكل فترة
+  final bool goalDailyEnabled;
+  final bool goalWeeklyEnabled;
+  final bool goalMonthlyEnabled;
+  // 📅 هدف يومي
+  final double? goalWeightDaily;
+  final double? goalPointsDaily;
+  final int? goalInvoicesDaily;
+  final double? goalBonusDaily;
+  // 🏆 نوع المكافأة: 'fixed' | 'rule'
+  final String goalRewardTypeDaily;
+  final String goalRewardTypeWeekly;
+  final String goalRewardTypeMonthly;
+  // 🔗 ربط بـ BonusRule
+  final int? goalBonusRuleIdDaily;
+  final int? goalBonusRuleIdWeekly;
+  final int? goalBonusRuleIdMonthly;
 
   const EmployeeModel({
     required this.id,
@@ -72,6 +89,19 @@ class EmployeeModel {
     this.goalInvoicesWeekly,
     this.goalBonusMonthly,
     this.goalBonusWeekly,
+    this.goalDailyEnabled = false,
+    this.goalWeeklyEnabled = true,
+    this.goalMonthlyEnabled = true,
+    this.goalWeightDaily,
+    this.goalPointsDaily,
+    this.goalInvoicesDaily,
+    this.goalBonusDaily,
+    this.goalRewardTypeDaily = 'fixed',
+    this.goalRewardTypeWeekly = 'fixed',
+    this.goalRewardTypeMonthly = 'fixed',
+    this.goalBonusRuleIdDaily,
+    this.goalBonusRuleIdWeekly,
+    this.goalBonusRuleIdMonthly,
   });
 
   factory EmployeeModel.fromJson(Map<String, dynamic> json) {
@@ -111,6 +141,19 @@ class EmployeeModel {
       goalInvoicesWeekly: json['goal_invoices_weekly'] as int?,
       goalBonusMonthly: (json['goal_bonus_monthly'] as num?)?.toDouble(),
       goalBonusWeekly: (json['goal_bonus_weekly'] as num?)?.toDouble(),
+      goalDailyEnabled: json['goal_daily_enabled'] as bool? ?? false,
+      goalWeeklyEnabled: json['goal_weekly_enabled'] as bool? ?? true,
+      goalMonthlyEnabled: json['goal_monthly_enabled'] as bool? ?? true,
+      goalWeightDaily: (json['goal_weight_daily'] as num?)?.toDouble(),
+      goalPointsDaily: (json['goal_points_daily'] as num?)?.toDouble(),
+      goalInvoicesDaily: json['goal_invoices_daily'] as int?,
+      goalBonusDaily: (json['goal_bonus_daily'] as num?)?.toDouble(),
+      goalRewardTypeDaily: json['goal_reward_type_daily'] as String? ?? 'fixed',
+      goalRewardTypeWeekly: json['goal_reward_type_weekly'] as String? ?? 'fixed',
+      goalRewardTypeMonthly: json['goal_reward_type_monthly'] as String? ?? 'fixed',
+      goalBonusRuleIdDaily: json['goal_bonus_rule_id_daily'] as int?,
+      goalBonusRuleIdWeekly: json['goal_bonus_rule_id_weekly'] as int?,
+      goalBonusRuleIdMonthly: json['goal_bonus_rule_id_monthly'] as int?,
     );
   }
 

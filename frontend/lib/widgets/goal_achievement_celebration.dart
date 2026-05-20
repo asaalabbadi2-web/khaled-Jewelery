@@ -31,6 +31,8 @@ class GoalAchievement {
   final String currency;
   final Map<String, dynamic> metrics;
   final DateTime achievedAt;
+  // 🗓️ الفترة: 'daily' | 'weekly' | 'monthly'
+  final String? period;
 
   const GoalAchievement({
     this.id,
@@ -43,6 +45,7 @@ class GoalAchievement {
     this.currency = 'ر.س',
     this.metrics = const {},
     required this.achievedAt,
+    this.period,
   });
 
   /// Arabic/English initials from name
@@ -66,6 +69,7 @@ class GoalAchievement {
       metrics: (json['metrics'] as Map<String, dynamic>?) ?? {},
       achievedAt: DateTime.tryParse(json['achieved_at']?.toString() ?? '') ??
           DateTime.now(),
+      period: json['goal_period']?.toString(),
     );
   }
 }

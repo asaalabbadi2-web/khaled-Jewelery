@@ -71,6 +71,7 @@ import 'sales_race_management_screen.dart';
 import 'voucher_details_screen.dart';
 import '../features/invoice/widgets/barcode_scanner_screen.dart';
 import '../widgets/pending_approvals_dialog.dart';
+import '../widgets/goal_achievement_celebration.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -155,6 +156,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   bool isLoading = true;
 
+  // 🎉 Achievement celebration
+  Timer? _achievementCheckTimer;
+  bool _isShowingAchievement = false;
+  final Set<int> _shownAchievementIds = {};
+
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
@@ -165,6 +171,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     _approvalsAutoRefreshTimer?.cancel();
     _approvalsAutoRefreshTimer = null;
+    _achievementCheckTimer?.cancel();
+    _achievementCheckTimer = null;
     super.dispose();
   }
 
@@ -255,6 +263,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       CurvedAnimation(parent: _sunController, curve: Curves.easeInOut),
     );
     _loadAllData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForAchievements();
+      _achievementCheckTimer = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) => _checkForAchievements(),
+      );
+    });
   }
 
   // ── RouteAware: fires when a pushed screen pops back to here ──
@@ -284,6 +299,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
   @override
   void didPopNext() {
+    _checkForAchievements();
     // Refresh pending approvals badge whenever we return from any sub-screen.
     _loadPendingApprovalsCount();
     // Returned from a sub-screen — refresh leaderboard but only if data is stale (>30s).
@@ -356,11 +372,83 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       debugPrint(
         '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
       );
+
+      // 🎯 فحص تحقيق الأهداف الشخصية بعد انتهاء التحميل
+      _checkPersonalGoalAchievements();
     } catch (e) {
       debugPrint('❌ خطأ في تحميل البيانات: $e');
     } finally {
       setState(() => isLoading = false);
     }
+  }
+
+  /// يتحقق من أهداف الموظف الحالي ويعرض الاحتفالية إذا تحقق هدف جديد.
+  Future<void> _checkPersonalGoalAchievements() async {
+    try {
+      final empId = context.read<AuthProvider>().currentUser?.employeeId;
+      if (empId == null) return;
+      final achievements = await api.checkEmployeeGoals(empId);
+      for (final ach in achievements) {
+        if (!mounted) return;
+        final achievement = GoalAchievement.fromJson(ach);
+        await GoalAchievementOverlay.show(context, achievement: achievement);
+        if (achievement.id != null) {
+          unawaited(api.markGoalAchievementSeen(achievement.id!));
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _checkForAchievements() async {
+    if (_isShowingAchievement || !mounted) return;
+    final auth = context.read<AuthProvider>();
+    if (!auth.isAuthenticated) return;
+    try {
+      final freshlyAchieved = await api.checkGoalProgress();
+      final unseen = await api.getUnseenAchievements();
+      final seen = <int>{};
+      final combined = <Map<String, dynamic>>[];
+      for (final a in [...freshlyAchieved, ...unseen]) {
+        final id = a['id'] as int?;
+        if (id != null && !_shownAchievementIds.contains(id) && seen.add(id)) {
+          combined.add(a);
+        }
+      }
+      for (final data in combined) {
+        if (!mounted) break;
+        await _showAchievement(GoalAchievement.fromJson(data));
+      }
+    } catch (e) {
+      debugPrint('❌ Achievement check failed: $e');
+    }
+  }
+
+  Future<void> _showAchievement(GoalAchievement achievement) async {
+    if (!mounted) return;
+    _isShowingAchievement = true;
+    if (achievement.id != null) _shownAchievementIds.add(achievement.id!);
+    await GoalAchievementOverlay.show(
+      context,
+      achievement: achievement,
+      isArabic: widget.isArabic,
+      onDismiss: () {
+        if (achievement.id != null) {
+          api.markAchievementSeen(achievement.id!);
+        }
+      },
+      onViewDetails: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => BonusManagementScreen(
+              api: api,
+              isArabic: widget.isArabic,
+            ),
+          ),
+        );
+      },
+    );
+    _isShowingAchievement = false;
   }
 
   Future<void> _loadLeaderboard({String? period}) async {
@@ -2251,11 +2339,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       ? (goalCurrentValue / goalTargetValue).clamp(0.0, 1.0)
       : targetProgress.clamp(0.0, 1.0);
     final isGoalAchieved =
-      (goalCurrentValue != null &&
-        goalTargetValue != null &&
-        goalTargetValue > 0 &&
-        goalCurrentValue >= goalTargetValue) ||
-      targetProgress >= 0.9999;
+      goalCurrentValue != null &&
+      goalTargetValue != null &&
+      goalTargetValue > 0 &&
+      goalCurrentValue >= goalTargetValue;
     final Color goalColor = isGoalAchieved
         ? AppColors.success
       : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);
