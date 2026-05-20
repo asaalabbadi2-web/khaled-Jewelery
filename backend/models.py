@@ -3002,27 +3002,18 @@ class Employee(db.Model):
     goal_points_weekly   = db.Column(db.Float,   nullable=True)
     goal_invoices_monthly = db.Column(db.Integer, nullable=True)
     goal_invoices_weekly  = db.Column(db.Integer, nullable=True)
-    # 💰 مبلغ المكافأة المباشرة عند تحقيق الهدف (بدون الحاجة لـ BonusRule)
-    goal_bonus_monthly   = db.Column(db.Float, nullable=True)   # ر.س
-    goal_bonus_weekly    = db.Column(db.Float, nullable=True)   # ر.س
-
-    # 🎛️ تفعيل/تعطيل الاحتفالية لكل فترة بشكل مستقل
-    goal_daily_enabled   = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
-    goal_weekly_enabled  = db.Column(db.Boolean, default=True,  nullable=False, server_default='1')
-    goal_monthly_enabled = db.Column(db.Boolean, default=True,  nullable=False, server_default='1')
-
-    # 📅 هدف يومي (جديد — مستقل عن الأسبوعي/الشهري)
-    goal_weight_daily    = db.Column(db.Float,   nullable=True)
-    goal_points_daily    = db.Column(db.Float,   nullable=True)
-    goal_invoices_daily  = db.Column(db.Integer, nullable=True)
-    goal_bonus_daily     = db.Column(db.Float,   nullable=True)   # ر.س ثابتة
-
-    # 🏆 نوع المكافأة لكل فترة: 'fixed' (مبلغ ثابت) | 'rule' (مرتبط بشرط مكافأة)
+    goal_bonus_monthly    = db.Column(db.Float,   nullable=True)
+    goal_bonus_weekly     = db.Column(db.Float,   nullable=True)
+    goal_monthly_enabled  = db.Column(db.Boolean, default=True,  nullable=True)
+    goal_weekly_enabled   = db.Column(db.Boolean, default=True,  nullable=True)
+    goal_daily_enabled    = db.Column(db.Boolean, default=False, nullable=True)
+    goal_weight_daily     = db.Column(db.Float,   nullable=True)
+    goal_points_daily     = db.Column(db.Float,   nullable=True)
+    goal_invoices_daily   = db.Column(db.Integer, nullable=True)
+    goal_bonus_daily      = db.Column(db.Float,   nullable=True)
     goal_reward_type_daily   = db.Column(db.String(20), default='fixed', nullable=True)
     goal_reward_type_weekly  = db.Column(db.String(20), default='fixed', nullable=True)
     goal_reward_type_monthly = db.Column(db.String(20), default='fixed', nullable=True)
-
-    # 🔗 ربط بـ BonusRule بديلاً عن المبلغ الثابت
     goal_bonus_rule_id_daily   = db.Column(db.Integer, db.ForeignKey('bonus_rule.id'), nullable=True)
     goal_bonus_rule_id_weekly  = db.Column(db.Integer, db.ForeignKey('bonus_rule.id'), nullable=True)
     goal_bonus_rule_id_monthly = db.Column(db.Integer, db.ForeignKey('bonus_rule.id'), nullable=True)
@@ -3071,20 +3062,16 @@ class Employee(db.Model):
             'goal_invoices_weekly':  self.goal_invoices_weekly,
             'goal_bonus_monthly':    self.goal_bonus_monthly,
             'goal_bonus_weekly':     self.goal_bonus_weekly,
-            # 🎛️ تفعيل/تعطيل
-            'goal_daily_enabled':    bool(self.goal_daily_enabled),
-            'goal_weekly_enabled':   bool(self.goal_weekly_enabled),
-            'goal_monthly_enabled':  bool(self.goal_monthly_enabled),
-            # 📅 يومي
+            'goal_monthly_enabled':  self.goal_monthly_enabled,
+            'goal_weekly_enabled':   self.goal_weekly_enabled,
+            'goal_daily_enabled':    self.goal_daily_enabled,
             'goal_weight_daily':     self.goal_weight_daily,
             'goal_points_daily':     self.goal_points_daily,
             'goal_invoices_daily':   self.goal_invoices_daily,
             'goal_bonus_daily':      self.goal_bonus_daily,
-            # 🏆 نوع المكافأة
-            'goal_reward_type_daily':   self.goal_reward_type_daily   or 'fixed',
-            'goal_reward_type_weekly':  self.goal_reward_type_weekly  or 'fixed',
-            'goal_reward_type_monthly': self.goal_reward_type_monthly or 'fixed',
-            # 🔗 ربط BonusRule
+            'goal_reward_type_daily':    self.goal_reward_type_daily,
+            'goal_reward_type_weekly':   self.goal_reward_type_weekly,
+            'goal_reward_type_monthly':  self.goal_reward_type_monthly,
             'goal_bonus_rule_id_daily':   self.goal_bonus_rule_id_daily,
             'goal_bonus_rule_id_weekly':  self.goal_bonus_rule_id_weekly,
             'goal_bonus_rule_id_monthly': self.goal_bonus_rule_id_monthly,
@@ -4394,9 +4381,6 @@ class GoalAchievement(db.Model):
     achieved_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
     seen_by_user = db.Column(db.Boolean, default=False, nullable=False, index=True)
     seen_at = db.Column(db.DateTime, nullable=True)
-    # 🗓️ مفتاح الفترة لمنع التكرار: e.g. "daily_2026-05-20", "weekly_2026-W20", "monthly_2026-05"
-    period_key  = db.Column(db.String(30), nullable=True, index=True)
-    goal_period = db.Column(db.String(20), nullable=True)  # 'daily'|'weekly'|'monthly'
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
 
     employee = db.relationship('Employee', backref=db.backref('achievements', lazy=True))
@@ -4423,8 +4407,6 @@ class GoalAchievement(db.Model):
             'achieved_at': self.achieved_at.isoformat() if self.achieved_at else None,
             'seen_by_user': bool(self.seen_by_user),
             'seen_at': self.seen_at.isoformat() if self.seen_at else None,
-            'period_key': self.period_key,
-            'goal_period': self.goal_period,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 

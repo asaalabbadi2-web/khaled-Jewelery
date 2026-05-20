@@ -537,12 +537,9 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
     final isAr = widget.isArabic;
     var currentEmployee = employee;
     var openingSalaryStatement = false;
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      barrierDismissible: true,
       builder: (context) {
         final theme = Theme.of(context);
         final textTheme = theme.textTheme;
@@ -554,24 +551,31 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
         return StatefulBuilder(
           builder: (context, setModalState) {
             final employee = currentEmployee;
-            return Padding(
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680, maxHeight: 900),
+                child: Padding(
               padding: const EdgeInsets.all(16),
               child: SingleChildScrollView(
                 controller: _scrollController,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // رأس الديالوج
                     Row(
                       children: [
                         Icon(Icons.badge, color: colorScheme.primary),
                         const SizedBox(width: 8),
-                        Text(
-                          employee.name,
-                          style: textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Text(
+                            employee.name,
+                            style: textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                        const Spacer(),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 8,
@@ -595,8 +599,15 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                             ),
                           ),
                         ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.of(context).pop(),
+                          tooltip: isAr ? 'إغلاق' : 'Close',
+                        ),
                       ],
                     ),
+                    const Divider(height: 20),
 
                     if (canManageAccounts) ...[
                       const SizedBox(height: 12),
@@ -968,6 +979,8 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                     ),
                   ],
                 ),
+              ),
+            ),
               ),
             );
           },
@@ -1650,15 +1663,26 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
 
   late String _metric;
   late TextEditingController _nameCtrl;
+  // Monthly
   late TextEditingController _monthlyCtrl;
+  late TextEditingController _bonusMonthlyCtrl;
+  String _rewardTypeMonthly = 'fixed';
+  int? _bonusRuleIdMonthly;
+  bool _monthlyEnabled = true;
+  // Weekly
   late TextEditingController _weeklyCtrl;
-  // 💰 متغيرات المكافأة
-  late bool _monthlyEnabled;
-  late bool _weeklyEnabled;
-  late TextEditingController _monthlyBonusCtrl;
-  late TextEditingController _weeklyBonusCtrl;
-  late String _monthlyRewardType;
-  late String _weeklyRewardType;
+  late TextEditingController _bonusWeeklyCtrl;
+  String _rewardTypeWeekly = 'fixed';
+  int? _bonusRuleIdWeekly;
+  bool _weeklyEnabled = true;
+  // Daily
+  late TextEditingController _dailyCtrl;
+  late TextEditingController _bonusDailyCtrl;
+  String _rewardTypeDaily = 'fixed';
+  int? _bonusRuleIdDaily;
+  bool _dailyEnabled = false;
+
+  List<Map<String, dynamic>> _bonusRules = [];
 
   static const _gold = Color(0xFFD4AF37);
 
@@ -1667,16 +1691,34 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
 
   void _init() {
     final e = widget.employee;
-    _metric      = e.goalMetric ?? 'weight';
-    _nameCtrl    = TextEditingController(text: e.goalName ?? '');
-    _monthlyCtrl = TextEditingController(text: _monthly(e)?.toString() ?? '');
-    _weeklyCtrl  = TextEditingController(text: _weekly(e)?.toString() ?? '');
-    _monthlyEnabled    = e.goalMonthlyEnabled;
-    _weeklyEnabled     = e.goalWeeklyEnabled;
-    _monthlyBonusCtrl  = TextEditingController(text: e.goalBonusMonthly?.toString() ?? '');
-    _weeklyBonusCtrl   = TextEditingController(text: e.goalBonusWeekly?.toString() ?? '');
-    _monthlyRewardType = e.goalRewardTypeMonthly ?? 'fixed';
-    _weeklyRewardType  = e.goalRewardTypeWeekly  ?? 'fixed';
+    _metric              = e.goalMetric ?? 'weight';
+    _nameCtrl            = TextEditingController(text: e.goalName ?? '');
+    _monthlyCtrl         = TextEditingController(text: _monthly(e)?.toString() ?? '');
+    _weeklyCtrl          = TextEditingController(text: _weekly(e)?.toString() ?? '');
+    _dailyCtrl           = TextEditingController(text: _daily(e)?.toString() ?? '');
+    _bonusMonthlyCtrl    = TextEditingController(text: e.goalBonusMonthly?.toString() ?? '');
+    _bonusWeeklyCtrl     = TextEditingController(text: e.goalBonusWeekly?.toString() ?? '');
+    _bonusDailyCtrl      = TextEditingController(text: e.goalBonusDaily?.toString() ?? '');
+    _monthlyEnabled      = e.goalMonthlyEnabled;
+    _weeklyEnabled       = e.goalWeeklyEnabled;
+    _dailyEnabled        = e.goalDailyEnabled;
+    _rewardTypeMonthly   = e.goalRewardTypeMonthly;
+    _rewardTypeWeekly    = e.goalRewardTypeWeekly;
+    _rewardTypeDaily     = e.goalRewardTypeDaily;
+    _bonusRuleIdMonthly  = e.goalBonusRuleIdMonthly;
+    _bonusRuleIdWeekly   = e.goalBonusRuleIdWeekly;
+    _bonusRuleIdDaily    = e.goalBonusRuleIdDaily;
+  }
+
+  Future<void> _loadBonusRules() async {
+    try {
+      final rules = await widget.api.getBonusRules(isActive: true);
+      if (mounted) {
+        setState(() {
+          _bonusRules = rules.whereType<Map<String, dynamic>>().toList();
+        });
+      }
+    } catch (_) {}
   }
 
   num? _monthly(EmployeeModel e) => switch (e.goalMetric ?? 'weight') {
@@ -1689,11 +1731,17 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
     'invoices' => e.goalInvoicesWeekly,
     _          => e.goalWeightWeekly,
   };
+  num? _daily(EmployeeModel e) => switch (e.goalMetric ?? 'weight') {
+    'points'   => e.goalPointsDaily,
+    'invoices' => e.goalInvoicesDaily,
+    _          => e.goalWeightDaily,
+  };
 
   @override
   void dispose() {
     _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose();
-    _monthlyBonusCtrl.dispose(); _weeklyBonusCtrl.dispose();
+    _dailyCtrl.dispose(); _bonusMonthlyCtrl.dispose();
+    _bonusWeeklyCtrl.dispose(); _bonusDailyCtrl.dispose();
     super.dispose();
   }
 
@@ -1714,37 +1762,61 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
     try {
       final monthly = double.tryParse(_monthlyCtrl.text.trim());
       final weekly  = double.tryParse(_weeklyCtrl.text.trim());
-      final monthlyBonus = double.tryParse(_monthlyBonusCtrl.text.trim());
-      final weeklyBonus  = double.tryParse(_weeklyBonusCtrl.text.trim());
+      final daily   = double.tryParse(_dailyCtrl.text.trim());
       final payload = <String, dynamic>{
         'goal_metric': _metric,
         'goal_name': _nameCtrl.text.trim().isEmpty ? null : _nameCtrl.text.trim(),
+        // Targets
         if (_metric == 'weight') ...{
           'goal_weight_monthly': monthly,
           'goal_weight_weekly':  weekly,
+          'goal_weight_daily':   daily,
         } else if (_metric == 'points') ...{
           'goal_points_monthly': monthly,
           'goal_points_weekly':  weekly,
+          'goal_points_daily':   daily,
         } else ...{
           'goal_invoices_monthly': monthly?.toInt(),
           'goal_invoices_weekly':  weekly?.toInt(),
+          'goal_invoices_daily':   daily?.toInt(),
         },
-        // مكافأة تحقيق الهدف
+        // Enable/disable per period
         'goal_monthly_enabled': _monthlyEnabled,
         'goal_weekly_enabled':  _weeklyEnabled,
-        'goal_bonus_monthly': _monthlyEnabled ? monthlyBonus : null,
-        'goal_bonus_weekly':  _weeklyEnabled  ? weeklyBonus  : null,
-        'goal_reward_type_monthly': _monthlyRewardType,
-        'goal_reward_type_weekly':  _weeklyRewardType,
+        'goal_daily_enabled':   _dailyEnabled,
+        // Bonus amount (fixed)
+        'goal_bonus_monthly': double.tryParse(_bonusMonthlyCtrl.text.trim()),
+        'goal_bonus_weekly':  double.tryParse(_bonusWeeklyCtrl.text.trim()),
+        'goal_bonus_daily':   double.tryParse(_bonusDailyCtrl.text.trim()),
+        // Reward type
+        'goal_reward_type_monthly': _rewardTypeMonthly,
+        'goal_reward_type_weekly':  _rewardTypeWeekly,
+        'goal_reward_type_daily':   _rewardTypeDaily,
+        // Bonus rule IDs
+        'goal_bonus_rule_id_monthly': _bonusRuleIdMonthly,
+        'goal_bonus_rule_id_weekly':  _bonusRuleIdWeekly,
+        'goal_bonus_rule_id_daily':   _bonusRuleIdDaily,
       };
       final res = await widget.api.updateEmployeeGoals(widget.employee.id!, payload);
       final updated = EmployeeModel.fromJson(res['employee'] as Map<String, dynamic>);
       widget.onSaved(updated);
       setState(() => _editing = false);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString()), backgroundColor: Colors.red.shade700),
-      );
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: Text(widget.isArabic ? 'خطأ في الحفظ' : 'Save Error'),
+            content: Text(e.toString()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1754,7 +1826,7 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
   Widget build(BuildContext context) {
     final isAr = widget.isArabic;
     final e    = widget.employee;
-    final hasGoal = e.goalMetric != null && (_monthly(e) != null || _weekly(e) != null);
+    final hasGoal = e.goalMetric != null && (_monthly(e) != null || _weekly(e) != null || _daily(e) != null);
 
     return Card(
       elevation: 0,
@@ -1781,10 +1853,18 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              onPressed: () => setState(() {
-                if (_editing) { _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose(); _init(); }
-                _editing = !_editing;
-              }),
+              onPressed: () {
+                if (_editing) {
+                  // إلغاء
+                  _nameCtrl.dispose(); _monthlyCtrl.dispose(); _weeklyCtrl.dispose();
+                  _dailyCtrl.dispose(); _bonusMonthlyCtrl.dispose();
+                  _bonusWeeklyCtrl.dispose(); _bonusDailyCtrl.dispose();
+                  _init();
+                } else {
+                  _loadBonusRules();
+                }
+                setState(() => _editing = !_editing);
+              },
               child: Text(_editing ? (isAr ? 'إلغاء' : 'Cancel') : (isAr ? 'تعديل' : 'Edit')),
             ),
           ]),
@@ -1798,15 +1878,13 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
               Text('${_metricLabel(e.goalMetric!)}${e.goalName != null ? "  ·  ${e.goalName}" : ""}',
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
               const SizedBox(height: 6),
-              Wrap(spacing: 8, children: [
-                if (_monthly(e) != null) _chip(isAr ? 'شهري' : 'Monthly', '${_monthly(e)} ${_unit(e.goalMetric!)}'),
-                if (_weekly(e)  != null) _chip(isAr ? 'أسبوعي' : 'Weekly',  '${_weekly(e)}  ${_unit(e.goalMetric!)}'),
-                if (e.goalMonthlyEnabled && (e.goalBonusMonthly ?? 0) > 0)
-                  _chip(isAr ? 'مكافأة شهرية' : 'Monthly Bonus',
-                        '${e.goalBonusMonthly!.toStringAsFixed(0)} ${e.goalRewardTypeMonthly == "percentage" ? "%" : isAr ? "ر.س" : "SAR"}'),
-                if (e.goalWeeklyEnabled && (e.goalBonusWeekly ?? 0) > 0)
-                  _chip(isAr ? 'مكافأة أسبوعية' : 'Weekly Bonus',
-                        '${e.goalBonusWeekly!.toStringAsFixed(0)} ${e.goalRewardTypeWeekly == "percentage" ? "%" : isAr ? "ر.س" : "SAR"}'),
+              Wrap(spacing: 8, runSpacing: 4, children: [
+                if (e.goalDailyEnabled && _daily(e) != null)   _chip(isAr ? 'يومي' : 'Daily',     '${_daily(e)} ${_unit(e.goalMetric!)}'),
+                if (e.goalWeeklyEnabled && _weekly(e) != null)  _chip(isAr ? 'أسبوعي' : 'Weekly',  '${_weekly(e)} ${_unit(e.goalMetric!)}'),
+                if (e.goalMonthlyEnabled && _monthly(e) != null) _chip(isAr ? 'شهري' : 'Monthly',   '${_monthly(e)} ${_unit(e.goalMetric!)}'),
+                if ((e.goalBonusDaily ?? 0) > 0 && e.goalDailyEnabled)     _chip(isAr ? 'مكافأة/يوم' : 'Bonus/Day', '${e.goalBonusDaily} ر.س'),
+                if ((e.goalBonusWeekly ?? 0) > 0 && e.goalWeeklyEnabled)   _chip(isAr ? 'مكافأة/أسبوع' : 'Bonus/Wk', '${e.goalBonusWeekly} ر.س'),
+                if ((e.goalBonusMonthly ?? 0) > 0 && e.goalMonthlyEnabled) _chip(isAr ? 'مكافأة/شهر' : 'Bonus/Mo', '${e.goalBonusMonthly} ر.س'),
               ]),
             ],
           ],
@@ -1835,112 +1913,23 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
                 border: const OutlineInputBorder(), isDense: true,
               ),
             ),
-            const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: TextField(
-                controller: _monthlyCtrl, keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: isAr ? 'الهدف الشهري' : 'Monthly',
-                  suffixText: _unit(_metric), border: const OutlineInputBorder(), isDense: true,
-                ),
-              )),
-              const SizedBox(width: 10),
-              Expanded(child: TextField(
-                controller: _weeklyCtrl, keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: isAr ? 'الهدف الأسبوعي' : 'Weekly',
-                  suffixText: _unit(_metric), border: const OutlineInputBorder(), isDense: true,
-                ),
-              )),
-            ]),
             const SizedBox(height: 14),
-            const Divider(),
-            // ── مكافأة تحقيق الهدف ──
-            Text(
-              isAr ? 'مكافأة تحقيق الهدف' : 'Achievement Bonus',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: Color(0xFF8B6914)),
+            // ── الأهداف لكل فترة ──
+            ..._buildPeriodSection(isAr, 'monthly', isAr ? 'الهدف الشهري' : 'Monthly Goal', _monthlyCtrl, _bonusMonthlyCtrl,
+              _monthlyEnabled, (v) => setState(() => _monthlyEnabled = v),
+              _rewardTypeMonthly, (v) => setState(() => _rewardTypeMonthly = v),
+              _bonusRuleIdMonthly, (v) => setState(() => _bonusRuleIdMonthly = v),
             ),
-            const SizedBox(height: 8),
-            // ── شهري ──
-            Row(children: [
-              Switch.adaptive(
-                value: _monthlyEnabled,
-                onChanged: (v) => setState(() => _monthlyEnabled = v),
-                activeColor: _gold,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(isAr ? 'مكافأة شهرية' : 'Monthly Bonus',
-                    style: const TextStyle(fontSize: 12.5)),
-              ),
-            ]),
-            if (_monthlyEnabled) ...[
-              const SizedBox(height: 6),
-              Row(children: [
-                Expanded(child: TextField(
-                  controller: _monthlyBonusCtrl, keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'قيمة المكافأة الشهرية' : 'Monthly Bonus Amount',
-                    border: const OutlineInputBorder(), isDense: true,
-                  ),
-                )),
-                const SizedBox(width: 10),
-                Expanded(child: DropdownButtonFormField<String>(
-                  value: _monthlyRewardType,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'نوع' : 'Type',
-                    border: const OutlineInputBorder(), isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                  ),
-                  items: [
-                    DropdownMenuItem(value: 'fixed',      child: Text(isAr ? 'مبلغ ثابت' : 'Fixed')),
-                    DropdownMenuItem(value: 'percentage', child: Text(isAr ? 'نسبة %' : 'Percent %')),
-                  ],
-                  onChanged: (v) => setState(() => _monthlyRewardType = v ?? 'fixed'),
-                )),
-              ]),
-              const SizedBox(height: 8),
-            ],
-            // ── أسبوعي ──
-            Row(children: [
-              Switch.adaptive(
-                value: _weeklyEnabled,
-                onChanged: (v) => setState(() => _weeklyEnabled = v),
-                activeColor: _gold,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(isAr ? 'مكافأة أسبوعية' : 'Weekly Bonus',
-                    style: const TextStyle(fontSize: 12.5)),
-              ),
-            ]),
-            if (_weeklyEnabled) ...[
-              const SizedBox(height: 6),
-              Row(children: [
-                Expanded(child: TextField(
-                  controller: _weeklyBonusCtrl, keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'قيمة المكافأة الأسبوعية' : 'Weekly Bonus Amount',
-                    border: const OutlineInputBorder(), isDense: true,
-                  ),
-                )),
-                const SizedBox(width: 10),
-                Expanded(child: DropdownButtonFormField<String>(
-                  value: _weeklyRewardType,
-                  decoration: InputDecoration(
-                    labelText: isAr ? 'نوع' : 'Type',
-                    border: const OutlineInputBorder(), isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                  ),
-                  items: [
-                    DropdownMenuItem(value: 'fixed',      child: Text(isAr ? 'مبلغ ثابت' : 'Fixed')),
-                    DropdownMenuItem(value: 'percentage', child: Text(isAr ? 'نسبة %' : 'Percent %')),
-                  ],
-                  onChanged: (v) => setState(() => _weeklyRewardType = v ?? 'fixed'),
-                )),
-              ]),
-              const SizedBox(height: 8),
-            ],
+            ..._buildPeriodSection(isAr, 'weekly', isAr ? 'الهدف الأسبوعي' : 'Weekly Goal', _weeklyCtrl, _bonusWeeklyCtrl,
+              _weeklyEnabled, (v) => setState(() => _weeklyEnabled = v),
+              _rewardTypeWeekly, (v) => setState(() => _rewardTypeWeekly = v),
+              _bonusRuleIdWeekly, (v) => setState(() => _bonusRuleIdWeekly = v),
+            ),
+            ..._buildPeriodSection(isAr, 'daily', isAr ? 'الهدف اليومي' : 'Daily Goal', _dailyCtrl, _bonusDailyCtrl,
+              _dailyEnabled, (v) => setState(() => _dailyEnabled = v),
+              _rewardTypeDaily, (v) => setState(() => _rewardTypeDaily = v),
+              _bonusRuleIdDaily, (v) => setState(() => _bonusRuleIdDaily = v),
+            ),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
@@ -1955,6 +1944,100 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
             ),
           ],
         ]),
+      ),
+    );
+  }
+
+  List<Widget> _buildPeriodSection(
+    bool isAr,
+    String period,
+    String title,
+    TextEditingController targetCtrl,
+    TextEditingController bonusCtrl,
+    bool enabled,
+    ValueChanged<bool> onEnabledChanged,
+    String rewardType,
+    ValueChanged<String> onRewardTypeChanged,
+    int? bonusRuleId,
+    ValueChanged<int?> onRuleIdChanged,
+  ) {
+    return [
+      // تبديل تفعيل الفترة
+      SwitchListTile.adaptive(
+        value: enabled,
+        onChanged: onEnabledChanged,
+        activeColor: _gold,
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+      ),
+      if (enabled) ...[
+        // حقل الهدف
+        TextField(
+          controller: targetCtrl,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: isAr ? 'قيمة الهدف' : 'Target Value',
+            suffixText: _unit(_metric),
+            border: const OutlineInputBorder(), isDense: true,
+          ),
+        ),
+        const SizedBox(height: 8),
+        // نوع المكافأة
+        Row(children: [
+          Text(isAr ? 'المكافأة:' : 'Reward:', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(width: 8),
+          _rewardTypeBtn(isAr ? 'مبلغ ثابت' : 'Fixed', 'fixed', rewardType, onRewardTypeChanged),
+          const SizedBox(width: 6),
+          _rewardTypeBtn(isAr ? 'قاعدة مكافأة' : 'Bonus Rule', 'rule', rewardType, onRewardTypeChanged),
+        ]),
+        const SizedBox(height: 8),
+        if (rewardType == 'fixed')
+          TextField(
+            controller: bonusCtrl,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: isAr ? 'مبلغ المكافأة (ر.س)' : 'Bonus Amount (SAR)',
+              prefixIcon: const Icon(Icons.monetization_on_outlined, size: 18),
+              border: const OutlineInputBorder(), isDense: true,
+            ),
+          )
+        else
+          DropdownButtonFormField<int?>(
+            value: _bonusRules.any((r) => r['id'] == bonusRuleId) ? bonusRuleId : null,
+            decoration: InputDecoration(
+              labelText: isAr ? 'اختر قاعدة المكافأة' : 'Select Bonus Rule',
+              border: const OutlineInputBorder(), isDense: true,
+            ),
+            items: [
+              DropdownMenuItem<int?>(value: null, child: Text(isAr ? '— لا شيء —' : '— None —')),
+              ..._bonusRules.map((r) => DropdownMenuItem<int?>(
+                value: r['id'] as int?,
+                child: Text(r['name']?.toString() ?? ''),
+              )),
+            ],
+            onChanged: onRuleIdChanged,
+          ),
+        const SizedBox(height: 10),
+      ],
+    ];
+  }
+
+  Widget _rewardTypeBtn(String label, String value, String current, ValueChanged<String> onChange) {
+    final selected = current == value;
+    return GestureDetector(
+      onTap: () => onChange(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? _gold : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? _gold : Colors.grey.shade400),
+        ),
+        child: Text(label, style: TextStyle(
+          fontSize: 11.5, fontWeight: FontWeight.w600,
+          color: selected ? Colors.white : Colors.grey.shade700,
+        )),
       ),
     );
   }
