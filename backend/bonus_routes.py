@@ -1760,23 +1760,40 @@ def _calc_employee_period_performance(employee_id: int, metric: str, start: date
     from sqlalchemy import func as sqlfunc
     # نحسب فقط فواتير البيع المرحّلة (posted)
     from sqlalchemy import or_ as _or
+    from datetime import datetime as _datetime, timedelta as _timedelta
     # للنقاط: نشمل "شراء من عميل" تطابقاً مع لوحة المبيعات
     inv_types = ['بيع', 'sell', 'sale', 'شراء من عميل'] if metric == 'points' else ['بيع', 'sell', 'sale']
+    # تحويل date إلى datetime لضمان شمول فواتير كامل اليوم الأخير
+    start_dt = _datetime.combine(start, _datetime.min.time()) if not isinstance(start, _datetime) else start
+    end_dt = _datetime.combine(end + _timedelta(days=1), _datetime.min.time()) if not isinstance(end, _datetime) else end
     base_q = (
         Invoice.query
         .filter(
             Invoice.employee_id == employee_id,
             Invoice.invoice_type.in_(inv_types),
             _or(Invoice.is_posted.is_(True), Invoice.status == 'posted'),
-            Invoice.date >= start,
-            Invoice.date <= end,
+            Invoice.date >= start_dt,
+            Invoice.date < end_dt,
         )
     )
     if metric == 'invoices':
         return float(base_q.count())
     elif metric == 'points':
         result = base_q.with_entities(sqlfunc.sum(Invoice.profit_gold)).scalar()
-        return float(result or 0)
+        raw = float(result or 0)
+        # نقاط = profit_gold × points_per_gram (نفس حساب لوحة المبيعات)
+        try:
+            from models import Settings
+            s = Settings.query.first()
+            import json as _json
+            _src = s and getattr(s, 'sales_race_settings', None)
+            _ppg = 10.0
+            if _src:
+                _p = _json.loads(_src) if isinstance(_src, str) else _src
+                _ppg = max(0.001, float(_p.get('points_per_gram') or 10.0))
+        except Exception:
+            _ppg = 10.0
+        return raw * _ppg
     else:  # weight (default)
         result = base_q.with_entities(sqlfunc.sum(Invoice.total_weight)).scalar()
         return float(result or 0)

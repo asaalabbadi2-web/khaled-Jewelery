@@ -35196,6 +35196,17 @@ def check_goal_progress():
         # ── قراءة الأهداف: شخصية أولاً، ثم هدف الفريق (وزن شهري/أسبوعي) كاحتياط ──
         settings_row = _get_settings_singleton(create_if_missing=False)
 
+        # معامل تحويل النقاط: نفس ما تستخدمه لوحة المبيعات (points_per_gram)
+        _ppg = 10.0
+        try:
+            _src = settings_row and getattr(settings_row, 'sales_race_settings', None)
+            if _src:
+                _parsed = json.loads(_src) if isinstance(_src, str) else _src
+                _ppg = max(0.001, float(_parsed.get('points_per_gram') or 10.0))
+        except Exception:
+            pass
+        points_per_gram = _ppg
+
         metric = (getattr(employee, 'goal_metric', None) or 'weight').strip().lower()
         if metric not in ('weight', 'points', 'invoices'):
             metric = 'weight'
@@ -35277,7 +35288,9 @@ def check_goal_progress():
             if metric == 'invoices':
                 return float(len(invoices))
             if metric == 'points':
-                return float(sum(float(getattr(inv, 'profit_gold', 0.0) or 0.0) for inv in invoices))
+                # نقاط = profit_gold × points_per_gram (نفس حساب لوحة المبيعات)
+                raw = sum(float(getattr(inv, 'profit_gold', 0.0) or 0.0) for inv in invoices)
+                return float(raw * points_per_gram)
 
             total_w = 0.0
             for inv in invoices:
