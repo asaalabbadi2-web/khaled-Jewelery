@@ -1219,17 +1219,19 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       isAr ? ' الموارد البشرية' : ' Human Resources',
       Colors.blueGrey.shade400,
     );
-    addDestination(
-      icon: Icons.badge,
-      title: isAr ? 'الموظفين' : 'Employees',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => EmployeesScreen(api: api)),
-        );
-      },
-    );
+    if (auth.hasPermission('employees.view')) {
+      addDestination(
+        icon: Icons.badge,
+        title: isAr ? 'الموظفين' : 'Employees',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => EmployeesScreen(api: api)),
+          );
+        },
+      );
+    }
     if (auth.hasPermission('employees.bonuses')) {
       addDestination(
         icon: Icons.card_giftcard,
@@ -1259,236 +1261,264 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         _loadLeaderboard(period: _leaderboardPeriod);
       },
     );
-    addDestination(
-      icon: Icons.manage_accounts,
-      title: isAr ? 'المستخدمين' : 'Users',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => UsersScreen(api: api)),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.payments_rounded,
-      title: isAr ? 'الرواتب' : 'Payroll',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => PayrollScreen(api: api)),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.event_available,
-      title: isAr ? 'الحضور والانصراف' : 'Attendance',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AttendanceScreen(api: api)),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.analytics,
-      title: isAr ? 'تقارير الرواتب' : 'Payroll Reports',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => PayrollReportScreen(api: api)),
-        );
-      },
-    );
+    if (auth.isSystemAdmin) {
+      addDestination(
+        icon: Icons.manage_accounts,
+        title: isAr ? 'المستخدمين' : 'Users',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => UsersScreen(api: api)),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('employees.payroll')) {
+      addDestination(
+        icon: Icons.payments_rounded,
+        title: isAr ? 'الرواتب' : 'Payroll',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => PayrollScreen(api: api)),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('employees.attendance')) {
+      addDestination(
+        icon: Icons.event_available,
+        title: isAr ? 'الحضور والانصراف' : 'Attendance',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AttendanceScreen(api: api)),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('employees.payroll')) {
+      addDestination(
+        icon: Icons.analytics,
+        title: isAr ? 'تقارير الرواتب' : 'Payroll Reports',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => PayrollReportScreen(api: api)),
+          );
+        },
+      );
+    }
 
-    addDivider();
-    addSection(isAr ? 'المحاسبة' : 'Accounting', gold);
-    addDestination(
-      icon: Icons.receipt_long,
-      title: isAr ? 'السندات' : 'Vouchers',
-      color: Colors.cyan,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => VouchersListScreen()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.south,
-      title: isAr ? 'سند قبض' : 'Receipt Voucher',
-      color: Colors.green,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AddVoucherScreen(voucherType: 'receipt'),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.north,
-      title: isAr ? 'سند صرف' : 'Payment Voucher',
-      color: Colors.red,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AddVoucherScreen(voucherType: 'payment'),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.assessment,
-      title: isAr ? 'كشوفات الحسابات' : 'Account Statements',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AccountsScreen()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.book,
-      title: isAr ? 'قيود اليومية' : 'Journal Entries',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => JournalEntriesListScreen(isArabic: isAr),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.edit_note,
-      title: isAr ? 'إضافة قيد' : 'Add Entry',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AddEditJournalEntryScreen()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.repeat,
-      title: isAr ? 'القيود الدورية' : 'Recurring Entries',
-      color: Colors.purple.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RecurringTemplatesScreen(isArabic: isAr),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.menu_book,
-      title: isAr ? 'دفتر الأستاذ العام' : 'General Ledger',
-      color: Colors.amber.shade700,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => GeneralLedgerScreenV2()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.account_balance_wallet,
-      title: isAr ? 'ميزان المراجعة' : 'Trial Balance',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => TrialBalanceScreenV2()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.account_tree,
-      title: isAr ? 'شجرة الحسابات' : 'Chart of Accounts',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ChartOfAccountsScreen()),
-        );
-      },
-    );
+    if (auth.hasPermission('accounts.view') || auth.hasPermission('vouchers.view') || auth.hasPermission('journal.view')) {
+      addDivider();
+      addSection(isAr ? 'المحاسبة' : 'Accounting', gold);
+    }
+    if (auth.hasPermission('vouchers.view')) {
+      addDestination(
+        icon: Icons.receipt_long,
+        title: isAr ? 'السندات' : 'Vouchers',
+        color: Colors.cyan,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => VouchersListScreen()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.south,
+        title: isAr ? 'سند قبض' : 'Receipt Voucher',
+        color: Colors.green,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddVoucherScreen(voucherType: 'receipt'),
+            ),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.north,
+        title: isAr ? 'سند صرف' : 'Payment Voucher',
+        color: Colors.red,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddVoucherScreen(voucherType: 'payment'),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('accounts.view')) {
+      addDestination(
+        icon: Icons.assessment,
+        title: isAr ? 'كشوفات الحسابات' : 'Account Statements',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AccountsScreen()),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('journal.view')) {
+      addDestination(
+        icon: Icons.book,
+        title: isAr ? 'قيود اليومية' : 'Journal Entries',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => JournalEntriesListScreen(isArabic: isAr),
+            ),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.edit_note,
+        title: isAr ? 'إضافة قيد' : 'Add Entry',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AddEditJournalEntryScreen()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.repeat,
+        title: isAr ? 'القيود الدورية' : 'Recurring Entries',
+        color: Colors.purple.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RecurringTemplatesScreen(isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('accounts.view')) {
+      addDestination(
+        icon: Icons.menu_book,
+        title: isAr ? 'دفتر الأستاذ العام' : 'General Ledger',
+        color: Colors.amber.shade700,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => GeneralLedgerScreenV2()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.account_balance_wallet,
+        title: isAr ? 'ميزان المراجعة' : 'Trial Balance',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => TrialBalanceScreenV2()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.account_tree,
+        title: isAr ? 'شجرة الحسابات' : 'Chart of Accounts',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ChartOfAccountsScreen()),
+          );
+        },
+      );
+    }
 
-    addDestination(
-      icon: Icons.fact_check,
-      title: isAr ? 'إغلاق اليومية' : 'Shift Closing',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ShiftClosingScreen(api: api, isArabic: isAr),
-          ),
-        );
-      },
-    );
+    if (auth.hasPermission('safe_boxes.view')) {
+      addDestination(
+        icon: Icons.fact_check,
+        title: isAr ? 'إغلاق اليومية' : 'Shift Closing',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ShiftClosingScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
 
-    addDestination(
-      icon: Icons.history,
-      title: isAr ? 'سجل التدقيق' : 'Audit Log',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AuditLogScreen()),
-        );
-      },
-    );
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.history,
+        title: isAr ? 'سجل التدقيق' : 'Audit Log',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+          );
+        },
+      );
+    }
 
     addDivider();
     addSection(
       isAr ? ' الإعدادات والأدوات' : ' Settings & Tools',
       theme.hintColor,
     );
-    addDestination(
-      icon: Icons.account_balance_wallet,
-      title: isAr ? 'إدارة الخزائن' : 'Safe Boxes',
-      color: Colors.amber.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SafeBoxesScreen(balancesView: true),
-          ),
-        );
-        await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.swap_horiz,
-      title: isAr ? 'مراقبة تسوية المقاصة' : 'Clearing Settlement',
-      color: Colors.teal.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ClearingMonitorScreen()),
-        );
-        await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.credit_card,
-      title: isAr ? 'إدارة وسائل الدفع' : 'Payment Methods',
-      color: Colors.amber.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const PaymentMethodsScreenEnhanced(),
-          ),
-        );
-        await _loadAllData();
-      },
-    );
+    if (auth.hasPermission('safe_boxes.view')) {
+      addDestination(
+        icon: Icons.account_balance_wallet,
+        title: isAr ? 'إدارة الخزائن' : 'Safe Boxes',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SafeBoxesScreen(balancesView: true),
+            ),
+          );
+          await _loadAllData();
+        },
+      );
+    }
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.swap_horiz,
+        title: isAr ? 'مراقبة تسوية المقاصة' : 'Clearing Settlement',
+        color: Colors.teal.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ClearingMonitorScreen()),
+          );
+          await _loadAllData();
+        },
+      );
+    }
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.credit_card,
+        title: isAr ? 'إدارة وسائل الدفع' : 'Payment Methods',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const PaymentMethodsScreenEnhanced(),
+            ),
+          );
+          await _loadAllData();
+        },
+      );
+    }
 
     if (auth.isSystemAdmin) {
       addDestination(
@@ -1506,19 +1536,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         },
       );
     }
-    addDestination(
-      icon: Icons.account_tree,
-      title: isAr ? 'إدارة المكاتب والفروع' : 'Branches Management',
-      color: Colors.amber.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => BranchesManagementScreen(isArabic: isAr),
-          ),
-        );
-      },
-    );
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.account_tree,
+        title: isAr ? 'إدارة المكاتب والفروع' : 'Branches Management',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BranchesManagementScreen(isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
     addDestination(
       icon: Icons.monetization_on,
       title: isAr ? 'تحديث سعر الذهب' : 'Update Gold Price',
@@ -1547,39 +1579,43 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         await _loadAllData();
       },
     );
-    addDestination(
-      icon: Icons.restore,
-      title: isAr ? 'إعادة تهيئة النظام' : 'System Reset',
-      color: Colors.red.shade400,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SettingsScreenEnhanced(
-              initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-              focusEntry: SettingsEntry.systemReset,
+    if (auth.isSystemAdmin) {
+      addDestination(
+        icon: Icons.restore,
+        title: isAr ? 'إعادة تهيئة النظام' : 'System Reset',
+        color: Colors.red.shade400,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SettingsScreenEnhanced(
+                initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
+                focusEntry: SettingsEntry.systemReset,
+              ),
             ),
-          ),
-        );
-        await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.print,
-      title: isAr ? 'إعدادات الطابعة' : 'Printer Settings',
-      color: Colors.purple.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SettingsScreenEnhanced(
-              initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-              focusEntry: SettingsEntry.printerSettings,
+          );
+          await _loadAllData();
+        },
+      );
+    }
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.print,
+        title: isAr ? 'إعدادات الطابعة' : 'Printer Settings',
+        color: Colors.purple.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SettingsScreenEnhanced(
+                initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
+                focusEntry: SettingsEntry.printerSettings,
+              ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    }
     addDestination(
       icon: Icons.info_outline,
       title: isAr ? 'حول التطبيق' : 'About',
@@ -4648,8 +4684,95 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   }
 
 
+  // ─── خريطة الصلاحيات: كل مسار → الصلاحية المطلوبة ───────────────────────
+  // null  = مسموح لجميع المستخدمين المسجّلين
+  // 'ADMIN_ONLY' = مسؤول النظام فقط
+  static const Map<String, String?> _routePermissions = {
+    // فواتير
+    'invoices_list':           'invoices.view',
+    'return_invoice':          'invoices.view',
+    'return_sales':            'invoices.view',
+    'return_purchase':         'invoices.view',
+    'return_purchase_supplier':'invoices.view',
+    'posting_management':      'invoices.post',
+    // محاسبة
+    'accounts':                'accounts.view',
+    'chart_of_accounts':       'accounts.view',
+    'general_ledger':          'accounts.view',
+    'trial_balance':           'accounts.view',
+    'journal_entry':           'journal.view',
+    'journal_entries_list':    'journal.view',
+    'vouchers':                'vouchers.view',
+    'vouchers_list':           'vouchers.view',
+    'receipt_voucher':         'vouchers.view',
+    'payment_voucher':         'vouchers.view',
+    // خزائن
+    'safe_boxes':              'safe_boxes.view',
+    'shift_closing':           'safe_boxes.view',
+    // الموظفون والرواتب
+    'employees':               'employees.view',
+    'payroll':                 'employees.payroll',
+    'payroll_report':          'employees.payroll',
+    'attendance':              'employees.attendance',
+    'bonus_rules':             'employees.bonuses',
+    'calculate_bonuses':       'employees.bonuses',
+    'bonuses':                 'employees.bonuses',
+    // تقارير
+    'reports_center':          'reports.view',
+    'gold_price_history':      'reports.view',
+    // مستخدمون وإعدادات النظام
+    'users':                   'ADMIN_ONLY',
+    'system_reset':            'ADMIN_ONLY',
+    'backup_restore':          'ADMIN_ONLY',
+    // بضاعة / عملاء — مسموح لعموم الموظفين (null)
+    'sales_invoice':           null,
+    'scrap_sales':             null,
+    'scrap_purchase':          null,
+    'purchase_invoice':        null,
+    'add_customer':            null,
+    'customers_list':          null,
+    'suppliers_list':          null,
+    'add_item':                null,
+    'items_list':              null,
+    'printing_center':         null,
+    'melting_renewal':         null,
+  };
+
+  /// يتحقق من صلاحية الوصول — يعرض رسالة واضحة ويعيد false إن لم يكن مسموحاً
+  bool _checkRoutePermission(String route) {
+    final auth = context.read<AuthProvider>();
+    final required = _routePermissions[route];
+    // المسارات غير المدرجة أو التي لا تحتاج صلاحية خاصة → مسموح
+    if (required == null) return true;
+    final allowed = required == 'ADMIN_ONLY'
+        ? auth.isSystemAdmin
+        : auth.hasPermission(required);
+    if (!allowed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(children: [
+            const Icon(Icons.lock_outline, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(
+              widget.isArabic
+                  ? 'ليس لديك صلاحية لاستعراض هذا القسم'
+                  : 'You do not have permission to access this section',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            )),
+          ]),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
   // معالجة النقر على أزرار الوصول السريع
   Future<void> _handleQuickActionTap(String route) async {
+    if (!_checkRoutePermission(route)) return;
     dynamic result;
 
     switch (route) {
