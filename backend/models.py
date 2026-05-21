@@ -4378,6 +4378,11 @@ class GoalAchievement(db.Model):
     currency = db.Column(db.String(10), default='ر.س')
     metrics = db.Column(db.JSON, nullable=True)  # {points, invoices, rank, ...}
 
+    # مفتاح الفترة — يُستخدم للتحقق من التكرار (e.g. 'monthly-2026-05', 'weekly-2026-W21')
+    period_key = db.Column(db.String(30), nullable=True, index=True)
+    # نوع الفترة: 'daily' | 'weekly' | 'monthly'
+    goal_period = db.Column(db.String(20), nullable=True)
+
     achieved_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
     seen_by_user = db.Column(db.Boolean, default=False, nullable=False, index=True)
     seen_at = db.Column(db.DateTime, nullable=True)
@@ -4391,6 +4396,10 @@ class GoalAchievement(db.Model):
 
     def to_dict(self):
         emp = self.employee
+        # period_key: prefer dedicated column, fall back to metrics['period_key']
+        pk = self.period_key
+        if not pk and isinstance(self.metrics, dict):
+            pk = self.metrics.get('period_key')
         return {
             'id': self.id,
             'employee_id': self.employee_id,
@@ -4404,6 +4413,8 @@ class GoalAchievement(db.Model):
             'bonus_amount': self.bonus_amount,
             'currency': self.currency,
             'metrics': self.metrics or {},
+            'goal_period': self.goal_period,
+            'period_key': pk,
             'achieved_at': self.achieved_at.isoformat() if self.achieved_at else None,
             'seen_by_user': bool(self.seen_by_user),
             'seen_at': self.seen_at.isoformat() if self.seen_at else None,

@@ -1734,15 +1734,14 @@ def employee_bonus_summary(employee_id):
 # ==========================================
 
 def _build_period_key(period_name: str, today: date) -> str:
-    """يبني مفتاح الفترة: daily_2026-05-20 | weekly_2026-W20 | monthly_2026-05."""
+    """يبني مفتاح الفترة بصيغة موحّدة: daily-YYYY-MM-DD | weekly-YYYY-W## | monthly-YYYY-MM."""
     if period_name == 'daily':
-        return f"daily_{today.isoformat()}"
+        return f"daily-{today.isoformat()}"
     elif period_name == 'weekly':
-        # ISO week: YYYY-W##
         iso = today.isocalendar()
-        return f"weekly_{iso[0]}-W{iso[1]:02d}"
+        return f"weekly-{iso[0]}-W{iso[1]:02d}"
     else:  # monthly
-        return f"monthly_{today.year}-{today.month:02d}"
+        return f"monthly-{today.year}-{today.month:02d}"
 
 
 def _get_period_goal_target(emp: Employee, period_name: str, metric: str):
@@ -1760,12 +1759,13 @@ def _calc_employee_period_performance(employee_id: int, metric: str, start: date
     """يحسب الأداء الفعلي للموظف في الفترة المحددة من الفواتير المرحّلة."""
     from sqlalchemy import func as sqlfunc
     # نحسب فقط فواتير البيع المرحّلة (posted)
+    from sqlalchemy import or_ as _or
     base_q = (
         Invoice.query
         .filter(
             Invoice.employee_id == employee_id,
             Invoice.invoice_type.in_(['بيع', 'sell', 'sale']),
-            Invoice.status == 'posted',
+            _or(Invoice.is_posted.is_(True), Invoice.status == 'posted'),
             Invoice.date >= start,
             Invoice.date <= end,
         )
@@ -1877,10 +1877,17 @@ def check_employee_personal_goals(employee_id):
 
         period_key = _build_period_key(period_name, today)
 
+        # البحث أولاً بالعمود المخصص، ثم داخل metrics للتوافق مع السجلات القديمة
         existing = GoalAchievement.query.filter_by(
             employee_id=emp.id,
             period_key=period_key,
         ).first()
+        if not existing:
+            for a in GoalAchievement.query.filter_by(employee_id=emp.id).all():
+                m = a.metrics if isinstance(a.metrics, dict) else {}
+                if m.get('period_key') == period_key:
+                    existing = a
+                    break
 
         if existing:
             # أُنجز من قبل — أعده إذا لم يُشاهَد بعد

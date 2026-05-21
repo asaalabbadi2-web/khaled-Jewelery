@@ -383,19 +383,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   }
 
   Future<void> _checkPersonalGoalAchievements() async {
-    try {
-      final empId = context.read<AuthProvider>().currentUser?.employeeId;
-      if (empId == null) return;
-      final achievements = await api.checkEmployeeGoals(empId);
-      for (final ach in achievements) {
-        if (!mounted) return;
-        final achievement = GoalAchievement.fromJson(ach);
-        await GoalAchievementOverlay.show(context, achievement: achievement);
-        if (achievement.id != null) {
-          unawaited(api.markGoalAchievementSeen(achievement.id!));
-        }
-      }
-    } catch (_) {}
+    // يُحوَّل إلى _checkForAchievements لضمان مسار موحّد ومدار بشكل صحيح
+    await _checkForAchievements();
   }
 
   Future<void> _loadLeaderboard({String? period}) async {
@@ -516,29 +505,31 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     _isShowingAchievement = true;
     if (achievement.id != null) _shownAchievementIds.add(achievement.id!);
 
-    await GoalAchievementOverlay.show(
-      context,
-      achievement: achievement,
-      isArabic: widget.isArabic,
-      onDismiss: () {
-        if (achievement.id != null) {
-          api.markAchievementSeen(achievement.id!);
-        }
-      },
-      onViewDetails: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => BonusManagementScreen(
-              api: api,
-              isArabic: widget.isArabic,
+    try {
+      await GoalAchievementOverlay.show(
+        context,
+        achievement: achievement,
+        isArabic: widget.isArabic,
+        onDismiss: () {
+          if (achievement.id != null) {
+            api.markAchievementSeen(achievement.id!);
+          }
+        },
+        onViewDetails: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BonusManagementScreen(
+                api: api,
+                isArabic: widget.isArabic,
+              ),
             ),
-          ),
-        );
-      },
-    );
-
-    _isShowingAchievement = false;
+          );
+        },
+      );
+    } finally {
+      _isShowingAchievement = false;
+    }
   }
 
   Future<void> _loadPendingApprovalsCount() async {

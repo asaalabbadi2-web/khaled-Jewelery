@@ -35356,12 +35356,14 @@ def check_goal_progress():
 
             existing = _find_existing(period_key)
             if existing is not None:
-                # إذا كان الإنجاز موجوداً سابقاً بمكافأة صفر ثم تم ربط قاعدة/مبلغ لاحقاً
-                # صحّح المبلغ وأعد إظهاره للمستخدم مرة واحدة.
-                should_refresh_seen = (
-                    float(existing.bonus_amount or 0.0) <= 0.0 and
-                    float(bonus_amount or 0.0) > 0.0
-                )
+                # إعادة عرض الاحتفالية إذا:
+                # 1) تغيّرت المكافأة من صفر إلى قيمة
+                # 2) تغيّر الهدف مقارنةً بما هو مخزون في الإنجاز
+                existing_bonus = float(existing.bonus_amount or 0.0)
+                existing_target = float((_metrics_dict(existing.metrics)).get('target', -1) or -1)
+                bonus_changed = existing_bonus <= 0.0 and float(bonus_amount or 0.0) > 0.0
+                target_changed = existing_target >= 0 and abs(existing_target - target) > 0.001
+                should_refresh_seen = bonus_changed or target_changed
                 if should_refresh_seen:
                     existing.bonus_amount = float(bonus_amount)
                     existing.bonus_rule_id = bonus_rule_id
