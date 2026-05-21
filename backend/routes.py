@@ -35262,11 +35262,16 @@ def check_goal_progress():
 
         # ── دالة: حساب الأداء الفعلي لفترة معينة ──
         def _sold_weight(start_dt, end_dt):
+            # للنقاط: نشمل "شراء من عميل" تطابقاً مع لوحة المبيعات
+            if metric == 'points':
+                inv_types = ['بيع', 'sell', 'sale', 'شراء من عميل']
+            else:
+                inv_types = ['بيع', 'sell', 'sale']
             invoices = Invoice.query.filter(
                 or_(Invoice.is_posted.is_(True), Invoice.status == 'posted'),
                 Invoice.date >= start_dt,
                 Invoice.date < end_dt,
-                Invoice.invoice_type.in_(['بيع', 'sell', 'sale']),
+                Invoice.invoice_type.in_(inv_types),
                 Invoice.employee_id == employee_id,
             ).all()
             if metric == 'invoices':

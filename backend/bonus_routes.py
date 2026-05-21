@@ -1760,11 +1760,13 @@ def _calc_employee_period_performance(employee_id: int, metric: str, start: date
     from sqlalchemy import func as sqlfunc
     # نحسب فقط فواتير البيع المرحّلة (posted)
     from sqlalchemy import or_ as _or
+    # للنقاط: نشمل "شراء من عميل" تطابقاً مع لوحة المبيعات
+    inv_types = ['بيع', 'sell', 'sale', 'شراء من عميل'] if metric == 'points' else ['بيع', 'sell', 'sale']
     base_q = (
         Invoice.query
         .filter(
             Invoice.employee_id == employee_id,
-            Invoice.invoice_type.in_(['بيع', 'sell', 'sale']),
+            Invoice.invoice_type.in_(inv_types),
             _or(Invoice.is_posted.is_(True), Invoice.status == 'posted'),
             Invoice.date >= start,
             Invoice.date <= end,
