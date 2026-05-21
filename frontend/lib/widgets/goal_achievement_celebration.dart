@@ -352,21 +352,33 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
     widget.onDismiss?.call();
   }
 
+  /// يُنسّق مبلغ المكافأة: المبلغ الفعلي مع "+" وفاصلة الآلاف بدون اختصار K/M
+  /// مثال: 1641.5 → "+1,642"   |   382.78 → "+383"   |   100.0 → "+100"
   String _formatBonus(double value) {
-    if (value.abs() >= 1000000) {
-      return '${(value / 1000000).toStringAsFixed(1)}M';
-    } else if (value.abs() >= 1000) {
-      return '${(value / 1000).toStringAsFixed(0)}K';
+    final rounded = value.round();
+    return '+${_withThousandsSep(rounded)}';
+  }
+
+  String _withThousandsSep(int n) {
+    final s = n.abs().toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
     }
-    return value.toStringAsFixed(0);
+    return n < 0 ? '-${buf.toString()}' : buf.toString();
   }
 
   String _formatMetric(dynamic value) {
     if (value is num) {
-      if (value.abs() >= 1000) {
-        return '${(value / 1000).toStringAsFixed(1)}K';
-      }
-      return value.toStringAsFixed(value == value.toInt() ? 0 : 1);
+      final d = value.toDouble();
+      // عرض الرقم كاملاً مع فاصلة الآلاف بدون اختصار
+      final rounded = d == d.roundToDouble() ? d.toInt() : null;
+      if (rounded != null) return _withThousandsSep(rounded);
+      // له كسر → عشري واحد
+      final s = d.toStringAsFixed(1);
+      final parts = s.split('.');
+      return '${_withThousandsSep(int.parse(parts[0]))}.${parts[1]}';
     }
     return value?.toString() ?? '-';
   }
