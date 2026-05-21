@@ -1799,7 +1799,7 @@ def _calc_employee_period_performance(employee_id: int, metric: str, start: date
         return float(result or 0)
 
 
-def _calc_goal_bonus(emp: Employee, period_name: str) -> float:
+def _calc_goal_bonus(emp: Employee, period_name: str, actual: float = 0.0) -> float:
     """يحسب مبلغ المكافأة بناءً على نوع المكافأة (ثابت أو قاعدة)."""
     reward_type = getattr(emp, f'goal_reward_type_{period_name}') or 'fixed'
     if reward_type == 'rule':
@@ -1807,8 +1807,19 @@ def _calc_goal_bonus(emp: Employee, period_name: str) -> float:
         if rule_id:
             rule = BonusRule.query.get(rule_id)
             if rule:
-                # نستخدم bonus_value من القاعدة كمبلغ الاحتفالية
-                return float(getattr(rule, 'bonus_value', None) or 0)
+                bonus_type = (getattr(rule, 'bonus_type', None) or 'fixed').strip().lower()
+                bonus_val  = float(getattr(rule, 'bonus_value', None) or 0.0)
+                if bonus_type in ('points_per_unit', 'percentage_of_sales', 'per_gram', 'per_invoice'):
+                    amount = actual * bonus_val
+                else:
+                    amount = bonus_val
+                min_bonus = getattr(rule, 'min_bonus', None)
+                max_bonus = getattr(rule, 'max_bonus', None)
+                if min_bonus is not None:
+                    amount = max(amount, float(min_bonus))
+                if max_bonus is not None:
+                    amount = min(amount, float(max_bonus))
+                return amount
     # fixed أو fallback
     return float(getattr(emp, f'goal_bonus_{period_name}') or 0)
 
@@ -1920,7 +1931,7 @@ def check_employee_personal_goals(employee_id):
             continue
 
         # تحقّق الهدف!
-        bonus_amount = _calc_goal_bonus(emp, period_name)
+        bonus_amount = _calc_goal_bonus(emp, period_name, actual)
         achievement = GoalAchievement(
             employee_id=emp.id,
             goal_name=emp.goal_name or f'هدف {period_label}',

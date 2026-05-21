@@ -35243,14 +35243,20 @@ def check_goal_progress():
                     return getattr(settings_row, 'monthly_sales_target_weight', None)
             return None
 
-        def _calc_bonus_for(period_name: str):
+        def _calc_bonus_for(period_name: str, actual: float = 0.0):
             reward_type = (getattr(employee, f'goal_reward_type_{period_name}', None) or 'fixed').strip().lower()
             if reward_type == 'rule':
                 rule_id = getattr(employee, f'goal_bonus_rule_id_{period_name}', None)
                 if rule_id:
                     rule = BonusRule.query.get(rule_id)
                     if rule and bool(getattr(rule, 'is_active', True)) and rule.is_valid_for_employee(employee):
-                        amount = float(getattr(rule, 'bonus_value', None) or 0.0)
+                        bonus_type = (getattr(rule, 'bonus_type', None) or 'fixed').strip().lower()
+                        bonus_val  = float(getattr(rule, 'bonus_value', None) or 0.0)
+                        # points_per_unit / percentage_of_sales / per_gram → مضروب في الأداء
+                        if bonus_type in ('points_per_unit', 'percentage_of_sales', 'per_gram', 'per_invoice'):
+                            amount = actual * bonus_val
+                        else:
+                            amount = bonus_val
                         min_bonus = getattr(rule, 'min_bonus', None)
                         max_bonus = getattr(rule, 'max_bonus', None)
                         if min_bonus is not None:
@@ -35370,7 +35376,7 @@ def check_goal_progress():
             if actual < target:
                 continue
 
-            bonus_amount, bonus_rule_id = _calc_bonus_for(period_name)
+            bonus_amount, bonus_rule_id = _calc_bonus_for(period_name, actual)
 
             existing = _find_existing(period_key)
             if existing is not None:

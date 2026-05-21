@@ -306,8 +306,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     _loadPendingApprovalsCount();
     // بطاقة سباق الأداء: تحديث فوري عند كل عودة للشاشة الرئيسية.
     _loadLeaderboard(period: _leaderboardPeriod);
-    // فحص الأهداف الشخصية → قد تظهر احتفالية إن تحقق الهدف.
-    _checkForAchievements();
+    // فحص الأهداف الشخصية — تأخير 600ms لإفساح المجال لـ animation الـ navigation
+    // حتى لا تظهر الاحتفالية فوق ديالوج الشاشة السابقة.
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _checkForAchievements();
+    });
     // Collapse any expanded quick-action groups so the home screen
     // always opens in its compact default state after navigation.
     if (_expandedGroups.isNotEmpty) {
