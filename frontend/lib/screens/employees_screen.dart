@@ -1761,7 +1761,16 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
           _bonusRules = rules.whereType<Map<String, dynamic>>().toList();
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(widget.isArabic
+              ? 'تعذّر تحميل قواعد المكافآت: $e'
+              : 'Failed to load bonus rules: $e'),
+          backgroundColor: Colors.red.shade700,
+        ));
+      }
+    }
   }
 
   num? _monthly(EmployeeModel e) => switch (e.goalMetric ?? 'weight') {
@@ -1960,17 +1969,26 @@ class _GoalSettingsTileState extends State<_GoalSettingsTile> {
             // ── الأهداف لكل فترة ──
             ..._buildPeriodSection(isAr, 'monthly', isAr ? 'الهدف الشهري' : 'Monthly Goal', _monthlyCtrl, _bonusMonthlyCtrl,
               _monthlyEnabled, (v) => setState(() => _monthlyEnabled = v),
-              _rewardTypeMonthly, (v) => setState(() => _rewardTypeMonthly = v),
+              _rewardTypeMonthly, (v) {
+                setState(() => _rewardTypeMonthly = v);
+                if (v == 'rule' && _bonusRules.isEmpty) _loadBonusRules();
+              },
               _bonusRuleIdMonthly, (v) => setState(() => _bonusRuleIdMonthly = v),
             ),
             ..._buildPeriodSection(isAr, 'weekly', isAr ? 'الهدف الأسبوعي' : 'Weekly Goal', _weeklyCtrl, _bonusWeeklyCtrl,
               _weeklyEnabled, (v) => setState(() => _weeklyEnabled = v),
-              _rewardTypeWeekly, (v) => setState(() => _rewardTypeWeekly = v),
+              _rewardTypeWeekly, (v) {
+                setState(() => _rewardTypeWeekly = v);
+                if (v == 'rule' && _bonusRules.isEmpty) _loadBonusRules();
+              },
               _bonusRuleIdWeekly, (v) => setState(() => _bonusRuleIdWeekly = v),
             ),
             ..._buildPeriodSection(isAr, 'daily', isAr ? 'الهدف اليومي' : 'Daily Goal', _dailyCtrl, _bonusDailyCtrl,
               _dailyEnabled, (v) => setState(() => _dailyEnabled = v),
-              _rewardTypeDaily, (v) => setState(() => _rewardTypeDaily = v),
+              _rewardTypeDaily, (v) {
+                setState(() => _rewardTypeDaily = v);
+                if (v == 'rule' && _bonusRules.isEmpty) _loadBonusRules();
+              },
               _bonusRuleIdDaily, (v) => setState(() => _bonusRuleIdDaily = v),
             ),
             const SizedBox(height: 12),
