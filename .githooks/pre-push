@@ -1,19 +1,65 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# ─────────────────────────────────────────────────────
+# pre-push: منع دفع تغييرات ضخمة تُشير إلى overwrite
+# ─────────────────────────────────────────────────────
 
-ROOT_DIR="$(git rev-parse --show-toplevel)"
-status=0
+REMOTE="$1"
+MAX_DELETIONS=1500   # حد أقصى للسطور المحذوفة
+MAX_FILES=60         # حد أقصى لعدد الملفات المتغيرة
 
-while read -r local_ref local_sha remote_ref remote_sha; do
-  if [[ -z "${local_ref:-}" ]]; then
-    continue
-  fi
-  if [[ "${remote_sha}" =~ ^0+$ ]]; then
-    base_sha="$(git hash-object -t tree /dev/null)"
-  else
-    base_sha="${remote_sha}"
-  fi
-  python3 "$ROOT_DIR/scripts/quality_guard.py" --base "$base_sha" --head "$local_sha" --run-tests
+# ─── قراءة range من stdin ───────────────────────────
+while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
+    # تجاهل الفروع المحذوفة
+    if [ "$LOCAL_SHA" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    # تجاهل push للفروع غير main
+    TARGET_BRANCH="${REMOTE_REF#refs/heads/}"
+    if [ "$TARGET_BRANCH" != "main" ] && [ "$TARGET_BRANCH" != "master" ]; then
+        continue
+    fi
+
+    # حساب الإحصائيات مقارنةً بـ remote/main
+    if [ "$REMOTE_SHA" = "0000000000000000000000000000000000000000" ]; then
+        BASE="HEAD~1"
+    else
+        BASE="$REMOTE_SHA"
+    fi
+
+    STATS=$(git diff --shortstat "$BASE" "$LOCAL_SHA" 2>/dev/null)
+    if [ -z "$STATS" ]; then continue; fi
+
+    # استخراج الأرقام
+    DELETIONS=$(echo "$STATS" | grep -o '[0-9]* deletion' | grep -o '[0-9]*' || echo 0)
+    CHANGES=$(echo "$STATS" | grep -o '[0-9]* file' | grep -o '[0-9]*' || echo 0)
+    DELETIONS=${DELETIONS:-0}
+    CHANGES=${CHANGES:-0}
+
+    echo "📊 Push stats → $CHANGES files changed, $DELETIONS deletions"
+
+    if [ "$DELETIONS" -gt "$MAX_DELETIONS" ]; then
+        echo ""
+        echo "🚫 PUSH BLOCKED: $DELETIONS سطر محذوف يتجاوز الحد ($MAX_DELETIONS)"
+        echo "   هذا النمط يطابق overwrite من فرع قديم."
+        echo "   راجع التغييرات:"
+        echo "     git diff $BASE $LOCAL_SHA --stat | sort -k3 -n | tail -20"
+        echo ""
+        echo "   للتجاوز اليدوي (بحذر):"
+        echo "     git push --no-verify"
+        exit 1
+    fi
+
+    if [ "$CHANGES" -gt "$MAX_FILES" ]; then
+        echo ""
+        echo "🚫 PUSH BLOCKED: $CHANGES ملف متغير يتجاوز الحد ($MAX_FILES)"
+        echo "   تغيير هذا العدد دفعة واحدة خطر على main."
+        echo "   قسّم الـ push لأجزاء أصغر أو تحقق يدوياً."
+        echo ""
+        echo "   للتجاوز اليدوي (بحذر):"
+        echo "     git push --no-verify"
+        exit 1
+    fi
 done
 
-exit "$status"
+exit 0

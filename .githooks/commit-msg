@@ -1,0 +1,53 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────
+# commit-msg: رفض رسائل commit مبهمة تُخفي overwrites
+# ─────────────────────────────────────────────────────
+
+MSG_FILE="$1"
+MSG=$(cat "$MSG_FILE")
+FIRST_LINE=$(echo "$MSG" | head -1)
+
+# رسائل محظورة — أثبتت تاريخياً أنها تُخفي overwrite
+BLOCKED_PATTERNS=(
+    "^chore: updates$"
+    "^chore: update$"
+    "^updates$"
+    "^update$"
+    "^fixes$"
+    "^fix$"
+    "^wip$"
+    "^WIP$"
+    "^temp$"
+    "^test$"
+    "^misc$"
+    "^changes$"
+    "^refactor$"
+)
+
+for PATTERN in "${BLOCKED_PATTERNS[@]}"; do
+    if echo "$FIRST_LINE" | grep -iqE "$PATTERN"; then
+        echo ""
+        echo "🚫 COMMIT BLOCKED: رسالة commit مبهمة: \"$FIRST_LINE\""
+        echo ""
+        echo "   أمثلة على رسائل واضحة:"
+        echo "     fix: correct posting_routes journal mismatch"
+        echo "     feat: add invoice currency formatter"
+        echo "     refactor: split settlement service from routes"
+        echo "     chore: update pytest.ini testpaths"
+        echo ""
+        echo "   الحد الأدنى: نوع + نقطتان + وصف (10 أحرف على الأقل)"
+        echo "   للتجاوز: git commit --no-verify"
+        exit 1
+    fi
+done
+
+# تحقق من الطول الأدنى
+if [ ${#FIRST_LINE} -lt 15 ]; then
+    echo ""
+    echo "🚫 COMMIT BLOCKED: رسالة قصيرة جداً (${#FIRST_LINE} حرف)"
+    echo "   الحد الأدنى 15 حرفاً مع وصف واضح."
+    echo "   للتجاوز: git commit --no-verify"
+    exit 1
+fi
+
+exit 0

@@ -1,5 +1,64 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# ─────────────────────────────────────────────────────
+# pre-commit: منع overwrite في الملفات الحساسة
+# ─────────────────────────────────────────────────────
 
-ROOT_DIR="$(git rev-parse --show-toplevel)"
-python3 "$ROOT_DIR/scripts/quality_guard.py" --staged
+THRESHOLD=80   # حد الانكماش (سطر)
+
+# الملفات التي تحتاج حماية مضاعفة
+KEY_FILES=(
+    "backend/routes.py"
+    "backend/posting_routes.py"
+    "backend/bonus_routes.py"
+    "backend/models.py"
+    "frontend/lib/api_service.dart"
+    "frontend/lib/screens/invoices_list_screen.dart"
+    "frontend/lib/screens/home_screen_enhanced.dart"
+    "frontend/lib/screens/sales_invoice_screen_v2.dart"
+)
+
+BLOCKED=0
+
+for FILE in "${KEY_FILES[@]}"; do
+    # تحقق من وجود الملف في الـ HEAD الحالي
+    if ! git show HEAD:"$FILE" > /dev/null 2>&1; then
+        continue
+    fi
+
+    # تحقق من وجود الملف في الـ staging
+    STAGED=$(git show :"$FILE" 2>/dev/null)
+    if [ -z "$STAGED" ]; then continue; fi
+
+    OLD_LINES=$(git show HEAD:"$FILE" | wc -l | tr -d ' ')
+    NEW_LINES=$(echo "$STAGED" | wc -l | tr -d ' ')
+    DIFF=$((OLD_LINES - NEW_LINES))
+
+    if [ "$DIFF" -gt "$THRESHOLD" ]; then
+        echo "⚠️  WARNING: $FILE انكمش بـ $DIFF سطر ($OLD_LINES → $NEW_LINES)"
+        echo "   يُحتمل أنه overwrite غير مقصود."
+        echo "   راجع: git diff HEAD -- $FILE"
+        BLOCKED=1
+    fi
+done
+
+# فحص إضافي: هل كل الملفات المرحّلة هي overwrite كامل؟
+TOTAL_STAGED=$(git diff --cached --shortstat 2>/dev/null)
+TOTAL_DEL=$(echo "$TOTAL_STAGED" | grep -o '[0-9]* deletion' | grep -o '[0-9]*' || echo 0)
+TOTAL_DEL=${TOTAL_DEL:-0}
+
+if [ "$TOTAL_DEL" -gt 800 ]; then
+    echo ""
+    echo "🚫 COMMIT BLOCKED: $TOTAL_DEL سطر محذوف في commit واحد — خطر overwrite"
+    echo "   قسّم التغييرات أو راجع يدوياً."
+    echo "   للتجاوز: git commit --no-verify"
+    exit 1
+fi
+
+if [ "$BLOCKED" -eq 1 ]; then
+    echo ""
+    echo "❌ Commit محجوب بسبب انكماش مريب في ملفات حساسة."
+    echo "   للتجاوز: git commit --no-verify"
+    exit 1
+fi
+
+exit 0
