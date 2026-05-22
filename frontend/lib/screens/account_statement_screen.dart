@@ -2579,172 +2579,531 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   }
 
   Future<void> _handleRowTap(StatementLine line, double mainKarat) async {
-    final invoiceId = _tryExtractInvoiceId(line);
-    if (invoiceId != null) {
-      await _showInvoiceQuickView(invoiceId);
-      return;
+    final refType = (line.referenceType ?? '').toLowerCase().trim();
+    final refId   = line.referenceId;
+
+    if (refType == 'invoice' && refId != null) {
+      await _showDocumentSheet(
+        title: 'فاتورة${line.referenceNumber != null ? "  #${line.referenceNumber}" : ""}',
+        icon: Icons.receipt_long,
+        future: ApiService().getInvoiceById(refId),
+        builder: _buildInvoiceContent,
+      );
+    } else if (refType == 'voucher' && refId != null) {
+      await _showDocumentSheet(
+        title: 'سند${line.referenceNumber != null ? "  #${line.referenceNumber}" : ""}',
+        icon: Icons.payments,
+        future: ApiService().getVoucher(refId),
+        builder: _buildVoucherContent,
+      );
+    } else if (refType == 'journal_entry' ||
+               (refType.isEmpty && line.journalEntryId != null)) {
+      final jeId = refId ?? line.journalEntryId!;
+      await _showDocumentSheet(
+        title: 'قيد يومية${line.entryNumber != null ? "  #${line.entryNumber}" : ""}',
+        icon: Icons.library_books,
+        future: ApiService().getJournalEntryById(jeId),
+        builder: _buildJournalEntryContent,
+      );
+    } else {
+      _showLineDetails(line, mainKarat);
     }
-    _showLineDetails(line, mainKarat);
   }
 
-  Future<void> _showInvoiceQuickView(int invoiceId) async {
-    showModalBottomSheet(
+  // ── عرض وثيقة مصدر في BottomSheet قابل للتمدد ──────────────────────────
+
+  Future<void> _showDocumentSheet({
+    required String title,
+    required IconData icon,
+    required Future<Map<String, dynamic>> future,
+    required Widget Function(Map<String, dynamic> data) builder,
+  }) {
+    return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (_) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: FutureBuilder<Map<String, dynamic>>(
-              future: ApiService().getInvoiceById(invoiceId),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 240,
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
-
-                if (snapshot.hasError || !snapshot.hasData) {
-                  return SizedBox(
-                    height: 240,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.error_outline),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'تعذر تحميل تفاصيل الفاتورة (#$invoiceId)',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text(snapshot.error.toString()),
-                      ],
-                    ),
-                  );
-                }
-
-                final invoice = snapshot.data!;
-                final items = (invoice['items'] as List?) ?? const [];
-                final invoiceType = (invoice['invoice_type'] ?? '').toString();
-                final customerName = (invoice['customer_name'] ?? '')
-                    .toString();
-                final supplierName = (invoice['supplier_name'] ?? '')
-                    .toString();
-
-                return ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.85,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.55,
+        minChildSize: 0.35,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (ctx, scrollCtrl) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          child: Material(
+            child: Column(
+              children: [
+                // ── Handle ──────────────────────────────────────────────
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                ),
+                // ── Header ─────────────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 8, 12),
+                  child: Row(
                     children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.receipt_long),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'عرض سريع للفاتورة #$invoiceId',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.of(context).pop(),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          if (invoiceType.isNotEmpty)
-                            Chip(label: Text('النوع: $invoiceType')),
-                          if (customerName.isNotEmpty && customerName != 'N/A')
-                            Chip(label: Text('العميل: $customerName')),
-                          if (supplierName.isNotEmpty && supplierName != 'N/A')
-                            Chip(label: Text('المورد: $supplierName')),
-                          Chip(label: Text('الأصناف: ${items.length}')),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      const Divider(height: 1),
-                      const SizedBox(height: 12),
+                      Icon(icon, color: app_theme.AppColors.primaryGold, size: 22),
+                      const SizedBox(width: 10),
                       Expanded(
-                        child: items.isEmpty
-                            ? const Center(child: Text('لا توجد أصناف'))
-                            : ListView.separated(
-                                itemCount: items.length,
-                                separatorBuilder: (context, index) =>
-                                    const Divider(height: 1),
-                                itemBuilder: (context, index) {
-                                  final item = items[index];
-                                  if (item is! Map) {
-                                    return ListTile(
-                                      title: Text(item.toString()),
-                                    );
-                                  }
-
-                                  final description =
-                                      (item['description'] ??
-                                              item['item_name'] ??
-                                              '')
-                                          .toString();
-                                  final karat = (item['karat'] ?? '')
-                                      .toString();
-                                  final weight = item['weight_grams'];
-                                  final weightText = (weight is num)
-                                      ? weight.toDouble().toStringAsFixed(3)
-                                      : (weight?.toString() ?? '');
-
-                                  return ListTile(
-                                    dense: true,
-                                    title: Text(
-                                      description.isEmpty
-                                          ? 'صنف #${index + 1}'
-                                          : description,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    subtitle: karat.isEmpty
-                                        ? null
-                                        : Text('عيار: $karat'),
-                                    trailing: weightText.isEmpty
-                                        ? null
-                                        : Text('$weightText جم'),
-                                  );
-                                },
-                              ),
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(ctx).pop(),
                       ),
                     ],
                   ),
-                );
-              },
+                ),
+                const Divider(height: 1),
+                // ── Content ────────────────────────────────────────────
+                Expanded(
+                  child: FutureBuilder<Map<String, dynamic>>(
+                    future: future,
+                    builder: (context, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (snap.hasError || !snap.hasData) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.error_outline, size: 40, color: Colors.red),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'تعذّر تحميل تفاصيل الوثيقة',
+                                  style: const TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  snap.error?.toString() ?? '',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+                      return SingleChildScrollView(
+                        controller: scrollCtrl,
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                        child: builder(snap.data!),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
+
+  // ── بناء محتوى الفاتورة ──────────────────────────────────────────────────
+
+  Widget _buildInvoiceContent(Map<String, dynamic> inv) {
+    final invoiceNumber = inv['invoice_number']?.toString() ?? inv['id']?.toString() ?? '—';
+    final invoiceType   = inv['invoice_type']?.toString() ?? '';
+    final date          = inv['date']?.toString().substring(0, 10) ?? '—';
+    final status        = (inv['is_posted'] == true || inv['status'] == 'posted') ? 'مُرحَّل' : 'مسودة';
+    final statusColor   = status == 'مُرحَّل' ? Colors.green : Colors.orange;
+    final customerName  = inv['customer_name']?.toString() ?? '';
+    final supplierName  = inv['supplier_name']?.toString() ?? '';
+    final total         = (inv['total'] as num?)?.toDouble() ?? 0.0;
+    final paid          = (inv['amount_paid'] as num?)?.toDouble() ?? 0.0;
+    final remaining     = total - paid;
+    final totalWeight   = (inv['total_weight'] as num?)?.toDouble();
+    final totalTax      = (inv['total_tax'] as num?)?.toDouble() ?? 0.0;
+    final postedBy      = inv['posted_by']?.toString() ?? '';
+    final notes         = inv['notes']?.toString() ?? '';
+    final items         = (inv['items'] as List?) ?? [];
+    final currency      = context.read<SettingsProvider>().currencySymbolText;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── شريط الحالة ─────────────────────────────────────────────────
+        Wrap(
+          spacing: 8, runSpacing: 6,
+          children: [
+            if (invoiceType.isNotEmpty)
+              _docChip(invoiceType, app_theme.AppColors.primaryGold),
+            _docChip('#$invoiceNumber', Colors.blueGrey),
+            _docChip(status, statusColor),
+            _docChip(date, Colors.blueGrey),
+            if (postedBy.isNotEmpty) _docChip('بواسطة: $postedBy', Colors.blueGrey),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        // ── الطرف الآخر ─────────────────────────────────────────────────
+        if (customerName.isNotEmpty && customerName != 'N/A')
+          _docRow(Icons.person_outline, 'العميل', customerName),
+        if (supplierName.isNotEmpty && supplierName != 'N/A')
+          _docRow(Icons.store_outlined, 'المورد', supplierName),
+
+        const SizedBox(height: 10),
+        const Divider(height: 1),
+        const SizedBox(height: 10),
+
+        // ── الأصناف ─────────────────────────────────────────────────────
+        Text(
+          'الأصناف (${items.length})',
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        if (items.isEmpty)
+          Text('لا توجد أصناف', style: TextStyle(color: Colors.grey.shade500))
+        else
+          ...items.map((rawItem) {
+            if (rawItem is! Map) return const SizedBox.shrink();
+            final item = Map<String, dynamic>.from(rawItem);
+            final name     = item['name']?.toString() ?? item['item_name']?.toString() ?? 'صنف';
+            final karat    = item['karat']?.toString() ?? '';
+            final weight   = (item['weight'] as num?)?.toDouble() ?? (item['weight_grams'] as num?)?.toDouble();
+            final price    = (item['price'] as num?)?.toDouble() ?? (item['unit_price'] as num?)?.toDouble();
+            final wage     = (item['wage'] as num?)?.toDouble() ?? (item['manufacturing_wage'] as num?)?.toDouble() ?? 0.0;
+            final tax      = (item['tax'] as num?)?.toDouble() ?? 0.0;
+            final lineTotal = (item['total'] as num?)?.toDouble() ?? (item['total_price'] as num?)?.toDouble();
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 10, runSpacing: 4,
+                    children: [
+                      if (karat.isNotEmpty) _infoTag('عيار', karat),
+                      if (weight != null) _infoTag('الوزن', '${weight.toStringAsFixed(3)} جم'),
+                      if (price != null) _infoTag('السعر', '${price.toStringAsFixed(2)} $currency'),
+                      if (wage > 0) _infoTag('الأجرة', '${wage.toStringAsFixed(2)} $currency'),
+                      if (tax > 0) _infoTag('الضريبة', '${tax.toStringAsFixed(2)} $currency'),
+                      if (lineTotal != null) _infoTag('الإجمالي', '${lineTotal.toStringAsFixed(2)} $currency', bold: true),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
+
+        const SizedBox(height: 10),
+        const Divider(height: 1),
+        const SizedBox(height: 10),
+
+        // ── الإجماليات ──────────────────────────────────────────────────
+        Text('الإجماليات', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+        const SizedBox(height: 8),
+        if (totalWeight != null)
+          _summaryRow('إجمالي الوزن', '${totalWeight.toStringAsFixed(3)} جم'),
+        if (totalTax > 0)
+          _summaryRow('الضريبة', '${totalTax.toStringAsFixed(2)} $currency'),
+        _summaryRow('الإجمالي الكلي', '${total.toStringAsFixed(2)} $currency', highlight: true),
+        _summaryRow('المدفوع', '${paid.toStringAsFixed(2)} $currency', color: Colors.green),
+        if (remaining.abs() > 0.01)
+          _summaryRow(
+            remaining > 0 ? 'المتبقي' : 'زيادة دفع',
+            '${remaining.abs().toStringAsFixed(2)} $currency',
+            color: remaining > 0 ? Colors.red : Colors.blue,
+          ),
+
+        if (notes.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          const Divider(height: 1),
+          const SizedBox(height: 8),
+          _docRow(Icons.notes_outlined, 'ملاحظات', notes),
+        ],
+      ],
+    );
+  }
+
+  // ── بناء محتوى السند ────────────────────────────────────────────────────
+
+  Widget _buildVoucherContent(Map<String, dynamic> v) {
+    final voucherNum = v['voucher_number']?.toString() ?? v['number']?.toString() ?? '—';
+    final type      = v['voucher_type']?.toString() ?? v['type']?.toString() ?? '';
+    final date      = v['date']?.toString().substring(0, 10) ?? '—';
+    final rawAmt    = v['amount'] ?? v['total_amount'];
+    final amount    = rawAmt is num ? rawAmt.toDouble() : double.tryParse(rawAmt?.toString() ?? '') ?? 0.0;
+    final currency  = context.read<SettingsProvider>().currencySymbolText;
+    final party     = v['party_name']?.toString() ?? v['customer_name']?.toString() ?? v['supplier_name']?.toString() ?? '';
+    final account   = v['account_name']?.toString() ?? '';
+    final ref       = v['reference_number']?.toString() ?? '';
+    final notes     = v['notes']?.toString() ?? v['description']?.toString() ?? '';
+    final createdBy = v['created_by']?.toString() ?? '';
+    final typeColor = type.contains('قبض') || type.contains('receipt') ? Colors.green : Colors.red;
+    final typeLabel = type.contains('قبض') || type.contains('receipt') ? '📥 قبض' : '📤 صرف';
+
+    final lines = (v['lines'] as List?) ?? (v['account_lines'] as List?) ?? [];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8, runSpacing: 6,
+          children: [
+            _docChip(typeLabel, typeColor),
+            if (voucherNum != '—') _docChip('#$voucherNum', Colors.blueGrey),
+            _docChip(date, Colors.blueGrey),
+            if (createdBy.isNotEmpty) _docChip('بواسطة: $createdBy', Colors.blueGrey),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        _summaryRow(
+          'المبلغ',
+          '${amount.toStringAsFixed(2)} $currency',
+          highlight: true,
+          color: typeColor,
+        ),
+        if (party.isNotEmpty)    _docRow(Icons.person_outline, 'الطرف', party),
+        if (account.isNotEmpty)  _docRow(Icons.account_balance_outlined, 'الحساب', account),
+        if (ref.isNotEmpty)      _docRow(Icons.tag_outlined, 'المرجع', ref),
+        if (notes.isNotEmpty)    _docRow(Icons.notes_outlined, 'الملاحظات', notes),
+
+        if (lines.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          const Divider(height: 1),
+          const SizedBox(height: 8),
+          Text('سطور السند', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+          const SizedBox(height: 8),
+          ...lines.map((l) {
+            if (l is! Map) return const SizedBox.shrink();
+            final acName   = l['account_name']?.toString() ?? '—';
+            final debit    = (l['debit'] as num?)?.toDouble() ?? 0.0;
+            final credit   = (l['credit'] as num?)?.toDouble() ?? 0.0;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(child: Text(acName, style: const TextStyle(fontSize: 13))),
+                  if (debit > 0) _infoTag('مدين', debit.toStringAsFixed(2), bold: true),
+                  if (credit > 0) _infoTag('دائن', credit.toStringAsFixed(2), bold: true),
+                ],
+              ),
+            );
+          }),
+        ],
+      ],
+    );
+  }
+
+  // ── بناء محتوى القيد اليومي ─────────────────────────────────────────────
+
+  Widget _buildJournalEntryContent(Map<String, dynamic> je) {
+    final entryNum   = je['entry_number']?.toString() ?? je['number']?.toString() ?? '—';
+    final date       = je['date']?.toString().substring(0, 10) ?? '—';
+    final narration  = je['narration']?.toString() ?? je['description']?.toString() ?? '';
+    final status     = je['status']?.toString() ?? '';
+    final createdBy  = je['created_by']?.toString() ?? je['posted_by']?.toString() ?? '';
+    final currency   = context.read<SettingsProvider>().currencySymbolText;
+    final lines      = (je['lines'] as List?) ?? [];
+
+    double totalDebitCash = 0, totalCreditCash = 0;
+    double totalDebitGold = 0, totalCreditGold = 0;
+    for (final l in lines) {
+      if (l is! Map) continue;
+      totalDebitCash  += (l['cash_debit']   as num?)?.toDouble() ?? 0;
+      totalCreditCash += (l['cash_credit']  as num?)?.toDouble() ?? 0;
+      totalDebitGold  += (l['debit_21k'] as num?)?.toDouble() ?? 0;
+      totalCreditGold += (l['credit_21k'] as num?)?.toDouble() ?? 0;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8, runSpacing: 6,
+          children: [
+            _docChip('قيد #$entryNum', app_theme.AppColors.primaryGold),
+            _docChip(date, Colors.blueGrey),
+            if (status.isNotEmpty) _docChip(status, Colors.blueGrey),
+            if (createdBy.isNotEmpty) _docChip('بواسطة: $createdBy', Colors.blueGrey),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        if (narration.isNotEmpty)
+          _docRow(Icons.notes_outlined, 'البيان', narration),
+
+        const SizedBox(height: 10),
+        const Divider(height: 1),
+        const SizedBox(height: 10),
+
+        // ── سطور القيد ───────────────────────────────────────────────
+        Text(
+          'سطور القيد (${lines.length})',
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        if (lines.isEmpty)
+          Text('لا توجد سطور', style: TextStyle(color: Colors.grey.shade500))
+        else
+          ...lines.map((l) {
+            if (l is! Map) return const SizedBox.shrink();
+            final acName   = l['account_name']?.toString() ?? '—';
+            final cashD    = (l['cash_debit']   as num?)?.toDouble() ?? 0;
+            final cashC    = (l['cash_credit']  as num?)?.toDouble() ?? 0;
+            final goldD    = (l['debit_21k'] as num?)?.toDouble() ?? 0;
+            final goldC    = (l['credit_21k'] as num?)?.toDouble() ?? 0;
+            final narr     = l['narration']?.toString() ?? '';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(acName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  if (narr.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(narr, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                  ],
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8, runSpacing: 4,
+                    children: [
+                      if (cashD > 0) _infoTag('نقد مدين', '${cashD.toStringAsFixed(2)} $currency', bold: true),
+                      if (cashC > 0) _infoTag('نقد دائن', '${cashC.toStringAsFixed(2)} $currency', bold: true),
+                      if (goldD > 0) _infoTag('ذهب مدين', '${goldD.toStringAsFixed(3)} جم'),
+                      if (goldC > 0) _infoTag('ذهب دائن', '${goldC.toStringAsFixed(3)} جم'),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
+
+        const SizedBox(height: 12),
+        const Divider(height: 1),
+        const SizedBox(height: 8),
+
+        // ── الميزان ──────────────────────────────────────────────────
+        Text('ميزان القيد', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+        const SizedBox(height: 6),
+        if (totalDebitCash > 0 || totalCreditCash > 0) ...[
+          _summaryRow('إجمالي نقد مدين', '${totalDebitCash.toStringAsFixed(2)} $currency'),
+          _summaryRow('إجمالي نقد دائن', '${totalCreditCash.toStringAsFixed(2)} $currency'),
+        ],
+        if (totalDebitGold > 0 || totalCreditGold > 0) ...[
+          _summaryRow('إجمالي ذهب مدين', '${totalDebitGold.toStringAsFixed(3)} جم'),
+          _summaryRow('إجمالي ذهب دائن', '${totalCreditGold.toStringAsFixed(3)} جم'),
+        ],
+      ],
+    );
+  }
+
+  // ── مساعدات العرض ────────────────────────────────────────────────────────
+
+  Widget _docChip(String label, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: color.withValues(alpha: 0.3)),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(
+        fontSize: 11.5,
+        fontWeight: FontWeight.w700,
+        color: color.withValues(alpha: 0.85),
+      ),
+    ),
+  );
+
+  Widget _docRow(IconData icon, String label, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 17, color: Colors.grey.shade500),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 72,
+          child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
+        Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+      ],
+    ),
+  );
+
+  Widget _summaryRow(String label, String value, {
+    bool highlight = false, Color? color,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: highlight ? FontWeight.w800 : FontWeight.w500,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: highlight ? FontWeight.w900 : FontWeight.w600,
+            color: color ?? (highlight ? app_theme.AppColors.primaryGold : null),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _infoTag(String label, String value, {bool bold = false}) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade100,
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: Colors.grey.shade300),
+    ),
+    child: RichText(
+      text: TextSpan(
+        style: const TextStyle(fontSize: 11.5, color: Colors.black87),
+        children: [
+          TextSpan(text: '$label: '),
+          TextSpan(
+            text: value,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
   void _showLineDetails(StatementLine line, double mainKarat) {
     showModalBottomSheet(
