@@ -462,12 +462,12 @@ class SuppliersScreenState extends State<SuppliersScreen> {
             const SizedBox(height: 6),
             Row(
               children: [
-                for (int _ki = 0; _ki < nonZeroKarats.length; _ki++) ...[
-                  if (_ki > 0) const SizedBox(width: 4),
+                for (int ki = 0; ki < nonZeroKarats.length; ki++) ...[
+                  if (ki > 0) const SizedBox(width: 4),
                   Expanded(
                     child: Builder(
                       builder: (_) {
-                        final e = nonZeroKarats[_ki];
+                        final e = nonZeroKarats[ki];
                         final isNeg = e.value < 0;
                         final chipColor = isNeg
                             ? app_theme.AppColors.error

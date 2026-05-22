@@ -278,12 +278,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       };
       const scrapTypes = {'شراء': 1, 'شراء من عميل': 1, 'مرتجع شراء': -1};
 
-      Map<String, dynamic> _empty() => {
+      Map<String, dynamic> empty() => {
         'total_value': 0.0, 'total_weight': 0.0,
         'docs': 0, 'by_user': [], 'by_karat': [],
       };
 
-      Future<Map<String, dynamic>> _fetchSummary(
+      Future<Map<String, dynamic>> fetchSummary(
         Map<String, int> types, DateTime from, DateTime to, {String? goldType}) async {
         try {
           final resp = await widget.api.getInvoices(
@@ -325,11 +325,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             'by_karat': [],
           };
         } catch (_) {
-          return _empty();
+          return empty();
         }
       }
 
-      Map<String, dynamic> _buildPeriod(Map<String, dynamic> sales,
+      Map<String, dynamic> buildPeriod(Map<String, dynamic> sales,
           Map<String, dynamic> purchases, Map<String, dynamic> scrap) => {
         'sales': sales,
         'purchases': purchases,
@@ -341,15 +341,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       final futures = <Future<Map<String, dynamic>>>[];
       for (final p in periods) {
         final bounds = periodBounds[p]!;
-        futures.add(_fetchSummary(saleTypes, bounds.start, bounds.end));
-        futures.add(_fetchSummary(purchaseTypes, bounds.start, bounds.end));
-        futures.add(_fetchSummary(scrapTypes, bounds.start, bounds.end, goldType: 'scrap'));
+        futures.add(fetchSummary(saleTypes, bounds.start, bounds.end));
+        futures.add(fetchSummary(purchaseTypes, bounds.start, bounds.end));
+        futures.add(fetchSummary(scrapTypes, bounds.start, bounds.end, goldType: 'scrap'));
       }
       final results = await Future.wait(futures);
 
       final output = <String, dynamic>{};
       for (int i = 0; i < periods.length; i++) {
-        output[periods[i]] = _buildPeriod(results[i * 3], results[i * 3 + 1], results[i * 3 + 2]);
+        output[periods[i]] = buildPeriod(results[i * 3], results[i * 3 + 1], results[i * 3 + 2]);
       }
       return output;
     } catch (e) {

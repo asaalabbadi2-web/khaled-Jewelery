@@ -567,7 +567,7 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
                           AppColors.primaryGold.withValues(alpha: 0.95),
                       tooltipPadding:
                           const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      getTooltipItem: (group, _, rod, __) {
+                      getTooltipItem: (group, _, rod, _) {
                         return BarTooltipItem(
                           _formatCurrency(rod.toY),
                           const TextStyle(

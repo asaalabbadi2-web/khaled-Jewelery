@@ -428,7 +428,7 @@ class _AlertsDialogState extends State<AlertsDialog> {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         shrinkWrap: true,
         itemCount: _alerts.length,
-        separatorBuilder: (_, __) => Divider(
+        separatorBuilder: (_, _) => Divider(
           height: 1,
           indent: 12,
           endIndent: 12,

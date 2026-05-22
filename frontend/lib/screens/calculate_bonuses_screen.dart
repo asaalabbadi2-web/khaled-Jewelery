@@ -162,12 +162,18 @@ class _AutoCalculateContentState extends State<_AutoCalculateContent> {
       setState(() {
         _results = bonuses.map((b) {
           String emp = 'غير محدد';
-          if (b['employee'] is Map) emp = b['employee']['name'] ?? emp;
-          else if (b['employee_name'] != null) emp = b['employee_name'];
+          if (b['employee'] is Map) {
+            emp = b['employee']['name'] ?? emp;
+          } else if (b['employee_name'] != null) {
+            emp = b['employee_name'];
+          }
 
           String rule = '';
-          if (b['rule'] is Map) rule = b['rule']['name'] ?? '';
-          else if (b['rule_name'] != null) rule = b['rule_name'];
+          if (b['rule'] is Map) {
+            rule = b['rule']['name'] ?? '';
+          } else if (b['rule_name'] != null) {
+            rule = b['rule_name'];
+          }
 
           return {
             'employee_name': emp,
@@ -466,7 +472,9 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
 
   @override
   void dispose() {
-    for (final w in _winners) w.dispose();
+    for (final w in _winners) {
+      w.dispose();
+    }
     _notesCtrl.dispose();
     super.dispose();
   }
@@ -503,7 +511,9 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
     try {
       final data = await widget.api.getHomeLeaderboard(period: _period, metric: _metric);
       final top3 = ((data['ranking'] as List?) ?? []).take(3).toList();
-      for (final w in _winners) w.dispose();
+      for (final w in _winners) {
+        w.dispose();
+      }
       final entries = <_WinnerEntry>[];
       for (var i = 0; i < top3.length; i++) {
         final row = top3[i] as Map;
