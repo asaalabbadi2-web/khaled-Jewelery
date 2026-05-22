@@ -981,7 +981,13 @@ def pay_bonus(bonus_id):
         
         # إذا كان الدفع عن طريق إضافة للراتب، نسجل فقط ولا ننشئ سند
         if payment_method == 'add_to_payroll':
-            bonus.mark_as_paid(f"سيتم الدفع مع الراتب")
+            # تحقق مزدوج من الحالة (يمنع double-pay عبر add_to_payroll)
+            if bonus.status == 'paid':
+                return jsonify({
+                    'success': False,
+                    'message': 'المكافأة مدفوعة مسبقاً'
+                }), 409
+            bonus.mark_as_paid('سيتم الدفع مع الراتب')
             bonus.notes = f"{bonus.notes or ''}\nسيتم إضافة المكافأة لراتب الشهر القادم"
             db.session.commit()
             
@@ -1029,7 +1035,10 @@ def pay_bonus(bonus_id):
                 return jsonify({'success': False, 'message': f'الخزينة {safe_box.name} غير مرتبطة بحساب محاسبي'}), 400
 
             treasury_name = safe_box.name
-            treasury_balance_cash = float(getattr(treasury_account, 'balance_cash', 0.0) or 0.0)
+            # قراءة الرصيد الحي من القيود (لا من الكائن المحلي القديم)
+            from services.party_live_balances import live_balances_by_account_ids as _lb
+            _live = _lb([treasury_account.id]).get(int(treasury_account.id)) or {}
+            treasury_balance_cash = round(float(_live.get('cash') or 0.0), 2)
 
         else:
             if not office_id:
@@ -1045,7 +1054,7 @@ def pay_bonus(bonus_id):
             treasury_name = office.name
             treasury_balance_cash = float(getattr(office, 'balance_cash', 0.0) or 0.0)
 
-        # التحقق من رصيد الخزينة
+        # التحقق من رصيد الخزينة (يُقرأ من القيود مباشرة لتفادي stale data)
         if treasury_balance_cash < bonus.amount:
             return jsonify({
                 'success': False,
@@ -1079,29 +1088,16 @@ def pay_bonus(bonus_id):
                 'safe_box_id': getattr(safe_box, 'id', None),
             }), 400
         
-        # إنشاء سند صرف
-        voucher_prefix = f"BPAY-{paid_date.year}-{paid_date.month:02d}"
-        latest_voucher = (
-            Voucher.query.filter(Voucher.voucher_number.like(f"{voucher_prefix}%"))
-            .order_by(Voucher.voucher_number.desc())
-            .first()
-        )
-        
-        if latest_voucher:
-            try:
-                last_seq = int(latest_voucher.voucher_number.split('-')[-1])
-                voucher_number = f"{voucher_prefix}-{last_seq + 1:04d}"
-            except (ValueError, IndexError):
-                voucher_number = f"{voucher_prefix}-0001"
-        else:
-            voucher_number = f"{voucher_prefix}-0001"
-        
-        # التحقق من عدم وجود سند بنفس الرقم
+        # إنشاء سند صرف — الرقم مرتبط بمعرف المكافأة لضمان الفردية
+        # BPAY-{bonus_id} كمعرف أساسي بدلاً من التسلسل الزمني القابل للتكرار
+        voucher_number = f"BPAY-{bonus.id}"
+
+        # التحقق من عدم وجود سند بنفس الرقم (حماية مضاعفة من double-pay)
         existing_voucher = Voucher.query.filter_by(voucher_number=voucher_number).first()
         if existing_voucher:
             return jsonify({
                 'success': False,
-                'message': f'سند الصرف موجود مسبقاً برقم {voucher_number}. لإعادة الدفع، يجب حذف السند الموجود أولاً.',
+                'message': f'سند الصرف موجود مسبقاً برقم {voucher_number}. المكافأة قد صُرفت سابقاً.',
                 'voucher_id': existing_voucher.id
             }), 409
         

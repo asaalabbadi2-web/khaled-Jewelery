@@ -69,9 +69,9 @@ class BonusCalculator:
         elif rule.bonus_type == "sales_percentage":
             amount = total_sales * (rule.bonus_value / 100)
 
-        if rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0:
             amount = max(amount, rule.min_bonus)
-        if rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0:
             amount = min(amount, rule.max_bonus)
 
         calculation_data = {
@@ -97,9 +97,9 @@ class BonusCalculator:
         elif rule.bonus_type == "fixed":
             amount = rule.bonus_value
 
-        if rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0:
             amount = max(amount, rule.min_bonus)
-        if rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0:
             amount = min(amount, rule.max_bonus)
 
         calculation_data = {
@@ -124,9 +124,9 @@ class BonusCalculator:
         elif rule.bonus_type == "fixed":
             amount = rule.bonus_value
 
-        if rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0:
             amount = max(amount, rule.min_bonus)
-        if rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0:
             amount = min(amount, rule.max_bonus)
 
         calculation_data = {
@@ -145,9 +145,9 @@ class BonusCalculator:
         elif rule.bonus_type == "fixed":
             amount = rule.bonus_value
 
-        if rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0:
             amount = max(amount, rule.min_bonus)
-        if rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0:
             amount = min(amount, rule.max_bonus)
 
         calculation_data = {"bonus_type": "fixed", "base_salary": employee.salary}
@@ -257,9 +257,9 @@ class BonusCalculator:
         elif rule.bonus_type == "profit_percentage":
             amount = target_profit * (rule.bonus_value / 100)
 
-        if rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0:
             amount = max(amount, rule.min_bonus)
-        if rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0:
             amount = min(amount, rule.max_bonus)
 
         calculation_data = {
@@ -344,9 +344,9 @@ class BonusCalculator:
         elif rule.bonus_type == "percentage":
             amount = employee.salary * (rule.bonus_value / 100)
 
-        if rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0:
             amount = max(amount, rule.min_bonus)
-        if rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0:
             amount = min(amount, rule.max_bonus)
 
         if amount <= 0:
@@ -559,9 +559,9 @@ class BonusCalculator:
         bonus_percentage = rule.bonus_value
         bonus_amount = profit_cash * (bonus_percentage / 100.0)
 
-        if rule.min_bonus and bonus_amount < rule.min_bonus:
+        if rule.min_bonus is not None and rule.min_bonus > 0 and bonus_amount < rule.min_bonus:
             bonus_amount = rule.min_bonus
-        if rule.max_bonus and bonus_amount > rule.max_bonus:
+        if rule.max_bonus is not None and rule.max_bonus > 0 and bonus_amount > rule.max_bonus:
             bonus_amount = rule.max_bonus
 
         bonus = EmployeeBonus(
