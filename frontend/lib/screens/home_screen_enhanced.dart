@@ -72,6 +72,7 @@ import 'sales_race_management_screen.dart';
 import '../features/invoice/widgets/barcode_scanner_screen.dart';
 import '../widgets/pending_approvals_dialog.dart';
 import '../widgets/goal_achievement_celebration.dart';
+import '../widgets/goal_progress_ring.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -2508,6 +2509,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final count = (row['count'] as num?)?.toInt() ?? 0;
       final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
       final purchaseAmount = (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
+      // تقدم الهدف الشخصي للموظف (null = لم يُضبط هدف)
+      final goalProgress = (row['goal_progress'] as num?)?.toDouble();
 
       final isLeader = index == 0;
       final valueColor = isLeader ? colorScheme.primary : colorScheme.secondary;
@@ -2610,11 +2613,16 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                 // Medal rank badge with crown for rank 1
                 _buildRankBadge(index, medalAccent),
                 const SizedBox(width: 8),
-                // Avatar
-                EmployeeAvatarWidget(
-                  name: name,
-                  photoBase64: photo,
-                  radius: 19,
+                // Avatar + حلقة تقدم الهدف الشخصي
+                GoalProgressRing(
+                  progress: goalProgress,
+                  avatarRadius: 19,
+                  strokeWidth: 3.0,
+                  child: EmployeeAvatarWidget(
+                    name: name,
+                    photoBase64: photo,
+                    radius: 19,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 // Employee info
@@ -3223,23 +3231,28 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            // Avatar (RTL: shows on RIGHT)
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1976D2).withValues(alpha: 0.13),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFF1976D2).withValues(alpha: 0.28)),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  meAvatarText,
-                                  style: const TextStyle(
-                                    fontFamily: 'Cairo',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 14,
-                                    color: Color(0xFF1976D2),
+                            // Avatar + حلقة تقدم الهدف (أنا)
+                            GoalProgressRing(
+                              progress: (meRow['goal_progress'] as num?)?.toDouble(),
+                              avatarRadius: 21,
+                              strokeWidth: 3.2,
+                              child: Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1976D2).withValues(alpha: 0.13),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: const Color(0xFF1976D2).withValues(alpha: 0.28)),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    meAvatarText,
+                                    style: const TextStyle(
+                                      fontFamily: 'Cairo',
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14,
+                                      color: Color(0xFF1976D2),
+                                    ),
                                   ),
                                 ),
                               ),

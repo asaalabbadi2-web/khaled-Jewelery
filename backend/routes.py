@@ -21827,10 +21827,51 @@ def get_home_leaderboard():
     ranking_raw.sort(key=lambda x: (x.get('score', 0.0), x.get('count', 0)), reverse=True)
 
     total_score = sum(float(it.get('score') or 0.0) for it in ranking_raw) or 0.0
+
+    # ── جلب بيانات الأهداف الشخصية لكل موظف (دفعة واحدة) ─────────────────
+    _ranking_ids = [it['id'] for it in ranking_raw]
+    _emp_by_id = {}
+    try:
+        _emps = Employee.query.filter(Employee.id.in_(_ranking_ids)).all()
+        _emp_by_id = {e.id: e for e in _emps}
+    except Exception:
+        pass
+
+    # خريطة: period → اسم حقل الهدف
+    _goal_attr_map = {
+        ('today',  'points'):   'goal_points_daily',
+        ('today',  'weight'):   'goal_weight_daily',
+        ('today',  'count'):    'goal_invoices_daily',
+        ('week',   'points'):   'goal_points_weekly',
+        ('week',   'weight'):   'goal_weight_weekly',
+        ('week',   'count'):    'goal_invoices_weekly',
+        ('month',  'points'):   'goal_points_monthly',
+        ('month',  'weight'):   'goal_weight_monthly',
+        ('month',  'count'):    'goal_invoices_monthly',
+    }
+    _goal_attr = _goal_attr_map.get((period, metric))
+
     ranking = []
     for it in ranking_raw:
         score_value = float(it.get('score') or 0.0)
         share = (score_value / total_score) if total_score > 0 else 0.0
+
+        # حساب تقدم الهدف الشخصي
+        goal_target = None
+        goal_progress = None
+        if _goal_attr:
+            emp = _emp_by_id.get(it['id'])
+            if emp:
+                raw_t = getattr(emp, _goal_attr, None)
+                if raw_t is not None:
+                    try:
+                        t = float(raw_t)
+                        if t > 0:
+                            goal_target = round(t, 2)
+                            goal_progress = round(min(1.0, score_value / t), 4)
+                    except Exception:
+                        pass
+
         ranking.append({
             'id': it['id'],
             'name': it['name'],
@@ -21840,6 +21881,8 @@ def get_home_leaderboard():
             'sales_amount': round(_to_float(it.get('sales_amount', 0.0), 0.0), 2),
             'purchase_amount': round(_to_float(it.get('purchase_amount', 0.0), 0.0), 2),
             'share': round(float(share), 4),
+            'goal_target': goal_target,
+            'goal_progress': goal_progress,  # 0.0–1.0 أو null إن لم يُضبط هدف
         })
 
     champion = None
