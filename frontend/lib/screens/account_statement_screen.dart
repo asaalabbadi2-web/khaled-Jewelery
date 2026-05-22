@@ -2596,6 +2596,14 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
         future: ApiService().getVoucher(refId),
         builder: _buildVoucherContent,
       );
+    } else if (refType == 'invoice_payments' && refId != null) {
+      // دفعة نقدية مرتبطة بفاتورة — نعرض الفاتورة بكامل تفاصيلها
+      await _showDocumentSheet(
+        title: 'دفعة فاتورة${line.referenceNumber != null ? "  #${line.referenceNumber}" : ""}',
+        icon: Icons.payments_outlined,
+        future: ApiService().getInvoiceById(refId),
+        builder: _buildInvoiceContent,
+      );
     } else if (refType == 'journal_entry' ||
                (refType.isEmpty && line.journalEntryId != null)) {
       final jeId = refId ?? line.journalEntryId!;
@@ -2843,65 +2851,149 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   // ── بناء محتوى السند ────────────────────────────────────────────────────
 
   Widget _buildVoucherContent(Map<String, dynamic> v) {
-    final voucherNum = v['voucher_number']?.toString() ?? v['number']?.toString() ?? '—';
-    final type      = v['voucher_type']?.toString() ?? v['type']?.toString() ?? '';
-    final date      = v['date']?.toString().substring(0, 10) ?? '—';
-    final rawAmt    = v['amount'] ?? v['total_amount'];
-    final amount    = rawAmt is num ? rawAmt.toDouble() : double.tryParse(rawAmt?.toString() ?? '') ?? 0.0;
-    final currency  = context.read<SettingsProvider>().currencySymbolText;
-    final party     = v['party_name']?.toString() ?? v['customer_name']?.toString() ?? v['supplier_name']?.toString() ?? '';
-    final account   = v['account_name']?.toString() ?? '';
-    final ref       = v['reference_number']?.toString() ?? '';
-    final notes     = v['notes']?.toString() ?? v['description']?.toString() ?? '';
-    final createdBy = v['created_by']?.toString() ?? '';
-    final typeColor = type.contains('قبض') || type.contains('receipt') ? Colors.green : Colors.red;
-    final typeLabel = type.contains('قبض') || type.contains('receipt') ? '📥 قبض' : '📤 صرف';
+    final currency   = context.read<SettingsProvider>().currencySymbolText;
+    final voucherNum = v['voucher_number']?.toString() ?? '—';
+    final type       = v['voucher_type']?.toString() ?? '';
+    final date       = (v['date']?.toString() ?? '').replaceFirst(RegExp(r'T.*'), '');
+    final amountCash = (v['amount_cash'] as num?)?.toDouble() ?? 0.0;
+    final amountGold = (v['amount_gold'] as num?)?.toDouble() ?? 0.0;
+    final description = v['description']?.toString() ?? '';
+    // notes قد يكون JSON — نتجاهله لأن البيان (description) يحمل المعلومة المفيدة
+    final createdBy  = v['created_by']?.toString() ?? '';
+    final status     = v['status']?.toString() ?? '';
+    final refType    = v['reference_type']?.toString() ?? '';
+    final refNum     = v['reference_number']?.toString() ?? '';
 
-    final lines = (v['lines'] as List?) ?? (v['account_lines'] as List?) ?? [];
+    // الطرف: عميل أو مورد
+    final customer   = v['customer'] as Map?;
+    final partyName  = v['party_name']?.toString() ??
+        customer?['name']?.toString() ?? '';
+
+    // نوع السند
+    final isReceipt = type == 'receipt' || type.contains('قبض') || type.contains('rv') || type.toLowerCase().contains('receipt');
+    final typeLabel = isReceipt ? '📥 سند قبض' : '📤 سند صرف';
+    final typeColor = isReceipt ? Colors.green : Colors.red;
+
+    // سطور الحسابات (account_lines) — الهيكل الحقيقي من الـ API
+    final accountLines = (v['account_lines'] as List?) ?? [];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── شريط المعلومات الأساسية ─────────────────────────────────────
         Wrap(
           spacing: 8, runSpacing: 6,
           children: [
             _docChip(typeLabel, typeColor),
             if (voucherNum != '—') _docChip('#$voucherNum', Colors.blueGrey),
-            _docChip(date, Colors.blueGrey),
+            if (date.isNotEmpty) _docChip(date, Colors.blueGrey),
+            if (status.isNotEmpty) _docChip(status, Colors.blueGrey),
             if (createdBy.isNotEmpty) _docChip('بواسطة: $createdBy', Colors.blueGrey),
           ],
         ),
         const SizedBox(height: 14),
 
-        _summaryRow(
-          'المبلغ',
-          '${amount.toStringAsFixed(2)} $currency',
-          highlight: true,
-          color: typeColor,
-        ),
-        if (party.isNotEmpty)    _docRow(Icons.person_outline, 'الطرف', party),
-        if (account.isNotEmpty)  _docRow(Icons.account_balance_outlined, 'الحساب', account),
-        if (ref.isNotEmpty)      _docRow(Icons.tag_outlined, 'المرجع', ref),
-        if (notes.isNotEmpty)    _docRow(Icons.notes_outlined, 'الملاحظات', notes),
+        // ── المبالغ ──────────────────────────────────────────────────────
+        if (amountCash > 0)
+          _summaryRow(
+            'المبلغ النقدي',
+            '${amountCash.toStringAsFixed(2)} $currency',
+            highlight: true, color: typeColor,
+          ),
+        if (amountGold > 0)
+          _summaryRow(
+            'المبلغ الذهبي',
+            '${amountGold.toStringAsFixed(3)} جم',
+            highlight: amountCash <= 0, color: typeColor,
+          ),
 
-        if (lines.isNotEmpty) ...[
+        // ── معلومات السند ─────────────────────────────────────────────
+        if (partyName.isNotEmpty)
+          _docRow(Icons.person_outline, 'الطرف', partyName),
+        if (description.isNotEmpty)
+          _docRow(Icons.notes_outlined, 'البيان', description),
+        if (refType.isNotEmpty && refNum.isNotEmpty)
+          _docRow(Icons.link_outlined, 'المرجع', '$refType #$refNum'),
+
+        // ── سطور الحسابات ─────────────────────────────────────────────
+        if (accountLines.isNotEmpty) ...[
           const SizedBox(height: 12),
           const Divider(height: 1),
           const SizedBox(height: 8),
-          Text('سطور السند', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+          Text(
+            'سطور السند (${accountLines.length})',
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          ),
           const SizedBox(height: 8),
-          ...lines.map((l) {
+          ...accountLines.map((l) {
             if (l is! Map) return const SizedBox.shrink();
-            final acName   = l['account_name']?.toString() ?? '—';
-            final debit    = (l['debit'] as num?)?.toDouble() ?? 0.0;
-            final credit   = (l['credit'] as num?)?.toDouble() ?? 0.0;
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+            // اسم الحساب في كائن nested
+            final acObj  = l['account'] as Map?;
+            final acName = acObj?['name']?.toString() ??
+                l['account_name']?.toString() ?? '—';
+            final lineType   = l['line_type']?.toString() ?? '';
+            final lineAmount = (l['amount'] as num?)?.toDouble() ?? 0.0;
+            final amtType    = l['amount_type']?.toString() ?? 'cash';
+            final isDebit    = lineType == 'debit';
+            final unit       = amtType == 'gold' ? 'جم' : currency;
+            final lineDesc   = l['description']?.toString() ?? '';
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: isDebit
+                    ? Colors.red.shade50
+                    : Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isDebit
+                      ? Colors.red.shade200
+                      : Colors.green.shade200,
+                ),
+              ),
               child: Row(
                 children: [
-                  Expanded(child: Text(acName, style: const TextStyle(fontSize: 13))),
-                  if (debit > 0) _infoTag('مدين', debit.toStringAsFixed(2), bold: true),
-                  if (credit > 0) _infoTag('دائن', credit.toStringAsFixed(2), bold: true),
+                  Icon(
+                    isDebit ? Icons.arrow_circle_down_outlined : Icons.arrow_circle_up_outlined,
+                    size: 18,
+                    color: isDebit ? Colors.red.shade600 : Colors.green.shade600,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(acName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                        if (lineDesc.isNotEmpty)
+                          Text(lineDesc, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                      ],
+                    ),
+                  ),
+                  Text(
+                    '${lineAmount.toStringAsFixed(amtType == 'gold' ? 3 : 2)} $unit',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                      color: isDebit ? Colors.red.shade700 : Colors.green.shade700,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isDebit ? Colors.red.shade100 : Colors.green.shade100,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      isDebit ? 'مدين' : 'دائن',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: isDebit ? Colors.red.shade700 : Colors.green.shade700,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             );
