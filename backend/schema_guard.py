@@ -713,6 +713,28 @@ def ensure_safe_box_transaction_stones_columns(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_employee_bonus_audit_columns(engine: Engine) -> None:
+    """أعمدة تدقيق الحالة لجدول employee_bonus (state machine)."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "employee_bonus",
+                [
+                    ("rejected_at",  "DATETIME",     "NULL"),
+                    ("rejected_by",  "VARCHAR(100)", "NULL"),
+                    ("paid_by",      "VARCHAR(100)", "NULL"),
+                ],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("Auto schema guard (employee_bonus audit columns) failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+
 def ensure_goal_achievement_columns(engine: Engine) -> None:
     """Add period_key / goal_period columns to goal_achievement for idempotent per-period tracking."""
     columns_added: list[str] = []

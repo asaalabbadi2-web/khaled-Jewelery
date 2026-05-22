@@ -658,15 +658,17 @@ def approve_bonus(bonus_id):
       إلى ح/ مكافآت مستحقة (2310)  دائن
     """
     try:
-        bonus = EmployeeBonus.query.get_or_404(bonus_id)
+        # with_for_update() يقفل السطر أثناء القراءة (منع double-approval في قواعد بيانات
+        # تدعم SELECT FOR UPDATE مثل PostgreSQL — في SQLite يعمل كقراءة عادية)
+        bonus = EmployeeBonus.query.with_for_update().get_or_404(bonus_id)
         data = request.get_json(silent=True) or {}
-        
+
         if bonus.status != 'pending':
             return jsonify({
                 'success': False,
-                'message': 'لا يمكن اعتماد مكافأة غير معلقة'
-            }), 400
-        
+                'message': f'لا يمكن اعتماد مكافأة بحالة "{bonus.status}"'
+            }), 409
+
         approved_by = data.get('approved_by', 'system')
         
         # البحث عن حساب مصروف المكافآت (5450)
@@ -885,9 +887,13 @@ def reject_bonus(bonus_id):
                 'message': 'لا يمكن رفض مكافأة غير معلقة'
             }), 400
         
-        reason = data.get('reason')
-        bonus.reject(reason)
-        
+        reason      = data.get('reason')
+        rejected_by = data.get('rejected_by') or data.get('approved_by', 'system')
+        try:
+            bonus.reject(reason=reason, rejected_by=rejected_by)
+        except ValueError as ve:
+            return jsonify({'success': False, 'message': str(ve)}), 409
+
         db.session.commit()
         
         return jsonify({
@@ -961,14 +967,15 @@ def pay_bonus(bonus_id):
         - created_by: اسم المستخدم (اختياري)
     """
     try:
-        bonus = EmployeeBonus.query.get_or_404(bonus_id)
+        # قفل السطر أثناء الدفع لمنع double-payment
+        bonus = EmployeeBonus.query.with_for_update().get_or_404(bonus_id)
         data = request.get_json(silent=True) or {}
-        
+
         if bonus.status != 'approved':
             return jsonify({
                 'success': False,
-                'message': 'لا يمكن دفع مكافأة غير معتمدة'
-            }), 400
+                'message': f'لا يمكن دفع مكافأة بحالة "{bonus.status}"'
+            }), 409
         
         payment_method = data.get('payment_method', 'cash')
         paid_date = datetime.strptime(data.get('paid_date'), '%Y-%m-%d').date() if data.get('paid_date') else date.today()
@@ -987,7 +994,7 @@ def pay_bonus(bonus_id):
                     'success': False,
                     'message': 'المكافأة مدفوعة مسبقاً'
                 }), 409
-            bonus.mark_as_paid('سيتم الدفع مع الراتب')
+            bonus.mark_as_paid('سيتم الدفع مع الراتب', paid_by=created_by)
             bonus.notes = f"{bonus.notes or ''}\nسيتم إضافة المكافأة لراتب الشهر القادم"
             db.session.commit()
             
@@ -1145,7 +1152,7 @@ def pay_bonus(bonus_id):
             office.balance_cash -= bonus.amount
 
         # تحديث المكافأة وربطها بالخزينة (office فقط لمسار التوافق)
-        bonus.mark_as_paid(voucher_number)
+        bonus.mark_as_paid(voucher_number, paid_by=created_by)
         if safe_box is None:
             bonus.office_id = office_id
         

@@ -4292,30 +4292,58 @@ class EmployeeBonus(db.Model):
     notes = db.Column(db.Text)
     payment_reference = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=db.func.now())
-    approved_at = db.Column(db.DateTime)
-    approved_by = db.Column(db.String(100))
-    paid_at = db.Column(db.DateTime)
-    
+    approved_at  = db.Column(db.DateTime)
+    approved_by  = db.Column(db.String(100))
+    rejected_at  = db.Column(db.DateTime)
+    rejected_by  = db.Column(db.String(100))
+    paid_at      = db.Column(db.DateTime)
+    paid_by      = db.Column(db.String(100))
+
     # ربط مع الخزينة عند الدفع
     office_id = db.Column(db.Integer, db.ForeignKey('office.id'), nullable=True)
 
     employee = db.relationship('Employee', backref=db.backref('bonuses', lazy=True))
-    rule = db.relationship('BonusRule', backref=db.backref('bonuses', lazy=True))
-    office = db.relationship('Office', backref=db.backref('bonus_payments', lazy=True))
+    rule     = db.relationship('BonusRule', backref=db.backref('bonuses', lazy=True))
+    office   = db.relationship('Office', backref=db.backref('bonus_payments', lazy=True))
 
-    def approve(self, approved_by='system'):
-        self.status = 'approved'
+    # ─── State Machine ────────────────────────────────────────────────────
+    # الانتقالات المسموحة فقط:  pending → approved | rejected
+    #                            approved → paid
+    #                            rejected, paid → لا شيء (حالات نهائية)
+    _VALID_TRANSITIONS: dict = {
+        'pending':  {'approved', 'rejected'},
+        'approved': {'paid'},
+        'rejected': set(),
+        'paid':     set(),
+    }
+
+    def _transition(self, new_status: str) -> None:
+        """يُطبّق انتقال الحالة — يُطلق ValueError على الانتقال غير المسموح."""
+        current = self.status or 'pending'
+        allowed = self._VALID_TRANSITIONS.get(current, set())
+        if new_status not in allowed:
+            raise ValueError(
+                f'انتقال غير مسموح: {current} → {new_status}. '
+                f'المسموح من هذه الحالة: {allowed or "لا شيء (حالة نهائية)"}'
+            )
+        self.status = new_status
+
+    def approve(self, approved_by: str = 'system') -> None:
+        self._transition('approved')
         self.approved_by = approved_by
         self.approved_at = datetime.now()
 
-    def reject(self, reason=None):
-        self.status = 'rejected'
+    def reject(self, reason: str = None, rejected_by: str = 'system') -> None:
+        self._transition('rejected')
+        self.rejected_by = rejected_by
+        self.rejected_at = datetime.now()
         if reason:
             self.notes = f"{self.notes or ''}\nرفض: {reason}".strip()
 
-    def mark_as_paid(self, reference=None):
-        self.status = 'paid'
-        self.paid_at = datetime.now()
+    def mark_as_paid(self, reference: str = None, paid_by: str = 'system') -> None:
+        self._transition('paid')
+        self.paid_at  = datetime.now()
+        self.paid_by  = paid_by
         if reference:
             self.payment_reference = reference
 
@@ -4333,11 +4361,14 @@ class EmployeeBonus(db.Model):
             'notes': self.notes,
             'payment_reference': self.payment_reference,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'approved_at': self.approved_at.isoformat() if self.approved_at else None,
-            'approved_by': self.approved_by,
-            'paid_at': self.paid_at.isoformat() if self.paid_at else None,
-            'office_id': self.office_id,
-            'office_name': self.office.name if self.office else None,
+            'approved_at':  self.approved_at.isoformat()  if self.approved_at  else None,
+            'approved_by':  self.approved_by,
+            'rejected_at':  self.rejected_at.isoformat()  if self.rejected_at  else None,
+            'rejected_by':  self.rejected_by,
+            'paid_at':      self.paid_at.isoformat()      if self.paid_at      else None,
+            'paid_by':      self.paid_by,
+            'office_id':    self.office_id,
+            'office_name':  self.office.name if self.office else None,
         }
         if include_employee and self.employee:
             result['employee'] = self.employee.to_dict() if hasattr(self.employee, 'to_dict') else {
