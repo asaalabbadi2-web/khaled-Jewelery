@@ -2,9 +2,13 @@
 E2E test via Flask test client — no server restart needed.
 Tests: بيع, شراء من عميل, مرتجع بيع, مرتجع شراء, COGS weight-closing
 """
+import os
 import sys
 import json
 from datetime import date
+
+# تفعيل bypass المصادقة لبيئة الاختبار حتى يعمل test client بدون token
+os.environ.setdefault('BYPASS_AUTH_FOR_DEVELOPMENT', '1')
 
 import app as flask_app
 from models import db, JournalEntryLine, JournalEntry, Account, WeightClosingOrder
