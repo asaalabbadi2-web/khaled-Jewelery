@@ -352,20 +352,32 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
     widget.onDismiss?.call();
   }
 
-  /// يُنسّق مبلغ المكافأة:
-  ///   ≥ 1,000,000 → +1.3M
-  ///   ≥ 1,000     → +1.3k
-  ///   < 1,000     → +383
+  /// يُنسّق مبلغ المكافأة بـ floor لعشري واحد في k/M
+  /// "+" يظهر فقط إذا كان الفعلي أكبر من الـ floor × الوحدة:
+  ///   1550 → +1.5k  |  1400 → 1.4k  |  2502 → +2.5k  |  2500 → 2.5k
   String _formatBonus(double value) {
-    final String num;
+    if (value <= 0) return '0';
+
+    double unitValue;
+    double divisor;
+    String suffix;
+
     if (value.abs() >= 1000000) {
-      num = '${(value / 1000000).toStringAsFixed(1)}M';
-    } else if (value.abs() >= 1000) {
-      num = '${(value / 1000).toStringAsFixed(1)}k';
+      divisor = 1000000;
+      suffix = 'M';
     } else {
-      num = value.round().toString();
+      divisor = 1000;
+      suffix = 'k';
     }
-    return '+$num';
+
+    // floor إلى عشري واحد: e.g. 1550 → 1.5، 2502 → 2.5
+    final tenths = (value / (divisor / 10)).floor(); // عدد أعشار الوحدة
+    unitValue = tenths / 10.0;
+    final threshold = unitValue * divisor;
+
+    // "+" إذا كان المبلغ أكبر من الـ threshold بفارق أكثر من دقة الفاصلة العائمة
+    final prefix = (value - threshold) > 0.001 ? '+' : '';
+    return '$prefix${unitValue.toStringAsFixed(1)}$suffix';
   }
 
   String _formatMetric(dynamic value) {
