@@ -23,12 +23,17 @@ class ClearingSettlementScreen extends StatefulWidget {
   /// العمليات المحددة للتسوية — إذا أُرسلت تُقيّد التسوية بها فقط.
   final List<int>? initialInvoicePaymentIds;
 
+  /// عدد العمليات المحددة — يُستخدم في حساب عمولة "رسوم ثابتة × عدد العمليات".
+  /// إذا لم يُرسل يُحسب من الـ API (كامل العمليات المعلقة).
+  final int? initialTxCount;
+
   const ClearingSettlementScreen({
     super.key,
     this.initialClearingSafeBoxId,
     this.initialBankSafeBoxId,
     this.initialDueAmount,
     this.initialInvoicePaymentIds,
+    this.initialTxCount,
   });
 
   @override
@@ -857,14 +862,19 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
             _recomputeFeeIfNeeded();
           }
         }
-        // Auto-fill tx count for per-transaction commission (bulk mode only)
-        if (txCountForFee != null &&
-            txCountForFee > 0 &&
+        // Auto-fill tx count for per-transaction commission (bulk mode only).
+        // إذا جاء عدد محدد من شاشة المراقبة (تسوية انتقائية) نُعطيه الأولوية
+        // على عدد الـ API الذي يعكس كامل العمليات المعلقة.
+        final effectiveTxCount = (widget.initialTxCount != null && widget.initialTxCount! > 0)
+            ? widget.initialTxCount!
+            : txCountForFee;
+        if (effectiveTxCount != null &&
+            effectiveTxCount > 0 &&
             !_feeAlreadyAppliedInInvoice) {
           final currentTxCount = int.tryParse(_txCountController.text) ?? 0;
           if (currentTxCount <= 1) {
-            _txCountController.text = txCountForFee.toString();
-            _lastTxCountText = txCountForFee.toString();
+            _txCountController.text = effectiveTxCount.toString();
+            _lastTxCountText = effectiveTxCount.toString();
             _recomputeFeeIfNeeded();
           }
         }
@@ -1275,7 +1285,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       appBar: AppBar(
         title: Text(
           widget.initialInvoicePaymentIds?.isNotEmpty == true
-              ? 'تسوية ${widget.initialInvoicePaymentIds!.length} عملية محددة'
+              ? 'تسوية ${widget.initialInvoicePaymentIds!.length} عملية (${widget.initialTxCount ?? widget.initialInvoicePaymentIds!.length} فاتورة)'
               : 'تسوية مستحقات تحصيل',
         ),
         backgroundColor: theme.AppColors.primaryGold,

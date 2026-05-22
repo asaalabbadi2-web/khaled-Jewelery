@@ -220,6 +220,8 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
           initialBankSafeBoxId: bankSafeId,
           initialDueAmount: dueAmount,
           initialInvoicePaymentIds: selectedIds,
+          // عدد العمليات المحددة لحساب عمولة "رسوم ثابتة × عدد"
+          initialTxCount: selectedIds?.length,
         ),
       ),
     );
