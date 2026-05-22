@@ -21837,47 +21837,40 @@ def get_home_leaderboard():
     except Exception:
         pass
 
-    # خريطة الأولوية: نحاول أولاً الهدف الخاص بالفترة المعروضة،
-    # ثم نرجع للهدف الشهري إن لم يُضبط هدف للفترة (مثلاً: لا يوجد هدف يومي).
-    # نُرجع النسبة الفعلية دون حد أقصى حتى يعكس الـ widget الفارق بين
-    # موظف عند 80% وآخر تجاوز 200%.
-    _goal_attrs_by_metric = {
-        'points':   [('today', 'goal_points_daily'),
-                     ('week',  'goal_points_weekly'),
-                     ('month', 'goal_points_monthly')],
-        'weight':   [('today', 'goal_weight_daily'),
-                     ('week',  'goal_weight_weekly'),
-                     ('month', 'goal_weight_monthly')],
-        'count':    [('today', 'goal_invoices_daily'),
-                     ('week',  'goal_invoices_weekly'),
-                     ('month', 'goal_invoices_monthly')],
+    # خريطة الهدف حسب الفترة والمقياس — لا احتياط بين الفترات:
+    # إذا لم يُضبط هدف لهذه الفترة تحديداً تُرجع null ولا تظهر حلقة.
+    _goal_attr_map = {
+        ('today', 'points'):  'goal_points_daily',
+        ('today', 'weight'):  'goal_weight_daily',
+        ('today', 'count'):   'goal_invoices_daily',
+        ('week',  'points'):  'goal_points_weekly',
+        ('week',  'weight'):  'goal_weight_weekly',
+        ('week',  'count'):   'goal_invoices_weekly',
+        ('month', 'points'):  'goal_points_monthly',
+        ('month', 'weight'):  'goal_weight_monthly',
+        ('month', 'count'):   'goal_invoices_monthly',
     }
-    _metric_attrs = _goal_attrs_by_metric.get(metric, [])
-    # اختر أولاً حقل الفترة الحالية، ثم المشهري كاحتياط
-    _period_attr = next((a for p, a in _metric_attrs if p == period), None)
-    _monthly_attr = next((a for p, a in _metric_attrs if p == 'month'), None)
+    _goal_attr = _goal_attr_map.get((period, metric))
 
     ranking = []
     for it in ranking_raw:
         score_value = float(it.get('score') or 0.0)
         share = (score_value / total_score) if total_score > 0 else 0.0
 
-        # حساب تقدم الهدف الشخصي
+        # تقدم الهدف — خاص بالفترة المعروضة فقط، بدون نسبة مقيّدة بـ 1.0
         goal_target = None
         goal_progress = None
-        emp = _emp_by_id.get(it['id'])
-        if emp:
-            # جرّب هدف الفترة الحالية أولاً، ثم الهدف الشهري كاحتياط
-            for attr in [a for a in [_period_attr, _monthly_attr] if a]:
-                raw_t = getattr(emp, attr, None)
+        if _goal_attr:
+            emp = _emp_by_id.get(it['id'])
+            if emp:
+                raw_t = getattr(emp, _goal_attr, None)
                 if raw_t is not None:
                     try:
                         t = float(raw_t)
                         if t > 0:
                             goal_target = round(t, 2)
-                            # بدون حد أقصى — نسبة حقيقية (قد تتجاوز 1.0)
+                            # نسبة حقيقية — قد تتجاوز 1.0 إذا تخطّى الهدف
                             goal_progress = round(score_value / t, 4)
-                            break
                     except Exception:
                         pass
 
