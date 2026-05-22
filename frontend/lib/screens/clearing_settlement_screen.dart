@@ -20,11 +20,15 @@ class ClearingSettlementScreen extends StatefulWidget {
   /// When provided, overrides the clearing balance as the cap.
   final double? initialDueAmount;
 
+  /// العمليات المحددة للتسوية — إذا أُرسلت تُقيّد التسوية بها فقط.
+  final List<int>? initialInvoicePaymentIds;
+
   const ClearingSettlementScreen({
     super.key,
     this.initialClearingSafeBoxId,
     this.initialBankSafeBoxId,
     this.initialDueAmount,
+    this.initialInvoicePaymentIds,
   });
 
   @override
@@ -1049,12 +1053,15 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     setState(() => _submitting = true);
 
     try {
-      // Collect IP IDs from pending transactions to create per-tx settlement links
-      final ipIds = _pendingTransactions
-          .map((tx) => tx['invoice_payment_id'] as int?)
-          .where((id) => id != null)
-          .cast<int>()
-          .toList();
+      // إذا وُجدت عمليات محددة من شاشة المراقبة نستخدمها مباشرة،
+      // وإلا نجمع كل IDs من قائمة الانتظار المحمّلة.
+      final ipIds = (widget.initialInvoicePaymentIds?.isNotEmpty == true)
+          ? widget.initialInvoicePaymentIds!
+          : _pendingTransactions
+              .map((tx) => tx['invoice_payment_id'] as int?)
+              .where((id) => id != null)
+              .cast<int>()
+              .toList();
 
       final res = await _api.createClearingSettlement(
         clearingSafeBoxId: clearingId,
@@ -1266,7 +1273,11 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تسوية مستحقات تحصيل'),
+        title: Text(
+          widget.initialInvoicePaymentIds?.isNotEmpty == true
+              ? 'تسوية ${widget.initialInvoicePaymentIds!.length} عملية محددة'
+              : 'تسوية مستحقات تحصيل',
+        ),
         backgroundColor: theme.AppColors.primaryGold,
         foregroundColor: isLight ? Colors.black : Colors.white,
       ),

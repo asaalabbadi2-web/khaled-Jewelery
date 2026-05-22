@@ -33,6 +33,8 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
   final Map<int, bool> _expandedBox = {};
   // safe_box_id -> loading more
   final Map<int, bool> _loadingBox = {};
+  // safe_box_id -> set of selected invoice_payment_ids
+  final Map<int, Set<int>> _selectedByBox = {};
 
   List<Map<String, dynamic>> _paymentMethods = [];
 
@@ -156,8 +158,49 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
     }
   }
 
-  Future<void> _openSettlementScreen(SafeBoxModel clearing) async {
-    // Find the linked bank safe from the matched PM
+  // ── Selection helpers ────────────────────────────────────────────────────
+
+  Set<int> _selectionFor(int safeId) =>
+      _selectedByBox.putIfAbsent(safeId, () => {});
+
+  void _toggleTx(int safeId, int txId) {
+    setState(() {
+      final sel = _selectionFor(safeId);
+      if (sel.contains(txId)) {
+        sel.remove(txId);
+      } else {
+        sel.add(txId);
+      }
+    });
+  }
+
+  void _toggleSelectAll(int safeId) {
+    final txs = _pendingByBox[safeId] ?? [];
+    final allIds = txs
+        .map((t) => t['invoice_payment_id'] as int?)
+        .whereType<int>()
+        .toSet();
+    setState(() {
+      final sel = _selectionFor(safeId);
+      if (sel.containsAll(allIds) && allIds.isNotEmpty) {
+        sel.clear(); // إلغاء تحديد الكل
+      } else {
+        sel.addAll(allIds); // تحديد الكل
+      }
+    });
+  }
+
+  double _selectedAmount(int safeId) {
+    final sel = _selectionFor(safeId);
+    final txs = _pendingByBox[safeId] ?? [];
+    return txs
+        .where((t) => sel.contains(t['invoice_payment_id'] as int?))
+        .fold(0.0, (sum, t) => sum + ((t['amount'] as num?)?.toDouble() ?? 0));
+  }
+
+  // ── Open settlement screen with optional selected IDs ────────────────────
+
+  Future<void> _openSettlementScreen(SafeBoxModel clearing, {List<int>? selectedIds}) async {
     int? bankSafeId;
     final pm = _matchedPm(clearing);
     if (pm != null) {
@@ -165,10 +208,10 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
       bankSafeId = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
     }
 
-    // Use the authoritative due_amount from the API
-    final dueAmount = (clearing.id != null)
-        ? _dueAmountByBox[clearing.id!]
-        : null;
+    // إذا كانت هناك عمليات محددة، استخدم مجموعها — وإلا استخدم المبلغ الكلي
+    final dueAmount = (selectedIds != null && selectedIds.isNotEmpty && clearing.id != null)
+        ? _selectedAmount(clearing.id!)
+        : (clearing.id != null ? _dueAmountByBox[clearing.id!] : null);
 
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -176,10 +219,15 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
           initialClearingSafeBoxId: clearing.id,
           initialBankSafeBoxId: bankSafeId,
           initialDueAmount: dueAmount,
+          initialInvoicePaymentIds: selectedIds,
         ),
       ),
     );
-    if (changed == true) await _loadData();
+    if (changed == true) {
+      // مسح التحديد بعد نجاح التسوية
+      if (clearing.id != null) _selectedByBox.remove(clearing.id);
+      await _loadData();
+    }
   }
 
   String _formatAmount(double v) => v.toStringAsFixed(2);
@@ -569,12 +617,32 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'دفعات الفواتير غير المُسوّاة (${txs.length})',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
+                      // عنوان + زر تحديد الكل
+                      Row(
+                        children: [
+                          if (txs.isNotEmpty) ...[
+                            SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: Checkbox(
+                                value: _selectionFor(sb.id!).length == txs.length && txs.isNotEmpty
+                                    ? true
+                                    : _selectionFor(sb.id!).isEmpty
+                                        ? false
+                                        : null,
+                                tristate: true,
+                                activeColor: theme.AppColors.primaryGold,
+                                onChanged: (_) => _toggleSelectAll(sb.id!),
+                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          Text(
+                            'دفعات غير مُسوّاة (${txs.length})',
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                          ),
+                        ],
                       ),
                       TextButton.icon(
                         onPressed: () async {
@@ -651,86 +719,69 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Column(
-                        children: txs.take(20).toList().asMap().entries.map((
-                          e,
-                        ) {
+                        children: txs.take(20).toList().asMap().entries.map((e) {
                           final idx = e.key;
                           final tx = e.value;
                           final amt = (tx['amount'] as num?)?.toDouble() ?? 0.0;
                           final invNum = tx['invoice_number'] ?? '—';
                           final txDate = _formatDate(tx['date']?.toString());
-                          return Container(
-                            decoration: BoxDecoration(
-                              color: idx.isEven
-                                  ? Colors.grey.shade50
-                                  : Colors.white,
-                              borderRadius: idx == 0
-                                  ? const BorderRadius.vertical(
-                                      top: Radius.circular(9),
-                                    )
-                                  : idx == txs.length - 1
-                                  ? const BorderRadius.vertical(
-                                      bottom: Radius.circular(9),
-                                    )
-                                  : null,
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 9,
+                          final txId = tx['invoice_payment_id'] as int?;
+                          final isSelected = txId != null && _selectionFor(sb.id!).contains(txId);
+                          return InkWell(
+                            onTap: txId != null ? () => _toggleTx(sb.id!, txId) : null,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? theme.AppColors.primaryGold.withValues(alpha: 0.07)
+                                    : idx.isEven ? Colors.grey.shade50 : Colors.white,
+                                borderRadius: idx == 0
+                                    ? const BorderRadius.vertical(top: Radius.circular(9))
+                                    : idx == txs.length - 1
+                                        ? const BorderRadius.vertical(bottom: Radius.circular(9))
+                                        : null,
                               ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 28,
-                                    height: 28,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: theme.AppColors.primaryGold
-                                          .withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      '${idx + 1}',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        color: theme.AppColors.primaryGold,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: Checkbox(
+                                        value: isSelected,
+                                        activeColor: theme.AppColors.primaryGold,
+                                        onChanged: txId != null ? (_) => _toggleTx(sb.id!, txId) : null,
+                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'فاتورة: $invNum',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'فاتورة: $invNum',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                                           ),
-                                        ),
-                                        Text(
-                                          txDate,
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.grey.shade500,
+                                          Text(
+                                            txDate,
+                                            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                  cu.SarAwareText(
-                                    '${_formatAmount(amt)} ${context.read<SettingsProvider>().currencySymbolText}',
-              isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      color: theme.AppColors.warning,
+                                    cu.SarAwareText(
+                                      '${_formatAmount(amt)} ${context.read<SettingsProvider>().currencySymbolText}',
+                                      isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        color: isSelected
+                                            ? theme.AppColors.primaryGold
+                                            : theme.AppColors.warning,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           );
@@ -743,33 +794,81 @@ class _ClearingMonitorScreenState extends State<ClearingMonitorScreen> {
                       padding: const EdgeInsets.only(top: 6),
                       child: Text(
                         'و${txs.length - 20} دفعة أخرى...',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade500,
-                        ),
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                       ),
                     ),
 
-                  const SizedBox(height: 16),
+                  // ── شريط ملخص التحديد ──────────────────────────────
+                  if (_selectionFor(sb.id!).isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: theme.AppColors.primaryGold.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: theme.AppColors.primaryGold.withValues(alpha: 0.35)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check_circle, color: theme.AppColors.primaryGold, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${_selectionFor(sb.id!).length} عملية محددة',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: theme.AppColors.darkGold,
+                              ),
+                            ),
+                          ),
+                          cu.SarAwareText(
+                            'الإجمالي: ${_formatAmount(_selectedAmount(sb.id!))} ${context.read<SettingsProvider>().currencySymbolText}',
+                            isNewSar: context.read<SettingsProvider>().currencyIsNewSar,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: theme.AppColors.darkGold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
 
-                  // Action buttons
+                  const SizedBox(height: 12),
+
+                  // ── أزرار الإجراءات ─────────────────────────────────
                   Row(
                     children: [
-                      Expanded(
+                      if (txs.isNotEmpty) Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: txs.isEmpty
-                              ? null
-                              : () => _openSettlementScreen(sb),
+                          onPressed: () => _openSettlementScreen(sb),
                           icon: const Icon(Icons.swap_horiz, size: 18),
-                          label: const Text('إنشاء تسوية'),
+                          label: const Text('تسوية الكل'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: theme.AppColors.primaryGold,
-                            side: BorderSide(
-                              color: theme.AppColors.primaryGold,
-                            ),
+                            side: BorderSide(color: theme.AppColors.primaryGold),
                           ),
                         ),
                       ),
+                      if (_selectionFor(sb.id!).isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => _openSettlementScreen(
+                              sb,
+                              selectedIds: _selectionFor(sb.id!).toList(),
+                            ),
+                            icon: const Icon(Icons.done_all, size: 18),
+                            label: Text('تسوية ${_selectionFor(sb.id!).length} محددة'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: theme.AppColors.primaryGold,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],
