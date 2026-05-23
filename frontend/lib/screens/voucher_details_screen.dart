@@ -610,41 +610,68 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
             ),
             const SizedBox(height: 12),
 
-            _buildSectionCard(
-              title: 'الطرف',
-              icon: Icons.groups_outlined,
-              accentColor: Colors.blueGrey,
-              child: Column(
+            // ── الطرف ──────────────────────────────────────────────────
+            () {
+              final partyType  = voucher['party_type']?.toString();
+              final partyName  = voucher['party_name']?.toString();
+              final customerObj = voucher['customer'] as Map?;
+              final supplierObj = voucher['supplier'] as Map?;
+              final employeeObj = voucher['employee'] as Map?;
+              final receiver   = voucher['receiver_name']?.toString();
+
+              // اسم الطرف الفعلي بأولوية: كائن > party_name > —
+              final resolvedName =
+                  customerObj?['name']?.toString() ??
+                  supplierObj?['name']?.toString() ??
+                  employeeObj?['name']?.toString() ??
+                  employeeObj?['full_name']?.toString() ??
+                  (partyName?.isNotEmpty == true ? partyName : null);
+
+              if (partyType == null && resolvedName == null && receiver == null) {
+                return const SizedBox.shrink();
+              }
+              return Column(
                 children: [
-                  _buildInfoRow(
-                    'نوع الطرف',
-                    _getPartyTypeName(voucher['party_type']),
-                    Icons.category_outlined,
+                  _buildSectionCard(
+                    title: 'الطرف',
+                    icon: Icons.groups_outlined,
+                    accentColor: Colors.blueGrey,
+                    child: Column(
+                      children: [
+                        if (partyType != null)
+                          _buildInfoRow(
+                            'نوع الطرف',
+                            _getPartyTypeName(partyType),
+                            Icons.category_outlined,
+                          ),
+                        if (resolvedName != null)
+                          _buildInfoRow(
+                            partyType == 'employee'
+                                ? 'الموظف'
+                                : partyType == 'supplier'
+                                    ? 'المورد'
+                                    : 'العميل',
+                            resolvedName,
+                            partyType == 'employee'
+                                ? Icons.badge_outlined
+                                : partyType == 'supplier'
+                                    ? Icons.store_outlined
+                                    : Icons.person_outline,
+                          ),
+                        if (receiver != null && receiver.isNotEmpty &&
+                            receiver != resolvedName)
+                          _buildInfoRow(
+                            'المستلم',
+                            receiver,
+                            Icons.handshake_outlined,
+                          ),
+                      ],
+                    ),
                   ),
-                  if (voucher['customer'] != null)
-                    _buildInfoRow(
-                      'العميل',
-                      voucher['customer']['name'],
-                      Icons.person_outline,
-                    ),
-                  if (voucher['supplier'] != null)
-                    _buildInfoRow(
-                      'المورد',
-                      voucher['supplier']['name'],
-                      Icons.store_outlined,
-                    ),
-                  if (voucher['employee'] != null)
-                    _buildInfoRow(
-                      'الموظف',
-                      voucher['employee']['name']?.toString() ??
-                          voucher['employee']['full_name']?.toString() ??
-                          'غير محدد',
-                      Icons.badge_outlined,
-                    ),
+                  const SizedBox(height: 12),
                 ],
-              ),
-            ),
-            const SizedBox(height: 12),
+              );
+            }(),
 
             if (voucher['description'] != null &&
                 voucher['description'].toString().isNotEmpty)
@@ -676,10 +703,17 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
                       _getReferenceTypeName(voucher['reference_type']),
                       Icons.link,
                     ),
-                    if (voucher['reference_id'] != null)
+                    if (voucher['reference_number'] != null &&
+                        voucher['reference_number'].toString().isNotEmpty)
                       _buildInfoRow(
                         'رقم المرجع',
-                        voucher['reference_id'].toString(),
+                        voucher['reference_number'].toString(),
+                        Icons.tag,
+                      )
+                    else if (voucher['reference_id'] != null)
+                      _buildInfoRow(
+                        'رقم المرجع',
+                        '#${voucher['reference_id']}',
                         Icons.tag,
                       ),
                   ],
@@ -704,6 +738,108 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
               ),
             const SizedBox(height: 12),
 
+            // ── سطور الحسابات (القيد المحاسبي) ─────────────────────────
+            () {
+              final lines = (voucher['account_lines'] as List?) ?? [];
+              if (lines.isEmpty) return const SizedBox.shrink();
+              final currency = context.read<SettingsProvider>().currencySymbolText;
+              return Column(
+                children: [
+                  _buildSectionCard(
+                    title: 'القيد المحاسبي',
+                    icon: Icons.account_tree_outlined,
+                    accentColor: Colors.indigo,
+                    child: Column(
+                      children: [
+                        // رأس الجدول
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            children: [
+                              const Expanded(flex: 5, child: Text('الحساب', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                              const SizedBox(width: 6,
+                                child: Text('', style: TextStyle(fontSize: 11))),
+                              const Expanded(flex: 3, child: Text('مدين', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Colors.red))),
+                              const SizedBox(width: 4),
+                              const Expanded(flex: 3, child: Text('دائن', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Colors.green))),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        ...lines.map<Widget>((l) {
+                          if (l is! Map) return const SizedBox.shrink();
+                          final accObj  = l['account'] as Map?;
+                          final accNum  = accObj?['account_number']?.toString() ?? '';
+                          final accName = accObj?['name']?.toString() ?? '—';
+                          final lineType = l['line_type']?.toString() ?? '';
+                          final isDebit  = lineType == 'debit';
+                          final amt      = (l['amount'] as num?)?.toDouble() ?? 0.0;
+                          final amtType  = l['amount_type']?.toString() ?? 'cash';
+                          final unit     = amtType == 'gold' ? 'جم' : currency;
+                          final amtStr   = '${amt.toStringAsFixed(amtType == 'gold' ? 3 : 2)} $unit';
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: isDebit
+                                  ? Colors.red.shade50
+                                  : Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(7),
+                              border: Border(
+                                right: BorderSide(
+                                  color: isDebit ? Colors.red.shade300 : Colors.green.shade300,
+                                  width: 3,
+                                ),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  flex: 5,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(accName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                                      if (accNum.isNotEmpty)
+                                        Text(accNum, style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(
+                                    isDebit ? amtStr : '',
+                                    textAlign: TextAlign.end,
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Colors.red),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(
+                                    !isDebit ? amtStr : '',
+                                    textAlign: TextAlign.end,
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: Colors.green),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              );
+            }(),
+
             _buildSectionCard(
               title: 'معلومات إضافية',
               icon: Icons.info_outline,
@@ -726,6 +862,18 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
                       'المستخدم',
                       voucher['created_by'],
                       Icons.person,
+                    ),
+                  if (voucher['approved_by'] != null)
+                    _buildInfoRow(
+                      'اعتمد بواسطة',
+                      voucher['approved_by'],
+                      Icons.verified_outlined,
+                    ),
+                  if (voucher['approved_at'] != null)
+                    _buildInfoRow(
+                      'تاريخ الاعتماد',
+                      _formatDateTime(voucher['approved_at']),
+                      Icons.check_circle_outline,
                     ),
                 ],
               ),

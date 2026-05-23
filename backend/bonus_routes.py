@@ -821,18 +821,29 @@ def approve_bonus(bonus_id):
                 'voucher_id': existing_voucher.id
             }), 409
         
+        emp_name = employee.name if employee else str(bonus.employee_id)
         voucher = Voucher(
             voucher_number=voucher_number,
             voucher_type='adjustment',
             date=date.today(),
-            description=f"اعتماد مكافأة {employee.name if employee else bonus.employee_id} - {bonus.bonus_type}",
+            description=f"اعتماد مكافأة {emp_name} - {bonus.bonus_type}",
             status='approved',
             created_by=approved_by,
+            approved_by=approved_by,
             amount_cash=float(bonus.amount or 0.0),
+            # الطرف: الموظف المستفيد
+            party_type='employee',
+            employee_id=bonus.employee_id,
+            party_name=emp_name,
+            receiver_name=emp_name,
+            # مرجع المكافأة
+            reference_type='bonus',
+            reference_id=bonus.id,
+            reference_number=f'BONUS-{bonus.id}',
         )
         db.session.add(voucher)
         db.session.flush()
-        
+
         # السطر المدين: مصروف المكافآت
         debit_line = VoucherAccountLine(
             voucher_id=voucher.id,
@@ -1254,7 +1265,17 @@ def pay_bonus(bonus_id):
             description=f"صرف مكافأة {employee.name} - {bonus.bonus_type} من {treasury_name}",
             status='approved',
             created_by=created_by,
+            approved_by=created_by,
             amount_cash=float(bonus.amount or 0.0),
+            # الطرف: الموظف المستفيد
+            party_type='employee',
+            employee_id=employee.id,
+            party_name=employee.name,
+            receiver_name=employee.name,
+            # مرجع المكافأة
+            reference_type='bonus',
+            reference_id=bonus.id,
+            reference_number=f'BONUS-{bonus.id}',
         )
         db.session.add(voucher)
         db.session.flush()
