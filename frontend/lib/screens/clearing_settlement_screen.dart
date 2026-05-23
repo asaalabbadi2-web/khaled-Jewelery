@@ -674,6 +674,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     if (type == 'clearing') {
       _applyFeePolicyFromClearingSafe();
+      _loadHistory();
     }
 
     // Nudge fee recalculation when changing context.
@@ -928,7 +929,8 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     try {
       final res = await _api.getVouchers(
         referenceType: 'clearing_settlement',
-        perPage: 15,
+        referenceId: _clearingSafe?.id,
+        perPage: 20,
         sortBy: 'date',
         sortOrder: 'desc',
       );
@@ -985,6 +987,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       if (!mounted) return;
       _showSnack('تم عكس التسوية بنجاح');
       _loadHistory();
+      _loadPendingTransactions();
     } catch (e) {
       if (!mounted) return;
       _showSnack(e.toString(), error: true);
@@ -1921,9 +1924,10 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                               final status =
                                   (v['status'] ?? '').toString();
                               final totalCash =
-                                  (v['total_cash'] as num?)?.toDouble() ??
+                                  (v['amount_cash'] as num?)?.toDouble() ??
                                   0.0;
-                              final isActive = status == 'active';
+                              final isActive =
+                                  status == 'approved' || status == 'pending';
                               return Padding(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 5),

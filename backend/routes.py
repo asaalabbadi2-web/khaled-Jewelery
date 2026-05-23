@@ -29820,6 +29820,7 @@ def _create_clearing_settlement_voucher(
         date=settlement_dt,
         description=description,
         reference_type='clearing_settlement',
+        reference_id=clearing_safe_box_id,
         reference_number=reference_number,
         notes=(notes or '').strip() or None,
         created_by=created_by,
