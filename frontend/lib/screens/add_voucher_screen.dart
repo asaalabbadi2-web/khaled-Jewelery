@@ -191,6 +191,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
   String _partyType = 'customer';
   String? _selectedTemplateId;
 
+  // تتبع آخر نص بيان وُلِّد تلقائياً — حتى لا نُلغي تعديلات المستخدم اليدوية
+  String? _lastAutoDesc;
+  String? _lastAutoReceiver;
+
   DateTime _selectedDate = DateTime.now();
 
   bool _checkedLocalDraft = false;
@@ -736,7 +740,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     if (selected == null) return;
     final id = _toInt(selected['id']);
     if (id == null) return;
-    setState(() => _selectedCustomerId = id);
+    setState(() {
+      _selectedCustomerId = id;
+      _smartFillDescriptionAndReceiver();
+    });
   }
 
   Future<void> _pickSupplier() async {
@@ -753,7 +760,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     if (selected == null) return;
     final id = _toInt(selected['id']);
     if (id == null) return;
-    setState(() => _selectedSupplierId = id);
+    setState(() {
+      _selectedSupplierId = id;
+      _smartFillDescriptionAndReceiver();
+    });
   }
 
   Future<void> _loadData() async {
@@ -824,6 +834,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       });
 
       _applyIncomingAccountLinesIfNeeded();
+      // توليد البيان والمستلم تلقائياً بعد اكتمال تحميل البيانات
+      // (يُغطي حالة الفتح من مورد/عميل عبر initialSupplierId/initialPartyType)
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _smartFillDescriptionAndReceiver(),
+      );
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -1561,9 +1576,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       }
     });
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
+
+    // بعد تطبيق النموذج نُطلق التوليد الذكي ليُضمّن اسم الطرف إن كان محدداً
+    _smartFillDescriptionAndReceiver(force: true);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1572,6 +1588,126 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         backgroundColor: AppColors.primaryGold,
       ),
     );
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // توليد ذكي لحقلَي البيان والمستلم
+  // ────────────────────────────────────────────────────────────────────────────
+  // القاعدة: لا نُلغي تعديلاً يدوياً أجراه المستخدم.
+  //   • [force=true]  → يُعيد الكتابة حتى لو عدَّل المستخدم (مثال: تغيير النموذج)
+  //   • [force=false] → يكتب فقط إن كان الحقل فارغاً أو يحتوي النص التلقائي السابق
+  // ════════════════════════════════════════════════════════════════════════════
+  void _smartFillDescriptionAndReceiver({bool force = false}) {
+    // ── تحديد اسم الطرف الحالي ──────────────────────────────────────────────
+    String? partyName;
+    if (_partyType == 'customer' && _selectedCustomerId != null) {
+      final c = _findById(_customers, _selectedCustomerId);
+      partyName = c?['name']?.toString() ?? c?['customer_name']?.toString();
+    } else if (_partyType == 'supplier' && _selectedSupplierId != null) {
+      final s = _findById(_suppliers, _selectedSupplierId);
+      partyName = s?['name']?.toString() ?? s?['supplier_name']?.toString();
+    } else if (_partyType == 'employee' && _selectedEmployeeId != null) {
+      final e = _findEmployeeById(_selectedEmployeeId);
+      partyName = e?.name;
+    }
+
+    // ── بناء نص البيان حسب النموذج والطرف ───────────────────────────────────
+    final isReceipt = widget.voucherType == 'receipt';
+    String? newDesc;
+    String? newReceiver;
+
+    switch (_selectedTemplateId) {
+      // ── قبض ──────────────────────────────────────────────────────────────
+      case 'receipt_customer':
+        newDesc = partyName != null
+            ? 'استلام دفعة من العميل $partyName'
+            : 'استلام دفعة من العميل';
+        newReceiver = null; // المستلم هو الصندوق لا الطرف
+        break;
+      case 'receipt_gold':
+        newDesc = partyName != null
+            ? 'استلام ذهب من العميل $partyName'
+            : 'استلام ذهب وتسليمه إلى الخزينة';
+        newReceiver = null;
+        break;
+      case 'receipt_advance_return':
+        newDesc = partyName != null
+            ? 'استرداد سلفة من الموظف $partyName'
+            : 'استرداد سلفة من موظف';
+        newReceiver = partyName;
+        break;
+      case 'receipt_safe_transfer':
+        newDesc = 'تحويل رصيد إلى الخزينة';
+        newReceiver = null;
+        break;
+      // ── صرف ──────────────────────────────────────────────────────────────
+      case 'payment_supplier':
+        newDesc = partyName != null
+            ? 'سداد دفعة للمورد $partyName'
+            : 'سداد دفعة للمورد';
+        newReceiver = partyName;
+        break;
+      case 'payment_salary':
+        newDesc = partyName != null
+            ? 'صرف راتب الموظف $partyName'
+            : 'صرف راتب موظف';
+        newReceiver = partyName;
+        break;
+      case 'payment_advance':
+        newDesc = partyName != null
+            ? 'صرف سلفة للموظف $partyName'
+            : 'صرف سلفة لموظف';
+        newReceiver = partyName;
+        break;
+      case 'payment_expense':
+        newDesc = 'صرف مصروف تشغيلي';
+        newReceiver = null;
+        break;
+      default:
+        // لا نموذج محدد — نعتمد على نوع الطرف فقط
+        if (partyName != null) {
+          if (_partyType == 'customer') {
+            newDesc = isReceipt
+                ? 'استلام دفعة من العميل $partyName'
+                : 'دفعة للعميل $partyName';
+          } else if (_partyType == 'supplier') {
+            newDesc = isReceipt
+                ? 'استلام دفعة من المورد $partyName'
+                : 'سداد دفعة للمورد $partyName';
+            newReceiver = partyName;
+          } else if (_partyType == 'employee') {
+            newDesc = isReceipt
+                ? 'استلام من الموظف $partyName'
+                : 'صرف للموظف $partyName';
+            newReceiver = partyName;
+          }
+        }
+    }
+
+    // ── تطبيق البيان ─────────────────────────────────────────────────────────
+    if (newDesc != null) {
+      final current = _descriptionController.text.trim();
+      final canWrite = force ||
+          current.isEmpty ||
+          current == _lastAutoDesc;
+      if (canWrite) {
+        _descriptionController.text = newDesc;
+        _lastAutoDesc = newDesc;
+      }
+    }
+
+    // ── تطبيق المستلم ────────────────────────────────────────────────────────
+    {
+      final current = _receiverNameController.text.trim();
+      final canWrite = force ||
+          current.isEmpty ||
+          current == _lastAutoReceiver;
+      if (canWrite) {
+        final val = newReceiver ?? '';
+        _receiverNameController.text = val;
+        _lastAutoReceiver = val;
+      }
+    }
   }
 
   Widget _buildStatusChip({
@@ -2031,6 +2167,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                   _selectedSupplierId = null;
                   _selectedEmployeeId = null;
                   _selectedOtherAccountId = null;
+                  // إعادة توليد البيان والمستلم عند تغيير نوع الطرف
+                  _smartFillDescriptionAndReceiver(force: true);
                 });
               },
             ),
@@ -2086,6 +2224,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                 onChanged: (value) {
                   setState(() {
                     _selectedEmployeeId = value;
+                    _smartFillDescriptionAndReceiver();
                   });
                 },
               ),
