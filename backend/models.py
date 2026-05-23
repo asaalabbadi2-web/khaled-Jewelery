@@ -2088,7 +2088,11 @@ class Settings(db.Model):
     main_karat = db.Column(db.Integer, default=21)
     currency_symbol = db.Column(db.String(10), default='ر.س')
     manufacturing_wage_mode = db.Column(db.String(20), default='expense')  # expense | inventory
-    
+
+    # أرقام حسابات المكافآت القابلة للتخصيص (NULL = بحث تلقائي بالاسم)
+    bonus_expense_account_number = db.Column(db.String(20), nullable=True)
+    bonus_payable_account_number = db.Column(db.String(20), nullable=True)
+
     # إعدادات الضريبة
     tax_rate = db.Column(db.Float, default=0.15)  # 15%
     tax_enabled = db.Column(db.Boolean, default=True)

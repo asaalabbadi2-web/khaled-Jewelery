@@ -243,6 +243,11 @@ def ensure_settings_columns(engine: Engine) -> None:
 
                     # Manufacturing wage mode
                     ("manufacturing_wage_mode", "VARCHAR(20)", "'expense'"),
+
+                    # حسابات المكافآت القابلة للتخصيص حسب بيئة الإنتاج
+                    # يُترك NULL ليستخدم النظام البحث التلقائي بالاسم
+                    ("bonus_expense_account_number",  "VARCHAR(20)", "NULL"),
+                    ("bonus_payable_account_number",  "VARCHAR(20)", "NULL"),
                 ],
             )
         )
