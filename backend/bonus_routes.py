@@ -828,6 +828,7 @@ def approve_bonus(bonus_id):
             description=f"اعتماد مكافأة {employee.name if employee else bonus.employee_id} - {bonus.bonus_type}",
             status='approved',
             created_by=approved_by,
+            amount_cash=float(bonus.amount or 0.0),
         )
         db.session.add(voucher)
         db.session.flush()
@@ -1253,6 +1254,7 @@ def pay_bonus(bonus_id):
             description=f"صرف مكافأة {employee.name} - {bonus.bonus_type} من {treasury_name}",
             status='approved',
             created_by=created_by,
+            amount_cash=float(bonus.amount or 0.0),
         )
         db.session.add(voucher)
         db.session.flush()
