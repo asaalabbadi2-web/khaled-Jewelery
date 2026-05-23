@@ -754,3 +754,62 @@ def ensure_goal_achievement_columns(engine: Engine) -> None:
         return
 
     _log_added(columns_added)
+
+
+def ensure_bonus_accounts(engine: Engine) -> None:
+    """ينشئ حسابات المكافآت المطلوبة إن لم تكن موجودة.
+    
+    - 2310: مكافآت مستحقة للموظفين  (خصوم متداولة ← أرصدة دائنة أخرى 23)
+    - 5450: حساب مصروف المكافآت    (مصاريف إدارية ← 540) — يُنشأ فقط إن غاب
+    """
+    try:
+        from sqlalchemy import text as _text
+        with engine.connect() as conn:
+            # حساب 2310 تحت 23 (أرصدة دائنة أخرى)
+            exists_2310 = conn.execute(
+                _text("SELECT id FROM account WHERE account_number='2310' LIMIT 1")
+            ).fetchone()
+            if not exists_2310:
+                parent_23 = conn.execute(
+                    _text("SELECT id FROM account WHERE account_number='23' LIMIT 1")
+                ).fetchone()
+                if parent_23:
+                    conn.execute(_text("""
+                        INSERT INTO account
+                          (account_number, name, type, parent_id,
+                           tracks_weight, transaction_type,
+                           balance_cash, balance_18k, balance_21k,
+                           balance_22k, balance_24k,
+                           include_in_gram_profit, exclude_from_gram_profit)
+                        VALUES
+                          ('2310', 'مكافآت مستحقة للموظفين', 'Liability', :pid,
+                           0, 'cash',
+                           0.0, 0.0, 0.0, 0.0, 0.0,
+                           0, 0)
+                    """), {"pid": parent_23[0]})
+                    conn.commit()
+                    LOGGER.info("schema_guard: أنشأ حساب 2310 (مكافآت مستحقة للموظفين)")
+
+            # حساب 5450 تحت 540 (مصاريف إدارية) — إن لم يكن موجوداً
+            exists_5450 = conn.execute(
+                _text("SELECT id FROM account WHERE account_number='5450' LIMIT 1")
+            ).fetchone()
+            if not exists_5450:
+                parent_540 = conn.execute(
+                    _text("SELECT id FROM account WHERE account_number='540' LIMIT 1")
+                ).fetchone()
+                if parent_540:
+                    conn.execute(_text("""
+                        INSERT INTO account
+                          (account_number, name, type, parent_id,
+                           is_active, tracks_weight, transaction_type,
+                           balance_cash, balance_gold_21k)
+                        VALUES
+                          ('5450', 'حساب مصروف المكافآت', 'Expense', :pid,
+                           1, 0, 'cash', 0.0, 0.0)
+                    """), {"pid": parent_540[0]})
+                    conn.commit()
+                    LOGGER.info("schema_guard: أنشأ حساب 5450 (حساب مصروف المكافآت)")
+
+    except Exception as exc:
+        LOGGER.error("ensure_bonus_accounts failed: %s", exc)

@@ -1043,7 +1043,8 @@ def pay_bonus(bonus_id):
 
             treasury_name = safe_box.name
             # قراءة الرصيد الحي من القيود (لا من الكائن المحلي القديم)
-            from services.party_live_balances import live_balances_by_account_ids as _lb
+            # استخدام الدالة المُستوردة بالفعل في أعلى الملف
+            _lb = live_balances_by_account_ids
             _live = _lb([treasury_account.id]).get(int(treasury_account.id)) or {}
             treasury_balance_cash = round(float(_live.get('cash') or 0.0), 2)
 
