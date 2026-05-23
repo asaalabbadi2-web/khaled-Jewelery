@@ -34705,6 +34705,14 @@ def get_admin_dashboard():
             'by_user': [], 'by_karat': [],
         }
 
+        # Pre-load AppUser list once; avoids a full-table scan on every _build_inv_summary call.
+        _cached_app_users = []
+        try:
+            from models import AppUser
+            _cached_app_users = AppUser.query.all()
+        except Exception:
+            pass
+
         def _build_inv_summary(inv_types_dict, start, end, exclude_gold_type=None):
             # Uses Invoice.query directly (same proven pattern as today_invoices/series_invoices).
             try:
@@ -34768,8 +34776,7 @@ def get_admin_dashboard():
                 posted_by_to_name = {}
                 if posted_keys:
                     try:
-                        from models import AppUser
-                        for u in AppUser.query.all():
+                        for u in _cached_app_users:
                             if not u.employee_id:
                                 continue
                             emp_name = employee_name_by_id.get(u.employee_id, '')

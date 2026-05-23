@@ -109,6 +109,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _weightFormat = NumberFormat('#,##0.000');
     _loadVaultOrder();
     _loadData();
+    _loadGramProfit();
     AppEvents.vaultRefreshSignal.addListener(_onVaultRefresh);
   }
 
@@ -239,7 +240,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       }
 
       setState(() => _response = result);
-      _loadGramProfit();
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
