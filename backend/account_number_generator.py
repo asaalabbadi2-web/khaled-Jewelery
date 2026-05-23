@@ -478,7 +478,7 @@ def validate_account_number(
         financial_parent = _financial_parent_from_weight(parent_digits)
         financial_child = acc_digits[1:]
 
-        start, end, step, child_len = _compute_child_range_and_step(financial_parent)
+        start, end, _step, child_len = _compute_child_range_and_step(financial_parent)
         account_num = int(financial_child)
 
         if len(financial_child) != child_len:
@@ -493,16 +493,11 @@ def validate_account_number(
                 'message': f'رقم الحساب خارج النطاق المسموح للحساب الأب (7{start} - 7{end})'
             }
 
-        if (account_num - start) % step != 0:
-            return {
-                'is_valid': False,
-                'message': f'رقم الحساب لا يتبع قاعدة الترقيم (الخطوة {step})'
-            }
-
         return {'is_valid': True, 'message': 'رقم الحساب صحيح ومتاح'}
 
-    # Normal (financial) parent: validate using standard rule.
-    start, end, step, child_len = _compute_child_range_and_step(parent_digits)
+    # Normal (financial) parent: validate length and range only.
+    # Step spacing is enforced for auto-generation but not for manual entry.
+    start, end, _step, child_len = _compute_child_range_and_step(parent_digits)
     account_num = int(acc_digits)
 
     if len(acc_digits) != child_len:
@@ -510,23 +505,14 @@ def validate_account_number(
             'is_valid': False,
             'message': f'طول رقم الحساب غير صحيح. المتوقع {child_len} خانات'
         }
-    
+
     if account_num < start or account_num > end:
         return {
             'is_valid': False,
             'message': f'رقم الحساب خارج النطاق المسموح للحساب الأب ({start} - {end})'
         }
 
-    if (account_num - start) % step != 0:
-        return {
-            'is_valid': False,
-            'message': f'رقم الحساب لا يتبع قاعدة الترقيم (الخطوة {step})'
-        }
-    
-    return {
-        'is_valid': True,
-        'message': 'رقم الحساب صحيح ومتاح'
-    }
+    return {'is_valid': True, 'message': 'رقم الحساب صحيح ومتاح'}
 
 
 if __name__ == '__main__':

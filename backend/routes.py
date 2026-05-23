@@ -35132,12 +35132,13 @@ def get_unseen_achievements():
         current_user = getattr(g, 'current_user', None)
         employee_id = getattr(current_user, 'employee_id', None) if current_user else None
 
-        query = GoalAchievement.query.filter_by(seen_by_user=False)
-        if employee_id:
-            query = query.filter_by(employee_id=employee_id)
+        # Only show achievements for the current employee — never expose other employees' data.
+        if not employee_id:
+            return jsonify({'achievements': []}), 200
 
         achievements = (
-            query
+            GoalAchievement.query
+            .filter_by(seen_by_user=False, employee_id=employee_id)
             .order_by(GoalAchievement.achieved_at.desc())
             .limit(10)
             .all()
@@ -35312,10 +35313,17 @@ def check_goal_progress():
                 return 0.0, None
             return float(getattr(employee, f'goal_bonus_{period_name}', None) or 0.0), None
 
+        # None means the column existed before the boolean was introduced — treat as the
+        # intended default (True for weekly/monthly, False for daily).
+        def _goal_enabled(val, default: bool) -> bool:
+            if val is None:
+                return default
+            return bool(val)
+
         if not any([
-            bool(getattr(employee, 'goal_daily_enabled', False)),
-            bool(getattr(employee, 'goal_weekly_enabled', True)),
-            bool(getattr(employee, 'goal_monthly_enabled', True)),
+            _goal_enabled(getattr(employee, 'goal_daily_enabled',   None), False),
+            _goal_enabled(getattr(employee, 'goal_weekly_enabled',  None), True),
+            _goal_enabled(getattr(employee, 'goal_monthly_enabled', None), True),
         ]):
             return jsonify({'achievements': []}), 200
 
@@ -35374,10 +35382,12 @@ def check_goal_progress():
                     return {}
             return {}
 
-        def _find_existing(period_key: str):
+        def _find_existing(pk: str):
             for ach in employee_achievements:
+                if ach.period_key == pk:
+                    return ach
                 m = _metrics_dict(ach.metrics)
-                if m.get('period_key') == period_key:
+                if m.get('period_key') == pk:
                     return ach
             return None
 
@@ -35393,9 +35403,9 @@ def check_goal_progress():
         month_end = _dt(now.year + 1, 1, 1) if now.month == 12 else _dt(now.year, now.month + 1, 1)
 
         periods = [
-            ('daily', bool(getattr(employee, 'goal_daily_enabled', False)), today_start, tomorrow_start, f'{now.year}/{now.month:02d}/{now.day:02d}'),
-            ('weekly', bool(getattr(employee, 'goal_weekly_enabled', True)), week_start, week_end, f'W{now.isocalendar()[1]:02d}/{now.year}'),
-            ('monthly', bool(getattr(employee, 'goal_monthly_enabled', True)), month_start, month_end, f'{now.year}/{now.month:02d}'),
+            ('daily',   _goal_enabled(getattr(employee, 'goal_daily_enabled',   None), False), today_start,  tomorrow_start, f'{now.year}/{now.month:02d}/{now.day:02d}'),
+            ('weekly',  _goal_enabled(getattr(employee, 'goal_weekly_enabled',  None), True),  week_start,   week_end,       f'W{now.isocalendar()[1]:02d}/{now.year}'),
+            ('monthly', _goal_enabled(getattr(employee, 'goal_monthly_enabled', None), True),  month_start,  month_end,      f'{now.year}/{now.month:02d}'),
         ]
 
         for period_name, enabled, start_dt, end_dt, period_label in periods:
@@ -35457,6 +35467,8 @@ def check_goal_progress():
             a = GoalAchievement(
                 employee_id=employee_id,
                 bonus_rule_id=bonus_rule_id,
+                period_key=period_key,
+                goal_period=period_name,
                 goal_name=getattr(employee, 'goal_name', None) or (
                     f'هدف اليوم {period_label}' if period_name == 'daily' else
                     f'هدف الأسبوع {period_label}' if period_name == 'weekly' else

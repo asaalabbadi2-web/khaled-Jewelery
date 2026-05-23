@@ -198,23 +198,21 @@ class _ConfettiPainter extends CustomPainter {
 
 class GoalAchievementOverlay extends StatefulWidget {
   final GoalAchievement achievement;
-  final VoidCallback? onDismiss;
   final VoidCallback? onViewDetails;
   final bool isArabic;
 
   const GoalAchievementOverlay({
     super.key,
     required this.achievement,
-    this.onDismiss,
     this.onViewDetails,
     this.isArabic = true,
   });
 
-  /// Shows the overlay on top of the entire screen
+  /// Shows the overlay on top of the entire screen.
+  /// The caller is responsible for marking the achievement as seen after this Future completes.
   static Future<void> show(
     BuildContext context, {
     required GoalAchievement achievement,
-    VoidCallback? onDismiss,
     VoidCallback? onViewDetails,
     bool isArabic = true,
   }) {
@@ -229,7 +227,6 @@ class GoalAchievementOverlay extends StatefulWidget {
       pageBuilder: (ctx, animation, secondaryAnimation) {
         return GoalAchievementOverlay(
           achievement: achievement,
-          onDismiss: onDismiss,
           onViewDetails: onViewDetails,
           isArabic: isArabic,
         );
@@ -349,7 +346,6 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
     await _modalController.reverse();
     if (!mounted) return;
     Navigator.of(context).pop();
-    widget.onDismiss?.call();
   }
 
   /// يُنسّق مبلغ المكافأة بـ floor لعشري واحد في k/M
@@ -504,7 +500,7 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
               child: IgnorePointer(
                 child: AnimatedBuilder(
                   animation: _confettiController,
-                  builder: (_, __) => CustomPaint(
+                  builder: (_, _) => CustomPaint(
                     painter: _ConfettiPainter(
                       particles: _particles,
                       progress: _confettiController.value,
@@ -621,7 +617,7 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
               // Trophy in glowing circle
               AnimatedBuilder(
                 animation: Listenable.merge([_trophyController, _glowController]),
-                builder: (_, __) => Transform.rotate(
+                builder: (_, _) => Transform.rotate(
                   angle: _trophyRotation.value,
                   child: Container(
                     width: 80,
@@ -711,7 +707,7 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
         top: p.t * 200,
         child: AnimatedBuilder(
           animation: _confettiController,
-          builder: (_, __) {
+          builder: (_, _) {
             final offset = math.sin(
                   _confettiController.value * math.pi * 3 + p.l * math.pi,
                 ) *

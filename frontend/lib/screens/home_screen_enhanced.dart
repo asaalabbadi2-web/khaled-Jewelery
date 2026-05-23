@@ -109,9 +109,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   int _sparklineTickCounter = 0;
   List customers = [];
   List items = [];
-  List invoices = [];
-  List suppliers = [];
-  List safeBoxes = []; // 🆕 خزائن الذهب
+  List safeBoxes = [];
 
   // Currency data
   double exchangeRate = 3.75; // سعر الصرف الافتراضي (دولار -> ريال سعودي)
@@ -160,6 +158,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   // 🎉 Achievement celebration
   Timer? _achievementCheckTimer;
   bool _isShowingAchievement = false;
+  bool _isCheckingAchievements = false;
   final Set<int> _shownAchievementIds = {};
 
   @override
@@ -348,42 +347,45 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
       setState(() {
         isLoading = true;
-
-        // Prevent showing data from a previous session when switching users.
         if (!auth.hasPermission('customers.view')) customers = [];
         if (!auth.hasPermission('items.view')) items = [];
-        if (!auth.hasPermission('invoices.view')) invoices = [];
-        if (!auth.hasPermission('suppliers.view')) suppliers = [];
         if (!auth.hasPermission('safe_boxes.view')) safeBoxes = [];
       });
 
-      debugPrint('🔄 بدء تحميل البيانات...');
-      final futures = <Future<void>>[];
-      if (auth.isAuthenticated) futures.add(_loadGoldPrice());
-      if (auth.isAuthenticated) futures.add(_loadSparklineData());
-      if (auth.isAuthenticated) futures.add(_loadPendingApprovalsCount());
+      // Phase 1: essential data that the home screen displays — show UI as soon as these finish.
+      final essentialFutures = <Future<void>>[];
+      if (auth.isAuthenticated) essentialFutures.add(_loadGoldPrice());
+      if (auth.isAuthenticated) essentialFutures.add(_loadSparklineData());
+      if (auth.isAuthenticated) essentialFutures.add(_loadPendingApprovalsCount());
+      if (auth.hasPermission('safe_boxes.view')) essentialFutures.add(_loadSafeBoxes());
       final quickActions = context.read<QuickActionsProvider>();
       if (auth.isAuthenticated && quickActions.showSalesRaceCard) {
-        futures.add(_loadLeaderboard());
+        essentialFutures.add(_loadLeaderboard());
       }
-      if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
-      if (auth.hasPermission('items.view')) futures.add(_loadItems());
-      if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
-      if (auth.hasPermission('suppliers.view')) futures.add(_loadSuppliers());
-      if (auth.hasPermission('safe_boxes.view')) futures.add(_loadSafeBoxes());
 
-      await Future.wait(futures);
-
-      debugPrint(
-        '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
-      );
+      await Future.wait(essentialFutures);
     } catch (e) {
-      debugPrint('❌ خطأ في تحميل البيانات: $e');
+      debugPrint('❌ خطأ في تحميل البيانات الأساسية: $e');
     } finally {
-      setState(() => isLoading = false);
-      // 🎯 فحص تحقيق الأهداف الشخصية بعد انتهاء التحميل
+      if (mounted) setState(() => isLoading = false);
       _checkPersonalGoalAchievements();
     }
+
+    // Phase 2: background data (customers/items) used only when opening invoice screens.
+    // Does not block the home screen UI.
+    _loadBackgroundData();
+  }
+
+  Future<void> _loadBackgroundData() async {
+    if (!mounted) return;
+    final auth = context.read<AuthProvider>();
+    if (!auth.isAuthenticated) return;
+
+    final futures = <Future<void>>[];
+    if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
+    if (auth.hasPermission('items.view')) futures.add(_loadItems());
+
+    await Future.wait(futures);
   }
 
   Future<void> _checkPersonalGoalAchievements() async {
@@ -474,18 +476,15 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   // ───────────────────────────────────────────────────
 
   Future<void> _checkForAchievements() async {
-    if (_isShowingAchievement || !mounted) return;
+    if (_isShowingAchievement || _isCheckingAchievements || !mounted) return;
     final auth = context.read<AuthProvider>();
     if (!auth.isAuthenticated) return;
 
+    _isCheckingAchievements = true;
     try {
-      // 1️⃣ تحقق من الأهداف الشخصية للموظف أولاً → قد يُنشئ إنجازات جديدة
       final freshlyAchieved = await api.checkGoalProgress();
-
-      // 2️⃣ ثم اجلب جميع الإنجازات غير المشاهدة (القديمة + الجديدة)
       final unseen = await api.getUnseenAchievements();
 
-      // دمج القائمتين مع إزالة التكرار (الجديدة أولاً)
       final seen = <int>{};
       final combined = <Map<String, dynamic>>[];
       for (final a in [...freshlyAchieved, ...unseen]) {
@@ -501,6 +500,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       }
     } catch (e) {
       debugPrint('❌ Achievement check failed: $e');
+    } finally {
+      _isCheckingAchievements = false;
     }
   }
 
@@ -514,12 +515,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         context,
         achievement: achievement,
         isArabic: widget.isArabic,
-        onDismiss: () {
-          if (achievement.id != null) {
-            api.markAchievementSeen(achievement.id!);
-          }
-        },
         onViewDetails: () {
+          if (!mounted) return;
           Navigator.push(
             context,
             MaterialPageRoute(
@@ -533,6 +530,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       );
     } finally {
       _isShowingAchievement = false;
+      // Mark as seen regardless of how the dialog was dismissed (button, barrier tap, etc.)
+      if (achievement.id != null) {
+        api.markAchievementSeen(achievement.id!);
+      }
     }
   }
 
@@ -687,25 +688,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     }
   }
 
-  Future<void> _loadInvoices() async {
-    try {
-      final data = await api.getInvoices();
-      setState(() {
-        invoices = data is List ? data : (data['invoices'] ?? []);
-      });
-    } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الفواتير: $e');
-    }
-  }
-
-  Future<void> _loadSuppliers() async {
-    try {
-      final data = await api.getSuppliers();
-      setState(() => suppliers = data);
-    } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الموردين: $e');
-    }
-  }
 
   Future<void> _loadSafeBoxes() async {
     try {
