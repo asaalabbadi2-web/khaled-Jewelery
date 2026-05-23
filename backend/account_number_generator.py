@@ -87,9 +87,10 @@ def _compute_child_range_and_step(parent_account_number: str) -> tuple[int, int,
         return start, end, 10, 3
 
     if parent_len == 3:
-        # 110 -> 1100..1190 (10)
+        # 110 -> 1100..1199 (خطوة 10 أساسية، مع احتياط 1191-1199 بخطوة 1)
+        # تم توسيع النطاق من +90 إلى +99 لاستيعاب المنظومات الممتلئة
         start = parent_int * 10
-        end = start + 90
+        end = start + 99
         return start, end, 10, 4
 
     if parent_len == 4:
@@ -232,11 +233,18 @@ def get_next_account_number(parent_account_number: str, use_spacing: bool = Fals
     
     # تحقق من عدم تجاوز النطاق المسموح
     if next_number > end_range:
+        # خانات الخطوة الأساسية امتلأت — ابحث بخطوة 1 في الفراغات المتبقية
+        # (مثال: 5490 آخر بخطوة 10 → ابحث عن أول فراغ في 5491-5499)
+        if step > 1:
+            try:
+                return _first_unused_number_in_range(start_range, end_range, step=1)
+            except ValueError:
+                pass
         raise ValueError(
             f"تجاوزت السعة المتاحة للحساب {parent_account_number}. "
             f"النطاق المسموح: {start_range} - {end_range}"
         )
-    
+
     return str(next_number)
 
 
