@@ -48,8 +48,12 @@ class EmployeeBonusModel {
       bonusRuleId: json['bonus_rule_id'] as int?,
       bonusType: json['bonus_type'] as String,
       amount: (json['amount'] as num).toDouble(),
-      periodStart: DateTime.parse(json['period_start'] as String),
-      periodEnd: DateTime.parse(json['period_end'] as String),
+      periodStart: json['period_start'] != null
+          ? DateTime.parse(json['period_start'] as String)
+          : DateTime.now(),
+      periodEnd: json['period_end'] != null
+          ? DateTime.parse(json['period_end'] as String)
+          : DateTime.now(),
       calculationData: json['calculation_data'] as Map<String, dynamic>?,
       status: json['status'] as String? ?? 'pending',
       notes: json['notes'] as String?,

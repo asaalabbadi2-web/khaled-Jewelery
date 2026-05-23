@@ -521,7 +521,7 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
                   gridData: FlGridData(
                     show: true,
                     drawVerticalLine: false,
-                    horizontalInterval: maxValue / 3,
+                    horizontalInterval: (maxValue / 3).clamp(0.01, double.infinity),
                     getDrawingHorizontalLine: (_) => FlLine(
                       color: theme.dividerColor.withValues(alpha: 0.3),
                       strokeWidth: 0.5,
