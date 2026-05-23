@@ -678,17 +678,35 @@ def approve_bonus(bonus_id):
                 'success': False,
                 'message': 'حساب مصروف المكافآت غير موجود (5450)'
             }), 400
-        
-        # البحث عن حساب مكافآت مستحقة (2310)
-        bonuses_payable_account = Account.query.filter_by(account_number='2310').first()
+
+        # إنشاء سند قيد لإثبات المصروف والالتزام
+        employee = Employee.query.get(bonus.employee_id)
+
+        # ── حساب الذمة الدائنة: يُفضَّل الحساب الشخصي للموظف تحت (2410) ──
+        # 2410xxx = ذمم الموظفين - عمولات/مكافآت (حساب خاص لكل موظف)
+        # يُتيح متابعة المكافأة في كشف حساب الموظف مباشرةً.
+        # إن لم يُوجد نستخدم 2310 (مكافآت مستحقة للموظفين) كاحتياط عام.
+        bonuses_payable_account = None
+        if employee:
+            bonuses_payable_account = (
+                Account.query
+                .filter(
+                    Account.account_number.like('2410%'),
+                    Account.name.like(f'%{employee.name}%'),
+                )
+                .first()
+            )
+        if not bonuses_payable_account:
+            bonuses_payable_account = Account.query.filter_by(account_number='2310').first()
         if not bonuses_payable_account:
             return jsonify({
                 'success': False,
-                'message': 'حساب مكافآت مستحقة غير موجود (2310)'
+                'message': (
+                    'لم يُعثر على حساب ذمة المكافآت للموظف '
+                    f'({employee.name if employee else bonus.employee_id}). '
+                    'يرجى ربط الموظف بحساب عمولات (2410xxx) أو إنشاء حساب 2310.'
+                )
             }), 400
-        
-        # إنشاء سند قيد لإثبات المصروف والالتزام
-        employee = Employee.query.get(bonus.employee_id)
         voucher_number = f"BAPP-{bonus.id}"
         
         # التحقق من عدم وجود سند بنفس الرقم
@@ -1069,10 +1087,25 @@ def pay_bonus(bonus_id):
                 'message': f'رصيد الخزينة غير كافٍ. الرصيد الحالي: {treasury_balance_cash} ريال، المطلوب: {bonus.amount} ريال'
             }), 400
         
-        # البحث عن حساب مكافآت مستحقة (2310)
-        bonuses_payable_account = Account.query.filter_by(account_number='2310').first()
+        # حساب الذمة المدينة عند الصرف: نفس الحساب الذي جرى القيد عليه عند الاعتماد
+        # الأولوية: 2410xxx الخاص بالموظف → 2310 العام كاحتياط
+        bonuses_payable_account = None
+        if employee:
+            bonuses_payable_account = (
+                Account.query
+                .filter(
+                    Account.account_number.like('2410%'),
+                    Account.name.like(f'%{employee.name}%'),
+                )
+                .first()
+            )
         if not bonuses_payable_account:
-            return jsonify({'success': False, 'message': 'حساب مكافآت مستحقة غير موجود (2310)'}), 400
+            bonuses_payable_account = Account.query.filter_by(account_number='2310').first()
+        if not bonuses_payable_account:
+            return jsonify({
+                'success': False,
+                'message': 'لم يُعثر على حساب ذمة المكافآت للموظف'
+            }), 400
         
         # تحديد حساب الخزينة والتحقق من ملاءمته
         if safe_box is None:
