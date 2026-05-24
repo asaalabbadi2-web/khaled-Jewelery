@@ -40,8 +40,20 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
   bool _loading = false;
   String? _error;
 
-  List<EmployeeBonusModel> _bonuses = [];
+  List<EmployeeBonusModel> _allBonuses = [];
   _AnalyticsPeriod _period = _AnalyticsPeriod.last30;
+
+  List<EmployeeBonusModel> get _bonuses {
+    if (_allBonuses.isEmpty || _period == _AnalyticsPeriod.lastYear) {
+      return _allBonuses;
+    }
+    final now = DateTime.now();
+    final days = _period == _AnalyticsPeriod.last30 ? 30 : 90;
+    final start = now.subtract(Duration(days: days));
+    return _allBonuses
+        .where((b) => !b.periodStart.isBefore(start))
+        .toList();
+  }
 
   // ─── دورة الحياة ────────────────────────────────────────
   @override
@@ -56,39 +68,19 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
       _error = null;
     });
     try {
-      final now = DateTime.now();
-      DateTime start;
-      switch (_period) {
-        case _AnalyticsPeriod.last30:
-          start = now.subtract(const Duration(days: 30));
-          break;
-        case _AnalyticsPeriod.last90:
-          start = now.subtract(const Duration(days: 90));
-          break;
-        case _AnalyticsPeriod.lastYear:
-          start = now.subtract(const Duration(days: 365));
-          break;
-      }
-
-      // جلب جميع المكافآت — الفلتر بالفترة يتم محلياً
       final data = await widget.api.getBonuses();
-
       if (!mounted) return;
       final parsed = <EmployeeBonusModel>[];
       for (final j in data) {
         try {
           if (j is! Map) continue;
-          final model = EmployeeBonusModel.fromJson(
-              Map<String, dynamic>.from(j));
-          if (model.periodStart.isAfter(start) ||
-              _period == _AnalyticsPeriod.lastYear) {
-            parsed.add(model);
-          }
+          parsed.add(
+              EmployeeBonusModel.fromJson(Map<String, dynamic>.from(j)));
         } catch (_) {
           // skip records that fail to parse
         }
       }
-      setState(() => _bonuses = parsed);
+      setState(() => _allBonuses = parsed);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -125,11 +117,11 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
     final theme = Theme.of(context);
     final isAr = widget.isArabic;
 
-    if (_loading && _bonuses.isEmpty) {
+    if (_loading && _allBonuses.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_error != null && _bonuses.isEmpty) {
+    if (_error != null && _allBonuses.isEmpty) {
       return _buildError(theme, isAr);
     }
 
@@ -216,10 +208,7 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
           };
           return Expanded(
             child: InkWell(
-              onTap: () {
-                setState(() => _period = p);
-                _load();
-              },
+              onTap: () => setState(() => _period = p),
               borderRadius: BorderRadius.circular(6),
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 8),
