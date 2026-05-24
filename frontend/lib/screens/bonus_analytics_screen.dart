@@ -78,13 +78,20 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
       );
 
       if (!mounted) return;
-      setState(() {
-        _bonuses = data
-            .map((j) =>
-                EmployeeBonusModel.fromJson(j as Map<String, dynamic>))
-            .where((b) => b.periodStart.isAfter(start) || _period == _AnalyticsPeriod.lastYear)
-            .toList();
-      });
+      final parsed = <EmployeeBonusModel>[];
+      for (final j in data) {
+        try {
+          if (j is Map<String, dynamic>) {
+            final model = EmployeeBonusModel.fromJson(j);
+            if (model.periodStart.isAfter(start) || _period == _AnalyticsPeriod.lastYear) {
+              parsed.add(model);
+            }
+          }
+        } catch (_) {
+          // skip records that fail to parse
+        }
+      }
+      setState(() => _bonuses = parsed);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -471,9 +478,13 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
   // ═══════════════════════════════════════════════════════
   Widget _buildTrendChart(ThemeData theme, bool isAr) {
     final now = DateTime.now();
+    // Build the last 6 months explicitly to avoid month-0 edge cases.
     final months = List.generate(6, (i) {
-      final m = DateTime(now.year, now.month - 5 + i, 1);
-      return m;
+      final offsetMonths = 5 - i;
+      var y = now.year;
+      var m = now.month - offsetMonths;
+      while (m < 1) { m += 12; y -= 1; }
+      return DateTime(y, m, 1);
     });
 
     final monthTotals = <double>[];
@@ -497,7 +508,13 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
         ? ((lastValue - prevValue) / prevValue * 100)
         : null;
 
-    final monthFmt = DateFormat.MMM(isAr ? 'ar' : 'en');
+    // Use 'en' as safe fallback; Arabic locale may not be initialized on web.
+    DateFormat monthFmt;
+    try {
+      monthFmt = DateFormat.MMM(isAr ? 'ar' : 'en');
+    } catch (_) {
+      monthFmt = DateFormat.MMM('en');
+    }
 
     return _AnalyticsCard(
       icon: Icons.trending_up_rounded,
@@ -517,11 +534,12 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
               child: BarChart(
                 BarChartData(
                   alignment: BarChartAlignment.spaceAround,
+                  minY: 0.0,
                   maxY: maxValue * 1.15,
                   gridData: FlGridData(
                     show: true,
                     drawVerticalLine: false,
-                    horizontalInterval: (maxValue / 3).clamp(0.01, double.infinity),
+                    horizontalInterval: (maxValue / 3).clamp(1.0, 1e12),
                     getDrawingHorizontalLine: (_) => FlLine(
                       color: theme.dividerColor.withValues(alpha: 0.3),
                       strokeWidth: 0.5,
@@ -542,14 +560,22 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
                         showTitles: true,
                         reservedSize: 22,
                         getTitlesWidget: (value, meta) {
-                          final i = value.toInt();
+                          final i = value.isNaN || value.isInfinite
+                              ? -1
+                              : value.round();
                           if (i < 0 || i >= months.length) {
                             return const SizedBox.shrink();
+                          }
+                          String label;
+                          try {
+                            label = monthFmt.format(months[i]);
+                          } catch (_) {
+                            label = '${months[i].month}';
                           }
                           return Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(
-                              monthFmt.format(months[i]),
+                              label,
                               style: TextStyle(
                                 fontSize: 9.5,
                                 color: theme.hintColor,

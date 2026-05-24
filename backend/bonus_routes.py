@@ -459,8 +459,9 @@ def get_bonuses():
     try:
         employee_id = request.args.get('employee_id', type=int)
         status = request.args.get('status')
-        period_start = request.args.get('period_start')
-        period_end = request.args.get('period_end')
+        # Support both period_start/period_end and date_from/date_to (Flutter alias)
+        period_start = request.args.get('period_start') or request.args.get('date_from')
+        period_end = request.args.get('period_end') or request.args.get('date_to')
         
         query = EmployeeBonus.query
         

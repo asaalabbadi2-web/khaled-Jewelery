@@ -4383,6 +4383,7 @@ class EmployeeBonus(db.Model):
             }
         if include_rule and self.rule:
             result['rule'] = self.rule.to_dict()
+            result['bonus_rule'] = result['rule']  # Flutter alias
         return result
 
 
