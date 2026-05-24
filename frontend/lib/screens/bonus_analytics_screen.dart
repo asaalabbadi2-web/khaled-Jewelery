@@ -77,11 +77,12 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
       final parsed = <EmployeeBonusModel>[];
       for (final j in data) {
         try {
-          if (j is Map<String, dynamic>) {
-            final model = EmployeeBonusModel.fromJson(j);
-            if (model.periodStart.isAfter(start) || _period == _AnalyticsPeriod.lastYear) {
-              parsed.add(model);
-            }
+          if (j is! Map) continue;
+          final model = EmployeeBonusModel.fromJson(
+              Map<String, dynamic>.from(j));
+          if (model.periodStart.isAfter(start) ||
+              _period == _AnalyticsPeriod.lastYear) {
+            parsed.add(model);
           }
         } catch (_) {
           // skip records that fail to parse
