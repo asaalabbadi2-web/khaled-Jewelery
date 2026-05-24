@@ -459,25 +459,31 @@ def get_bonuses():
     try:
         employee_id = request.args.get('employee_id', type=int)
         status = request.args.get('status')
-        # Support both period_start/period_end and date_from/date_to (Flutter alias)
-        period_start = request.args.get('period_start') or request.args.get('date_from')
-        period_end = request.args.get('period_end') or request.args.get('date_to')
-        
+        # date_from / date_to filter by created_at (inclusive, null-safe)
+        date_from = request.args.get('date_from') or request.args.get('period_start')
+        date_to   = request.args.get('date_to')   or request.args.get('period_end')
+
         query = EmployeeBonus.query
-        
+
         if employee_id:
             query = query.filter_by(employee_id=employee_id)
-        
+
         if status:
             query = query.filter_by(status=status)
-        
-        if period_start:
-            start_date = datetime.strptime(period_start, '%Y-%m-%d').date()
-            query = query.filter(EmployeeBonus.period_start >= start_date)
-        
-        if period_end:
-            end_date = datetime.strptime(period_end, '%Y-%m-%d').date()
-            query = query.filter(EmployeeBonus.period_end <= end_date)
+
+        if date_from:
+            try:
+                df = datetime.strptime(date_from, '%Y-%m-%d')
+                query = query.filter(EmployeeBonus.created_at >= df)
+            except ValueError:
+                pass
+
+        if date_to:
+            try:
+                dt = datetime.strptime(date_to, '%Y-%m-%d') + timedelta(days=1)
+                query = query.filter(EmployeeBonus.created_at < dt)
+            except ValueError:
+                pass
         
         bonuses = query.order_by(EmployeeBonus.created_at.desc()).all()
         

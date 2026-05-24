@@ -70,12 +70,8 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
           break;
       }
 
-      // نحمّل سنة كاملة لرسم اتجاه آخر 6 شهور حتى لو الفلتر أصغر
-      final yearStart = now.subtract(const Duration(days: 365));
-      final data = await widget.api.getBonuses(
-        dateFrom: yearStart.toIso8601String().split('T').first,
-        dateTo: now.toIso8601String().split('T').first,
-      );
+      // جلب جميع المكافآت — الفلتر بالفترة يتم محلياً
+      final data = await widget.api.getBonuses();
 
       if (!mounted) return;
       final parsed = <EmployeeBonusModel>[];
