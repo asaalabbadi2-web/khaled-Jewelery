@@ -461,6 +461,7 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
   bool _loadingLeaderboard = false;
   bool _loadingData = false;
   bool _granting = false;
+  bool _fetchedOnce = false;
   final _notesCtrl = TextEditingController();
 
 
@@ -510,13 +511,19 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
     setState(() { _loadingLeaderboard = true; _winners = []; });
     try {
       final data = await widget.api.getHomeLeaderboard(period: _period, metric: _metric);
-      final top3 = ((data['ranking'] as List?) ?? []).take(3).toList();
+      // Only employees who reached their goal (goal_progress >= 1.0).
+      // If goal_progress is null the employee has no target set — exclude them too.
+      final allRanking = (data['ranking'] as List?) ?? [];
+      final qualified = allRanking.where((r) {
+        final gp = (r as Map)['goal_progress'];
+        return gp != null && (gp as num) >= 1.0;
+      }).take(3).toList();
       for (final w in _winners) {
         w.dispose();
       }
       final entries = <_WinnerEntry>[];
-      for (var i = 0; i < top3.length; i++) {
-        final row = top3[i] as Map;
+      for (var i = 0; i < qualified.length; i++) {
+        final row = qualified[i] as Map;
         final name = (row['name'] ?? '').toString();
         final score = (row['score'] as num?)?.toDouble() ?? 0.0;
         EmployeeModel? matched;
@@ -532,7 +539,7 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
           amount: _calcAmount(score, _selectedRule),
         ));
       }
-      setState(() => _winners = entries);
+      setState(() { _winners = entries; _fetchedOnce = true; });
     } catch (e) {
       _snack(e.toString(), error: true);
     } finally {
@@ -725,6 +732,15 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
         ),
 
         // ── الفائزون ──
+        if (_fetchedOnce && _winners.isEmpty && !_loadingLeaderboard) ...[
+          const SizedBox(height: 16),
+          Center(
+            child: Text(
+              isAr ? 'لا يوجد موظفون بلغوا هدفهم بعد' : 'No employees have reached their goal yet',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+            ),
+          ),
+        ],
         if (_winners.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text(isAr ? 'الفائزون' : 'Winners',
