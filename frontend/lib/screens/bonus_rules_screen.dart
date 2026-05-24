@@ -38,18 +38,20 @@ class _BonusRulesScreenState extends State<BonusRulesScreen> {
     setState(() => _loading = true);
     try {
       final data = await widget.api.getBonusRules(isActive: _activeFilter);
+      if (!mounted) return;
       final rules = data
           .map((json) => BonusRuleModel.fromJson(json as Map<String, dynamic>))
           .toList();
       setState(() => _rules = rules);
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
+      if (mounted) _showSnack(e.toString(), isError: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   void _showSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
     final isAr = widget.isArabic;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -111,10 +113,11 @@ class _BonusRulesScreenState extends State<BonusRulesScreen> {
     if (confirm == true && rule.id != null) {
       try {
         await widget.api.deleteBonusRule(rule.id!);
+        if (!mounted) return;
         _showSnack(isAr ? 'تم الحذف بنجاح' : 'Deleted successfully');
         _loadRules();
       } catch (e) {
-        _showSnack(e.toString(), isError: true);
+        if (mounted) _showSnack(e.toString(), isError: true);
       }
     }
   }

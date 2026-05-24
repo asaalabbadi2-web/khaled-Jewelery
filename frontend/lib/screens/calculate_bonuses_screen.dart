@@ -224,6 +224,7 @@ class _AutoCalculateContentState extends State<_AutoCalculateContent> {
   }
 
   void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: error ? Colors.red.shade700 : Colors.green.shade700,
@@ -616,6 +617,7 @@ class _WinnersBonusContentState extends State<_WinnersBonusContent> {
   }
 
   void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: error ? Colors.red.shade700 : Colors.green.shade700,
