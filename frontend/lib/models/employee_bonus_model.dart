@@ -42,40 +42,45 @@ class EmployeeBonusModel {
   });
 
   factory EmployeeBonusModel.fromJson(Map<String, dynamic> json) {
+    // Use (num).toInt() for all integer fields — on Flutter Web JSON numbers
+    // may arrive as double (e.g. 1.0) and `as int` would throw a TypeError.
     return EmployeeBonusModel(
-      id: json['id'] as int?,
-      employeeId: json['employee_id'] as int,
-      bonusRuleId: json['bonus_rule_id'] as int?,
-      bonusType: json['bonus_type'] as String,
-      amount: (json['amount'] as num).toDouble(),
+      id: (json['id'] as num?)?.toInt(),
+      employeeId: (json['employee_id'] as num).toInt(),
+      bonusRuleId: (json['bonus_rule_id'] as num?)?.toInt(),
+      bonusType: (json['bonus_type'] as String?) ?? 'manual',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
       periodStart: json['period_start'] != null
-          ? DateTime.parse(json['period_start'] as String)
+          ? DateTime.tryParse(json['period_start'].toString()) ?? DateTime.now()
           : DateTime.now(),
       periodEnd: json['period_end'] != null
-          ? DateTime.parse(json['period_end'] as String)
+          ? DateTime.tryParse(json['period_end'].toString()) ?? DateTime.now()
           : DateTime.now(),
-      calculationData: json['calculation_data'] as Map<String, dynamic>?,
-      status: json['status'] as String? ?? 'pending',
+      calculationData: json['calculation_data'] is Map
+          ? Map<String, dynamic>.from(json['calculation_data'] as Map)
+          : null,
+      status: (json['status'] as String?) ?? 'pending',
       notes: json['notes'] as String?,
       approvedBy: json['approved_by'] as String?,
       approvedAt: json['approved_at'] != null
-          ? DateTime.parse(json['approved_at'] as String)
+          ? DateTime.tryParse(json['approved_at'].toString())
           : null,
       paidAt: json['paid_at'] != null
-          ? DateTime.parse(json['paid_at'] as String)
+          ? DateTime.tryParse(json['paid_at'].toString())
           : null,
       paymentReference: json['payment_reference'] as String?,
       createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
+          ? DateTime.tryParse(json['created_at'].toString())
           : null,
       createdBy: json['created_by'] as String?,
-      employee: json['employee'] != null
-          ? EmployeeSummary.fromJson(json['employee'] as Map<String, dynamic>)
+      employee: json['employee'] is Map
+          ? EmployeeSummary.fromJson(
+              Map<String, dynamic>.from(json['employee'] as Map))
           : null,
-      bonusRule: json['bonus_rule'] != null
+      bonusRule: (json['bonus_rule'] ?? json['rule']) is Map
           ? BonusRuleSummary.fromJson(
-              json['bonus_rule'] as Map<String, dynamic>,
-            )
+              Map<String, dynamic>.from(
+                  (json['bonus_rule'] ?? json['rule']) as Map))
           : null,
     );
   }
