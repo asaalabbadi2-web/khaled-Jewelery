@@ -42,6 +42,9 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
 
   List<EmployeeBonusModel> _allBonuses = [];
   _AnalyticsPeriod _period = _AnalyticsPeriod.last30;
+  int _rawCount = -1;
+  String _diagMsg = '';
+  // ^^^ diagnostic fields — remove after confirming data loads
 
   List<EmployeeBonusModel> get _bonuses {
     if (_allBonuses.isEmpty || _period == _AnalyticsPeriod.lastYear) {
@@ -66,17 +69,32 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _rawCount = -1;
+      _diagMsg = '';
     });
     try {
       final data = await widget.api.getBonuses();
       if (!mounted) return;
-      final parsed = data
-          .map((j) => EmployeeBonusModel.fromJson(j as Map<String, dynamic>))
-          .toList();
-      setState(() => _allBonuses = parsed);
+      _rawCount = data.length;
+      String parseErr = '';
+      final parsed = <EmployeeBonusModel>[];
+      for (final j in data) {
+        try {
+          parsed.add(EmployeeBonusModel.fromJson(j as Map<String, dynamic>));
+        } catch (e) {
+          parseErr = e.toString();
+        }
+      }
+      setState(() {
+        _allBonuses = parsed;
+        _diagMsg = 'API:$_rawCount parsed:${parsed.length}'
+            '${parseErr.isNotEmpty ? " err:$parseErr" : ""}';
+      });
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = e.toString());
+      setState(() {
+        _error = e.toString();
+        _diagMsg = 'load-err:$e';
+      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -899,6 +917,14 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
               ),
             ),
           ),
+          if (_diagMsg.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            SelectableText(
+              _diagMsg,
+              style: const TextStyle(fontSize: 11, color: Colors.red),
+              textAlign: TextAlign.center,
+            ),
+          ],
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: _load,
