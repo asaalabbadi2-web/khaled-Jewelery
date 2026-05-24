@@ -13,7 +13,7 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 
 from models import (
     BonusInvoiceLink,
@@ -42,12 +42,17 @@ class BonusCalculator:
         username = None
         if hasattr(employee, "user_account") and employee.user_account:
             username = employee.user_account.username
-        if not username:
+
+        if username:
+            attr_filter = or_(Invoice.employee_id == employee.id, Invoice.posted_by == username)
+        elif employee.id:
+            attr_filter = Invoice.employee_id == employee.id
+        else:
             return None
 
         sales_query = db.session.query(func.sum(Invoice.total)).filter(
             and_(
-                Invoice.posted_by == username,
+                attr_filter,
                 Invoice.date >= period_start_dt,
                 Invoice.date <= period_end_dt,
                 Invoice.invoice_type == "بيع",
@@ -165,14 +170,19 @@ class BonusCalculator:
         username = None
         if hasattr(employee, "user_account") and employee.user_account:
             username = employee.user_account.username
-        if not username:
+
+        if username:
+            attr_filter = or_(Invoice.employee_id == employee.id, Invoice.posted_by == username)
+        elif employee.id:
+            attr_filter = Invoice.employee_id == employee.id
+        else:
             return None
 
         applicable_types = rule.applicable_invoice_types
 
         eligible_invoices_query = Invoice.query.filter(
             and_(
-                Invoice.posted_by == username,
+                attr_filter,
                 Invoice.date >= period_start_dt,
                 Invoice.date <= period_end_dt,
                 Invoice.is_posted.is_(True),
@@ -320,15 +330,13 @@ class BonusCalculator:
             Invoice.date <= end_dt,
         )
 
-        # ابحث بـ employee_id أولاً ثم posted_by
-        invoices = Invoice.query.filter(
-            and_(invoice_filter, Invoice.employee_id == employee.id)
-        ).all()
-
-        if not invoices and username:
-            invoices = Invoice.query.filter(
-                and_(invoice_filter, Invoice.posted_by == username)
-            ).all()
+        # ابحث بـ employee_id والـ posted_by معاً (OR) حتى لا تُفقد الفواتير التي
+        # تحمل أحدهما فقط — نفس منهجية لوحة المبيعات.
+        if username:
+            attr_filter = or_(Invoice.employee_id == employee.id, Invoice.posted_by == username)
+        else:
+            attr_filter = Invoice.employee_id == employee.id
+        invoices = Invoice.query.filter(and_(invoice_filter, attr_filter)).all()
 
         total_profit_gold = sum(float(inv.profit_gold or 0.0) for inv in invoices if float(inv.profit_gold or 0.0) > 0)
         employee_points = int(round(total_profit_gold * points_per_gram))

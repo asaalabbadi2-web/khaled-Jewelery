@@ -35338,6 +35338,15 @@ def check_goal_progress():
         now = _dt.now()
         new_achievements = []
 
+        # ── جلب اسم المستخدم للموظف مرة واحدة (للبحث بـ posted_by أيضاً) ──
+        _goal_username = None
+        try:
+            ua = getattr(employee, 'user_account', None)
+            if ua and getattr(ua, 'username', None):
+                _goal_username = str(ua.username).strip() or None
+        except Exception:
+            pass
+
         # ── دالة: حساب الأداء الفعلي لفترة معينة ──
         def _sold_weight(start_dt, end_dt):
             # للنقاط: نشمل "شراء من عميل" تطابقاً مع لوحة المبيعات
@@ -35345,12 +35354,17 @@ def check_goal_progress():
                 inv_types = ['بيع', 'sell', 'sale', 'شراء من عميل']
             else:
                 inv_types = ['بيع', 'sell', 'sale']
+            # نجمع بين employee_id و posted_by بـ OR تطابقاً مع لوحة المبيعات
+            if _goal_username:
+                _attr = or_(Invoice.employee_id == employee_id, Invoice.posted_by == _goal_username)
+            else:
+                _attr = Invoice.employee_id == employee_id
             invoices = Invoice.query.filter(
                 or_(Invoice.is_posted.is_(True), Invoice.status == 'posted'),
                 Invoice.date >= start_dt,
                 Invoice.date < end_dt,
                 Invoice.invoice_type.in_(inv_types),
-                Invoice.employee_id == employee_id,
+                _attr,
             ).all()
             if metric == 'invoices':
                 return float(len(invoices))
