@@ -70,16 +70,9 @@ class _BonusAnalyticsScreenState extends State<BonusAnalyticsScreen> {
     try {
       final data = await widget.api.getBonuses();
       if (!mounted) return;
-      final parsed = <EmployeeBonusModel>[];
-      for (final j in data) {
-        try {
-          if (j is! Map) continue;
-          parsed.add(
-              EmployeeBonusModel.fromJson(Map<String, dynamic>.from(j)));
-        } catch (_) {
-          // skip records that fail to parse
-        }
-      }
+      final parsed = data
+          .map((j) => EmployeeBonusModel.fromJson(j as Map<String, dynamic>))
+          .toList();
       setState(() => _allBonuses = parsed);
     } catch (e) {
       if (!mounted) return;
