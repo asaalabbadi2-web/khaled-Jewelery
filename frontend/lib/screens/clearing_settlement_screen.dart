@@ -17,14 +17,12 @@ class ClearingSettlementScreen extends StatefulWidget {
   final int? initialBankSafeBoxId;
 
   /// Maximum settleable amount (due amount) from the monitor screen.
-  /// When provided, overrides the clearing balance as the cap.
   final double? initialDueAmount;
 
-  /// العمليات المحددة للتسوية — إذا أُرسلت تُقيّد التسوية بها فقط.
+  /// IDs of the selected invoice payments from the monitor screen.
   final List<int>? initialInvoicePaymentIds;
 
-  /// عدد العمليات المحددة — يُستخدم في حساب عمولة "رسوم ثابتة × عدد العمليات".
-  /// إذا لم يُرسل يُحسب من الـ API (كامل العمليات المعلقة).
+  /// Number of selected transactions — pre-fills the tx-count field.
   final int? initialTxCount;
 
   const ClearingSettlementScreen({
@@ -107,6 +105,10 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     if (widget.initialDueAmount != null && widget.initialDueAmount! > 0) {
       final prefill = widget.initialDueAmount!.toStringAsFixed(2);
       _grossController.text = prefill;
+    }
+    // Pre-fill tx count from monitor selection
+    if (widget.initialTxCount != null && widget.initialTxCount! > 1) {
+      _txCountController.text = widget.initialTxCount!.toString();
     }
     // Track last text values to avoid unnecessary setState on cursor-only changes
     _lastGrossText = _grossController.text;
@@ -674,7 +676,6 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     if (type == 'clearing') {
       _applyFeePolicyFromClearingSafe();
-      _loadHistory();
     }
 
     // Nudge fee recalculation when changing context.
@@ -863,19 +864,14 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
             _recomputeFeeIfNeeded();
           }
         }
-        // Auto-fill tx count for per-transaction commission (bulk mode only).
-        // إذا جاء عدد محدد من شاشة المراقبة (تسوية انتقائية) نُعطيه الأولوية
-        // على عدد الـ API الذي يعكس كامل العمليات المعلقة.
-        final effectiveTxCount = (widget.initialTxCount != null && widget.initialTxCount! > 0)
-            ? widget.initialTxCount!
-            : txCountForFee;
-        if (effectiveTxCount != null &&
-            effectiveTxCount > 0 &&
+        // Auto-fill tx count for per-transaction commission (bulk mode only)
+        if (txCountForFee != null &&
+            txCountForFee > 0 &&
             !_feeAlreadyAppliedInInvoice) {
           final currentTxCount = int.tryParse(_txCountController.text) ?? 0;
           if (currentTxCount <= 1) {
-            _txCountController.text = effectiveTxCount.toString();
-            _lastTxCountText = effectiveTxCount.toString();
+            _txCountController.text = txCountForFee.toString();
+            _lastTxCountText = txCountForFee.toString();
             _recomputeFeeIfNeeded();
           }
         }
@@ -929,8 +925,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     try {
       final res = await _api.getVouchers(
         referenceType: 'clearing_settlement',
-        referenceId: _clearingSafe?.id,
-        perPage: 20,
+        perPage: 15,
         sortBy: 'date',
         sortOrder: 'desc',
       );
@@ -987,7 +982,6 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
       if (!mounted) return;
       _showSnack('تم عكس التسوية بنجاح');
       _loadHistory();
-      _loadPendingTransactions();
     } catch (e) {
       if (!mounted) return;
       _showSnack(e.toString(), error: true);
@@ -1066,15 +1060,14 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
     setState(() => _submitting = true);
 
     try {
-      // إذا وُجدت عمليات محددة من شاشة المراقبة نستخدمها مباشرة،
-      // وإلا نجمع كل IDs من قائمة الانتظار المحمّلة.
-      final ipIds = (widget.initialInvoicePaymentIds?.isNotEmpty == true)
-          ? widget.initialInvoicePaymentIds!
-          : _pendingTransactions
+      // Collect IP IDs: prefer pending transactions; fall back to monitor selection
+      final ipIds = _pendingTransactions.isNotEmpty
+          ? _pendingTransactions
               .map((tx) => tx['invoice_payment_id'] as int?)
               .where((id) => id != null)
               .cast<int>()
-              .toList();
+              .toList()
+          : (widget.initialInvoicePaymentIds ?? <int>[]);
 
       final res = await _api.createClearingSettlement(
         clearingSafeBoxId: clearingId,
@@ -1286,11 +1279,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          widget.initialInvoicePaymentIds?.isNotEmpty == true
-              ? 'تسوية ${widget.initialInvoicePaymentIds!.length} عملية (${widget.initialTxCount ?? widget.initialInvoicePaymentIds!.length} فاتورة)'
-              : 'تسوية مستحقات تحصيل',
-        ),
+        title: const Text('تسوية مستحقات تحصيل'),
         backgroundColor: theme.AppColors.primaryGold,
         foregroundColor: isLight ? Colors.black : Colors.white,
       ),
@@ -1924,10 +1913,9 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                               final status =
                                   (v['status'] ?? '').toString();
                               final totalCash =
-                                  (v['amount_cash'] as num?)?.toDouble() ??
+                                  (v['total_cash'] as num?)?.toDouble() ??
                                   0.0;
-                              final isActive =
-                                  status == 'approved' || status == 'pending';
+                              final isActive = status == 'active';
                               return Padding(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 5),

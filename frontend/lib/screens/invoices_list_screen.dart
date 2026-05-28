@@ -53,9 +53,8 @@ class _InvoiceTabConfig {
 
 class InvoicesListScreen extends StatefulWidget {
   final bool isArabic;
-  final String? initialSearch;
 
-  const InvoicesListScreen({super.key, this.isArabic = true, this.initialSearch});
+  const InvoicesListScreen({super.key, this.isArabic = true});
 
   @override
   State<InvoicesListScreen> createState() => _InvoicesListScreenState();
@@ -210,11 +209,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     DataSyncBus.itemsRevision.addListener(_itemsRevisionListener!);
     _loadInvoices();
     _warmFilterLookups();
-    if (widget.initialSearch != null && widget.initialSearch!.isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _searchControllers[_tabController.index].text = widget.initialSearch!;
-      });
-    }
   }
 
   @override
