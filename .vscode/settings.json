@@ -1,4 +1,5 @@
 {
+    "files.hotExit": "off",
     "cmake.sourceDirectory": "/Users/salehalabbadi/yasargold/frontend/linux",
     "python.defaultInterpreterPath": "/Users/salehalabbadi/yasargold/backend/venv/bin/python",
     "python.analysis.extraPaths": [
