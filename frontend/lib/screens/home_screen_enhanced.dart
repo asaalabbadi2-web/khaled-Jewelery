@@ -160,6 +160,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   // 🎉 Achievement celebration
   Timer? _achievementCheckTimer;
   bool _isShowingAchievement = false;
+  bool _isCheckingAchievements = false;
   final Set<int> _shownAchievementIds = {};
 
   @override
@@ -354,31 +355,37 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         if (!auth.hasPermission('safe_boxes.view')) safeBoxes = [];
       });
 
-      debugPrint('🔄 بدء تحميل البيانات...');
-      final futures = <Future<void>>[];
-      if (auth.isAuthenticated) futures.add(_loadGoldPrice());
-      if (auth.isAuthenticated) futures.add(_loadSparklineData());
-      if (auth.isAuthenticated) futures.add(_loadPendingApprovalsCount());
+      // Phase 1: essential data — blocks UI until ready
+      final essentialFutures = <Future<void>>[];
+      if (auth.isAuthenticated) essentialFutures.add(_loadGoldPrice());
+      if (auth.isAuthenticated) essentialFutures.add(_loadSparklineData());
+      if (auth.isAuthenticated) essentialFutures.add(_loadPendingApprovalsCount());
+      if (auth.hasPermission('safe_boxes.view')) essentialFutures.add(_loadSafeBoxes());
       final quickActions = context.read<QuickActionsProvider>();
       if (auth.isAuthenticated && quickActions.showSalesRaceCard) {
-        futures.add(_loadLeaderboard());
+        essentialFutures.add(_loadLeaderboard());
       }
-      if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
-      if (auth.hasPermission('items.view')) futures.add(_loadItems());
-      if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
-      if (auth.hasPermission('suppliers.view')) futures.add(_loadSuppliers());
-      if (auth.hasPermission('safe_boxes.view')) futures.add(_loadSafeBoxes());
-
-      await Future.wait(futures);
-
-      debugPrint(
-        '✅ تم تحميل البيانات - العملاء: ${customers.length}, الأصناف: ${items.length}, الفواتير: ${invoices.length}',
-      );
+      await Future.wait(essentialFutures);
     } catch (e) {
-      debugPrint('❌ خطأ في تحميل البيانات: $e');
+      debugPrint('❌ خطأ في تحميل البيانات الأساسية: $e');
     } finally {
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
     }
+
+    // Phase 2: background data — does not block the home screen UI
+    _loadBackgroundData();
+  }
+
+  Future<void> _loadBackgroundData() async {
+    if (!mounted) return;
+    final auth = context.read<AuthProvider>();
+    if (!auth.isAuthenticated) return;
+    final futures = <Future<void>>[];
+    if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
+    if (auth.hasPermission('items.view')) futures.add(_loadItems());
+    if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
+    if (auth.hasPermission('suppliers.view')) futures.add(_loadSuppliers());
+    await Future.wait(futures);
   }
 
   Future<void> _loadLeaderboard({String? period}) async {
@@ -464,10 +471,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   // ───────────────────────────────────────────────────
 
   Future<void> _checkForAchievements() async {
-    if (_isShowingAchievement || !mounted) return;
+    if (_isShowingAchievement || _isCheckingAchievements || !mounted) return;
     final auth = context.read<AuthProvider>();
     if (!auth.isAuthenticated) return;
 
+    _isCheckingAchievements = true;
     try {
       // 1️⃣ تحقق من الأهداف الشخصية للموظف أولاً → قد يُنشئ إنجازات جديدة
       final freshlyAchieved = await api.checkGoalProgress();
@@ -491,6 +499,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       }
     } catch (e) {
       debugPrint('❌ Achievement check failed: $e');
+    } finally {
+      _isCheckingAchievements = false;
     }
   }
 
