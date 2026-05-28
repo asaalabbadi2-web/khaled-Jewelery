@@ -352,21 +352,26 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
     widget.onDismiss?.call();
   }
 
+  /// يُنسّق مبلغ المكافأة بـ floor لعشري واحد في k/M
+  /// "+" يظهر فقط إذا كان الفعلي أكبر من الـ floor × الوحدة:
+  ///   1550 → +1.5k  |  1400 → 1.4k  |  2502 → +2.5k  |  2500 → 2.5k
   String _formatBonus(double value) {
-    if (value.abs() >= 1000000) {
-      return '${(value / 1000000).toStringAsFixed(1)}M';
-    } else if (value.abs() >= 1000) {
-      return '${(value / 1000).toStringAsFixed(0)}K';
-    }
-    return value.toStringAsFixed(0);
+    if (value <= 0) return '0';
+    final bool isMega = value.abs() >= 1000000;
+    final double divisor = isMega ? 1000000 : 1000;
+    final String suffix = isMega ? 'M' : 'k';
+    final int tenths = (value / (divisor / 10)).floor();
+    final double unitValue = tenths / 10.0;
+    final double threshold = unitValue * divisor;
+    final String prefix = (value - threshold) > 0.001 ? '+' : '';
+    return '$prefix${unitValue.toStringAsFixed(1)}$suffix';
   }
 
   String _formatMetric(dynamic value) {
     if (value is num) {
-      if (value.abs() >= 1000) {
-        return '${(value / 1000).toStringAsFixed(1)}K';
-      }
-      return value.toStringAsFixed(value == value.toInt() ? 0 : 1);
+      final double d = value.toDouble();
+      if (d.abs() >= 1000) return '${(d / 1000).toStringAsFixed(1)}k';
+      return d.toStringAsFixed(d == d.toInt() ? 0 : 1);
     }
     return value?.toString() ?? '-';
   }
@@ -374,15 +379,15 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
   String _localizeMetricKey(String key, bool isAr) {
     if (!isAr) return key;
     const translations = {
-      'points': 'النقاط',
-      'invoices': 'الفواتير',
-      'rank': 'المرتبة',
-      'sales': 'المبيعات',
-      'weight': 'الوزن',
-      'count': 'العدد',
-      'amount': 'المبلغ',
+      'points':   'النقاط المحققة',
+      'invoices': 'الفواتير المحققة',
+      'weight':   'الوزن المحقق',
+      'target':   'الهدف المطلوب',
+      'rank':     'المرتبة',
+      'sales':    'المبيعات',
+      'count':    'العدد',
+      'amount':   'المبلغ',
       'percentage': 'النسبة',
-      'target': 'الهدف',
       'progress': 'التقدّم',
       'metric': 'المقياس',
       'period': 'الفترة',
@@ -832,14 +837,28 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
                                 .withValues(alpha: 0.65),
                           ),
                         ),
-                      Text(
-                        isAr ? 'المكافأة المستحقة' : 'Bonus Earned',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: theme.colorScheme.onSurface
-                              .withValues(alpha: 0.5),
+                      if (achievement.bonusAmount > 0) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          isAr ? 'المكافأة المستحقة' : 'Bonus Earned',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.5),
+                          ),
                         ),
-                      ),
+                      ] else ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          isAr ? 'بدون مكافأة مالية' : 'No monetary bonus',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.4),
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
