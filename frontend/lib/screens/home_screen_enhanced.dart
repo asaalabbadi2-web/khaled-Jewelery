@@ -109,9 +109,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   int _sparklineTickCounter = 0;
   List customers = [];
   List items = [];
-  List invoices = [];
-  List suppliers = [];
-  List safeBoxes = []; // 🆕 خزائن الذهب
+  List safeBoxes = [];
 
   // Currency data
   double exchangeRate = 3.75; // سعر الصرف الافتراضي (دولار -> ريال سعودي)
@@ -349,16 +347,12 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
       setState(() {
         isLoading = true;
-
-        // Prevent showing data from a previous session when switching users.
         if (!auth.hasPermission('customers.view')) customers = [];
         if (!auth.hasPermission('items.view')) items = [];
-        if (!auth.hasPermission('invoices.view')) invoices = [];
-        if (!auth.hasPermission('suppliers.view')) suppliers = [];
         if (!auth.hasPermission('safe_boxes.view')) safeBoxes = [];
       });
 
-      // Phase 1: essential data — blocks UI until ready
+      // Phase 1: essential data that the home screen displays — show UI as soon as these finish.
       final essentialFutures = <Future<void>>[];
       if (auth.isAuthenticated) essentialFutures.add(_loadGoldPrice());
       if (auth.isAuthenticated) essentialFutures.add(_loadSparklineData());
@@ -368,14 +362,17 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       if (auth.isAuthenticated && quickActions.showSalesRaceCard) {
         essentialFutures.add(_loadLeaderboard());
       }
+
       await Future.wait(essentialFutures);
     } catch (e) {
       debugPrint('❌ خطأ في تحميل البيانات الأساسية: $e');
     } finally {
       if (mounted) setState(() => isLoading = false);
+      _checkPersonalGoalAchievements();
     }
 
-    // Phase 2: background data — does not block the home screen UI
+    // Phase 2: background data (customers/items) used only when opening invoice screens.
+    // Does not block the home screen UI.
     _loadBackgroundData();
   }
 
@@ -383,12 +380,17 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     if (!mounted) return;
     final auth = context.read<AuthProvider>();
     if (!auth.isAuthenticated) return;
+
     final futures = <Future<void>>[];
     if (auth.hasPermission('customers.view')) futures.add(_loadCustomers());
     if (auth.hasPermission('items.view')) futures.add(_loadItems());
-    if (auth.hasPermission('invoices.view')) futures.add(_loadInvoices());
-    if (auth.hasPermission('suppliers.view')) futures.add(_loadSuppliers());
+
     await Future.wait(futures);
+  }
+
+  Future<void> _checkPersonalGoalAchievements() async {
+    // يُحوَّل إلى _checkForAchievements لضمان مسار موحّد ومدار بشكل صحيح
+    await _checkForAchievements();
   }
 
   Future<void> _loadLeaderboard({String? period}) async {
@@ -480,13 +482,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
 
     _isCheckingAchievements = true;
     try {
-      // 1️⃣ تحقق من الأهداف الشخصية للموظف أولاً → قد يُنشئ إنجازات جديدة
       final freshlyAchieved = await api.checkGoalProgress();
-
-      // 2️⃣ ثم اجلب جميع الإنجازات غير المشاهدة (القديمة + الجديدة)
       final unseen = await api.getUnseenAchievements();
 
-      // دمج القائمتين مع إزالة التكرار (الجديدة أولاً)
       final seen = <int>{};
       final combined = <Map<String, dynamic>>[];
       for (final a in [...freshlyAchieved, ...unseen]) {
@@ -512,29 +510,31 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     _isShowingAchievement = true;
     if (achievement.id != null) _shownAchievementIds.add(achievement.id!);
 
-    await GoalAchievementOverlay.show(
-      context,
-      achievement: achievement,
-      isArabic: widget.isArabic,
-      onDismiss: () {
-        if (achievement.id != null) {
-          api.markAchievementSeen(achievement.id!);
-        }
-      },
-      onViewDetails: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => BonusManagementScreen(
-              api: api,
-              isArabic: widget.isArabic,
+    try {
+      await GoalAchievementOverlay.show(
+        context,
+        achievement: achievement,
+        isArabic: widget.isArabic,
+        onViewDetails: () {
+          if (!mounted) return;
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BonusManagementScreen(
+                api: api,
+                isArabic: widget.isArabic,
+              ),
             ),
-          ),
-        );
-      },
-    );
-
-    _isShowingAchievement = false;
+          );
+        },
+      );
+    } finally {
+      _isShowingAchievement = false;
+      // Mark as seen regardless of how the dialog was dismissed (button, barrier tap, etc.)
+      if (achievement.id != null) {
+        api.markAchievementSeen(achievement.id!);
+      }
+    }
   }
 
   Future<void> _loadPendingApprovalsCount() async {
@@ -688,25 +688,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     }
   }
 
-  Future<void> _loadInvoices() async {
-    try {
-      final data = await api.getInvoices();
-      setState(() {
-        invoices = data is List ? data : (data['invoices'] ?? []);
-      });
-    } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الفواتير: $e');
-    }
-  }
-
-  Future<void> _loadSuppliers() async {
-    try {
-      final data = await api.getSuppliers();
-      setState(() => suppliers = data);
-    } catch (e) {
-      debugPrint('⚠️ خطأ في تحميل الموردين: $e');
-    }
-  }
 
   Future<void> _loadSafeBoxes() async {
     try {
@@ -985,6 +966,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         ),
       ),
     );
+    // ════════════════════════════════════════════════════════════════════════
+    // 1. الفواتير
+    // ════════════════════════════════════════════════════════════════════════
     addSection(isAr ? 'الفواتير' : 'Invoices', gold);
     addDestination(
       icon: Icons.point_of_sale,
@@ -1005,7 +989,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
     addDestination(
       icon: Icons.recycling_outlined,
-      title: isAr ? 'فاتورة بيع ذهب كسر' : 'Scrap Gold Sale',
+      title: isAr ? 'بيع ذهب كسر' : 'Scrap Gold Sale',
       color: Colors.orangeAccent,
       onSelected: () async {
         final result = await Navigator.push(
@@ -1023,7 +1007,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     addDestination(
       icon: Icons.shopping_basket,
       title: isAr ? 'شراء كسر من عميل' : 'Buy Scrap from Customer',
-      color: Colors.blue,
+      color: Colors.amber.shade700,
       onSelected: () async {
         final result = await Navigator.push(
           context,
@@ -1038,8 +1022,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
     addDestination(
       icon: Icons.business,
-      title: isAr ? 'شراء' : 'Purchase (Supplier)',
-      color: Colors.purple,
+      title: isAr ? 'فاتورة شراء' : 'Purchase Invoice',
+      color: Colors.blue.shade400,
       onSelected: () async {
         final result = await Navigator.push(
           context,
@@ -1050,7 +1034,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
     addDestination(
       icon: Icons.receipt_long,
-      title: isAr ? 'عرض جميع الفواتير' : 'All Invoices',
+      title: isAr ? 'جميع الفواتير' : 'All Invoices',
+      color: Colors.blueGrey,
       onSelected: () async {
         await Navigator.push(
           context,
@@ -1058,7 +1043,23 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         );
       },
     );
+    addDestination(
+      icon: Icons.check_circle_outline,
+      title: isAr ? 'اعتماد الترحيل' : 'Posting Management',
+      color: Colors.teal,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PostingManagementScreen(isArabic: isAr),
+          ),
+        );
+      },
+    );
 
+    // ════════════════════════════════════════════════════════════════════════
+    // 2. المرتجعات
+    // ════════════════════════════════════════════════════════════════════════
     addDivider();
     addSection(isAr ? 'المرتجعات' : 'Returns', Colors.red.shade300);
     addDestination(
@@ -1079,7 +1080,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     addDestination(
       icon: Icons.undo,
       title: isAr ? 'مرتجع شراء كسر' : 'Scrap Purchase Return',
-      color: Colors.orange.shade300,
+      color: Colors.red.shade300,
       onSelected: () async {
         final result = await Navigator.push(
           context,
@@ -1093,25 +1094,26 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
     addDestination(
       icon: Icons.assignment_return,
-      title: isAr ? 'مرتجع شراء (مورد)' : 'Supplier Purchase Return',
-      color: Colors.deepOrange.shade300,
+      title: isAr ? 'مرتجع شراء (مورد)' : 'Supplier Return',
+      color: Colors.red.shade300,
       onSelected: () async {
         final result = await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) =>
-                const PurchaseInvoiceScreen(supplierReturnMode: true),
-          ),
+          MaterialPageRoute(builder: (_) => const PurchaseInvoiceScreen()),
         );
         if (result == true) await _loadAllData();
       },
     );
 
+    // ════════════════════════════════════════════════════════════════════════
+    // 3. العملاء والموردين
+    // ════════════════════════════════════════════════════════════════════════
     addDivider();
-    addSection(isAr ? 'العملاء' : 'Customers', Colors.blue.shade300);
+    addSection(isAr ? 'العملاء والموردين' : 'Customers & Suppliers', Colors.blue.shade300);
     addDestination(
       icon: Icons.people,
-      title: isAr ? 'قائمة العملاء' : 'Customers List',
+      title: isAr ? 'قائمة العملاء' : 'Customers',
+      color: Colors.blue.shade300,
       onSelected: () async {
         await Navigator.push(
           context,
@@ -1123,59 +1125,18 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     );
     addDestination(
       icon: Icons.person_add,
-      title: isAr ? 'إضافة عميل جديد' : 'Add Customer',
-      onSelected: () async {
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AddCustomerScreen(api: api)),
-        );
-        if (result == true) await _loadAllData();
-      },
-    );
-
-    addDivider();
-    addSection(isAr ? 'الأصناف' : 'Items', Colors.orange.shade300);
-    addDestination(
-      icon: Icons.inventory_2,
-      title: isAr ? 'قائمة الأصناف' : 'Items List',
+      title: isAr ? 'إضافة عميل' : 'Add Customer',
+      color: Colors.blue.shade300,
       onSelected: () async {
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => ItemsScreenEnhanced(api: api)),
+          MaterialPageRoute(builder: (_) => AddCustomerScreen(api: api)),
         );
       },
     );
-    addDestination(
-      icon: Icons.add_box,
-      title: isAr ? 'إضافة صنف جديد' : 'Add Item',
-      onSelected: () async {
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AddItemScreenEnhanced(api: api)),
-        );
-        if (result == true) await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.autorenew,
-      title: isAr ? 'التجديد والتكسير' : 'Renewal & Melting',
-      color: Colors.amber.shade600,
-      onSelected: () async {
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => MeltingRenewalScreen(api: api, isArabic: isAr),
-          ),
-        );
-        if (result == true) await _loadAllData();
-      },
-    );
-
-    addDivider();
-    addSection(isAr ? 'الموردين' : 'Suppliers', Colors.purple.shade300);
     addDestination(
       icon: Icons.store,
-      title: isAr ? 'قائمة الموردين' : 'Suppliers List',
+      title: isAr ? 'قائمة الموردين' : 'Suppliers',
       color: Colors.purple.shade300,
       onSelected: () async {
         await Navigator.push(
@@ -1187,23 +1148,61 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       },
     );
 
-    // مكاتب التسكير تصنّف ضمن الموردين (كيان مستقل عن الفروع)
+    // ════════════════════════════════════════════════════════════════════════
+    // 4. الأصناف
+    // ════════════════════════════════════════════════════════════════════════
+    addDivider();
+    addSection(isAr ? 'الأصناف' : 'Items', Colors.orange.shade300);
     addDestination(
-      icon: Icons.business,
-      title: isAr ? 'قائمة مكاتب التسكير' : 'Closing Offices',
-      color: AppColors.darkGold,
+      icon: Icons.inventory_2,
+      title: isAr ? 'قائمة الأصناف' : 'Items List',
+      color: Colors.orange.shade300,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ItemsScreenEnhanced(api: api)),
+        );
+      },
+    );
+    addDestination(
+      icon: Icons.add_box,
+      title: isAr ? 'إضافة صنف' : 'Add Item',
+      color: Colors.orange.shade300,
       onSelected: () async {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => OfficesScreen(api: api, isArabic: isAr),
+            builder: (_) => AddItemScreenEnhanced(api: api),
           ),
         );
       },
     );
     addDestination(
+      icon: Icons.autorenew,
+      title: isAr ? 'التجديد والتكسير' : 'Melting & Renewal',
+      color: Colors.orange.shade300,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                MeltingRenewalScreen(api: api, isArabic: isAr),
+          ),
+        );
+      },
+    );
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 5. التسكير والذهب الخام
+    // ════════════════════════════════════════════════════════════════════════
+    addDivider();
+    addSection(
+      isAr ? 'التسكير والذهب الخام' : 'Gold & Closing',
+      AppColors.primaryGold,
+    );
+    addDestination(
       icon: Icons.lock_clock,
-      title: isAr ? 'التسكير - حجز ذهب خام' : 'Gold Reservation',
+      title: isAr ? 'حجز ذهب خام' : 'Gold Reservation',
       color: AppColors.primaryGold,
       onSelected: () async {
         final result = await Navigator.push(
@@ -1215,23 +1214,49 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         if (result == true) await _loadAllData();
       },
     );
-
-    addDivider();
-    addSection(
-      isAr ? ' الموارد البشرية' : ' Human Resources',
-      Colors.blueGrey.shade400,
-    );
     addDestination(
-      icon: Icons.badge,
-      title: isAr ? 'الموظفين' : 'Employees',
-      color: Colors.blueGrey.shade300,
+      icon: Icons.business,
+      title: isAr ? 'مكاتب التسكير' : 'Closing Offices',
+      color: AppColors.darkGold,
       onSelected: () async {
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => EmployeesScreen(api: api)),
+          MaterialPageRoute(
+            builder: (_) => OfficesScreen(api: api, isArabic: isAr),
+          ),
         );
       },
     );
+    addDestination(
+      icon: Icons.scale,
+      title: isAr ? 'تنفيذ التسكير الوزني' : 'Weight Closing',
+      color: AppColors.primaryGold,
+      onSelected: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const WeightClosingExecuteScreen()),
+        );
+      },
+    );
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 6. الموارد البشرية (حسب الصلاحيات)
+    // ════════════════════════════════════════════════════════════════════════
+    addDivider();
+    addSection(isAr ? 'الموارد البشرية' : 'Human Resources', Colors.blueGrey.shade400);
+    if (auth.hasPermission('employees.view')) {
+      addDestination(
+        icon: Icons.badge,
+        title: isAr ? 'الموظفين' : 'Employees',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => EmployeesScreen(api: api)),
+          );
+        },
+      );
+    }
     if (auth.hasPermission('employees.bonuses')) {
       addDestination(
         icon: Icons.card_giftcard,
@@ -1241,7 +1266,39 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           await Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => BonusManagementScreen(api: api, isArabic: isAr),
+              builder: (_) =>
+                  BonusManagementScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('employees.payroll')) {
+      addDestination(
+        icon: Icons.payments_rounded,
+        title: isAr ? 'الرواتب' : 'Payroll',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PayrollScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('employees.attendance')) {
+      addDestination(
+        icon: Icons.event_available,
+        title: isAr ? 'الحضور والانصراف' : 'Attendance',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  AttendanceScreen(api: api, isArabic: isAr),
             ),
           );
         },
@@ -1249,259 +1306,280 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     }
     addDestination(
       icon: Icons.emoji_events_rounded,
-      title: isAr ? 'سباق الأداء' : 'Performance Race',
+      title: isAr ? 'سباق الأداء' : 'Sales Race',
       color: AppColors.primaryGold,
       onSelected: () async {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => SalesRaceManagementScreen(api: api, isArabic: isAr),
+            builder: (_) =>
+                SalesRaceManagementScreen(api: api, isArabic: isAr),
           ),
         );
         _loadLeaderboard(period: _leaderboardPeriod);
       },
     );
-    addDestination(
-      icon: Icons.manage_accounts,
-      title: isAr ? 'المستخدمين' : 'Users',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => UsersScreen(api: api)),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.payments_rounded,
-      title: isAr ? 'الرواتب' : 'Payroll',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => PayrollScreen(api: api)),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.event_available,
-      title: isAr ? 'الحضور والانصراف' : 'Attendance',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AttendanceScreen(api: api)),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.analytics,
-      title: isAr ? 'تقارير الرواتب' : 'Payroll Reports',
-      color: Colors.blueGrey.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => PayrollReportScreen(api: api)),
-        );
-      },
-    );
-
-    addDivider();
-    addSection(isAr ? 'المحاسبة' : 'Accounting', gold);
-    addDestination(
-      icon: Icons.receipt_long,
-      title: isAr ? 'السندات' : 'Vouchers',
-      color: Colors.cyan,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => VouchersListScreen()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.south,
-      title: isAr ? 'سند قبض' : 'Receipt Voucher',
-      color: Colors.green,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AddVoucherScreen(voucherType: 'receipt'),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.north,
-      title: isAr ? 'سند صرف' : 'Payment Voucher',
-      color: Colors.red,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AddVoucherScreen(voucherType: 'payment'),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.assessment,
-      title: isAr ? 'كشوفات الحسابات' : 'Account Statements',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AccountsScreen()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.book,
-      title: isAr ? 'قيود اليومية' : 'Journal Entries',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => JournalEntriesListScreen(isArabic: isAr),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.edit_note,
-      title: isAr ? 'إضافة قيد' : 'Add Entry',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AddEditJournalEntryScreen()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.repeat,
-      title: isAr ? 'القيود الدورية' : 'Recurring Entries',
-      color: Colors.purple.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RecurringTemplatesScreen(isArabic: isAr),
-          ),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.menu_book,
-      title: isAr ? 'دفتر الأستاذ العام' : 'General Ledger',
-      color: Colors.amber.shade700,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => GeneralLedgerScreenV2()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.account_balance_wallet,
-      title: isAr ? 'ميزان المراجعة' : 'Trial Balance',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => TrialBalanceScreenV2()),
-        );
-      },
-    );
-    addDestination(
-      icon: Icons.account_tree,
-      title: isAr ? 'شجرة الحسابات' : 'Chart of Accounts',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ChartOfAccountsScreen()),
-        );
-      },
-    );
-
-    addDestination(
-      icon: Icons.fact_check,
-      title: isAr ? 'إغلاق اليومية' : 'Shift Closing',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ShiftClosingScreen(api: api, isArabic: isAr),
-          ),
-        );
-      },
-    );
-
-    addDestination(
-      icon: Icons.history,
-      title: isAr ? 'سجل التدقيق' : 'Audit Log',
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AuditLogScreen()),
-        );
-      },
-    );
-
-    addDivider();
-    addSection(
-      isAr ? ' الإعدادات والأدوات' : ' Settings & Tools',
-      theme.hintColor,
-    );
-    addDestination(
-      icon: Icons.account_balance_wallet,
-      title: isAr ? 'إدارة الخزائن' : 'Safe Boxes',
-      color: Colors.amber.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SafeBoxesScreen(balancesView: true),
-          ),
-        );
-        await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.swap_horiz,
-      title: isAr ? 'مراقبة تسوية المقاصة' : 'Clearing Settlement',
-      color: Colors.teal.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ClearingMonitorScreen()),
-        );
-        await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.credit_card,
-      title: isAr ? 'إدارة وسائل الدفع' : 'Payment Methods',
-      color: Colors.amber.shade600,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const PaymentMethodsScreenEnhanced(),
-          ),
-        );
-        await _loadAllData();
-      },
-    );
-
     if (auth.isSystemAdmin) {
       addDestination(
-        icon: Icons.upload_file,
-        title: isAr ? 'استيراد المستندات (Excel)' : 'Import Documents (Excel)',
+        icon: Icons.manage_accounts,
+        title: isAr ? 'المستخدمين' : 'Users',
+        color: Colors.blueGrey.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => UsersScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 7. المحاسبة (حسب الصلاحيات)
+    // ════════════════════════════════════════════════════════════════════════
+    if (auth.hasPermission('accounts.view') ||
+        auth.hasPermission('vouchers.view') ||
+        auth.hasPermission('journal.view')) {
+      addDivider();
+      addSection(isAr ? 'المحاسبة' : 'Accounting', gold);
+    }
+    if (auth.hasPermission('vouchers.view')) {
+      addDestination(
+        icon: Icons.receipt_long,
+        title: isAr ? 'السندات' : 'Vouchers',
+        color: Colors.cyan,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => VouchersListScreen()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.south,
+        title: isAr ? 'سند قبض' : 'Receipt Voucher',
+        color: Colors.green,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddVoucherScreen(voucherType: 'receipt'),
+            ),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.north,
+        title: isAr ? 'سند صرف' : 'Payment Voucher',
+        color: Colors.red,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddVoucherScreen(voucherType: 'payment'),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('accounts.view')) {
+      addDestination(
+        icon: Icons.assessment,
+        title: isAr ? 'كشوفات الحسابات' : 'Account Statements',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AccountsScreen()),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('journal.view')) {
+      addDestination(
+        icon: Icons.book,
+        title: isAr ? 'قيود اليومية' : 'Journal Entries',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  JournalEntriesListScreen(isArabic: isAr),
+            ),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.edit_note,
+        title: isAr ? 'إضافة قيد' : 'Add Entry',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddEditJournalEntryScreen(),
+            ),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.repeat,
+        title: isAr ? 'القيود الدورية' : 'Recurring Entries',
+        color: Colors.purple.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  RecurringTemplatesScreen(isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.hasPermission('accounts.view')) {
+      addDestination(
+        icon: Icons.menu_book,
+        title: isAr ? 'دفتر الأستاذ العام' : 'General Ledger',
+        color: Colors.amber.shade700,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => GeneralLedgerScreenV2()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.account_balance_wallet,
+        title: isAr ? 'ميزان المراجعة' : 'Trial Balance',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => TrialBalanceScreenV2()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.account_tree,
+        title: isAr ? 'شجرة الحسابات' : 'Chart of Accounts',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ChartOfAccountsScreen()),
+          );
+        },
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 8. التقارير
+    // ════════════════════════════════════════════════════════════════════════
+    if (auth.hasPermission('reports.view')) {
+      addDivider();
+      addSection(isAr ? 'التقارير' : 'Reports', Colors.indigo.shade300);
+      addDestination(
+        icon: Icons.insights,
+        title: isAr ? 'مركز التقارير' : 'Reports Center',
+        color: Colors.indigo.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  ReportsMainScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.auto_graph,
+        title: isAr ? 'سعر الذهب - تاريخي' : 'Gold Price History',
         color: Colors.amber.shade600,
         onSelected: () async {
           await Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => ImportDocumentsScreen(isArabic: isAr),
+              builder: (_) => GoldPriceHistoryReportScreen(
+                api: api,
+                isArabic: isAr,
+              ),
+            ),
+          );
+        },
+      );
+      if (auth.hasPermission('employees.payroll')) {
+        addDestination(
+          icon: Icons.analytics,
+          title: isAr ? 'تقارير الرواتب' : 'Payroll Reports',
+          color: Colors.blueGrey.shade300,
+          onSelected: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => PayrollReportScreen(api: api),
+              ),
+            );
+          },
+        );
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 9. الأدوات التشغيلية
+    // ════════════════════════════════════════════════════════════════════════
+    addDivider();
+    addSection(isAr ? 'الأدوات' : 'Tools', Colors.teal.shade400);
+    if (auth.hasPermission('safe_boxes.view')) {
+      addDestination(
+        icon: Icons.savings,
+        title: isAr ? 'إدارة الخزائن' : 'Safe Boxes',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SafeBoxesScreen(balancesView: true),
+            ),
+          );
+          await _loadAllData();
+        },
+      );
+      addDestination(
+        icon: Icons.fact_check,
+        title: isAr ? 'إغلاق اليومية' : 'Shift Closing',
+        color: Colors.teal.shade400,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  ShiftClosingScreen(api: api, isArabic: isAr),
+            ),
+          );
+        },
+      );
+    }
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.swap_horiz,
+        title: isAr ? 'تسوية المقاصة' : 'Clearing Settlement',
+        color: Colors.teal.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ClearingMonitorScreen()),
+          );
+          await _loadAllData();
+        },
+      );
+      addDestination(
+        icon: Icons.credit_card,
+        title: isAr ? 'وسائل الدفع' : 'Payment Methods',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const PaymentMethodsScreenEnhanced(),
             ),
           );
           await _loadAllData();
@@ -1509,14 +1587,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       );
     }
     addDestination(
-      icon: Icons.account_tree,
-      title: isAr ? 'إدارة المكاتب والفروع' : 'Branches Management',
-      color: Colors.amber.shade600,
+      icon: Icons.print,
+      title: isAr ? 'مركز الطباعة' : 'Printing Center',
+      color: Colors.purple.shade300,
       onSelected: () async {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => BranchesManagementScreen(isArabic: isAr),
+            builder: (_) => PrintingCenterScreen(isArabic: isAr),
           ),
         );
       },
@@ -1539,7 +1617,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           );
           return;
         }
-
         await Navigator.push(
           context,
           MaterialPageRoute(
@@ -1549,39 +1626,89 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         await _loadAllData();
       },
     );
-    addDestination(
-      icon: Icons.restore,
-      title: isAr ? 'إعادة تهيئة النظام' : 'System Reset',
-      color: Colors.red.shade400,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SettingsScreenEnhanced(
-              initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-              focusEntry: SettingsEntry.systemReset,
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 10. الإعدادات والنظام (مدير فأعلى)
+    // ════════════════════════════════════════════════════════════════════════
+    addDivider();
+    addSection(isAr ? 'الإعدادات والنظام' : 'Settings & System', theme.hintColor);
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.domain,
+        title: isAr ? 'إدارة الفروع' : 'Branches',
+        color: Colors.amber.shade600,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  BranchesManagementScreen(isArabic: isAr),
             ),
-          ),
-        );
-        await _loadAllData();
-      },
-    );
-    addDestination(
-      icon: Icons.print,
-      title: isAr ? 'إعدادات الطابعة' : 'Printer Settings',
-      color: Colors.purple.shade300,
-      onSelected: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SettingsScreenEnhanced(
-              initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
-              focusEntry: SettingsEntry.printerSettings,
+          );
+        },
+      );
+    }
+    if (auth.isManager) {
+      addDestination(
+        icon: Icons.history,
+        title: isAr ? 'سجل التدقيق' : 'Audit Log',
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AuditLogScreen()),
+          );
+        },
+      );
+      addDestination(
+        icon: Icons.print,
+        title: isAr ? 'إعدادات الطابعة' : 'Printer Settings',
+        color: Colors.purple.shade300,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SettingsScreenEnhanced(
+                initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
+                focusEntry: SettingsEntry.printerSettings,
+              ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    }
+    if (auth.isSystemAdmin) {
+      addDestination(
+        icon: Icons.upload_file,
+        title: isAr ? 'استيراد Excel' : 'Import Excel',
+        color: Colors.green.shade700,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ImportDocumentsScreen(isArabic: isAr),
+            ),
+          );
+          await _loadAllData();
+        },
+      );
+      addDestination(
+        icon: Icons.restore,
+        title: isAr ? 'إعادة تهيئة النظام' : 'System Reset',
+        color: Colors.red.shade400,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SettingsScreenEnhanced(
+                initialTabIndex: SettingsScreenEnhanced.systemTabIndex,
+                focusEntry: SettingsEntry.systemReset,
+              ),
+            ),
+          );
+          await _loadAllData();
+        },
+      );
+    }
     addDestination(
       icon: Icons.info_outline,
       title: isAr ? 'حول التطبيق' : 'About',
@@ -1598,6 +1725,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         );
       },
     );
+
 
     // Build section widgets as collapsible ExpansionTiles (card style)
     for (final sec in sections) {
@@ -2474,6 +2602,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final count = (row['count'] as num?)?.toInt() ?? 0;
       final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
       final purchaseAmount = (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
+      // تقدم الهدف الشخصي للموظف (null = لم يُضبط هدف)
       final goalProgress = (row['goal_progress'] as num?)?.toDouble();
 
       final isLeader = index == 0;
@@ -2892,6 +3021,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                                   _showAllLeaderboardEmployees = false;
                                 });
                                 _loadLeaderboard(period: next);
+                                _checkForAchievements();
                               },
                         showSelectedIcon: false,
                         style: _leaderboardSegmentedButtonStyle(theme),
@@ -4660,8 +4790,100 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   }
 
 
+  // ─── خريطة الصلاحيات: كل مسار → الصلاحية المطلوبة ───────────────────────
+  // null  = مسموح لجميع المستخدمين المسجّلين
+  // 'ADMIN_ONLY' = مسؤول النظام فقط
+  static const Map<String, String?> _routePermissions = {
+    // فواتير
+    'invoices_list':           'invoices.view',
+    'return_invoice':          'invoices.view',
+    'return_sales':            'invoices.view',
+    'return_purchase':         'invoices.view',
+    'return_purchase_supplier':'invoices.view',
+    'posting_management':      'invoices.post',
+    // محاسبة
+    'accounts':                'accounts.view',
+    'chart_of_accounts':       'accounts.view',
+    'general_ledger':          'accounts.view',
+    'trial_balance':           'accounts.view',
+    'journal_entry':           'journal.view',
+    'journal_entries_list':    'journal.view',
+    'vouchers':                'vouchers.view',
+    'vouchers_list':           'vouchers.view',
+    'receipt_voucher':         'vouchers.view',
+    'payment_voucher':         'vouchers.view',
+    // خزائن
+    'safe_boxes':              'safe_boxes.view',
+    'shift_closing':           'safe_boxes.view',
+    // الموظفون والرواتب
+    'employees':               'employees.view',
+    'payroll':                 'employees.payroll',
+    'payroll_report':          'employees.payroll',
+    'attendance':              'employees.attendance',
+    'bonus_rules':             'employees.bonuses',
+    'calculate_bonuses':       'employees.bonuses',
+    'bonuses':                 'employees.bonuses',
+    // تقارير
+    'reports_center':          'reports.view',
+    'gold_price_history':      'reports.view',
+    // أدوات تشغيلية
+    'clearing_settlement':     'MANAGER_ONLY',
+    // مستخدمون وإعدادات النظام
+    'users':                   'ADMIN_ONLY',
+    'system_reset':            'ADMIN_ONLY',
+    'backup_restore':          'ADMIN_ONLY',
+    'import_documents':        'ADMIN_ONLY',
+    // بضاعة / عملاء — مسموح لعموم الموظفين (null)
+    'sales_invoice':           null,
+    'scrap_sales':             null,
+    'scrap_purchase':          null,
+    'purchase_invoice':        null,
+    'add_customer':            null,
+    'customers_list':          null,
+    'suppliers_list':          null,
+    'add_item':                null,
+    'items_list':              null,
+    'printing_center':         null,
+    'melting_renewal':         null,
+  };
+
+  /// يتحقق من صلاحية الوصول — يعرض رسالة واضحة ويعيد false إن لم يكن مسموحاً
+  bool _checkRoutePermission(String route) {
+    final auth = context.read<AuthProvider>();
+    final required = _routePermissions[route];
+    // المسارات غير المدرجة أو التي لا تحتاج صلاحية خاصة → مسموح
+    if (required == null) return true;
+    final allowed = required == 'ADMIN_ONLY'
+        ? auth.isSystemAdmin
+        : required == 'MANAGER_ONLY'
+            ? auth.isManager
+            : auth.hasPermission(required);
+    if (!allowed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(children: [
+            const Icon(Icons.lock_outline, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(
+              widget.isArabic
+                  ? 'ليس لديك صلاحية لاستعراض هذا القسم'
+                  : 'You do not have permission to access this section',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            )),
+          ]),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
   // معالجة النقر على أزرار الوصول السريع
   Future<void> _handleQuickActionTap(String route) async {
+    if (!_checkRoutePermission(route)) return;
     dynamic result;
 
     switch (route) {
@@ -4916,6 +5138,21 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           context,
           MaterialPageRoute(
             builder: (_) => PostingManagementScreen(isArabic: widget.isArabic),
+          ),
+        );
+        break;
+      case 'clearing_settlement':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ClearingMonitorScreen()),
+        );
+        if (result == true || result == null) await _loadAllData();
+        break;
+      case 'import_documents':
+        result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ImportDocumentsScreen(isArabic: widget.isArabic),
           ),
         );
         break;

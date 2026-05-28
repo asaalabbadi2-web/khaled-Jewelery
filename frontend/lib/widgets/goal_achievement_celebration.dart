@@ -198,23 +198,21 @@ class _ConfettiPainter extends CustomPainter {
 
 class GoalAchievementOverlay extends StatefulWidget {
   final GoalAchievement achievement;
-  final VoidCallback? onDismiss;
   final VoidCallback? onViewDetails;
   final bool isArabic;
 
   const GoalAchievementOverlay({
     super.key,
     required this.achievement,
-    this.onDismiss,
     this.onViewDetails,
     this.isArabic = true,
   });
 
-  /// Shows the overlay on top of the entire screen
+  /// Shows the overlay on top of the entire screen.
+  /// The caller is responsible for marking the achievement as seen after this Future completes.
   static Future<void> show(
     BuildContext context, {
     required GoalAchievement achievement,
-    VoidCallback? onDismiss,
     VoidCallback? onViewDetails,
     bool isArabic = true,
   }) {
@@ -229,7 +227,6 @@ class GoalAchievementOverlay extends StatefulWidget {
       pageBuilder: (ctx, animation, secondaryAnimation) {
         return GoalAchievementOverlay(
           achievement: achievement,
-          onDismiss: onDismiss,
           onViewDetails: onViewDetails,
           isArabic: isArabic,
         );
@@ -349,7 +346,6 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
     await _modalController.reverse();
     if (!mounted) return;
     Navigator.of(context).pop();
-    widget.onDismiss?.call();
   }
 
   /// يُنسّق مبلغ المكافأة بـ floor لعشري واحد في k/M
@@ -357,20 +353,35 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
   ///   1550 → +1.5k  |  1400 → 1.4k  |  2502 → +2.5k  |  2500 → 2.5k
   String _formatBonus(double value) {
     if (value <= 0) return '0';
-    final bool isMega = value.abs() >= 1000000;
-    final double divisor = isMega ? 1000000 : 1000;
-    final String suffix = isMega ? 'M' : 'k';
-    final int tenths = (value / (divisor / 10)).floor();
-    final double unitValue = tenths / 10.0;
-    final double threshold = unitValue * divisor;
-    final String prefix = (value - threshold) > 0.001 ? '+' : '';
+
+    double unitValue;
+    double divisor;
+    String suffix;
+
+    if (value.abs() >= 1000000) {
+      divisor = 1000000;
+      suffix = 'M';
+    } else {
+      divisor = 1000;
+      suffix = 'k';
+    }
+
+    // floor إلى عشري واحد: e.g. 1550 → 1.5، 2502 → 2.5
+    final tenths = (value / (divisor / 10)).floor(); // عدد أعشار الوحدة
+    unitValue = tenths / 10.0;
+    final threshold = unitValue * divisor;
+
+    // "+" إذا كان المبلغ أكبر من الـ threshold بفارق أكثر من دقة الفاصلة العائمة
+    final prefix = (value - threshold) > 0.001 ? '+' : '';
     return '$prefix${unitValue.toStringAsFixed(1)}$suffix';
   }
 
   String _formatMetric(dynamic value) {
     if (value is num) {
-      final double d = value.toDouble();
-      if (d.abs() >= 1000) return '${(d / 1000).toStringAsFixed(1)}k';
+      final d = value.toDouble();
+      if (d.abs() >= 1000) {
+        return '${(d / 1000).toStringAsFixed(1)}k';
+      }
       return d.toStringAsFixed(d == d.toInt() ? 0 : 1);
     }
     return value?.toString() ?? '-';
@@ -389,8 +400,8 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
       'amount':   'المبلغ',
       'percentage': 'النسبة',
       'progress': 'التقدّم',
-      'metric': 'المقياس',
-      'period': 'الفترة',
+      'metric':   'المقياس',
+      'period':   'الفترة',
       'race_rank': 'المرتبة في السباق',
       'race_total': 'المشاركون',
       'race_beaten': 'تفوقت على',
@@ -798,7 +809,7 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
 
           const SizedBox(height: 4),
 
-          // Goal card with bonus
+          // Goal card — description + bonus (if any)
           Container(
             padding: const EdgeInsets.all(13),
             decoration: BoxDecoration(
@@ -838,7 +849,7 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
                           ),
                         ),
                       if (achievement.bonusAmount > 0) ...[
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 4),
                         Text(
                           isAr ? 'المكافأة المستحقة' : 'Bonus Earned',
                           style: TextStyle(
@@ -848,7 +859,7 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
                           ),
                         ),
                       ] else ...[
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 4),
                         Text(
                           isAr ? 'بدون مكافأة مالية' : 'No monetary bonus',
                           style: TextStyle(
@@ -862,26 +873,41 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
                     ],
                   ),
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _formatBonus(achievement.bonusAmount),
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.darkGold,
+                if (achievement.bonusAmount > 0) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.darkGold.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.darkGold.withValues(alpha: 0.35),
                       ),
                     ),
-                    Text(
-                      achievement.currency,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: AppColors.darkGold.withValues(alpha: 0.7),
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          _formatBonus(achievement.bonusAmount),
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.darkGold,
+                          ),
+                        ),
+                        Text(
+                          achievement.currency,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.darkGold.withValues(alpha: 0.8),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -892,9 +918,10 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
           if (_hasRaceData(achievement))
             _buildRaceRow(theme, isAr, achievement),
 
-          // Stats row (exclude race/internal keys)
+          // Stats row (exclude race/internal/duplicate keys)
           if (achievement.metrics.entries
-              .where((e) => !e.key.startsWith('race_') && e.key != 'period_key' && e.key != 'metric')
+              .where((e) => !e.key.startsWith('race_') &&
+                  !{'period_key', 'metric', 'period', 'actual'}.contains(e.key))
               .isNotEmpty)
             _buildStatsRow(theme, isAr, achievement),
 
@@ -959,10 +986,14 @@ class _GoalAchievementOverlayState extends State<GoalAchievementOverlay>
 
   Widget _buildStatsRow(
       ThemeData theme, bool isAr, GoalAchievement achievement) {
-    // استبعاد مفاتيح السباق والمفاتيح الداخلية من الصف الإحصائي
-    const hiddenKeys = {'period_key', 'metric', 'race_rank', 'race_total',
-        'race_beaten', 'race_points', 'race_weight', 'race_invoices',
-        'race_top_name', 'race_is_champion'};
+    // المفاتيح المُستبعدة: داخلية أو مكررة
+    // 'actual' مكرر مع مفتاح المقياس (points/weight/invoices)
+    // 'period' مذكور في وصف الإنجاز
+    const hiddenKeys = {
+      'period_key', 'metric', 'period', 'actual',
+      'race_rank', 'race_total', 'race_beaten', 'race_points',
+      'race_weight', 'race_invoices', 'race_top_name', 'race_is_champion',
+    };
     final entries = achievement.metrics.entries
         .where((e) => !hiddenKeys.contains(e.key))
         .take(4)
